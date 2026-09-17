@@ -52,6 +52,36 @@ implicit reference, notation variants).
 - Kept **only if fusion measurably beats the best single seam** on the eval
   set. "Always-on" means *candidates*, not *cargo*.
 
+**Storage.** One row per embedded chunk, keyed by the model that produced it
+(`chunk_embeddings(chunk_id, model, embedding, created_at)`). A collection can
+hold vectors from more than one model across a model swap; every query filters
+by exact `model`, so a swap never mixes vectors. Chunks without an embedding
+row simply don't participate — absence is dormancy, not error.
+
+**Ingestion-time embedding.** After chunks are written, each chunk's text is
+embedded and stored with the model name. Re-embedding under a new model writes
+new rows alongside old ones; the query-time model filter is what makes a swap
+safe without a mass rewrite.
+
+**Query-time seam.** Embed the query at answer time, return the top-N chunks
+by dot product. Hard rules:
+
+- **Dimension guard** — a mismatched-dimension row is excluded, never silently
+  truncated into a garbage score. A model swap must not rank garbage.
+- **Stable ordering** — dot DESC, then chunk index, then chunk id.
+- **Direction** — embedding scores mean "higher = closer"; normalization keeps
+  that sign while other seams flip theirs, so all scores compete as one
+  currency in fusion.
+
+**Quota semantics.** A config-bound quota bounds chunks found *only* by
+embeddings when grounded seams (keyword/TOC/graph) also matched — semantic
+expansion must not displace grounded hits. When no grounded seam matched
+anything, the quota does not apply: embeddings are the only evidence there is.
+
+**The kill switch.** If the funnel without embeddings matches or beats the
+funnel with them (recall@k on the eval set), the seam is turned off via
+config — not code deletion.
+
 ### Baseline seam: keyword
 
 Plain keyword/fts matching over chunks ships day one with zero model
