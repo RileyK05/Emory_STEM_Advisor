@@ -414,6 +414,42 @@ Decision rules:
 - Every change lands with an eval delta against the previous config on the
   frozen set. A regression blocks merge.
 
+## Learning loop
+
+The system should answer more from the corpus and less from external help
+over time. The mechanism is gap capture: unanswered questions become work
+items, and resolved work items enter the corpus through the normal
+ingestion pipeline. The system learns by accumulating sources, never by
+caching answers.
+
+Why not cache answers directly: a stored answer has no locator and no
+evidence trail. It violates invariant 1, and if the original answer was
+wrong it becomes permanent contamination that future answers treat as
+knowledge. Learning must keep the citation contract intact.
+
+The loop:
+
+1. **Gap detection.** A query yields a refusal, low fused scores, or a
+   low-confidence answer. The retrieval trace records the gap (a `gaps`
+   row keyed on normalized query, with embedding and partial matches).
+2. **Gap capture.** Unanswered questions accumulate in a deduplicated work
+   queue, oldest first.
+3. **Resolution**, one of three paths:
+   - Human: a curator answers or points at the covering document.
+   - External: web/LLM generates a candidate, stored marked `unverified`
+     and never citable.
+   - Corpus growth: the actual document is uploaded.
+4. **Promotion.** Verified material enters through the standard pipeline:
+   a new source with locators and chunks, or a graph node with an evidence
+   level. Externally derived knowledge enters as `hypothesis` and is
+   promoted to `direct` on review, reusing the graph trust ladder. From
+   this point the same question is answerable with full grounding and
+   citations, and external help is no longer needed for it.
+
+Metric: gap recurrence rate — the fraction of repeated questions that were
+previously gaps and are now answerable from the corpus. This is the
+learning KPI and is computable from the trace tables.
+
 ## Build order
 
 1. Keyword baseline, locators, token-bounded chunks, citation contract.
@@ -422,5 +458,6 @@ Decision rules:
 4. Graph extraction (concepts, dependencies, evidence levels), then the
    graph seam (dormant until review enables it).
 5. Embeddings seam, gated on provider pick and measured help.
-6. Upgrades (model-routed TOC, reranker) only on documented baseline
+6. Gap capture and the learning loop.
+7. Upgrades (model-routed TOC, reranker) only on documented baseline
    failure.
