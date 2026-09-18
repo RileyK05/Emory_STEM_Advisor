@@ -1,0 +1,26 @@
+[project]
+name = "emory-stem-advisor-backend"
+version = "0.1.0"
+description = "Backend for the Emory STEM Advisor RAG system"
+requires-python = ">=3.12"
+dependencies = [
+    # Pinned exactly: MiniCPM-2B-128k ships remote modeling code written
+    # against the transformers 4.38 API (later 4.x releases removed
+    # DynamicCache.get_max_length and is_torch_fx_available, which it uses).
+    # Upgrade only after re-validating the model repo's code against it.
+    "transformers==4.38.2",
+    "accelerate>=0.26",
+    "torch>=2.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100

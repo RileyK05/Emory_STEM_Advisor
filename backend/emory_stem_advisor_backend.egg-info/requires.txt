@@ -1,0 +1,7 @@
+transformers==4.38.2
+accelerate>=0.26
+torch>=2.4
+
+[dev]
+pytest
+ruff

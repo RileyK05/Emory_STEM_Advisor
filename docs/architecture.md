@@ -323,6 +323,25 @@ past the module. Outputs at structured stages (TOC, extraction) are
 validated against Pydantic schemas at the seam boundary. Malformed output
 fails the stage closed; it is never half-parsed.
 
+### Experimentation layer
+
+Local development and eval runs use a small open model (default
+`openbmb/MiniCPM-2B-128k`, Apache-2.0) loaded via Hugging Face
+transformers, behind the provider seam. Weights download on first use and
+cache in the standard HF cache; the only install is pip. No compiled
+binaries, no per-machine model conversion.
+
+Local runs are for pipeline validation, not model quality: a 2B on CPU is
+slow and its answers are weak. That is acceptable. The question a local
+run answers is "does the harness behave correctly" (chunking, fusion,
+citations, refusals), which must hold regardless of model strength. Answer
+quality is measured later against hosted models.
+
+Config: `HF_MODEL_ID`, `HF_MAX_CONTEXT` (default 4096, deliberately far
+below the model's 128k; full attention over 128k is not feasible on
+consumer hardware), `HF_MAX_NEW_TOKENS`. Generation is greedy by default
+so eval runs are reproducible.
+
 ### Evidence chain
 
 ```mermaid
