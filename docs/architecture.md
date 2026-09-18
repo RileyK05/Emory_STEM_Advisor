@@ -388,6 +388,43 @@ A grounded question with zero surviving candidates returns a refusal ("no
 relevant material found"). The generative model is never prompted without a
 context block.
 
+### Answer artifacts: interactive flowcharts
+
+Some answers are better as diagrams than paragraphs: dependency chains,
+process flows, decision trees, concept maps. The system supports
+interactive flowcharts as a first-class answer artifact.
+
+The rule that keeps this safe: the model never emits HTML. It emits a
+structured diagram spec, and the frontend renders it. The spec is a plain
+node/edge list:
+
+```json
+{
+  "kind": "flowchart",
+  "nodes": [
+    {"id": "n1", "label": "Normal equations", "concept_id": "..."},
+    {"id": "n2", "label": "Gradient descent", "concept_id": "..."}
+  ],
+  "edges": [
+    {"from": "n1", "to": "n2", "relation": "alternative_to",
+     "evidence_level": "direct", "chunk_ids": ["..."]}
+  ]
+}
+```
+
+- Every node and edge carries its grounding (concept id, chunk ids,
+  evidence level). A diagram element with no backing chunk is rejected at
+  the contract check, same as a text claim. The citation contract applies
+  to diagrams verbatim.
+- The frontend renders the spec with an interactive component (pan, zoom,
+  click a node to open its evidence: the chunks and locators behind it).
+  Rendering is deterministic; nothing executable comes out of the model.
+- Diagrams are one answer modality among several; the tutor picks text,
+  diagram, or both per query. Whether diagram answers actually help is a
+  measured question like everything else: eval questions tagged
+  "structural" are scored on diagram correctness in addition to text
+  metrics.
+
 ## Measurement
 
 The eval set is the contract.
@@ -434,17 +471,16 @@ The loop:
    row keyed on normalized query, with embedding and partial matches).
 2. **Gap capture.** Unanswered questions accumulate in a deduplicated work
    queue, oldest first.
-3. **Resolution**, one of three paths:
-   - Human: a curator answers or points at the covering document.
-   - External: web/LLM generates a candidate, stored marked `unverified`
-     and never citable.
-   - Corpus growth: the actual document is uploaded.
-4. **Promotion.** Verified material enters through the standard pipeline:
-   a new source with locators and chunks, or a graph node with an evidence
-   level. Externally derived knowledge enters as `hypothesis` and is
-   promoted to `direct` on review, reusing the graph trust ladder. From
-   this point the same question is answerable with full grounding and
-   citations, and external help is no longer needed for it.
+3. **Resolution (human-only at first).** A curator answers the question or
+   points at the covering document. Later paths, external candidate
+   generation and direct corpus growth, are deferred: external candidates
+   would be stored marked `unverified` and never citable, and corpus growth
+   is just a normal upload. Both stay out of scope until the human loop
+   works.
+4. **Promotion.** The curator's material enters through the standard
+   pipeline: a new source with locators and chunks, or a graph node with an
+   evidence level. From this point the same question is answerable with
+   full grounding and citations, and no further help is needed for it.
 
 Metric: gap recurrence rate — the fraction of repeated questions that were
 previously gaps and are now answerable from the corpus. This is the
