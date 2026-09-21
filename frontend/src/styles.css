@@ -1,29 +1,93 @@
+/* ---------------------------------------------------------------------------
+   Theme tokens.
+   Light (default) = "Swoop": Emory Blue dominant, Emory Gold as accent.
+   [data-theme="dark"] = "Dooley": near-black background, bone text,
+   ghostly pale blue accent, spectral gold.
+--------------------------------------------------------------------------- */
+
 :root {
   --bg: #f4f6f9;
   --bg-panel: #ffffff;
   --bg-subtle: #f8fafc;
   --bg-hover: #eef2f7;
+  --card: #ffffff;
   --border: #e3e8ef;
   --border-strong: #cfd8e3;
+
   --text: #1e293b;
   --text-dim: #64748b;
   --text-faint: #94a3b8;
-  --accent: #2563eb;
-  --accent-hover: #1d4ed8;
-  --accent-soft: #eff4ff;
-  --accent-border: #c7dbfe;
-  --warning: #b45309;
-  --warning-strong: #d97706;
-  --warning-bg: #fef6e7;
-  --warning-border: #f3d9a4;
-  --error: #dc2626;
+
+  --accent: #012169; /* Emory Blue */
+  --accent-hover: #0b2d8f;
+  --accent-soft: #e9eefb;
+  --accent-border: #b6c4ea;
+  --accent-ring: rgba(1, 33, 105, 0.12);
+
+  --gold: #f2a900; /* Emory Gold */
+  --gold-strong: #b58500; /* darker gold for text/accents on light backgrounds */
+  --gold-soft: #fdf3dd;
+  --gold-border: #ecd9a6;
+  --on-gold: #ffffff;
+  --badge-glow: 0 1px 3px rgba(181, 133, 0, 0.45);
+
+  --warning: #b58500;
+  --warning-bg: #fdf3dd;
+  --warning-border: #ecd9a6;
+
+  --error: #c62828;
   --error-bg: #fdf1f0;
   --error-border: #f3c6c2;
+
   --ok: #15803d;
+  --ok-bg: #e7f4ec;
+
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
   --shadow-md: 0 1px 2px rgba(15, 23, 42, 0.05), 0 4px 14px rgba(15, 23, 42, 0.07);
+
   --radius: 12px;
   --radius-sm: 8px;
+}
+
+[data-theme='dark'] {
+  --bg: #0d0f14;
+  --bg-panel: #151922;
+  --bg-subtle: #191e29;
+  --bg-hover: #222938;
+  --card: #1a1f2b;
+  --border: #272e3c;
+  --border-strong: #38435a;
+
+  --text: #e8e6df; /* bone */
+  --text-dim: #a3a091; /* bone-dim */
+  --text-faint: #6d7382;
+
+  --accent: #6f8fe0; /* ghostly pale blue */
+  --accent-hover: #8aa6ea;
+  --accent-soft: rgba(111, 143, 224, 0.13);
+  --accent-border: rgba(111, 143, 224, 0.4);
+  --accent-ring: rgba(111, 143, 224, 0.22);
+
+  --gold: #f2a900;
+  --gold-strong: #f2a900;
+  --gold-soft: rgba(242, 169, 0, 0.12);
+  --gold-border: rgba(242, 169, 0, 0.32);
+  --on-gold: #1a1405;
+  --badge-glow: 0 0 14px rgba(242, 169, 0, 0.55);
+
+  --warning: #e8ac3c;
+  --warning-bg: rgba(242, 169, 0, 0.12);
+  --warning-border: rgba(242, 169, 0, 0.3);
+
+  --error: #e5655a;
+  --error-bg: rgba(229, 101, 90, 0.12);
+  --error-border: rgba(229, 101, 90, 0.35);
+
+  --ok: #6fbf8a;
+  --ok-bg: rgba(95, 184, 122, 0.15);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 14px rgba(0, 0, 0, 0.45);
 }
 
 * {
@@ -51,6 +115,7 @@ body {
   font-size: 15px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  transition: background 150ms ease;
 }
 
 code,
@@ -62,6 +127,29 @@ pre {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+
+/* Scrollbars */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* Header */
@@ -96,15 +184,38 @@ pre {
   gap: 14px;
 }
 
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.theme-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .debug-badge {
   padding: 4px 12px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.09em;
-  color: #fff;
-  background: var(--warning-strong);
-  box-shadow: 0 1px 3px rgba(217, 119, 6, 0.4);
+  color: var(--on-gold);
+  background: var(--gold-strong);
+  box-shadow: var(--badge-glow);
 }
 
 .debug-toggle {
@@ -131,7 +242,7 @@ pre {
 }
 
 .switch:hover {
-  background: #b9c5d4;
+  background: var(--text-faint);
 }
 
 .switch-on,
@@ -210,7 +321,8 @@ pre {
   color: #fff;
   border-radius: 16px 16px 4px 16px;
   padding: 11px 16px;
-  box-shadow: var(--shadow-sm);
+  /* subtle gold base detail */
+  box-shadow: var(--shadow-sm), inset 0 -2px 0 rgba(242, 169, 0, 0.55);
   font-size: 15px;
 }
 
@@ -221,7 +333,7 @@ pre {
 
 .message-assistant .message-body {
   max-width: 82%;
-  background: var(--bg-panel);
+  background: var(--card);
   border: 1px solid var(--border);
   border-radius: 4px 16px 16px 16px;
   padding: 14px 18px;
@@ -315,7 +427,7 @@ pre {
   padding: 7px 13px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg-subtle);
+  background: var(--card);
   color: var(--text);
   cursor: pointer;
   font: inherit;
@@ -329,8 +441,8 @@ pre {
 }
 
 .citation-card:hover {
-  border-color: var(--accent-border);
-  background: var(--accent-soft);
+  border-color: var(--gold);
+  background: var(--gold-soft);
   transform: translateY(-1px);
   box-shadow: var(--shadow-md);
 }
@@ -374,8 +486,8 @@ pre {
 .chat-input textarea:focus {
   outline: none;
   border-color: var(--accent);
-  background: #fff;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  background: var(--card);
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .send-button {
@@ -437,7 +549,7 @@ pre {
   padding: 6px 13px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
-  background: #fff;
+  background: var(--card);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -477,7 +589,7 @@ pre {
   padding: 11px 13px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: #fff;
+  background: var(--card);
   box-shadow: var(--shadow-sm);
   transition:
     border-color 250ms ease,
@@ -486,9 +598,9 @@ pre {
 }
 
 .source-item-highlight {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  border-color: var(--gold);
+  background: var(--gold-soft);
+  box-shadow: 0 0 0 3px var(--gold-soft);
 }
 
 .source-item-name {
@@ -551,7 +663,7 @@ pre {
   width: 82%;
   margin-top: 10px;
   border: 1px solid var(--border);
-  border-left: 3px solid var(--warning-strong);
+  border-left: 3px solid var(--gold);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
   padding: 14px 16px;
@@ -563,7 +675,7 @@ pre {
   font-size: 11.5px;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  color: var(--warning);
+  color: var(--gold-strong);
   margin-bottom: 12px;
 }
 
@@ -652,7 +764,7 @@ pre {
   padding: 1px 9px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: #fff;
+  background: var(--card);
   color: var(--text-dim);
   font-size: 11px;
   font-weight: 500;
@@ -696,7 +808,7 @@ pre {
 }
 
 .seam-state-active {
-  background: #e7f4ec;
+  background: var(--ok-bg);
   color: var(--ok);
 }
 
@@ -731,7 +843,7 @@ pre {
   position: relative;
   min-width: 100px;
   height: 18px;
-  background: #fff;
+  background: var(--card);
   border: 1px solid var(--border);
   border-radius: 5px;
   overflow: hidden;
@@ -740,7 +852,8 @@ pre {
 .score-bar-fill {
   position: absolute;
   inset: 0 auto 0 0;
-  background: linear-gradient(90deg, rgba(37, 99, 235, 0.25), rgba(37, 99, 235, 0.45));
+  background: var(--accent);
+  opacity: 0.28;
 }
 
 .score-bar span {
@@ -756,7 +869,7 @@ pre {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   overflow: hidden;
-  background: #fff;
+  background: var(--card);
 }
 
 .dbg-chunk-header {

@@ -24,11 +24,27 @@ interface HighlightTarget {
   nonce: number;
 }
 
+export type Theme = 'light' | 'dark';
+
+const THEME_STORAGE_KEY = 'advisor-theme';
+
+function initialTheme(): Theme {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === 'light' || stored === 'dark') return stored;
+  } catch {
+    /* storage unavailable (private mode etc.) — fall through to system preference */
+  }
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
 interface AppState {
   messages: ChatMessage[];
   sending: boolean;
   debugMode: boolean;
   toggleDebugMode: () => void;
+  theme: Theme;
+  toggleTheme: () => void;
   sendQuery: (text: string) => void;
   sources: SourceDoc[];
   highlight: HighlightTarget | null;
@@ -49,9 +65,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [debugMode, setDebugMode] = useState(false);
+  const [theme, setTheme] = useState<Theme>(initialTheme);
   const [sources, setSources] = useState<SourceDoc[]>([]);
   const [highlight, setHighlight] = useState<HighlightTarget | null>(null);
   const mounted = useRef(true);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      /* non-persistent theme is fine */
+    }
+  }, [theme]);
+
+  const toggleTheme = useCallback(() => {
+    setTheme((t) => (t === 'light' ? 'dark' : 'light'));
+  }, []);
 
   useEffect(() => {
     mounted.current = true;
@@ -119,12 +149,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       sending,
       debugMode,
       toggleDebugMode,
+      theme,
+      toggleTheme,
       sendQuery,
       sources,
       highlight,
       showCitationSource,
     }),
-    [messages, sending, debugMode, toggleDebugMode, sendQuery, sources, highlight, showCitationSource],
+    [messages, sending, debugMode, toggleDebugMode, theme, toggleTheme, sendQuery, sources, highlight, showCitationSource],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
