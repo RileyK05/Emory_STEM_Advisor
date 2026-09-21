@@ -63,13 +63,60 @@ export interface Citation {
   chunkId: string;
 }
 
+// --- Answer artifacts (generation layer; see docs/architecture.md) ---
+// The model emits a validated structured spec per kind; the frontend renders
+// each kind with a fixed component. Kinds are a trust ladder: the model's
+// output is always data, never executable code.
+
+export type ArtifactKind = 'markdown' | 'table' | 'chart' | 'diagram' | 'html';
+
+/** Grounding carried by content-bearing artifact elements. Elements without
+ *  backing chunks are rejected at the contract check, same as text claims. */
+export interface ArtifactElementRef {
+  chunkIds: string[];
+  conceptId?: string;
+  evidenceLevel: 'direct' | 'derived' | 'hypothesis';
+}
+
+export interface TableSpec {
+  columns: { key: string; label: string }[];
+  rows: Record<string, string | number>[];
+}
+
+/** Declarative chart spec (Vega-Lite or equivalent): data + mark + encoding. No code. */
+export interface ChartSpec {
+  mark: string;
+  data: Record<string, string | number>[];
+  encoding: Record<string, unknown>;
+}
+
+export interface DiagramSpec {
+  nodes: { id: string; label: string } & ArtifactElementRef[];
+  edges: { from: string; to: string; relation: string } & ArtifactElementRef[];
+}
+
+export interface Artifact {
+  artifactId: string;
+  kind: ArtifactKind;
+  title: string;
+  /** Per-kind validated spec. Rendered by one fixed component per kind. */
+  spec: string | TableSpec | ChartSpec | DiagramSpec;
+  provenance: { traceId: string; modelId: string; promptVersion: string };
+}
+
 export interface QueryRequest {
   query: string;
   collectionId?: string;
 }
 
 export type QueryResponse =
-  | { type: 'answer'; answer: string; citations: Citation[]; trace: RetrievalTrace }
+  | {
+      type: 'answer';
+      answer: string;
+      citations: Citation[];
+      artifacts?: Artifact[];
+      trace: RetrievalTrace;
+    }
   | { type: 'refusal'; reason: string; trace?: RetrievalTrace };
 
 export interface SourceDoc {

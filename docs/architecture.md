@@ -407,19 +407,37 @@ A grounded question with zero surviving candidates returns a refusal ("no
 relevant material found"). The generative model is never prompted without a
 context block.
 
-### Answer artifacts: interactive flowcharts
+### Generation layers: answer artifacts
 
-Some answers are better as diagrams than paragraphs: dependency chains,
-process flows, decision trees, concept maps. The system supports
-interactive flowcharts as a first-class answer artifact.
+Answers are not only prose. The harness supports typed **artifacts**:
+rendered outputs attached to an answer, in several kinds. This is the
+generalization of the flowchart idea: the model produces a structured spec,
+the system validates it, and a fixed renderer turns it into something
+interactive. The model never emits executable output directly.
 
-The rule that keeps this safe: the model never emits HTML. It emits a
-structured diagram spec, and the frontend renders it. The spec is a plain
-node/edge list:
+Kinds, in trust order (each tier builds on the guarantees of the one
+before):
+
+1. **markdown** — formatted documents (study guides, summaries). Rendered
+   by a fixed markdown component. No interaction.
+2. **table / dataset** — structured data as rows + column schema. Rendered
+   as a sortable/filterable table. The spec is data, not markup.
+3. **chart** — a declarative visualization spec (Vega-Lite or equivalent:
+   data + mark + encoding, no code). Rendered by one chart component.
+   Pan/zoom/tooltip come from the renderer, not the model.
+4. **diagram** — the node/edge flowchart spec (below). Rendered by an
+   interactive graph component.
+5. **html** — freeform layout, the most expressive and least trusted tier.
+   Rendered inside a sandboxed iframe (`sandbox` attribute, no scripts, no
+   network, no storage), or rejected in favor of a lower tier when the spec
+   fails validation.
+
+The artifact contract:
 
 ```json
 {
-  "kind": "flowchart",
+  "kind": "diagram",
+  "title": "Solution methods for linear systems",
   "nodes": [
     {"id": "n1", "label": "Normal equations", "concept_id": "..."},
     {"id": "n2", "label": "Gradient descent", "concept_id": "..."}
@@ -431,18 +449,36 @@ node/edge list:
 }
 ```
 
-- Every node and edge carries its grounding (concept id, chunk ids,
-  evidence level). A diagram element with no backing chunk is rejected at
-  the contract check, same as a text claim. The citation contract applies
-  to diagrams verbatim.
-- The frontend renders the spec with an interactive component (pan, zoom,
-  click a node to open its evidence: the chunks and locators behind it).
-  Rendering is deterministic; nothing executable comes out of the model.
-- Diagrams are one answer modality among several; the tutor picks text,
-  diagram, or both per query. Whether diagram answers actually help is a
-  measured question like everything else: eval questions tagged
-  "structural" are scored on diagram correctness in addition to text
-  metrics.
+- Every artifact declares `kind`, a validated `spec`, and provenance:
+  `(trace_id, model_id, prompt_version)`. Artifacts are stored in the DB
+  with their spec, so any artifact can be re-rendered and re-evaluated
+  later.
+- Every content-bearing element carries its grounding (concept id, chunk
+  ids, evidence level). An element with no backing chunk is rejected at the
+  contract check, same as a text claim. The citation contract applies to
+  artifacts verbatim — a pretty diagram cannot smuggle in an ungrounded
+  claim.
+- The spec is validated against a Pydantic schema at the provider seam
+  before storage. Malformed spec fails closed; nothing half-valid reaches
+  the renderer.
+- The frontend renders each kind with one fixed component per kind. The
+  model's output is data; the renderer is code that never comes from the
+  model. Interactive affordances (click a node to open its evidence panel,
+  sort a table, inspect a chart value) come from the renderer and always
+  lead back to chunks and locators.
+- The tutor picks the modality per query: text, or text + artifact, or
+  artifact-led. The choice is itself measurable: eval questions tagged
+  "structural" are scored on diagram correctness; questions tagged
+  "quantitative" on chart/table fidelity to the source numbers.
+
+**Processing pipelines.** A later layer lets an artifact be produced by a
+deterministic pipeline rather than a one-shot model call: the model plans
+steps (extract these values, join these tables, compute this), the harness
+executes them against the corpus, and the result renders as a table/chart
+artifact with full provenance of which chunks fed each step. Model-planned,
+harness-executed: the numbers in a chart are computed, not narrated. This
+stays behind the artifact layer above; it ships only when a measured eval
+failure justifies it.
 
 ## Measurement
 
@@ -513,6 +549,8 @@ learning KPI and is computable from the trace tables.
 4. Graph extraction (concepts, dependencies, evidence levels), then the
    graph seam (dormant until review enables it).
 5. Embeddings seam, gated on provider pick and measured help.
-6. Gap capture and the learning loop.
-7. Upgrades (model-routed TOC, reranker) only on documented baseline
+6. Artifact layer: markdown, table, chart, diagram renderers + spec
+   validation + sandboxed html; then the processing-pipeline layer.
+7. Gap capture and the learning loop.
+8. Upgrades (model-routed TOC, reranker) only on documented baseline
    failure.
