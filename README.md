@@ -3,6 +3,11 @@
 AI/LLM advisor that ingests internal documentation and surfaces relevant
 information (RAG-based web app: Python backend API + React frontend).
 
+## Contributing
+
+You can't push here directly: fork, branch, and open a pull request.
+Step-by-step instructions: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Layout
 
 - `backend/` — Python backend (`app/` package, `tests/`)
