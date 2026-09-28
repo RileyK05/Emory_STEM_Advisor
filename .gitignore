@@ -13,3 +13,6 @@ dist/
 .env
 data/
 *.egg-info/
+
+# VS Code
+.vscode/
