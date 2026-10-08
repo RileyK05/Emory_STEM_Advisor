@@ -14,7 +14,6 @@ import torch
 from sentence_transformers import SentenceTransformer
 
 from app.config import Settings
-from app.embeddings.base import Embedder
 
 # Lazy singleton; the model loads on first use, not at import.
 _model: SentenceTransformer | None = None

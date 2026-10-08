@@ -89,11 +89,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-const GRAPH_DORMANT: SeamStatus = {
-  name: 'graph',
-  enabled: false,
+// The prerequisite graph is parsed deterministically from the course atlas, so
+// it is authoritative (never review-gated). It is dormant when the query names
+// no course code.
+const PREREQ_DORMANT: SeamStatus = {
+  name: 'prereq',
+  enabled: true,
   state: 'dormant',
-  reason: 'seams.graph.enabled = false; extracted edges await manual review',
+  reason: 'no course codes in query',
   candidateCount: 0,
 };
 
@@ -108,7 +111,7 @@ export class MockClient implements AdvisorClient {
     } else if (q.includes('gradient') || q.includes('semantic') || q.includes('embed')) {
       response = embeddingResponse(req.query, wait);
     } else if (q.includes('prereq') || q.includes('depend')) {
-      response = graphResponse(req.query, wait);
+      response = prereqResponse(req.query, wait);
     } else if (q.includes('vector') || q.includes('basis') || q.includes('eigen')) {
       response = groundedResponse(req.query, wait);
     } else {
@@ -140,14 +143,13 @@ function groundedResponse(query: string, wait: number): QueryResponse {
     query,
     seams: [
       { name: 'keyword', enabled: true, state: 'active', candidateCount: 6 },
-      { name: 'toc', enabled: true, state: 'active', candidateCount: 4 },
-      GRAPH_DORMANT,
-      { name: 'embed', enabled: false, state: 'disabled', reason: 'provider not configured', candidateCount: 0 },
+      PREREQ_DORMANT,
+      { name: 'embed', enabled: true, state: 'active', candidateCount: 5 },
     ],
     contributions: [
-      contribution('chk-la-03', ['keyword', 'toc'], 1.0, 1),
-      contribution('chk-la-02', ['keyword', 'toc'], 0.82, 2),
-      contribution('chk-la-05', ['toc'], 0.61, 3),
+      contribution('chk-la-03', ['keyword', 'embed'], 1.0, 1),
+      contribution('chk-la-02', ['keyword', 'embed'], 0.82, 2),
+      contribution('chk-la-05', ['embed'], 0.61, 3),
       contribution('chk-ob-03', ['keyword'], 0.44, 4),
     ],
     contextChunkIds: ['chk-la-03', 'chk-la-02', 'chk-la-05'],
@@ -167,13 +169,12 @@ function embeddingResponse(query: string, wait: number): QueryResponse {
     'The semantic angle here is eigenstructure: an eigenvector\'s direction is unchanged by the ' +
     'linear map, and spectral decomposition factors a diagonalizable matrix into PDP⁻¹.\n\n' +
     'Note that several of these chunks were surfaced by embedding similarity rather than keyword ' +
-    'or TOC match, so the phrasing in the source may not mirror your question.';
+    'match, so the phrasing in the source may not mirror your question.';
   const trace = buildTrace({
     query,
     seams: [
       { name: 'keyword', enabled: true, state: 'active', candidateCount: 1 },
-      { name: 'toc', enabled: true, state: 'active', candidateCount: 0 },
-      GRAPH_DORMANT,
+      PREREQ_DORMANT,
       {
         name: 'embed',
         enabled: true,
@@ -193,8 +194,8 @@ function embeddingResponse(query: string, wait: number): QueryResponse {
     answer,
     latencyMs: wait,
     warnings: [
-      'embedding_only_quota applied: 6 embedding-only candidates survived, quota is 8',
-      'toc seam: 0 entries above toc_match_min (0.3); seam contributed nothing this query',
+      'embedding_only_quota applied: 6 embedding-only candidates survived, quota is 4',
+      'keyword seam matched 1 chunk; embedding expansion bounded by quota',
     ],
   });
   return {
@@ -210,7 +211,7 @@ function embeddingResponse(query: string, wait: number): QueryResponse {
   };
 }
 
-function graphResponse(query: string, wait: number): QueryResponse {
+function prereqResponse(query: string, wait: number): QueryResponse {
   const answer =
     'Before the material on inner products you will want the vector-space fundamentals: closure ' +
     'under addition and scalar multiplication, the span/independence distinction, and what a basis is. ' +
@@ -219,27 +220,26 @@ function graphResponse(query: string, wait: number): QueryResponse {
     query,
     seams: [
       { name: 'keyword', enabled: true, state: 'active', candidateCount: 3 },
-      { name: 'toc', enabled: true, state: 'active', candidateCount: 2 },
       {
-        name: 'graph',
+        name: 'prereq',
         enabled: true,
         state: 'active',
         candidateCount: 2,
       },
-      { name: 'embed', enabled: false, state: 'disabled', reason: 'provider not configured', candidateCount: 0 },
+      { name: 'embed', enabled: true, state: 'active', candidateCount: 3 },
     ],
     contributions: [
-      contribution('chk-la-02', ['keyword', 'toc'], 0.91, 1),
-      contribution('chk-la-03', ['toc'], 0.73, 2),
-      contribution('chk-la-05', ['graph'], 0.58, 3),
-      contribution('chk-la-07', ['graph'], 0.46, 4),
+      contribution('chk-la-02', ['keyword', 'prereq'], 0.91, 1),
+      contribution('chk-la-03', ['prereq'], 0.73, 2),
+      contribution('chk-la-05', ['prereq', 'embed'], 0.58, 3),
+      contribution('chk-la-07', ['embed'], 0.46, 4),
     ],
     contextChunkIds: ['chk-la-02', 'chk-la-03', 'chk-la-05', 'chk-la-07'],
     answer,
     latencyMs: wait,
     warnings: [
-      'graph seam: 2 edges skipped, evidence_level = hypothesis (inert until review)',
-      'graph_decay = 0.8 applied: expansion candidates cannot outrank direct matches',
+      'prereq seam: matched 1 course; upstream expansion returned 2 chunks',
+      'prereq decay = 0.8 applied: prerequisite chunks cannot outrank the course itself',
     ],
   });
   return {
@@ -259,14 +259,13 @@ function defaultResponse(query: string, wait: number): QueryResponse {
     query,
     seams: [
       { name: 'keyword', enabled: true, state: 'active', candidateCount: 2 },
-      { name: 'toc', enabled: true, state: 'active', candidateCount: 1 },
-      GRAPH_DORMANT,
-      { name: 'embed', enabled: false, state: 'disabled', reason: 'provider not configured', candidateCount: 0 },
+      PREREQ_DORMANT,
+      { name: 'embed', enabled: true, state: 'active', candidateCount: 3 },
     ],
     contributions: [
-      contribution('chk-ob-03', ['keyword', 'toc'], 0.87, 1),
+      contribution('chk-ob-03', ['keyword', 'embed'], 0.87, 1),
       contribution('chk-ob-04', ['keyword'], 0.66, 2),
-      contribution('chk-safe-01', ['toc'], 0.49, 3),
+      contribution('chk-safe-01', ['embed'], 0.49, 3),
     ],
     contextChunkIds: ['chk-ob-03', 'chk-ob-04', 'chk-safe-01'],
     answer,
@@ -285,9 +284,8 @@ function refusalResponse(query: string, wait: number): QueryResponse {
     query,
     seams: [
       { name: 'keyword', enabled: true, state: 'active', candidateCount: 0 },
-      { name: 'toc', enabled: true, state: 'active', candidateCount: 0 },
-      GRAPH_DORMANT,
-      { name: 'embed', enabled: false, state: 'disabled', reason: 'provider not configured', candidateCount: 0 },
+      PREREQ_DORMANT,
+      { name: 'embed', enabled: true, state: 'active', candidateCount: 0 },
     ],
     contributions: [],
     contextChunkIds: [],

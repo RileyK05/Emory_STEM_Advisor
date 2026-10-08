@@ -62,7 +62,7 @@ export function SourcePanel() {
           </li>
           <li>
             <button type="button" onClick={() => sendQuery('What are the prerequisites for this topic?')}>
-              graph seam + warnings
+              prereq seam + warnings
             </button>
           </li>
           <li>
