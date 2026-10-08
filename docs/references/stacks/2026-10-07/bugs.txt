@@ -1,0 +1,92 @@
+Reading and indexing your PDFs
+
+Passages were cut far too big, sometimes several pages long. (fixed)
+Citations showed a passage's first page instead of the page the quote was actually on. (fixed)
+Scanned pages were skipped unless the whole PDF was a scan. (partly fixed: OCR now runs, but see the blank-page bug below)
+Garbled fonts and scrambled digits weren't detected. (partly fixed: Week 5's coded text is mostly repaired, but Week 3's digits are still corrupt and unflagged)
+Page headers got spliced into the middle of words. (fixed)
+Empty and header-only passages were saved and searched. (fixed)
+Words ran together with no space between them. (fixed)
+A single OCR error failed the whole document. (fixed)
+OCR text landed on the wrong page. (fixed)
+Soft hyphens turned into a junk character, and text had Windows line endings. (fixed, though a few stray control characters remain in Week 5)
+OCR sent dozens of pages in one huge request. (partly fixed: requests are capped now)
+MiMo's OCR recovered almost nothing. (partly fixed: Week 2 and Reséndez came back, Week 3 still gets nothing)
+When the model leaves a blank page empty as the prompt tells it to, the splitter rejects the whole batch. (new, still broken, high)
+A dropped connection isn't retried, because the retry check matches English error text. (new, still broken)
+One OCR call burned the full 16k-token budget and was then thrown away, and some calls record no token usage at all. (new, still broken, low)
+OCR failures never show up for the student. (new, still broken)
+Duplicate passages aren't deduplicated. (still broken)
+Finding passages and answering
+
+The 2048-token output cap caused blank and cut-off replies. (fixed)
+Dollar amounts were rendered as math formulas. (fixed)
+"Sources used" listed every passage it searched instead of only the cited ones. (fixed in code, needs an app check)
+"Sources used" once expanded empty. (fixed in code, needs an app check)
+Asking about a specific reading didn't pull from that reading. (still broken; you reclassified it)
+Factual answers got cut short and ended with "Your turn". (fixed)
+Passages went to the model with no document, author or page, so it misattributed things. (fixed)
+Garbled numbers reach the model unflagged. In round 1 it invented "180–200", and now it confidently decodes the Alamo digits. (partly fixed)
+Citation markers in chat aren't clickable, and the passage panel loses line breaks. (partly fixed: hovering now works)
+There's no relevance cutoff, so unrelated passages get through, and refusals list unrelated sources. (still broken)
+Follow-up questions get false "not in the material" refusals. (still broken)
+Table 2.2 can't be found even though it's indexed. (still broken)
+Reversed citation ranges like [5-3] now count as valid. (new, low)
+A MiMo "request rejected, high risk" message is treated as a real answer. (new)
+A reply that finishes after 600 seconds is thrown away even though it was billed. (new, low)
+Reasoning models request 16k tokens for every task, even small summaries. (new, low)
+Conversation memory
+
+Turns between the summary and the last 4 messages are dropped. (still broken)
+The conversation summary failed 22 of 27 times, and silently. (partly fixed)
+Earlier answers are cut to 600 characters with citations stripped, and artifacts are remembered by title only. (still broken)
+Questions about the conversation itself get answered from the readings. (still broken)
+Grading a quiz loses the quiz and contradicts its own answer key. (still broken)
+Quizzes, documents, slides and tables
+
+The artifact type was guessed from keywords, so "essay with a table" became a spreadsheet. (partly fixed: edits to a table still aren't routed, and "give me the notes" now creates a document)
+Documents and slides lost their line breaks and collapsed into one slide or one heading. (partly fixed: sections survive, but tables and bullets inside them still break)
+Words like "Week 3" and "first exam" get searched as topics. A Week 3 quiz pulled no Week 3 passages, and words like "8-slide" and "one-page" end up in the search too. (still broken)
+Quizzes were capped at 6 questions. (fixed)
+Every correct quiz answer is option A. (new)
+A deck had a malformed citation [12) and a sentence cut off mid-passage. (new, low)
+A one-line document starting with # got rejected as title-only. (partly fixed)
+Heading handling has three problems: a one-line ### paragraph rejects the whole document, "#1 Priority" loses its "#1", and a title over 120 characters rejects the draft. (new, low)
+An error during quiz repair throws away questions that were already good. (new, low)
+Decks of up to 200 slides are accepted even though they can't fit. (new, low)
+The "from Qn" label on workspace tabs is confusing. (still; you reclassified it)
+The narrow pane clipped sheet cells and quiz options. (fixed in code, needs an app check)
+The slide viewer has navigation gaps. (still)
+Exporting
+
+.md and .csv files were saved silently into the app's own folder. (fixed in code, needs an app check)
+Word, Excel and PowerPoint export only exists on the saved-artifact page. (still)
+Course export says "Downloads" but quietly falls back to your home folder. (partly fixed)
+Three smaller export problems: a filename typed without its extension errors out, overwriting may ask twice, and files are sent inefficiently. (new, low)
+The interface
+
+"No sources yet" showed while files were uploading. (fixed in code, needs an app check)
+A stray Cancel button appeared on an empty My courses page. (fixed)
+There was no indexing progress. (partly fixed)
+Every upload gets typed "Notes" even on Auto. (still)
+The source list looks newest-first. (partly fixed: it actually sorts by upload order)
+The Reindex control was ambiguous. (fixed)
+There were no page counts or quality info per source. (fixed)
+Enter didn't send the first question. (fixed)
+Answers aren't streamed, so you wait 60–90 seconds behind a spinner. (still; you reclassified it)
+The Sources panel auto-expanded and hid the answer, and text overflowed. (fixed)
+Pressing Enter while a reply was pending was ignored. (fixed)
+The Sources panel stops refreshing after about 15 minutes, so long uploads look stuck. (still broken)
+Settings and setup
+
+"Ask a bigger model" couldn't be set from .env. (fixed, but blocked by the keyring bug)
+A key in the shell environment overrides .env. (by design)
+MiMo had no model profile, and its content filter blanked pages. (fixed)
+With no system keychain, model settings fail entirely. (still broken)
+Two of these bugs, the polling cap and the keyring error, never made it into your docket. Two more (Sources used and the MiMo OCR result) aren't in it either, but they're partly fixed already.
+Companion (the first three were found on the old build and haven't been rechecked)
+
+Custom edits and rewrites stuck at "Saving this request…" and then failed.
+Summarize on the spreadsheet answered from the Word doc instead.
+There's no insert or replace, and Copy only gives plain text.
+Pasted documents are labelled "Partial or unverified capture", and Summarize pulls in separator pages. (still)

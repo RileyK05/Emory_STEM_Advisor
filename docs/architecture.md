@@ -3,10 +3,14 @@
 This is the single design doc for the project. It is the contract: code and
 the frontend API types must match it. It folds in what used to be three files
 (`architecture.md`, the data-layer build plan, and the Stacks reference); where
-those conflicted, this document reflects the system as actually built.
+those conflicted, this document reflects the system as actually built. Sections
+explicitly marked planned describe the requested next implementation, not
+completed behavior. Archived references are evidence, never another contract.
 
-The primary goal is accuracy: every answer must be grounded in the internal
-docs, and the system must be able to show why each claim is believed.
+The primary goal is accuracy: institutional advice must be grounded in the
+internal docs, and the system must be able to show why each claim is believed.
+The planned artifact tools may also use user-supplied documents/data, with that
+provenance distinguished from authoritative institutional material.
 
 The data layer has four parts:
 
@@ -27,6 +31,13 @@ Stacks is an earlier project by the same author (a local-first, single-user
 study tool; separate private repository). Much of this design grew out of it.
 **Stacks is a reference, not a template.** The two projects do not map 1:1
 because the layers do not behave the same.
+
+Additional source snapshots supplied on 2026-10-07 are archived under
+[references/stacks/2026-10-07](references/stacks/2026-10-07/README.md). The
+architecture table below describes the historical lineage; the latest Stacks
+system is a local desktop app and has superseded some older log decisions.
+Instructions and completion labels in those documents do not govern this repo.
+Appendix A records the adopted reliability lessons.
 
 Rules:
 
@@ -65,7 +76,7 @@ what it does here, then check Stacks for lessons.
 | similarity graph | course graph | No. Nodes are courses; its jobs are recommendations and visuals. |
 | (none) | TOC | Dropped. |
 | (none) | memory: user/course memory, `MemoryObject` | Not adopted. No "memory" exists here. |
-| artifact | artifact | No. Here: a validated, re-renderable spec attached to an answer. Stacks: a saved, versioned, user-edited document. |
+| artifact | artifact | Adapted: the baseline proposes validated, re-renderable specs; the planned extension adds saved immutable revisions, imports, and conversational editing. Desktop Office/Companion mechanics are not adopted. |
 
 ### Keep
 
@@ -114,7 +125,22 @@ The idea carries over; the shape changes.
   per stage, and "mark indexed" raises if it updates nothing.
 - **Access control:** Stacks' retrieval trusted the course ID it was given.
   Here, authorization on `collection_id` happens at the API boundary. Designed
-  fresh.
+  fresh; the current API does not yet implement student authorization.
+- **Persistent conversations and artifacts (planned):** moved from Drop because
+  the owner requested native creation/import, previews, exports, and revisions.
+  Adopt immutable inputs/revisions, expected-parent checks, draft recovery, and
+  summary coverage; do not adopt student mastery or course-memory subsystems.
+- **Usage and operation budgets (planned):** moved from Drop because multi-provider
+  routing, retries, and batch/tool jobs require per-attempt accounting and a
+  shared operation budget. No pricing tiers or customer billing are adopted.
+- **Replacement publication (planned):** stage new indexes/revisions and publish
+  only against the expected current revision; failures retain last good data.
+- **Artifact and tool reliability (planned):** separate intent/scope from search
+  text, validate typed structures, preserve original Office files, export the
+  chosen draft/revision, and reject stale completions. Structural success is not
+  proof of factual quality or visual/Office fidelity.
+- **Operational recovery (planned):** backup/restore evidence for a server
+  deployment, rather than desktop .course archives or trash/keepsakes semantics.
 
 ### Drop
 
@@ -128,9 +154,8 @@ Not part of this project.
 - The memory vocabulary and subsystems: user/course memory, `MemoryObject`,
   student model, practice suites, mastery estimates.
 - Companion window, Office add-in, document capture.
-- Saved/versioned/editable artifacts, autosave, drafts.
-- Backups, `.course` archives, the 30-day trash and keepsakes.
-- Usage ledger, token budgets, tiers, billing.
+- Desktop `.course` archives, the 30-day trash and keepsakes.
+- Customer pricing tiers and billing.
 - The graded-work assistance policy (three zones).
 
 ### Deferred
@@ -680,7 +705,8 @@ open (O1); do not add them yet.
 
 ### Provider seam
 
-Every model call goes through one seam, with task `answer` or `embed`.
+The current model seams serve answering and embedding. The planned extension
+adds typed generation/tool results and a separate decision interface.
 Provider, model name, and settings are env config. Concrete providers are
 imported only in their `factory.py`; no SDK objects leak past the module. The
 atlas parser and the prerequisite seam import no provider at all.
@@ -794,10 +820,10 @@ takes the cited chunks from `retrieve()` (already contract-checked), fences
 their text as untrusted data (never instructions), and asks the provider for
 an answer with bracketed chunk-number citations. It maps the markers the
 answer actually used back to `(source_name, locator_label, chunk_id)`
-citations; if the model used no markers it cites every context chunk, so an
-answer is never shown unsourced. An empty model return is flagged as a
-warning (fail-closed at the API: the answer is still returned but visibly
-ungrounded, and a future revision may refuse instead). `PROMPT_VERSION`
+citations. Currently, if the model used no valid markers it cites every context
+chunk, and an empty model return only adds a warning. These are open correctness
+gaps, not fail-closed guarantees; Appendix A requires removing the fallback and
+withholding invalid output. `PROMPT_VERSION`
 identifies the prompt for the evidence chain.
 
 Nothing here imports a concrete provider: it takes a `Provider` from the API
@@ -829,63 +855,175 @@ and the Vite dev server proxies `/api` and `/health` to `127.0.0.1:8000` so
 there is no CORS in development. `VITE_API_BASE_URL` overrides the proxy.
 
 The upload path approximates token counts (whitespace) rather than loading the
-embedding tokenizer; the scripts use the exact tokenizer. Chunking stays
-token-bounded either way. Ingestion is synchronous in the request for now; a
-worker (with Stacks' queue lessons) is deferred.
+embedding tokenizer; the scripts use the exact tokenizer. The HTTP approximation
+does not prove compliance with the embedding model's token ceiling; the tested
+base must verify actual-token bounds. Ingestion is synchronous in the request
+for now; persistent workers are planned in the platform extension.
 
-### Generation layers: answer artifacts
+### Generation layers: answer artifacts (planned)
 
-Answers are not only prose. The harness supports typed **artifacts**:
-rendered outputs attached to an answer. The model produces a structured spec,
-the system validates it, and a fixed renderer turns it into something
-interactive. The model never emits executable output directly.
+This layer is not built. The platform extension below is the current artifact
+scope: Markdown, DOCX, interactive HTML, and XLSX creation/import/revisions,
+with native preview and export. Typed tables/charts can form document/workbook
+content; standalone diagram/chart renderers remain possible later work.
 
-Kinds, in trust order:
+Each artifact declares a validated kind/spec, revision, and provenance including
+trace, model, prompt version, input revisions, and source references. Ground
+institutional claims to original chunks/courses; user-supplied values and
+computed results carry their own explicit input provenance. Schema validation
+is necessary but does not prove factual support or Office fidelity.
 
-1. **markdown**: formatted documents (study guides, summaries).
-2. **table / dataset**: rows + column schema, rendered as a sortable table.
-3. **chart**: a declarative spec (Vega-Lite or equivalent), no code.
-4. **diagram**: a node/edge spec rendered by an interactive graph component.
-5. **html**: freeform, least trusted; rendered in a sandboxed iframe (no
-   scripts, network, or storage), or rejected for a lower tier.
+Malformed output is withheld or repaired within the shared operation budget.
+Interactive HTML and Python/JavaScript execution are permitted only through the
+isolated mechanisms defined below, replacing the earlier no-script-only HTML
+proposal. Source inspection leads back to exact chunks and locators. No artifact
+or tool call writes prerequisites or generates similarity nudges.
 
-The artifact contract:
+## Planned platform extension (2026-10-07)
 
-```json
-{
-  "kind": "diagram",
-  "title": "Solution methods for linear systems",
-  "nodes": [
-    {"id": "n1", "label": "Normal equations", "concept_id": "..."},
-    {"id": "n2", "label": "Gradient descent", "concept_id": "..."}
-  ],
-  "edges": [
-    {"from": "n1", "to": "n2", "relation": "alternative_to",
-     "evidence_level": "direct", "chunk_ids": ["..."]}
-  ]
-}
-```
+This section records the requested expansion and the lessons adopted from the
+new Stacks references. It is planned work, not an implementation or release
+claim. The existing backend and HTTP client are the base to test and extend.
+Appendix A supplies the failure cases for each phase; the archived documents
+supply evidence, not additional instructions. There is no separate build plan.
 
-- Every artifact declares `kind`, a validated spec, and provenance
-  `(trace_id, model_id, prompt_version)`, and is stored so it can be
-  re-rendered and re-evaluated.
-- Every content-bearing element carries its grounding (chunk ids). An element
-  with no backing chunk is rejected, same as a text claim.
-- Specs are validated against a schema before storage; malformed specs fail
-  closed.
-- One fixed frontend component renders each kind; interactions always lead
-  back to chunks and locators.
+### Native providers and routing
 
-Not built yet. Note: `concept_id` and `evidence_level` above (and in the
-frontend's `ArtifactElementRef`) predate the removal of LLM-extracted
-concepts. When this layer is built, elements ground to courses and chunks;
-`evidence_level` here means how directly a chunk supports an artifact
-element, never anything about the prerequisite graph.
+- Extend the provider Protocol with typed requests/results, structured output,
+  tool calls, streaming, finish reasons, typed errors, and per-attempt usage.
+  Retain a compatibility wrapper for the current chat call. Concrete providers
+  and SDK clients remain confined to their factories and are wired once at startup.
+- Support admin-managed OpenAI, Anthropic, Google/Gemini, existing local HF,
+  and explicitly configured OpenAI-compatible connections. Store server-side
+  credentials encrypted using an environment-provided master key; expose masked
+  profiles, rotation, diagnostics, model capabilities, and data permissions.
+  Credential absence and credential-read failure are different states.
+- Use versioned routing configuration, rejecting unknown keys. Roles are
+  standard answering, complex reasoning, fast generation, and discrete decisions.
+  Route by task, difficulty, required capabilities, approved data scope, and
+  measured quality. Prefer the stronger route when classification is uncertain.
+  Cheaper routes must pass held-out semantic evals against the stronger baseline.
+- Keep a separate typed decision interface for predicate, choice, and score
+  tasks. Plan native OpenAI Decisions and Cloudflare Clef adapters, with a
+  structured classifier fallback; verify availability and capabilities when
+  implementing. Model catalogs, IDs, and prices are configurable and dated.
+  Decision models never grant access or infer/edit prerequisites.
+- Allow one bounded quality escalation and ordered approved fallbacks. Pin
+  connection/model settings for the logical operation, recording any fallback.
+  Retries, repairs, and continuation share one request, time, and token budget.
+  Record every attempt before validation or rejection, including failed,
+  cancelled, and late results. Missing usage remains explicitly unknown;
+  estimates are distinct from provider measurements. A hard concurrent spending
+  cap requires atomic reservations, not a check of yesterday's ledger.
 
-**Processing pipelines** (later): the model plans steps, the harness executes
-them against the corpus, and the result renders as a table/chart with
-provenance for every input. Ships only when a measured eval failure justifies
-it.
+### Tools, jobs, and evidence
+
+- The application owns the sequence: authorized inputs, retrieval, routing,
+  generation/tool execution, validation, then persistence. Typed tools expose
+  source inspection, retrieval, deterministic calculations, document/workbook
+  operations, rendering, and approved Python/JavaScript execution. Models receive
+  scoped resource IDs, not arbitrary host paths or credentials.
+- Store conversations, responses, claims/citations, immutable artifact revisions,
+  files, runs/jobs, model calls, and tool executions through append-only migrations
+  and named queries. Revisions require an expected parent; retries are idempotent.
+  Persist input revisions and source provenance so edits cannot silently change
+  the material an answer cites. Generated output is never promoted automatically
+  into institutional facts or the prerequisite graph.
+- Persist worker leases, heartbeats, retries, cancellation, and terminal errors.
+  Never hold database transactions during extraction, model calls, or rendering.
+  Separate promptly started background jobs from provider Batch APIs for eligible
+  independent generation/extraction steps. Interactive tool loops use ordinary
+  runs rather than pretending to be independent batch requests.
+- Keep the current query endpoint compatible. Add runs/status/cancel/events,
+  conversations, artifacts/import/revisions/preview/download, and admin profile
+  APIs with matching frontend types. Streaming output is provisional until
+  validated; refusals, failures, and cancellations are distinct terminal states.
+- Conversation context covers every retained turn exactly once through raw
+  history or a successful summary with a coverage boundary. Failed summarization
+  cannot advance that boundary. Preserve citations and artifact revision IDs;
+  summaries aid context, never become factual evidence. Follow-ups resolve the
+  current topic and selected sources before retrieval; questions about the
+  conversation use conversation history rather than unrelated readings.
+
+### Native artifacts and imports
+
+- Create, preview, export, and conversationally revise Markdown, Word documents,
+  interactive HTML, and Excel workbooks. Also import and revise existing DOCX
+  and XLSX files. Keep originals and immutable revisions with provenance.
+- Use typed document blocks for paragraphs, lists, tables, and headings, plus
+  typed workbook structures for sheets, cells, formulas, styles, and basic charts.
+  Preserve real newlines, literal heading text, currency, and worksheet order.
+  Intent distinguishes creating, inspecting, summarizing, and editing, including
+  mixed requests such as a document containing a table. Format/count constraints
+  are not retrieval keywords. Plan large outputs as bounded units with checkpoints.
+- Plan python-docx/openpyxl for supported transformations and isolated LibreOffice
+  for pagination, preview, and formula recalculation. These choices do not promise
+  lossless arbitrary Office editing. Detect unsupported features before revision,
+  explain limitations, retain the original, and reject destructive rewrites.
+  Macros, external connections, and full desktop Office/add-in editing are outside
+  the first release. Formulas are verified after recalculation; writing formula
+  strings alone is not evidence of correct calculated values.
+- Preview and export the same chosen revision or explicitly identified current
+  draft. Saving failures retain the draft and block operations requiring a saved
+  revision. Repairs retain already valid units. Exports include applicable source
+  legends, correct MIME type/extension, and a visible browser download outcome.
+  Import containers/XML and output files have bounded sizes and decoded content.
+- Run Python/JavaScript in disposable Linux containers with fixed dependencies,
+  bounded CPU/memory/runtime/output, approved input/output files, and no network,
+  secrets, database access, privileged execution, or Docker socket. Production
+  uses a separate sandbox host with gVisor isolation and refuses code execution
+  when that isolation is unavailable. Network tooling is deferred.
+- Interactive HTML runs on an opaque iframe origin with scripts allowed only
+  inside that sandbox; restrictive CSP blocks network, storage, navigation, and
+  forms. It never executes with the application origin's permissions.
+
+### Product, access, and deployment
+
+- Finish source upload, progress/errors/quality warnings, locator views,
+  recommendations, artifact workspace, revisions, conversation history, and job
+  progress. Stream answers and keep status updates active through long jobs;
+  do not impose a fifteen-minute polling cutoff. Ignore stale completions after
+  switching sources, conversations, revisions, or connection profiles.
+- Share the advising corpus while keeping user workspaces private. Apply access
+  and explicit source scope before every candidate limit, model/tool call, file
+  download, and job action. An explicitly empty selection does not mean all sources.
+  User-supplied document facts are attributed separately from institutional advice.
+- Local development initially uses one development identity without sign-in,
+  bound to loopback. Prepare inactive OIDC sessions and an optional Keycloak
+  broker for school OIDC/SAML, with setup/diagnostics, role/claim mapping, and a
+  plain handoff guide. Test against a mock identity provider. Public student mode
+  requires authentication; school approval, credentials, and activation remain
+  external dependencies, not assumed agreements.
+- Use a Docker Linux development stack on Windows and a portable Linux app host
+  plus separate sandbox host for deployment. Deliver configuration, migrations,
+  health checks, monitoring, backups and a proven restore, rollback instructions,
+  and the school-auth handoff before students use the product.
+
+### Delivery order and release evidence
+
+1. Establish the tested base: reliable Postgres test setup, frontend build,
+   Docker development stack, atlas input preparation, 30+ real requisite strings,
+   and 30-50 manually verified retrieval questions.
+2. Define shared API/provider/tool contracts and append-only persistence migrations.
+3. Implement provider connections, decision adapters, routing, and held-out evals.
+4. Implement runs, workers, budgets, streaming, cancellation, and batch tracking.
+5. Implement artifact generation/import/revisions, previews, exports, and sandboxes.
+6. Finish product flows, private scoping, auth preparation, and browser checks.
+7. Verify deployment, restore, load behavior, and handoff; then assess release readiness.
+
+Each phase includes the applicable Appendix A checks. Required release evidence
+includes all backend tests with real DB tests and zero skips, Ruff, frontend
+typecheck/build, and browser tests for substantive UI behavior. Test semantic
+answer quality separately from citation/schema validity; an LLM judge is a
+review aid, not ground truth. Exercise retries, duplicate workers, cancellation,
+concurrent revisions, private access, malicious imports/HTML/code, formula
+recalculation, representative Office round-trips, and visual exports. Paid live
+provider evals need an agreed budget. Existing structural tests or historical
+Stacks "fixed" labels do not satisfy these checks.
+
+Goal execution and agents have not started. When requested, up to three Luna
+agents can take bounded provider/routing, artifact/rendering, and frontend/test
+work; the lead owns shared contracts, migrations, integration, and review.
 
 ## Measurement
 
@@ -958,12 +1096,15 @@ Still to build:
 2. Recommendation UI in the frontend (the endpoint exists).
 3. Evidence chain tables (`responses`/`claims`/`citations`) and persisting
    generated answers + artifacts.
-4. Artifact layer, then processing pipelines.
+4. Native providers/routing, jobs/tools, and artifact creation/import/revisions
+   in the delivery order of the planned platform extension.
 5. Gap capture and the learning loop.
 6. Upgrades (reranker, OCR) only on a documented baseline failure.
 7. Data-layer gaps from the prior system still open: numeric/punctuation
    keyword search (`Table 2.2`), and per-document/source scoping for queries
    (see Appendix A).
+8. Conversation persistence, source/error UI, private workspace scoping, auth
+   preparation, and deployment/restore evidence from the extension plan.
 
 ## Layout and commands
 
@@ -1019,69 +1160,96 @@ Constraints worth not re-learning:
 
 ## Appendix A: failure modes from the prior system
 
-The prior system (Stacks) shipped a long list of retrieval-, ingest-, and
-generation-layer bugs. This appendix records the ones that could plausibly
-recur here, so the design either prevents them structurally or names the
-guard. It is a checklist for future phases, not a spec.
+The supplied [bug report](references/stacks/2026-10-07/bugs.txt) and
+[reference snapshots](references/stacks/2026-10-07/README.md) are preserved
+verbatim. This appendix adopts relevant lessons into this design contract.
+Historical statuses describe Stacks, not Emory; later notes sometimes supersede
+those statuses. The rows below distinguish existing guards, current gaps, and
+planned acceptance checks. They do not claim that every Stacks bug was reproduced
+here, or that a code fix has passed an installed-product or semantic check.
 
-### Prevented by the current design
+### Existing guards and their limits
 
-- **A chunk cited to the wrong page / passages spanning several pages.**
-  Prevented: a chunk never crosses a locator (D4) and is hard-bounded by
-  `target_tokens` (D5); `cited_chunk_details` joins the locator per chunk.
-- **"Sources used" listing everything searched, or expanding empty.**
-  Prevented: `Retrieved.chunks` (cited) is separate from the trace's
-  `candidate_count`; the UI shows only cited chunks.
-- **Chunks reaching the model with no document/author/page -> misattribution.**
-  Prevented: `CitedChunk` always carries `source_name` + `locator_label`.
-- **Reversed citation ranges like `[5-3]`.** N/A: we emit one locator label,
-  never a range.
-- **Empty or whitespace-only chunks stored and searched.** Prevented: empty
-  chunks are dropped in the chunker.
-- **Ingest/embedding failure hidden from the user.** Prevented:
-  `set_source_failed` + `error_message`; only `indexed` sources are citable.
-- **Mixing vectors from different models/dimensions.** Prevented: `model` +
-  `dim` filter in SQL and a unit-norm check at write.
+- **Page identity and chunk size:** D4 keeps each chunk inside its locator;
+  D5 bounds chunks. PDF offsets use the same joined text as extraction, and
+  empty chunks are dropped. This does not detect corrupted fonts/digits,
+  restore missing spaces, or recover scanned pages.
+- **Source identity:** model context carries source filename and locator label.
+  Author metadata is not extracted; filenames must not be treated as authors.
+- **Vector compatibility:** model/dimension filters and write validation prevent
+  incompatible vectors from being scored together.
+- **Relevance:** embedding and fusion floors exist, but keyword min-max gives
+  the best keyword hit 1.0 even if irrelevant. Semantic refusal quality is open.
+- **Duplicates:** fusion deduplicates identical selected text, not arbitrary
+  overlaps or all duplicate passages at ingest.
+- **Markdown and normalization:** body-less headings merge with surrounding
+  sections; BOM-aware decoding and control/soft-hyphen cleanup exist. This does
+  not prove artifact rendering, arbitrary encoding detection, or repaired glyphs.
+- **Configuration:** the .env loader exists and the shell wins deliberately.
+  Multi-provider encrypted profiles and credential diagnostics are planned.
+- **Ingestion failures:** error_message is stored and failed sources are not
+  citable, but SourceDoc does not expose the error to the frontend. Per-page
+  extraction warnings and progress remain to build.
 
-### Fixed (guard added, with regression tests)
+### Current gaps to address before expansion is trusted
 
-- **No relevance cutoff.** Fixed: `seams.embed.min_similarity` drops
-  dissimilar chunks in the embedding seam, and `fusion.min_score` drops the
-  weak fused tail before citation. Note the honest limit: per-query min-max
-  means the best keyword hit is always 1.0, so a keyword-only query with one
-  hit still cites it; the floor bites on multi-candidate results.
-- **Duplicate passages.** Fixed: `fusion.dedupe` collapses identical cited
-  text (the 48-token overlap can otherwise cite the same passage twice).
-  Content-level dedup at ingest is not done; the citation layer handles it.
-- **Empty/header-only locators.** Fixed: the markdown extractor merges
-  body-less headings into the next section that has a body (or the previous
-  one for a trailing run), so a lone `##` title is never a passage by itself.
-- **Soft hyphens, C1 controls, zero-width/bidi characters.** Fixed:
-  `normalize_text` strips U+00AD, the C1 block, and zero-width/bidi controls.
-  BOM-aware decoding added for UTF-16/UTF-32. Remaining: encoding detection is
-  still only as good as the BOM; a UTF-16 file without one decodes to
-  cp1252 garbage, which is at least not silently mis-tiled.
-- **No `.env` loader.** Fixed: `app/config.py` loads `REPO_ROOT/.env` at
-  import via `os.environ.setdefault`, so the shell always wins (by design).
+1. **Citations can list everything provided to the model.** The generation
+   function falls back to every context chunk when there is no valid marker.
+   Remove that fallback; retain the complete numbered context separately from
+   the actually cited subset. Explicitly empty citation metadata stays empty.
+2. **Malformed citations are not validated comprehensively.** The current
+   parser recognizes individual numeric markers, not citation ranges. Reversed
+   ranges such as [5-3] are neither supported nor explicitly rejected; they are
+   not made impossible by locator labels. Validate prose/spec citations, bounds,
+   code contexts, and source references; a valid marker still does not prove
+   that a passage supports the claim.
+3. **Empty and rejected output can appear as an answer.** Empty output currently
+   adds a warning, and the text-only provider seam cannot express refusal,
+   truncation, or content filtering consistently. Typed failures and bounded
+   repair/escalation must withhold invalid answers rather than invent sources.
+4. **Numeric retrieval and per-source scope are missing.** Short numeric tokens
+   in "Table 2.2" disappear and all seams search the collection. Apply explicit
+   source scope before ranking/limits; preserve numeric references without
+   changing deterministic prerequisite semantics.
+5. **Extraction completeness is unknown.** OCR is unsupported; a mixed PDF can
+   yield usable text while scanned pages are omitted. Expose page coverage and
+   suspicious numeric/text quality; never let a model guess corrupted digits.
+   OCR itself stays deferred until a documented real-corpus baseline failure.
+6. **Conversation, artifact, worker, and accounting contracts are unimplemented.**
+   The platform extension above is the planned remedy, not proof of completion.
 
-### Real gaps still open
+### Acceptance checks carried into the implementation phases
 
-- **Numbers/punctuation unsearchable ("Table 2.2").** Tokens are `[a-z0-9]+`
-  and `min_token_len = 2` drops short tokens, so `2.2` vanishes; numeric
-  queries match nothing. Course codes are rescued only by the prereq seam.
-  Needs a keyword strategy change, not a config tweak.
-- **No document/source scoping.** Every seam queries the whole collection, so
-  "ask about a specific reading" pulls from everywhere (same root as Stacks'
-  "Week 3 searched as a topic").
+| ID | Reported failure family | Required behavior and evidence |
+| --- | --- | --- |
+| A01 | Multi-page passages, wrong quote/OCR page, mixed scans, hidden extraction failure | Preserve exact page identities and expose per-page coverage/quality. Check real mixed PDFs, corrupt fonts/digits, blank and header-only pages, spaces, and controls. Bound the upload/decoded size. Never silently claim complete extraction. |
+| A02 | A blank page or one OCR error rejects an entire batch; giant low-yield OCR calls | If OCR becomes justified, use bounded page batches with explicit page IDs, distinguish legitimate blank from failed extraction, retain usable pages, and show warnings. Ambiguous page mapping fails that unit. OCR uses the same shared budgets and usage accounting as other calls. |
+| A03 | Duplicate passages and failed reindex damaging good sources | Deduplicate at the appropriate stage without losing provenance. Build replacement data outside long transactions; publish only if its expected source/index revision is current. Failed or stale replacements retain the last good index and citation snapshots. |
+| A04 | Wrong reading, Week 3/exam labels and output counts searched as topics; Table 2.2 misses | Resolve named files, explicit source selections, conversation references, and artifact targets separately from semantic queries and formatting. Verify a selected reading beats unrelated material, empty scope remains empty, and numeric/table references are found. |
+| A05 | Unrelated hits and refusal sources, false follow-up refusals, garbled numeric answers | Calibrate relevance on real questions, including keyword-only misses. Resolve follow-ups using grounded context and original source identity. Refusals show no claimed supporting citations. Suspicious source text cannot become confident guessed facts. |
+| A06 | Every retrieved passage listed as used, empty panels, malformed/reversed markers, author misattribution | Keep numbered context stable and parse only actual citations; reject malformed/out-of-range/reversed references. Clicking citations opens the exact source/locator with line breaks. Preserve prior cited material through revisions; test author/filename distinction and semantic support manually. |
+| A07 | Provider filter text treated as prose; dropped connection missed by English-message retry | Normalize adapter errors and finish reasons into typed results; retry eligible transport errors by type within the shared budget. Blank, filtered, and incomplete output cannot become a validated answer. Treat an intentional grounded refusal separately from infrastructure failure. |
+| A08 | 2048-token truncation, 16k reasoning for tiny tasks, 600-second billed result discarded, missing usage | Plan context/output budgets by task and capability. Bound the whole operation, including repairs/fallbacks; handle truncation without concatenating arbitrary partial JSON. Persist usage for every attempt before discarding output; label unknown/estimated measurements and account for late cancellation. |
+| A09 | Dropped turns between summary and recent messages; silent failed summaries; 600-character history and artifact titles only | Persist raw turns and summary coverage boundaries. A failed summary does not erase turns. Context selection retains citations and exact artifact revisions, reports limits, and uses conversation history for questions about the conversation. Summaries are not authoritative sources. |
+| A10 | Keyword artifact guessing; essay-with-table becomes spreadsheet; summarize/notes request creates or edits wrong document | Validate intent and target revision before dispatch. Test creation, inspection, summary, and revision separately, including mixed structures and ambiguous named targets. Switching contexts cannot redirect an in-flight write. |
+| A11 | Collapsed lines/lists/tables; currency interpreted as math; heading/title edge cases | Use typed blocks and preserve structure through storage, preview, export, and reopen. Cover dollar amounts, literal #1 Priority, one-line headings/documents, long titles, multiline cells, and pasted content. No ad hoc splitting of structured text. |
+| A12 | Oversized generation accepted though it cannot fit; repair discards good units | Validate size/count against a generation plan, checkpoint bounded units, and repair only invalid units with bounded retries. Preserve accepted units and visible failure status. Do not clip valid content to satisfy a schema silently. |
+| A13 | Imported Office preview falsely treated as a full editor; partial capture and wrong source document | Detect supported import features and partial content, preserve originals, and verify representative DOCX/XLSX round-trips and rendered pages/sheets. Unsupported content cannot be silently flattened or deleted. Inspect the selected document/revision, not a previous Word or Excel context. Full Office/add-in capture is outside this release. |
+| A14 | Unsaved edit stuck or lost; export uses older saved content; unclear workspace labels | Serialize saves, use expected-parent checks, retain failed drafts, and prevent stale saves from replacing newer revisions. Export identifies exactly which draft/revision it uses. Label artifacts by title/type/revision, not internal question numbers. |
+| A15 | Silent export to app/home folder, saved-page-only export, filename/overwrite/bytes defects | Offer export from the artifact workflow, return correct bytes/MIME/extension, and make the download outcome visible. Verify exported current content by reopening, formulas after recalculation, and source legends; never announce an unverified destination. Desktop file-dialog mechanics are not copied into the web app. |
+| A16 | Upload says No sources yet, wrong Auto type, no progress/page/quality data, confusing Reindex/sort | Distinguish empty, uploading, indexing, partial, failed, and indexed states with actionable errors and stable documented sorting. Auto uses actual format detection. Explain reindex behavior and show extraction coverage rather than implying a count proves quality. |
+| A17 | Long spinner, polling stops after fifteen minutes, pending input ignored, panels clip answers/cells | Stream provisional output and persistent job progress; recover event/poll connections until settled or unmounted. Verify slow jobs beyond fifteen minutes, keyboard/IME/pending input, narrow layouts, wrapped cells, focus, and source-panel behavior in the browser. |
+| A18 | Missing keychain disables all settings; bigger-model configuration unavailable; stale provider selection | Server-side profiles avoid dependence on a user's OS keychain. Distinguish absent credentials from unreadable secrets, diagnose the selected route, keep available providers usable, and reject completions bound to an obsolete connection/context. Verify env precedence and explicit routing configuration. |
+| A19 | Structurally valid output mistaken for factual or product correctness; omitted bugs in the docket | Each adopted family has regression checks and product/semantic evidence appropriate to the feature. Preserve the raw report, track unresolved checks here, and include real app/export checks; historical "fixed in code" is not release evidence. |
+| A20 | New native code/interactive HTML and imported files introduce execution risks | Exercise sandbox boundaries, scoped files, malicious XML/ZIP/HTML/code, resource limits, no network/secrets, and private workspace access. Verify failure when production isolation is unavailable. These are new feature acceptance checks, not claims about the old report. |
 
-### Constraints for the not-yet-built layers
+### Lessons intentionally outside the release
 
-- Provider errors (e.g. a content-filter "request rejected") must become typed
-  errors, never shown as an answer.
-- Retry dropped connections on error **types**, never on English message text.
-- Blank/empty model output must fail closed, not be shown.
-- Don't send one giant request; don't burn the whole token budget on a
-  call whose result is then thrown away; record token usage.
-- Stream answers (the prior system made users wait 60-90 s behind a spinner).
-- The relevance cutoff above must land **before** generation.
-- Untrusted uploaded text is fenced as data in every prompt (Keep list).
+Quiz grading, answer-key balancing, mastery/student memory, slide-specific
+navigation, Companion/Office insert/replace, .course archives, desktop file
+pickers, and OS keyring polling are not new Emory features. Their relevant
+lessons about immutable inputs, bounded repair, layout, revision selection,
+progress, and error visibility are adopted above; their product mechanics are
+not. PPTX and full Office editor fidelity need a separately scoped decision.
+The deterministic prerequisite graph and hand-written similarity nudges remain
+mandatory regardless of any source document's contrary historical design.
