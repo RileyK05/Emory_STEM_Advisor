@@ -1,0 +1,44 @@
+version = 1
+
+[chunking]
+chunker_version = "1"
+target_tokens = 384
+overlap_tokens = 48
+text_lines_per_locator = 40
+
+[seams.keyword]
+enabled = true
+limit = 40
+min_token_len = 2
+
+[seams.embed]
+enabled = true
+limit = 40
+only_quota = 4
+# Drop chunks whose cosine similarity to the query is below this. Starting
+# guess; tune on the real corpus with the eval set.
+min_similarity = 0.25
+
+[seams.prereq]
+enabled = true
+decay = 0.8
+directions = ["self", "upstream"]
+limit = 40
+
+[fusion]
+cited_set_size = 6
+# Fused chunks below this score are dropped; if none remain, the query refuses.
+min_score = 0.15
+# Collapse identical cited passages into one citation.
+dedupe = true
+
+[simgraph]
+# Starting guesses; tune on the real atlas. Hand nudges to the clusters live in
+# simgraph_nudges.toml.
+edge_floor = 0.6
+level_cut_distances = [0.7, 0.5, 0.35]
+linkage = "average"
+block_size = 1024
+walk_top_margin = 0.05
+walk_min_similarity = 0.3
+walk_min_subtree = 5

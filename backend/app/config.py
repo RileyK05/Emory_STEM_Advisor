@@ -2,6 +2,35 @@
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_dotenv() -> None:
+    """Load `REPO_ROOT/.env` into the environment without overriding anything.
+
+    Real environment variables and shell exports win, so a key in the shell
+    always beats the file (intentional). Runs at import, before any setting is
+    read. Missing file, blank lines, and `#` comments are ignored.
+    """
+    path = _REPO_ROOT / ".env"
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        value = value.strip().strip("'\"")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_dotenv()
 
 
 def _int(name: str, default: int) -> int:
@@ -27,6 +56,14 @@ class Settings:
     # Max tokens per embedded text. Granite's context is 512; chunkers
     # must respect this ceiling.
     embedding_max_tokens: int
+    # Postgres connection string. None means the dev/test embedded database
+    # (pgserver) is used; production sets DATABASE_URL.
+    database_url: str | None
+    # Collection the HTTP API serves when a request does not name one.
+    default_collection: str
+    # Where ingest keeps raw uploads (`raw/`) and the dev database
+    # (`pgserver/`). Gitignored. Tests point it at a temp dir.
+    data_dir: Path
 
 
 def load_settings() -> Settings:
@@ -40,4 +77,7 @@ def load_settings() -> Settings:
             "EMBEDDING_MODEL_ID", "ibm-granite/granite-embedding-125m-english"
         ),
         embedding_max_tokens=_int("EMBEDDING_MAX_TOKENS", 512),
+        database_url=os.environ.get("DATABASE_URL") or None,
+        default_collection=os.environ.get("DEFAULT_COLLECTION", "default"),
+        data_dir=Path(os.environ.get("DATA_DIR") or _REPO_ROOT / "data"),
     )

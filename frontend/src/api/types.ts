@@ -1,8 +1,9 @@
 // API contract types mirroring docs/architecture.md.
-// The backend does not exist yet; these types are the contract the future
-// HTTP client must satisfy, and the mock client already satisfies.
+// These are the contract the HttpClient (frontend/src/api/http.ts) and the
+// backend FastAPI schemas (backend/app/api/schemas.py) both satisfy; the mock
+// client satisfies them too.
 
-export type SeamName = 'keyword' | 'toc' | 'graph' | 'embed';
+export type SeamName = 'keyword' | 'embed' | 'prereq';
 
 export interface SeamStatus {
   name: SeamName;
@@ -130,7 +131,6 @@ export interface SourceDoc {
 export interface AdvisorClient {
   query(req: QueryRequest): Promise<QueryResponse>;
   listSources(): Promise<SourceDoc[]>;
-  /** Placeholder until the backend exists; the mock rejects with a
-   *  "backend not connected" error and the UI surfaces that state. */
+  /** Ingest a file into the backend. The mock rejects; the HttpClient posts. */
   uploadSource(file: File): Promise<SourceDoc>;
 }

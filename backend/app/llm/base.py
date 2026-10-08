@@ -1,8 +1,8 @@
 """Provider interface. Every LLM call in the system goes through this."""
 
-from typing import Protocol, TypeAlias
+from typing import Protocol
 
-Message: TypeAlias = dict[str, str]  # {"role": ..., "content": ...}
+type Message = dict[str, str]  # {"role": ..., "content": ...}
 
 
 class Provider(Protocol):
