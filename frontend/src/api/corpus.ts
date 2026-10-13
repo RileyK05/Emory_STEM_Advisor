@@ -77,7 +77,7 @@ export const MOCK_CHUNKS: Record<string, MockChunk> = {
     sourceId: 'src-syllabus',
     sourceName: 'STEM Program Syllabus',
     locatorLabel: 'section 1',
-    text: 'The STEM program requires 36 credit hours: 24 in the core sequence, 9 in electives, and a 3-credit capstone. Electives must include at least one course from outside the student\'s home department.',
+    text: "The STEM program requires 36 credit hours: 24 in the core sequence, 9 in electives, and a 3-credit capstone. Electives must include at least one course from outside the student's home department.",
   },
 };
 

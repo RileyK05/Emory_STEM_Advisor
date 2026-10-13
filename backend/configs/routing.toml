@@ -1,0 +1,18 @@
+version = 2
+
+# Routing policy only. Profiles, models, credentials, and measured quality belong in server settings.
+default_role = "standard"
+uncertain_role = "complex"
+max_quality_escalations = 1
+
+[signals]
+complex_terms = ["compare", "evaluate", "synthesize", "multi-step", "why", "trade-off"]
+fast_job_kinds = ["batch_generation", "bulk_extract", "draft_many", "artifact_authoring"]
+decision_job_kinds = ["binary_decision", "predicate", "yes_no"]
+complex_token_threshold = 1200
+simple_lookup_max_words = 10
+course_lookup_patterns = [
+  "(?:what\\s+(?:is|are)\\s+(?:the\\s+)?(?:prerequisites|requirements|description|title|name)\\s+(?:for\\s+)?|(?:prerequisites|requirements|description|title|name)\\s+(?:for\\s+)?)?[A-Z]{2,6}\\s*\\d{3,4}[A-Z]?[?.]?",
+  "what\\s+(?:is|are)\\s+[A-Z]{2,6}\\s*\\d{3,4}[A-Z]?[?.]?",
+  "[A-Z]{2,6}\\s*\\d{3,4}[A-Z]?"
+]

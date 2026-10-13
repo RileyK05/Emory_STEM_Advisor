@@ -1,0 +1,25 @@
+# Store every text file as LF and check it out as LF everywhere, so diffs do
+# not churn on Windows/macOS/Linux. Reviewers can skip the one-time
+# renormalization; later commits show only real changes.
+* text=auto eol=lf
+
+# Explicit binaries: git must never apply text conversion to these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.zip binary
+*.gz binary
+*.xlsx binary
+*.docx binary
+*.pptx binary
+*.so binary
+*.dll binary
+*.exe binary
+*.pyc binary

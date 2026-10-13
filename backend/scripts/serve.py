@@ -11,6 +11,10 @@ import argparse
 
 import uvicorn
 
+from app.config import configure_runtime_database, load_settings
+from app.db.bootstrap import prepare_database
+from app.db.connection import open_connection
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -18,13 +22,13 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--reload", action="store_true")
     args = parser.parse_args()
-    uvicorn.run(
-        "app.api:app",
-        factory=True,
-        host=args.host,
-        port=args.port,
-        reload=args.reload,
-    )
+    settings = load_settings()
+    with open_connection(settings) as conn:
+        prepare_database(conn, settings.default_collection)
+        configure_runtime_database(conn.info.dsn)
+        uvicorn.run(
+            "app.api:app", factory=True, host=args.host, port=args.port, reload=args.reload,
+        )
 
 
 if __name__ == "__main__":

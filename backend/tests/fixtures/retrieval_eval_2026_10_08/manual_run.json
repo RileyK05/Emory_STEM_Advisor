@@ -1,0 +1,93 @@
+{
+  "status": "manual_local_run",
+  "fixture_sha256": "55a652676760b48ae59e5e1fa6c47fde3fc3e2b5f40d89ec27849e625ddf5c10",
+  "source_manifest_sha256": "c24e6c50b963c1c0b7a9be9d6282ded63489c1324e45adabf4b0a659405e06bf",
+  "source_documents_sha256": "683c4073acb507fb89ab63e6fdfc334eb1316bc91a7976ccb45597608be55449",
+  "retrieval_config_sha256": "ae127f214f825213d2b187b3bea2d0636bfc24715da6375b9db8523d0dfd46a6",
+  "positive_case_count": 44,
+  "negative_case_count": 4,
+  "selected_scope_cases": [
+    {
+      "id": "scope-01",
+      "allowed_source_count": 1,
+      "returned_chunks": 2,
+      "expected_found": [
+        [
+          "degree_requirements.md",
+          "GER Entry Cohorts"
+        ]
+      ],
+      "expected": [
+        [
+          "degree_requirements.md",
+          "GER Entry Cohorts"
+        ]
+      ],
+      "recall": 1.0
+    },
+    {
+      "id": "scope-02",
+      "allowed_source_count": 1,
+      "returned_chunks": 1,
+      "expected_found": [
+        [
+          "biology.md",
+          "Advising Tracks"
+        ]
+      ],
+      "expected": [
+        [
+          "biology.md",
+          "Advising Tracks"
+        ]
+      ],
+      "recall": 1.0
+    }
+  ],
+  "positive_recall_summary": {
+    "total": 42,
+    "resolved": 42,
+    "unresolved": [],
+    "seam_recall": {
+      "keyword": 1.0,
+      "prereq": 0.0,
+      "embed": 0.9880952380952381
+    },
+    "fused_recall": 0.8809523809523809,
+    "fusion_beats_best_single": false
+  },
+  "empty_scope_observations": [
+    {
+      "id": "empty-01",
+      "case_type": "empty_scope",
+      "returned_chunks": 0,
+      "refused": true
+    },
+    {
+      "id": "empty-02",
+      "case_type": "empty_scope",
+      "returned_chunks": 0,
+      "refused": true
+    },
+    {
+      "id": "neg-01",
+      "case_type": "unrelated_negative",
+      "returned_chunks": 6,
+      "refused": false
+    },
+    {
+      "id": "neg-02",
+      "case_type": "empty_scope",
+      "returned_chunks": 0,
+      "refused": true
+    }
+  ],
+  "constraints": [
+    "Uses cached Granite through app.embeddings factory; no network model download.",
+    "Runs against a newly created temporary embedded Postgres database and temporary DATA_DIR.",
+    "Does not mutate project data, official course corpus, retrieval settings, or prerequisite graph.",
+    "Expected evidence labels are pending human review; recall is not answer correctness.",
+    "Empty/unrelated cases report retrieval presence only; they do not establish safe abstention.",
+    "Source notes are concise manual paraphrases and require current source verification."
+  ]
+}

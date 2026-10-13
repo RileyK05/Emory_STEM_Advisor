@@ -1,7 +1,7 @@
-version = 1
+version = 6
 
 [chunking]
-chunker_version = "1"
+chunker_version = "2"
 target_tokens = 384
 overlap_tokens = 48
 text_lines_per_locator = 40
@@ -32,13 +32,36 @@ min_score = 0.15
 # Collapse identical cited passages into one citation.
 dedupe = true
 
+[planning]
+# Query planning (QUERY_PLANNING_ENABLED). A model reads the scoped catalog
+# directory and proposes searches; these bound what it may propose and how
+# much evidence the plan can put in front of the answer. Starting values;
+# compare answers with planning off/on before changing them.
+max_search_queries = 5
+max_course_codes = 12
+max_documents = 3
+question_slots = 4
+document_chunks = 2
+search_slots = 2
+context_size = 28
+
+[research]
+# Research advising (ADVISING_RESEARCH_ENABLED). These bound the model's own
+# working comparison; the durable evidence register is separate and larger.
+# Starting values, not a claim they are enough for every question. Keep
+# max_candidates within the strict state model's ceiling.
+max_candidates = 6
+max_evidence_items = 100
+max_evidence_bytes = 256000
+max_state_bytes = 8000
+# Offer a finish after this many rounds that add no evidence and no movement.
+no_progress_rounds = 2
+
 [simgraph]
-# Starting guesses; tune on the real atlas. Hand nudges to the clusters live in
-# simgraph_nudges.toml.
-edge_floor = 0.6
-level_cut_distances = [0.7, 0.5, 0.35]
+# Within fixed departments only. Real stored-vector inspection found the old
+# cuts collapsed the catalog into one group. Topic quality still needs review.
+level_cut_distances = [0.18, 0.12, 0.08]
 linkage = "average"
-block_size = 1024
 walk_top_margin = 0.05
 walk_min_similarity = 0.3
-walk_min_subtree = 5
+walk_min_subtree = 1

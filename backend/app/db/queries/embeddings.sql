@@ -17,6 +17,9 @@ WHERE e.model = %(model)s
   AND e.dim = %(dim)s
   AND s.collection_id = %(collection_id)s
   AND s.status = 'indexed'
+  AND s.is_current
+  AND (s.workspace_key IS NULL OR s.workspace_key = %(workspace_key)s)
+  AND (%(source_ids)s::uuid[] IS NULL OR c.source_id = ANY(%(source_ids)s::uuid[]))
   AND -(e.embedding <#> %(q)s) >= %(min_similarity)s
 ORDER BY dot DESC, c.source_id, c.chunk_index
 LIMIT %(limit)s;

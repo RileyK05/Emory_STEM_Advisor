@@ -1,0 +1,8 @@
+FROM python:3.12.8-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1     PYTHONUNBUFFERED=1     PIP_NO_CACHE_DIR=1
+
+# No pip, package manager, shell entrypoint, application code, or credentials.
+# The untrusted program is supplied on a read-only bind mount at runtime.
+USER 65532:65532
+WORKDIR /output

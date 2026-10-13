@@ -1,0 +1,38 @@
+services:
+  sandbox-worker:
+    build:
+      context: ..
+      dockerfile: sandbox/Dockerfile.worker
+    restart: unless-stopped
+    environment:
+      SANDBOX_WORKER_BEARER_TOKEN: ${SANDBOX_WORKER_BEARER_TOKEN:?set_a_random_32+_character_token}
+      SANDBOX_SEPARATE_HOST_ATTESTED: ${SANDBOX_SEPARATE_HOST_ATTESTED:?set_true_only_on_dedicated_host}
+      SANDBOX_WORK_ROOT: /var/lib/emory-sandbox/jobs
+      SANDBOX_PYTHON_IMAGE: emory-sandbox-python:3.12-v1
+      SANDBOX_JAVASCRIPT_IMAGE: emory-sandbox-javascript:22-v1
+      SANDBOX_OFFICE_IMAGE: emory-sandbox-office:7.4.7-v1
+      SANDBOX_MAX_TIMEOUT_SECONDS: ${SANDBOX_MAX_TIMEOUT_SECONDS:-120}
+      SANDBOX_MAX_CPU_COUNT: ${SANDBOX_MAX_CPU_COUNT:-1}
+      SANDBOX_MAX_MEMORY_BYTES: ${SANDBOX_MAX_MEMORY_BYTES:-536870912}
+      SANDBOX_MAX_OUTPUT_BYTES: ${SANDBOX_MAX_OUTPUT_BYTES:-4194304}
+      SANDBOX_MAX_INPUT_BYTES: ${SANDBOX_MAX_INPUT_BYTES:-16777216}
+      SANDBOX_MAX_OUTPUT_FILES: ${SANDBOX_MAX_OUTPUT_FILES:-100}
+      SANDBOX_MAX_PIDS: ${SANDBOX_MAX_PIDS:-64}
+    group_add:
+      - ${DOCKER_GID:?set the host docker group numeric GID}
+    ports:
+      - 127.0.0.1:8080:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/emory-sandbox/jobs:/var/lib/emory-sandbox/jobs
+    read_only: true
+    tmpfs: [/tmp:size=16m,noexec,nosuid]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    user: "10001:10001"
+    mem_limit: 512m
+    pids_limit: 128
+    networks: [worker_api]
+networks:
+  worker_api:
+    driver: bridge

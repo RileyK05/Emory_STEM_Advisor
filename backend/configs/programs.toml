@@ -1,0 +1,196 @@
+# Department pages that state program requirements, for `scripts.scrape_programs`.
+#
+# Emory's college catalog (Coursedog) has no requirement data for any program,
+# so these are the departments' own pages. Hand-picked and checked to list
+# concrete courses; reviewed 2026-10-08. Where a department posts both an older
+# and a newer sheet, only the newer one is listed. Codes and names are the
+# catalog's (college.catalog.emory.edu/programs/<CODE>).
+
+[programs]
+AIMIN = "Artificial Intelligence Minor"
+ANTHHBIOBS = "Anthropology & Human Biology BS"
+ASTRONMIN = "Astronomy Minor"
+BIOLOGYBA = "Biology BA"
+BIOLOGYBS = "Biology BS"
+BIOPHYSBS = "Biophysics BS"
+CHEMBA = "Chemistry BA"
+CHEMBS = "Chemistry BS"
+COMPINFMIN = "Computer Informatics Minor"
+COMPSCIBA = "Computer Science BA"
+COMPSCIBS = "Computer Science BS"
+COMPSCIMIN = "Computer Science Minor"
+ECONCS = "Economics & Computer Science"
+ECONMATHBA = "Economics & Mathematics BA"
+ENGSCIBS = "Engineering Science BS"
+ENVSBA = "Environmental Sciences BA"
+ENVSBS = "Environmental Sciences BS"
+ENVSMIN = "Environmental Sciences Minor"
+MATHAPPBS = "Applied Mathematics BS"
+MATHAPPMIN = "Applied Mathematics Minor"
+MATHBA = "Mathematics BA"
+MATHBS = "Mathematics BS"
+MATHCSBS = "Mathematics & Computer Science BS"
+MATHMIN = "Mathematics Minor"
+MATHPOLSBA = "Mathematics & Political Science BA"
+MTAPSTBS = "Applied Mathematics & Statistics BS"
+NEUROBBBS = "Neuroscience & Behavioral Biology BS"
+NEUROBBMIN = "Neuroethics Minor"
+NUTRSCIMIN = "Nutrition Science Minor"
+PHYSASTBA = "Physics & Astronomy BA"
+PHYSASTBS = "Physics & Astronomy BS"
+PHYSICSBA = "Physics BA"
+PHYSICSBS = "Physics BS"
+PHYSICSMIN = "Physics Minor"
+PSYCHBS = "Psychology BS"
+QPPABS = "Public Policy Analysis BS"
+QPPAMIN = "Public Policy Analysis Minor"
+QSSBS = "Quantitative Sciences BS"
+QSSMIN = "Quantitative Sciences Minor"
+SUSTSCIMIN = "Sustainability Sciences Minor"
+
+# --- Mathematics & Computer Science
+[[page]]
+url = "https://computerscience.emory.edu/undergraduate/degrees-and-requirements/cs-ba.html"
+programs = ["COMPSCIBA"]
+
+[[page]]
+url = "https://computerscience.emory.edu/undergraduate/degrees-and-requirements/cs-bs.html"
+programs = ["COMPSCIBS"]
+
+[[page]]
+url = "https://computerscience.emory.edu/undergraduate/degrees-and-requirements/minors.html"
+programs = ["COMPSCIMIN", "AIMIN", "COMPINFMIN"]
+
+[[page]]
+url = "https://computerscience.emory.edu/undergraduate/degrees-and-requirements/math-cs-major.html"
+programs = ["MATHCSBS"]
+
+[[page]]
+url = "https://computerscience.emory.edu/undergraduate/degrees-and-requirements/economics-computer-science.html"
+programs = ["ECONCS"]
+
+[[page]]
+url = "https://mathematics.emory.edu/undergraduate/degrees-requirements/index.html"
+programs = ["MATHBA", "MATHBS", "MATHAPPBS"]
+
+[[page]]
+url = "https://mathematics.emory.edu/undergraduate/degrees-requirements/minors.html"
+programs = ["MATHMIN", "MATHAPPMIN"]
+
+[[page]]
+url = "https://mathematics.emory.edu/undergraduate/degrees-requirements/joint-majors.html"
+programs = ["ECONMATHBA", "MATHPOLSBA"]
+
+[[page]]
+url = "https://polisci.emory.edu/undergraduate/degree-options/math-and-political-science.html"
+programs = ["MATHPOLSBA"]
+
+# --- Data Science / QTM (the catalog still uses the QSS codes)
+[[page]]
+url = "https://datascience.emory.edu/undergraduate/majors-requirements/joint-majors.html"
+programs = ["MTAPSTBS"]
+
+[[page]]
+# Biology-track checklist; the core is shared across tracks.
+url = "https://datascience.emory.edu/documents/checklists/fillable-QSS_major_checklist_biol_2022-10-03.pdf"
+programs = ["QSSBS"]
+
+[[page]]
+url = "https://datascience.emory.edu/documents/checklists/word-qss_minor_checklist_2024-3-22.pdf"
+programs = ["QSSMIN"]
+
+[[page]]
+url = "https://datascience.emory.edu/documents/checklists-2025/ppa-checklist.pdf"
+programs = ["QPPABS"]
+
+[[page]]
+url = "https://polisci.emory.edu/documents/PPA-Minor-Checklist-with-Electives.pdf"
+programs = ["QPPAMIN"]
+
+# --- Physics
+[[page]]
+url = "https://physics.emory.edu/documents/2023oct-degree-table.pdf"
+programs = ["PHYSICSBA", "PHYSICSBS", "PHYSASTBA", "PHYSASTBS", "BIOPHYSBS", "ENGSCIBS"]
+
+[[page]]
+url = "https://physics.emory.edu/undergrad/faqs.html"
+programs = ["PHYSICSBA", "PHYSICSBS", "PHYSASTBA", "PHYSASTBS"]
+
+[[page]]
+url = "https://physics.emory.edu/documents/minor-in-physics-requirements.pdf"
+programs = ["PHYSICSMIN"]
+
+[[page]]
+url = "https://physics.emory.edu/documents/astronomy-minor-requirements.pdf"
+programs = ["ASTRONMIN"]
+
+[[page]]
+url = "https://physics.emory.edu/documents/engineeringscience_requirementsfall2025.pdf"
+programs = ["ENGSCIBS"]
+
+# --- Biology, Chemistry, NBB
+[[page]]
+url = "https://biology.emory.edu/undergraduate/degree-options/major-ba.html"
+programs = ["BIOLOGYBA"]
+
+[[page]]
+url = "https://biology.emory.edu/documents/ba-program-worksheet-fall-2020_updated-1-june-2021.pdf"
+programs = ["BIOLOGYBA"]
+
+[[page]]
+url = "https://biology.emory.edu/undergraduate/degree-options/major-bs.html"
+programs = ["BIOLOGYBS"]
+
+[[page]]
+url = "https://biology.emory.edu/documents/2020_bs_requirements-8.1.20_updated_23_august_2023.pdf"
+programs = ["BIOLOGYBS"]
+
+[[page]]
+url = "https://chemistry.emory.edu/undergraduate/"
+programs = ["CHEMBA", "CHEMBS"]
+
+[[page]]
+url = "https://nbb.emory.edu/academics/nbb-major-requirements.html"
+programs = ["NEUROBBBS"]
+
+[[page]]
+url = "https://nbb.emory.edu/academics/minor-in-neuroethics.html"
+programs = ["NEUROBBMIN"]
+
+# --- Environmental Sciences
+[[page]]
+url = "https://envs.emory.edu/undergraduate/requirements-for-major/index.html"
+programs = ["ENVSBA", "ENVSBS"]
+
+[[page]]
+url = "https://envs.emory.edu/documents/undergrad-docs/2026_fall%20curriculum%20sheets/ENVS%20BA%20Requirements%20fall%202026.pdf"
+programs = ["ENVSBA"]
+
+[[page]]
+url = "https://envs.emory.edu/documents/undergrad-docs/2026_fall%20curriculum%20sheets/ENVS%20BS%20Requirements%20Fall%202026.pdf"
+programs = ["ENVSBS"]
+
+[[page]]
+url = "https://envs.emory.edu/undergraduate/minors/envsmin.html"
+programs = ["ENVSMIN"]
+
+[[page]]
+url = "https://envs.emory.edu/undergraduate/minors/sustscimin.html"
+programs = ["SUSTSCIMIN"]
+
+# --- Other STEM-adjacent
+[[page]]
+url = "https://humanhealth.emory.edu/degreesandprograms/academic-programs/nutrition-science-minor.html"
+programs = ["NUTRSCIMIN"]
+
+[[page]]
+url = "https://anthropology.emory.edu/undergraduate/majors-minors/anthro-bs.html"
+programs = ["ANTHHBIOBS"]
+
+[[page]]
+url = "https://psychology.emory.edu/undergraduate/major/bachelor-of-science.html"
+programs = ["PSYCHBS"]
+
+[[page]]
+url = "https://psychology.emory.edu/documents/undergraduate-docs/psychbs-undergraduate-flowchart.pdf"
+programs = ["PSYCHBS"]

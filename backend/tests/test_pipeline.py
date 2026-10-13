@@ -12,8 +12,6 @@ from app.ingest.pipeline import ingest_file
 from app.retrieval.config import load_retrieval_config
 from tests.fakes import FakeEmbedder, whitespace_tokens
 
-pytestmark = pytest.mark.db
-
 _MODEL = "fake-model"
 
 
@@ -62,6 +60,13 @@ def test_ingest_markdown_twice_dedupes(db, collection, tmp_path):
     ).fetchone()
     assert status["status"] == "indexed"
 
+    locator = db.execute(queries.get("list_locators_for_source"), {"source_id": first}).fetchone()
+    with pytest.raises(errors.UniqueViolation), db.transaction():
+        db.execute(queries.get("insert_chunk"), {
+            "chunk_id": uuid4(), "source_id": first, "locator_id": locator["locator_id"],
+            "chunk_index": 0, "start_char": 0, "end_char": 3, "token_count": 1, "text": "dup",
+        })
+
 
 def test_failed_extract_records_error(db, collection, tmp_path):
     path = tmp_path / "broken.bin"
@@ -83,38 +88,6 @@ def test_failed_extract_records_error(db, collection, tmp_path):
     ).fetchone()
     assert row["status"] == "failed"
     assert row["error_message"]
-
-
-def test_duplicate_chunk_index_rejected(db, collection, tmp_path):
-    path = tmp_path / "doc.txt"
-    path.write_text("alpha beta gamma\n", encoding="utf-8")
-    source_id = ingest_file(
-        db,
-        collection_id=collection,
-        path=path,
-        content_type="text/plain",
-        count_tokens=whitespace_tokens,
-        embedder=_embedder(),
-        embed_model=_MODEL,
-        config=_config(),
-    )
-    loc = db.execute(
-        queries.get("list_locators_for_source"), {"source_id": source_id}
-    ).fetchone()
-    with pytest.raises(errors.UniqueViolation), db.transaction():
-        db.execute(
-            queries.get("insert_chunk"),
-            {
-                "chunk_id": uuid4(),
-                "source_id": source_id,
-                "locator_id": loc["locator_id"],
-                "chunk_index": 0,
-                "start_char": 0,
-                "end_char": 5,
-                "token_count": 1,
-                "text": "dup",
-            },
-        )
 
 
 def test_failed_chunking_records_error(db, collection, tmp_path):
@@ -163,3 +136,28 @@ def test_raw_upload_goes_to_data_dir(db, collection, tmp_path):
     ).fetchone()["raw_path"]
     data_dir = load_settings().data_dir.resolve()
     assert data_dir in Path(raw_path).resolve().parents
+
+
+def test_verified_provenance_publishes_with_the_indexed_version(db, collection, tmp_path):
+    from app.ingest.provenance import SourceProvenance
+
+    path = tmp_path / "data-engineer.md"
+    path.write_text("# Data engineers\n\nThey build data pipelines.\n", encoding="utf-8")
+    common = {"collection_id": collection, "path": path, "content_type": "text/markdown",
+              "count_tokens": whitespace_tokens, "embedder": FakeEmbedder(dim=8),
+              "embed_model": _MODEL, "config": load_retrieval_config(),
+              "origin_key": "careers:bls:data-engineer"}
+    plain = ingest_file(db, **common)
+    db.commit()
+    # An ordinary ingest makes no trusted claim.
+    assert db.execute("SELECT 1 FROM source_provenance WHERE source_id = %(s)s",
+                      {"s": plain}).fetchone() is None
+    # Re-importing the same content through a verified manifest records it.
+    verified = ingest_file(db, **common, provenance=SourceProvenance(
+        "career_reference", publisher="BLS", geography="United States"))
+    row = db.execute("SELECT * FROM source_provenance WHERE source_id = %(s)s",
+                     {"s": verified}).fetchone()
+    assert verified == plain
+    assert (row["source_category"], row["classification_origin"], row["publisher"]) == (
+        "career_reference", "verified_import", "BLS")
+    assert len(row["content_hash"]) == 64

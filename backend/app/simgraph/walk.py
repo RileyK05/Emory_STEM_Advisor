@@ -1,6 +1,8 @@
-"""Recommend: walk the cluster tree toward the query, then return the whole
-subtree. No top-k anywhere: every course under the chosen node is returned,
-sorted for display but never truncated, so niche courses are not dropped."""
+"""Route a goal toward department/topic centroids; return whole course groups.
+
+This is probabilistic topic exploration, not course-to-course recommendations
+or a prerequisite sequence. Semantic chunk retrieval remains a separate seam.
+"""
 
 from dataclasses import dataclass
 from uuid import UUID
@@ -17,7 +19,6 @@ class Recommendation:
     cluster_id: UUID
     path: tuple[str, ...]  # labels from the top split down to the chosen node
     courses: list[tuple[UUID, str, str]]  # (course_id, code, title)
-    scores: list[float]
 
 
 def _to_array(value) -> np.ndarray:
@@ -63,37 +64,33 @@ def recommend(
     recommendations: list[Recommendation] = []
     seen: set[UUID] = set()
     for branch in branches:
-        node, path = branch, [nodes[branch]["label"]]
-        while True:
-            eligible = [
-                cid
-                for cid in children.get(node, [])
-                if nodes[cid]["size"] >= simgraph.walk_min_subtree
-            ]
-            # Children are sorted by score, so the first eligible one is the argmax.
-            if not eligible or score[eligible[0]] <= score[node]:
-                break
-            node = eligible[0]
-            path.append(nodes[node]["label"])
+        # A mixed parent's centroid can score lower than the department even
+        # when it contains an excellent deeper topic. Consider all descendants
+        # so that this centroid barrier cannot hide a relevant small group.
+        descendants, pending = [], list(children.get(branch, []))
+        while pending:
+            cid = pending.pop()
+            pending.extend(children.get(cid, []))
+            if nodes[cid]["size"] >= simgraph.walk_min_subtree:
+                descendants.append(cid)
+        node = min([branch, *descendants], key=lambda cid: (
+            -score[cid], nodes[cid]["level"], nodes[cid]["label"], str(cid),
+        ))
+        ancestors = [node]
+        while ancestors[-1] != branch:
+            ancestors.append(nodes[ancestors[-1]]["parent_cluster_id"])
+        path = [nodes[cid]["label"] for cid in reversed(ancestors)]
 
         members = conn.execute(queries.get("list_cluster_courses"), {"cluster_id": node}).fetchall()
-        scored = sorted(
-            (
-                (float(np.dot(query_vec, _to_array(row["embedding"]))), row)
-                for row in members
-                if row["course_id"] not in seen
-            ),
-            key=lambda item: (-item[0], item[1]["code"]),
-        )
-        if not scored:
+        members = [row for row in members if row["course_id"] not in seen]
+        if not members:
             continue
-        seen.update(row["course_id"] for _, row in scored)
+        seen.update(row["course_id"] for row in members)
         recommendations.append(
             Recommendation(
                 cluster_id=node,
                 path=tuple(path),
-                courses=[(row["course_id"], row["code"], row["title"]) for _, row in scored],
-                scores=[value for value, _ in scored],
+                courses=[(row["course_id"], row["code"], row["title"]) for row in members],
             )
         )
     return recommendations

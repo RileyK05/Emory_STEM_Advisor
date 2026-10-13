@@ -1,12 +1,17 @@
 """The only place psycopg connects. Nothing else calls psycopg.connect."""
 
+import atexit
 import os
+import threading
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Self
 
 import psycopg
 from pgvector.psycopg import register_vector
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 
 from app.config import Settings
 
@@ -18,10 +23,160 @@ def connect(dsn: str) -> psycopg.Connection:
     except psycopg.ProgrammingError:
         # pgvector raises ProgrammingError("vector type not found") when the
         # extension does not exist yet (fresh database, before the first
-        # migration). The type is created by migration 001; callers that bind
+        # migration). The baseline (or legacy 001) creates it; callers that bind
         # vector values run against a migrated database.
         conn.rollback()
     return conn
+
+
+def _configure_pooled(conn: psycopg.Connection) -> None:
+    """Prepare a new pooled connection and leave it idle, as the pool requires."""
+    try:
+        register_vector(conn)
+        conn.commit()
+    except psycopg.ProgrammingError:
+        # Same fresh-database case as `connect`; `PooledConnection` retries the
+        # registration when a connection is borrowed after migration.
+        conn.rollback()
+
+
+class PooledConnection:
+    """A borrowed pool connection with `psycopg.Connection`'s close/`with` semantics.
+
+    `close()` (and leaving a `with` block) returns the connection to the pool
+    instead of closing it; a transaction left open is rolled back by the pool.
+    Everything else is the underlying connection.
+    """
+
+    __slots__ = ("_conn", "_pool")
+
+    def __init__(self, pool: ConnectionPool, conn: psycopg.Connection):
+        self._pool = pool
+        self._conn = conn
+
+    def __getattr__(self, name: str):
+        conn = self._conn
+        if conn is None:
+            raise psycopg.OperationalError("the connection is closed")
+        return getattr(conn, name)
+
+    def close(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is None:
+            return
+        try:
+            # Closing a plain connection discards uncommitted work; do the same
+            # explicitly so the pool does not log every read-only request.
+            if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+                conn.rollback()
+        except psycopg.Error:
+            pass  # a broken connection is discarded by the pool on return
+        self._pool.putconn(conn)
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        try:
+            if self._conn is not None:
+                if exc_type is None:
+                    self._conn.commit()
+                else:
+                    self._conn.rollback()
+        finally:
+            self.close()
+
+
+def register_vector_adapter(conn: "psycopg.Connection | PooledConnection") -> None:
+    """Register pgvector on a plain or borrowed connection.
+
+    pgvector type-checks for a real `psycopg.Connection`, so a pooled borrow
+    (the API's first-request schema bootstrap) registers on its underlying one.
+    """
+    register_vector(conn._conn if isinstance(conn, PooledConnection) else conn)
+
+
+_pools: dict[tuple[str, int, float, str], ConnectionPool] = {}
+_pools_lock = threading.Lock()
+
+
+def _pool_for(dsn: str, max_size: int, timeout: float, pool_name: str = "default") -> ConnectionPool:
+    key = (dsn, max_size, timeout, pool_name)
+    pool = _pools.get(key)
+    if pool is None:
+        with _pools_lock:
+            pool = _pools.get(key)
+            if pool is None:
+                pool = ConnectionPool(
+                    dsn, min_size=1, max_size=max_size, timeout=timeout, open=False,
+                    kwargs={"row_factory": dict_row, "autocommit": False},
+                    configure=_configure_pooled,
+                )
+                pool.open()
+                _pools[key] = pool
+    return pool
+
+
+def pooled_connect(dsn: str, *, max_size: int, timeout: float,
+                   pool_name: str = "default") -> PooledConnection:
+    """Borrow a connection from the shared pool for `dsn` (raises `PoolTimeout` when exhausted)."""
+    pool = _pool_for(dsn, max_size, timeout, pool_name)
+    conn = pool.getconn()
+    try:
+        # TypesRegistry has no __contains__, so membership tests against a
+        # string are always false. get() is the supported lookup.
+        if conn.adapters.types.get("vector") is None:
+            # The connection was created before the pgvector extension existed.
+            try:
+                register_vector(conn)
+            except psycopg.ProgrammingError:
+                pass
+            conn.rollback()
+    except BaseException:
+        # Never leak the slot: an OperationalError from registration or
+        # rollback must return the connection to the pool before propagating.
+        pool.putconn(conn)
+        raise
+    return PooledConnection(pool, conn)
+
+
+def connector(settings: Settings, dsn: str | None = None, *,
+              pool_name: str = "default") -> Callable[[], "psycopg.Connection | PooledConnection"]:
+    """The connection factory for request and worker paths: pooled unless disabled.
+
+    `dsn` defaults to the configured database. Settings objects without pool
+    fields (minimal test doubles) get plain connections.
+    """
+    dsn = dsn or settings.database_url
+    max_size = getattr(settings, "db_pool_max_size", 0)
+    if max_size <= 0:
+        return lambda: connect(dsn)
+    timeout = settings.db_pool_timeout_seconds
+    return lambda: pooled_connect(dsn, max_size=max_size, timeout=timeout,
+                                  pool_name=pool_name)
+
+
+def close_pools() -> None:
+    """Close every pool (process exit and test teardown)."""
+    with _pools_lock:
+        pools = list(_pools.values())
+        _pools.clear()
+    for pool in pools:
+        pool.close(timeout=5)
+
+
+atexit.register(close_pools)
+
+
+@contextmanager
+def connection_transaction(connect_fn):
+    """Open a fresh connection, run one transaction on it, and always close it."""
+    conn = connect_fn()
+    try:
+        with conn.transaction():
+            yield conn
+    finally:
+        conn.close()
 
 
 @contextmanager

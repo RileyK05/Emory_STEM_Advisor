@@ -4,11 +4,16 @@ import { HttpClient } from './http';
 
 let cached: AdvisorClient | null = null;
 
+/** True when the app runs on the in-browser mock (VITE_API_MODE unset or `mock`):
+ *  answers work, but nothing is saved and artifacts are unavailable. */
+export function isDemoMode(): boolean {
+  return (import.meta.env.VITE_API_MODE ?? 'mock') !== 'http';
+}
+
 /** Single entry point for the rest of the app. Swap VITE_API_MODE=http to
  *  move from the mock client to the real backend client. */
 export function getClient(): AdvisorClient {
   if (cached) return cached;
-  const mode = import.meta.env.VITE_API_MODE ?? 'mock';
-  cached = mode === 'http' ? new HttpClient() : new MockClient();
+  cached = isDemoMode() ? new MockClient() : new HttpClient();
   return cached;
 }

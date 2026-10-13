@@ -68,8 +68,8 @@ def parse_nudges(raw: dict, file_hash: str | None = None) -> Nudges:
         if set(entry) != {"level", "course", "text"}:
             raise NudgeError(f"{where}: expected keys level, course, text")
         level, text = entry["level"], entry["text"]
-        if not isinstance(level, int) or level < 1:
-            raise NudgeError(f"{where}: level must be an integer >= 1")
+        if not isinstance(level, int) or level < 2:
+            raise NudgeError(f"{where}: level must be an integer >= 2 (a learned topic)")
         if not isinstance(text, str) or not text.strip():
             raise NudgeError(f"{where}: text must be a non-empty string")
         labels.append(LabelNudge(level, _code(entry["course"], where), text.strip()))

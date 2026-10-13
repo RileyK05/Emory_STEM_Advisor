@@ -1,9 +1,8 @@
-"""Build the similarity graph: course vectors, lateral edges, cluster tree.
+"""Build fixed departments -> learned topic groups -> course leaves.
 
-Nodes are courses. The hierarchy comes from agglomerative clustering of the
-course embeddings, optionally nudged by hand (`nudges.py`). Same vectors,
-config, and nudges give the same clusters. No model names or places anything:
-labels are the most common subject plus the medoid course's title.
+Course vectors are temporary clustering inputs and stored build snapshots,
+not lateral relationships. Cosine distances are computed only within a fixed
+department and never persisted as course-to-course edges. No LLM is called.
 """
 
 from collections import Counter
@@ -18,6 +17,7 @@ from scipy.spatial.distance import pdist
 
 from app.db import queries
 from app.retrieval.config import SimgraphConfig
+from app.simgraph.departments import Departments, load_departments
 from app.simgraph.nudges import Nudges
 
 ROOT_LABEL = "All courses"
@@ -28,13 +28,15 @@ class ClusterSpec:
     parent: int | None  # index of the parent spec in the returned list
     level: int  # 0 = root, n = the n-th distance cut
     members: tuple[int, ...]  # row indices of the input matrix, ascending
+    kind: str = "topic"
+    department_key: str | None = None
 
 
 @dataclass
 class BuildResult:
     build_id: UUID
     courses: int
-    edges: int
+    edges: int  # unweighted containment links, including terminal course leaves
     clusters: int
     warnings: list[str] = field(default_factory=list)
 
@@ -88,8 +90,10 @@ def cluster_tree(
     A cluster with the same members as its parent is folded into the parent.
     """
     n = matrix.shape[0]
-    if n < 2:
-        raise ValueError("clustering needs at least two courses")
+    if n == 0:
+        raise ValueError("clustering needs at least one course")
+    if n == 1:
+        return [ClusterSpec(parent=None, level=0, members=(0,), kind="root")]
     distances = pdist(matrix.astype(np.float64), "cosine")
     np.clip(distances, 0.0, 2.0, out=distances)
 
@@ -106,7 +110,7 @@ def cluster_tree(
                 distances[_condensed_index(n, rows[a], rows[b])] = 0.0
 
     tree = scipy_linkage(distances, method=method)
-    specs = [ClusterSpec(parent=None, level=0, members=tuple(range(n)))]
+    specs = [ClusterSpec(parent=None, level=0, members=tuple(range(n)), kind="root")]
     # node_of[row] = index of the deepest stored cluster containing the row.
     node_of = [0] * n
     for level, cut in enumerate(cuts, start=1):
@@ -128,6 +132,37 @@ def cluster_tree(
     return specs
 
 
+def department_tree(
+    matrix: np.ndarray, subjects: list[str], *, departments: Departments,
+    cuts: tuple[float, ...], method: str,
+    together: list[list[int]] = (), apart: list[tuple[int, int]] = (),
+) -> list[ClusterSpec]:
+    """Clustering cannot move a course across its fixed department boundary."""
+    units: dict[str, list[int]] = {}
+    for row, subject in enumerate(subjects):
+        units.setdefault(departments.for_subject(subject).key, []).append(row)
+    specs = [ClusterSpec(None, 0, tuple(range(len(subjects))), "root")]
+    for key, members in sorted(units.items()):
+        local_of = {row: local for local, row in enumerate(members)}
+        local_together = [
+            [local_of[row] for row in group] for group in together
+            if all(row in local_of for row in group)
+        ]
+        local_apart = [
+            (local_of[a], local_of[b]) for a, b in apart if a in local_of and b in local_of
+        ]
+        local = cluster_tree(matrix[members], cuts=cuts, method=method,
+                             together=local_together, apart=local_apart)
+        offset = len(specs)
+        for spec in local:
+            specs.append(ClusterSpec(
+                0 if spec.parent is None else offset + spec.parent,
+                spec.level + 1, tuple(members[row] for row in spec.members),
+                "department" if spec.parent is None else "topic", key,
+            ))
+    return specs
+
+
 def _course_rows(conn: Connection, collection_id: UUID, model: str) -> list:
     return conn.execute(
         queries.get("list_courses_with_vectors"),
@@ -136,7 +171,7 @@ def _course_rows(conn: Connection, collection_id: UUID, model: str) -> list:
 
 
 def _resolve_nudges(
-    nudges: Nudges, row_of: dict[str, int], warnings: list[str]
+    nudges: Nudges, row_of: dict[str, int], warnings: list[str], department_of: list[str]
 ) -> tuple[list[list[int]], list[tuple[int, int]]]:
     def rows(codes, kind: str) -> list[int]:
         found = []
@@ -147,13 +182,23 @@ def _resolve_nudges(
                 warnings.append(f"{kind}: {code} is not in the graph; skipped")
         return found
 
-    together = [found for group in nudges.together if len(found := rows(group, "together")) >= 2]
+    together = []
+    for group in nudges.together:
+        found = rows(group, "together")
+        if len(found) < 2:
+            continue
+        if len({department_of[row] for row in found}) != 1:
+            warnings.append("together: crosses fixed department boundaries; ignored")
+        else:
+            together.append(found)
     component = _components(len(row_of), together)
     apart: list[tuple[int, int]] = []
     for a, b in nudges.apart:
         found = rows((a, b), "apart")
         if len(found) != 2:
             continue
+        if department_of[found[0]] != department_of[found[1]]:
+            continue  # already separated by a fixed boundary
         if component[found[0]] == component[found[1]]:
             warnings.append(f"apart: {a} / {b} conflicts with a together nudge; ignored")
             continue
@@ -175,26 +220,33 @@ def build_simgraph(
     config_version: int,
     simgraph: SimgraphConfig,
     nudges: Nudges | None = None,
+    departments: Departments | None = None,
 ) -> BuildResult:
     nudges = nudges or Nudges()
+    departments = departments if departments is not None else load_departments()
     rows = _course_rows(conn, collection_id, model)
-    if len(rows) < 2:
+    if not rows:
         raise ValueError(
-            f"need at least two courses with {model!r} embeddings; import the atlas first"
+            f"need at least one course with {model!r} embeddings; import the atlas first"
         )
     ids = [row["course_id"] for row in rows]
     codes = [row["code"] for row in rows]
     titles = [row["title"] for row in rows]
     subjects = [row["subject"] for row in rows]
     matrix = np.vstack([_normalize(_to_array(row["mean_vector"])) for row in rows])
+    if not np.isfinite(matrix).all() or np.any(np.linalg.norm(matrix, axis=1) == 0):
+        raise ValueError("course clustering requires finite, nonzero vectors")
     row_of = {code: row for row, code in enumerate(codes)}
 
     # Everything is computed before the first write, then written in one
     # transaction: a failed build leaves the previous build current.
     warnings: list[str] = []
-    together, apart = _resolve_nudges(nudges, row_of, warnings)
-    specs = cluster_tree(
+    department_of = [departments.for_subject(subject).key for subject in subjects]
+    together, apart = _resolve_nudges(nudges, row_of, warnings, department_of)
+    specs = department_tree(
         matrix,
+        subjects,
+        departments=departments,
         cuts=simgraph.level_cut_distances,
         method=simgraph.linkage,
         together=together,
@@ -202,20 +254,30 @@ def build_simgraph(
     )
 
     build_id = uuid4()
+    atlas_row = conn.execute(
+        queries.get("get_current_atlas_source_hash"), {"collection_id": collection_id}
+    ).fetchone()
+    content_hash = atlas_row["file_hash"] if atlas_row else None
     clusters = []
     for spec in specs:
         sub = matrix[list(spec.members)]
         total = sub.sum(axis=0)
         # Summed similarity to the other members; ties go to the lowest code
         # because rows are in code order and argmax takes the first maximum.
-        medoid = spec.members[int(np.argmax(sub @ total))]
+        medoid = spec.members[0] if spec.kind == "root" else spec.members[
+            int(np.argmax(sub @ total))]
         clusters.append(
             {
-                "cluster_id": uuid5(build_id, f"cluster:{spec.level}:{codes[spec.members[0]]}"),
+                "cluster_id": uuid5(build_id,
+                                    f"{spec.kind}:{spec.level}:{codes[spec.members[0]]}"),
                 "label": ROOT_LABEL
                 if spec.parent is None
+                else departments.for_subject(subjects[spec.members[0]]).label
+                if spec.kind == "department"
                 else _label(spec.members, subjects, titles[medoid]),
                 "medoid": medoid,
+                "medoid_code": codes[medoid],
+                "medoid_title": titles[medoid],
                 "centroid": _normalize(total),
             }
         )
@@ -231,8 +293,12 @@ def build_simgraph(
                 "model": model,
                 "config_version": config_version,
                 "nudges_hash": nudges.file_hash,
+                "content_hash": content_hash,
             },
         )
+        conn.execute(queries.get("set_sim_departments_hash"), {
+            "build_id": build_id, "departments_hash": departments.digest,
+        })
         with conn.cursor() as cur:
             cur.executemany(
                 queries.get("insert_sim_course"),
@@ -241,7 +307,6 @@ def build_simgraph(
                     for row in range(len(ids))
                 ],
             )
-            edge_count = _write_edges(cur, build_id, ids, matrix, simgraph)
             for spec, cluster in zip(specs, clusters, strict=True):
                 cur.execute(
                     queries.get("insert_sim_cluster"),
@@ -254,44 +319,25 @@ def build_simgraph(
                         "level": spec.level,
                         "label": cluster["label"],
                         "medoid_course_id": ids[cluster["medoid"]],
+                        "medoid_code": cluster["medoid_code"],
+                        "medoid_title": cluster["medoid_title"],
                         "centroid": cluster["centroid"],
                         "size": len(spec.members),
+                        "kind": spec.kind,
+                        "department_key": spec.department_key,
                     },
                 )
                 cur.executemany(
                     queries.get("insert_sim_cluster_member"),
                     [
-                        {"cluster_id": cluster["cluster_id"], "course_id": ids[row]}
+                        {"cluster_id": cluster["cluster_id"], "course_id": ids[row],
+                         "code": codes[row], "title": titles[row]}
                         for row in spec.members
                     ],
                 )
         conn.execute(queries.get("clear_current_build"), {"collection_id": collection_id})
         conn.execute(queries.get("set_current_build"), {"build_id": build_id})
-    return BuildResult(build_id, len(ids), edge_count, len(specs), warnings)
-
-
-def _write_edges(cur, build_id: UUID, ids: list[UUID], matrix: np.ndarray, simgraph) -> int:
-    """Every pair at or above `edge_floor`; never top-k, so hubs keep all edges."""
-    count = 0
-    n = len(ids)
-    for start in range(0, n, simgraph.block_size):
-        similarity = matrix[start : start + simgraph.block_size] @ matrix.T
-        local, other = np.nonzero(similarity >= simgraph.edge_floor)
-        keep = other > local + start
-        params = []
-        for i, j in zip(local[keep], other[keep], strict=True):
-            a, b = sorted((ids[start + i], ids[j]))
-            params.append(
-                {
-                    "build_id": build_id,
-                    "course_a": a,
-                    "course_b": b,
-                    "weight": float(similarity[i, j]),
-                }
-            )
-        cur.executemany(queries.get("insert_sim_edge"), params)
-        count += len(params)
-    return count
+    return BuildResult(build_id, len(ids), len(specs) - 1 + len(ids), len(specs), warnings)
 
 
 def _deepest(specs: list[ClusterSpec], row: int, max_level: int) -> int:
@@ -311,7 +357,7 @@ def _apply_label_nudges(nudges, specs, clusters, row_of, warnings) -> None:
             warnings.append(f"label: {nudge.course} is not in the graph; skipped")
             continue
         node = _deepest(specs, row_of[nudge.course], nudge.level)
-        if node == 0:
+        if specs[node].kind != "topic":
             warnings.append(f"label: no level-{nudge.level} cluster holds {nudge.course}")
             continue
         if node in claimed:
@@ -329,7 +375,7 @@ def _check_apart(apart, specs, codes, warnings) -> None:
         shared = [
             spec.level
             for spec in specs
-            if spec.level > 0 and i in spec.members and j in spec.members
+            if spec.kind == "topic" and i in spec.members and j in spec.members
         ]
         if shared:
             warnings.append(

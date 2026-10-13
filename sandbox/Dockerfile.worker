@@ -1,0 +1,12 @@
+FROM docker:27.5.1-cli AS docker-cli
+FROM python:3.12.8-slim-bookworm
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+RUN pip install --no-cache-dir fastapi==0.142.4 pydantic==2.13.5 uvicorn==0.54.0
+WORKDIR /opt/worker
+COPY backend/app/__init__.py /opt/worker/app/__init__.py
+COPY backend/app/sandbox /opt/worker/app/sandbox
+RUN useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin sandbox-api && mkdir -p /var/lib/emory-sandbox/jobs && chown -R 10001:10001 /var/lib/emory-sandbox
+USER 10001:10001
+EXPOSE 8080
+CMD ["uvicorn", "app.sandbox.host_app:app", "--host", "0.0.0.0", "--port", "8080", "--no-server-header"]

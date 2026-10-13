@@ -24,8 +24,9 @@ def write_trace(
     refused: bool,
     seams: list[SeamResult],
     contributions: list[FusedChunk],
+    trace_id: UUID | None = None,
 ) -> UUID:
-    trace_id = uuid4()
+    trace_id = trace_id or uuid4()
     with conn.transaction():
         conn.execute(
             queries.get("insert_trace"),

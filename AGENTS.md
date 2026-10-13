@@ -14,43 +14,122 @@ modes; there is no separate build plan.
 - `backend/app/` — Python package.
   - `llm/`, `embeddings/` — provider seams. Each has `base.py` (Protocol),
     `factory.py` (the only place concrete providers are imported or
-    instantiated), and one impl (`hf_local.py`, `granite.py`). Never import a
+    instantiated), with local and native API implementations. Never import a
     concrete provider outside its factory.
-  - `db/` — `connect()` (the only place psycopg connects), the migration
-    runner, and the named-query loader. Schema lives in `db/migrations/NNN_*.sql`
-    (numbered, append-only: never edit an applied file, add a new one). Every
+  - `db/` — `connection.py` (the only place psycopg connects: `connect()`, plus
+    `connector(settings)`, the pooled factory the API and worker use; set
+    `DB_POOL_MAX_SIZE=0` to disable pooling), the migration
+    runner, and the named-query loader. Fresh installs apply `db/baseline/032_schema.sql`.
+    `db/legacy_migrations/001`–`032` is the immutable upgrade archive for existing
+    databases/backups. Future numbered changes start at `db/migrations/033_*.sql`;
+    never edit an applied file or the baseline. Every
     SQL statement is a `-- name:` block in `db/queries/*.sql`; no inline SQL in
     app code.
   - `ingest/` — extract, normalize, locators, chunk, embed (`pipeline.py`).
   - `atlas/` — course atlas records, the deterministic requisites parser, the
-    importer.
+    importer, and `catalog.py` (Coursedog catalog page -> atlas record).
+  - `advising/` — read-only, citation-scoped atlas/topic snapshots and a pure
+    deterministic prerequisite/corequisite sequence planner. Missing evidence,
+    alternatives and conditions produce blockers. Never infer graph facts with
+    a model; dependency stages are not verified semester or graduation plans.
+  - `programs/` — program requirements: the official catalog PDF split per
+    program, and department pages converted to Markdown (ingested as ordinary
+    documents), plus `requirements.py`, a deterministic parser that keeps each
+    requirement line raw and reads off course codes and explicit "choose N"
+    counts into `programs` / `program_items` / `program_course_mentions`
+    (migration 031). Never feeds the prerequisite graph; no model.
   - `retrieval/` — config loader, seams (`keyword`, `embed`, `prereq`),
-    fusion, trace, `retrieve()`, eval runner.
+    fusion, trace, `retrieve()`, eval runner, and the scoped catalog
+    `directory` that opt-in query planning (`generation/query_plan.py`,
+    `QUERY_PLANNING_ENABLED`) reads before retrieval.
   - `generation/` — assembles the grounded answer prompt and maps the model's
     inline citations back to chunks. Calls the provider seam; never imports a
     concrete provider.
-  - `api/` — FastAPI app factory, request/response schemas (mirroring
-    `frontend/src/api/types.ts`), dependency wiring, and routes. Concrete
-    providers are built once in `create_app` and stored on `app.state`.
-  - `simgraph/` — similarity graph: clustering build, nudges, recommendation
-    walk, subgraph view.
+  - `api/` — FastAPI app factory, shared dependencies, serializers, and
+    request/response schemas (mirroring
+    `frontend/src/api/types.ts`). Route modules live in `api/routes/`, grouped
+    by feature (`corpus`, `artifacts`, `conversations`, `connections`, and so on).
+    JSON routes declare a `response_model` from `schemas.py`; those models are
+    `extra="allow"` and routes use `response_model_exclude_unset=True`, so a
+    handler's omitted keys stay omitted and unknown keys pass through. Model
+    names match the TypeScript interfaces, and `tests/test_contract_drift.py`
+    fails when their field sets diverge. Routes that return files, redirects,
+    or a hand-built `JSONResponse` (headers) have no model. The API
+    process and the job worker both build their provider, embedder, retrieval
+    config, and connection runtime through `app/runtime.build_runtime` (the only
+    caller of the provider and embedder factories outside scripts); `create_app`
+    stores the result on `app.state`.
+  - `auth/` — server-side sessions and OIDC login; `get_principal` is the one
+    authentication dependency. The job worker purges expired login rows and
+    long-revoked sessions hourly (`auth/housekeeping.py`). `connections/` — encrypted provider connection
+    profiles, evaluated routing selection, and the profile runtime.
+  - `jobs/` — persistent job store and worker runtime, the dependent artifact
+    run plans, and provider (batch) tracking. `operations/` — persisted
+    token/call/time budgets shared across a logical generation operation.
+  - `conversations/` — private persisted conversations and the streaming turn
+    worker. `gaps/` — human-reviewed retrieval gaps.
+  - `artifacts/` — native document/workbook/HTML specs, immutable revisions,
+    import/export (Markdown, DOCX, XLSX). `tools/` — allowlisted typed model
+    tools and their execution ledger. `sandbox/` — disposable isolated
+    execution (Docker/gVisor runner, remote worker, Office conversion).
+  - `ops/` — readiness probe and `backup.py` (checksummed database plus
+    original-file backup/restore). `util/` — shared low-level helpers
+    (`digest.json_digest`/`canonical_json_bytes`, `workspace` key rule).
+  - `simgraph/` — department topic graph: fixed department membership, within-department
+    clustering, human nudges, goal exploration, containment tree view. No lateral
+    course similarity links. `configs/departments.toml` configures fixed membership.
 - `backend/configs/` — `retrieval.toml` (versioned tunables; unknown keys are
-  errors) and `simgraph_nudges.toml` (hand-written cluster nudges).
-- `backend/scripts/` — `ingest`, `import_atlas`, `build_simgraph`,
-  `eval_retrieval`, `serve` (run with `python -m scripts.<name>` from
-  `backend/`). They use `DATABASE_URL`, or an embedded `pgserver` database
-  under `DATA_DIR/pgserver` when it is unset. `smoke_*.py` are manual checks
-  that download model weights; never add them to the test suite.
+  errors), `routing.toml` (task-to-model-role routing signals),
+  `simgraph_nudges.toml` (hand-written cluster nudges), and
+  `programs.toml` (hand-picked department requirement pages), and
+  `catalog-directory.md` (the supplied discovery directory for LLM planning;
+  not citable evidence).
+- `backend/scripts/` — `scrape_catalog`, `scrape_programs`, `import_programs`,
+  `ingest`, `import_atlas`, `build_simgraph`, `eval_retrieval`, `serve`,
+  `worker` (background jobs), `migrate`, `backup`, `rotate_profile_key`,
+  `schema_baseline` (disposable schema parity check), `restore_consolidated`
+  (verified backup into a new embedded baseline database), and
+  `reconcile_source_origins` (explicit legacy program versions) (run with
+  `python -m scripts.<name>` from `backend/`). They use `DATABASE_URL`, or an
+  embedded `pgserver` database under `DATA_DIR/pgserver` when it is unset.
+  `scripts/smoke/` holds explicit model/service smoke checks, invoked as
+  `python -m scripts.smoke.<name>`. `scripts/manual/` holds one-off probes and
+  compatibility audits. These can load real models or use the network; never
+  add them to the test suite. Print diagnostics in the terminal; do not create status
+  reports or saved test output unless the user requests them.
 - `backend/tests/` — fast tests. They never load models or touch the network
-  (use `tests/fakes.py`). Tests marked `db` run against a real Postgres:
-  a temporary `pgserver` instance, or `TEST_DATABASE_URL` if set. A skipped DB
-  test is a failure. `DATA_DIR` is pointed at a temp dir for the session.
+  (use `tests/fakes.py`; shared helpers such as `ingest_text` and `api_client`
+  are in `tests/helpers.py`). Any test that requests `db`, `collection`,
+  `migrated_dsn` or `pg_dsn` is auto-marked `db` and runs against a real
+  Postgres: a temporary `pgserver` instance, or `TEST_DATABASE_URL` if set. A
+  skipped DB test is a failure. `DATA_DIR` is pointed at a temp dir for the
+  session. The `db` fixture cleans only the tables a test wrote to (a `DELETE`
+  with foreign keys off; it falls back to `TRUNCATE` without superuser), so
+  persistent-store tests using fresh connections through `migrated_dsn` must
+  also request the `db` fixture so their committed rows are cleaned up. Tests
+  that change the schema or migration history use `isolated_database` in
+  `test_db_migrate.py`, never the shared session database.
+  Real HTTP transports are blocked in pytest; inject a mock transport instead.
 - `frontend/src/api/` — `types.ts` mirrors the architecture doc; `client.ts`
   is the single factory the app uses. `VITE_API_MODE` selects `mock` (default)
-  or `http`; `HttpClient` is an unimplemented stub that throws on purpose.
+  or `http`; `HttpClient` implements the workspace-scoped HTTP contract.
+- `frontend/src/components/` — one chat with artifacts made from it. `shell/`
+  is the layout (top bar, sidebar, dialogs, the mascot theme switch: Swoop =
+  light Emory blue/gold, Dooley = dark black/white). `chat/` has a single
+  `ChatController` with two engines: `useSavedChat` (HTTP conversations,
+  streamed turns, never replayed) and `useDemoChat` (mock, stateless query,
+  nothing saved). `artifact/` is the side panel, editor canvas, and generation
+  dialogs; which chat an artifact belongs to is kept in browser storage plus the
+  artifacts a message referenced. `source/` is the sources and explore dialogs;
+  `batch`, `gap`, and `connection` render inside the Tools dialog. Pure helpers
+  in `artifact/*.ts` are unit-tested directly.
+  `frontend/tests/fixtures/` holds the offline real-API browser test server.
 - `data/` — gitignored: raw uploads, the dev database, atlas files
   (`data/atlas/*.jsonl`), eval set (`data/eval/retrieval.jsonl`).
-- `docs/` — `architecture.md` (the one design doc).
+- `sandbox/` and `compose.yaml` — worker/sandbox images and the local compose
+  stack (see `sandbox/WORKER.md`).
+- `docs/` — `architecture.md` (the one design contract), `plans/` (requested
+  implementation handoffs), and `audit/` (existing review findings).
 
 ## Hard rule: the prerequisite graph is deterministic
 
@@ -87,15 +166,25 @@ From `backend/`:
 ../.venv/Scripts/python -m pytest                       # all tests, incl. DB
 ../.venv/Scripts/python -m ruff check .
 ../.venv/Scripts/python -m scripts.ingest --collection NAME FILE [FILE ...]
+../.venv/Scripts/python -m scripts.scrape_catalog        # courses -> data/atlas/emory_college.jsonl
+../.venv/Scripts/python -m scripts.scrape_catalog --offline   # rebuild JSONL from raw cache
+../.venv/Scripts/python -m scripts.scrape_programs       # majors/minors -> data/programs/{catalog,departments}/, programs.jsonl
+../.venv/Scripts/python -m scripts.ingest --collection NAME --origin-manifest ../data/programs/ingest-manifest.json ../data/programs/catalog/* ../data/programs/departments/*
+../.venv/Scripts/python -m scripts.import_programs --collection NAME   # after ingest: parsed requirements -> DB, bound to exact sources
 ../.venv/Scripts/python -m scripts.import_atlas --collection NAME FILE
 ../.venv/Scripts/python -m scripts.build_simgraph --collection NAME [--nudges FILE]
 ../.venv/Scripts/python -m scripts.eval_retrieval [--cases FILE]
 ../.venv/Scripts/python -m scripts.serve                 # HTTP API on :8000
-../.venv/Scripts/python -m scripts.smoke_local_model    # slow, downloads weights
-../.venv/Scripts/python -m scripts.smoke_embeddings     # ~250 MB download
+../.venv/Scripts/python -m scripts.schema_baseline       # baseline == legacy final schema, disposable DBs
+../.venv/Scripts/python -m scripts.restore_consolidated BACKUP --data-dir NEW_DIRECTORY
+../.venv/Scripts/python -m scripts.smoke.local_model    # slow, downloads weights
+../.venv/Scripts/python -m scripts.smoke.embeddings     # ~250 MB download
 ```
 
 `ruff` (line-length 100) is the linter; `pytest` config sets `testpaths=["tests"]`.
+If Windows denies access to pytest's default temp directory, use a fresh unique
+`--basetemp ../data/test-runs/pytest-<run-id>` from `backend/`. Never reuse an
+active run's basetemp or put new test scratch beside the source folders.
 
 Frontend (from `frontend/`):
 
@@ -103,13 +192,33 @@ Frontend (from `frontend/`):
 npm run dev         # Vite dev server
 npm run typecheck   # tsc --noEmit
 npm run build       # tsc --noEmit && vite build — type errors fail the build
+npm test            # offline client and Chromium behavior checks
+npm run test:integration # real API/Postgres/Chromium, offline fake models
+npm run format:check    # Prettier over src/**/*.{ts,tsx}; `npm run format` fixes
 ```
 
 ## Constraints worth not re-learning
 
+- `DB_POOL_MAX_SIZE` bounds each role's pool per process. Conversation workers
+  separate `conversation_execution` from the default control/lease pool, so
+  their combined bound is twice the setting; tool execution ledgers use a
+  separate `tool_execution` role. Run API handlers release bootstrap and pooled
+  request borrows before store-owned transactions — conversation abandon returns
+  its request borrow before `JobStore.cancel`; never nest same-pool borrows.
+- Authoritative sources use `origin_key` plus `is_current`; replacements stage
+  before atomic publication. Keep historical sources/chunks for evidence, and
+  filter current retrieval on indexed/current sources. Atlas replacement never
+  deletes the previous source before preparing the next deterministic graph.
+- Program acquisition timestamps/download URLs belong in sidecars, outside
+  canonical Markdown identity. Use the scraper's exact-SHA origin manifest for
+  ingestion; reconcile legacy duplicates only with explicitly verified groups.
+
 - `transformers==4.38.2` is pinned exactly: MiniCPM-2B-128k ships remote code
-  against the 4.38 API. `sentence-transformers==3.3.1` is pinned as the newest
-  line compatible with that transform. Do not bump either without re-validating.
+  against the 4.38 API. `sentence-transformers==3.0.1` was revalidated with
+  identical Granite CPU vectors, rankings, and token boundaries; its declared
+  dependencies accept 4.38.2. Do not change either without re-validating.
+  Granite loads only a fixed, trusted module assembly and safetensors weights;
+  never restore generic model-authored module loading.
 - All env config is in `backend/app/config.py`; nothing model-specific is
   hardcoded. Defaults: `LLM_PROVIDER=hf-local` (MiniCPM-2B-128k),
   `EMBEDDING_PROVIDER=granite` (`granite-embedding-125m-english`, 512-token
@@ -119,5 +228,51 @@ npm run build       # tsc --noEmit && vite build — type errors fail the build
   sampling defaults.
 - IDs are content-addressed `uuid5` (see architecture D3) so re-ingest keeps
   citations stable. Don't switch them to random IDs.
-- Frontend has no test runner or linter configured; `typecheck`/`build` is the
-  only verification.
+- Frontend has Node test suites and Chromium behavior/integration checks plus
+  `typecheck`/`build`. Prettier (`format:check`) is the only formatter; no
+  frontend linter is configured.
+
+## Testing policy
+
+The suite is small on purpose. Before adding a test:
+
+- Search for the invariant first. Each behavior is tested in one place; a bug
+  fix adds a row to the existing table or a case to the existing test, not a
+  new file.
+- Test behavior, not plumbing. No tests that assert constants (model ids,
+  default values), SQL text, route tables, file lists, or what a mock was
+  called with. A test must fail only when behavior breaks.
+- Table-drive variants (`pytest.mark.parametrize`) instead of near-identical
+  functions. Use the shared fakes and helpers; never redefine a provider,
+  embedder, or ingest helper per file.
+- Use the database only when the logic lives in SQL. Pure logic gets a plain
+  unit test. Use `FakeClock`, never `sleep`.
+- Do not write tests for manual or one-shot scripts (`scripts/manual/`,
+  `scripts/smoke/`) or for test doubles.
+- Frontend: rules that are unit-tested in `artifact-modules.test.mjs` are not
+  re-tested through the browser; browser tests prove what only a browser can
+  (rendering, focus, isolation, drafts surviving errors).
+
+## Emory data sources (checked 2026-10-08)
+
+- Courses: `college.catalog.emory.edu` (Coursedog; robots.txt allows all). Course
+  pages embed the record; requisite text comes from the public
+  `app.coursedog.com/api/v1/emory_peoplesoft_direct/requirementGroups/<ids>`
+  endpoint the page itself calls. The catalog sits behind an AWS WAF that
+  answers fast crawls with a CAPTCHA; the scraper stops on it and resumes from
+  cache. Never solve or route around the challenge. Coursedog's search/course
+  APIs require auth; don't use them. The live Course Atlas (`atlas.emory.edu`)
+  is gated; don't use it.
+- Program requirements: not on the catalog website, but in the catalog's
+  generated PDF (catalog of record), found via
+  `.../pdf-reports/catalogs/<catalogId>`. Department pages in
+  `configs/programs.toml` supplement it and can be stale.
+- Killing `scripts.serve`'s process tree also kills the embedded Postgres, and
+  its crash recovery then hangs on Windows: recovery fsyncs every file in
+  `data/pgserver`, including the `log` file the postmaster holds open (sharing
+  violation). Recover once with the log outside the data dir, then stop cleanly:
+  `pg_ctl stop -D data/pgserver -m fast`, `pg_ctl start -D data/pgserver -o "-p 62999" -l <elsewhere>/pg.log -w`,
+  `pg_ctl stop -D data/pgserver -m fast` (`pg_ctl` is under
+  `.venv/Lib/site-packages/pgserver/pginstall/bin`).
+- Local generation on CPU (MiniCPM-2B, no GPU) needs more than the 60 s
+  default: set `LLM_TIMEOUT_SECONDS` / `OPERATION_TIMEOUT_SECONDS`.

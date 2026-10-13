@@ -1,0 +1,21 @@
+# Fixed catalog units, independent of semantic clustering.
+# Unmapped subject codes remain separate units with their exact code as label.
+# This does not assert that every catalog subject is an institutional department.
+# Add verified multi-subject department membership here, then rebuild the graph.
+version = 1
+
+[departments.ECON]
+label = "Economics"
+subjects = ["ECON"]
+
+[departments.MATH]
+label = "Mathematics"
+subjects = ["MATH"]
+
+[departments.CS]
+label = "Computer Science"
+subjects = ["CS"]
+
+[departments.DATASCI]
+label = "Data Science"
+subjects = ["DATASCI"]

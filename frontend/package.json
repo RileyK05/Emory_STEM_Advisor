@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "npm run build -- --mode browser-test && node --test tests/browser-workflows.test.mjs tests/http-client.test.mjs tests/mock-client.test.mjs tests/artifact-modules.test.mjs",
+    "test:integration": "npm run build -- --mode browser-test && node --test tests/live-api-integration.test.mjs",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -17,8 +21,10 @@
   "devDependencies": {
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.3.3",
+    "@vitejs/plugin-react": "^4.7.0",
+    "playwright-core": "^1.64.0",
+    "prettier": "3.3.3",
     "typescript": "^5.6.3",
-    "vite": "^5.4.10"
+    "vite": "^6.4.3"
   }
 }

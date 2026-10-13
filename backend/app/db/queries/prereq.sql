@@ -6,6 +6,10 @@ JOIN sources s ON s.source_id = c.source_id
 WHERE co.collection_id = %(collection_id)s
   AND co.code = %(code)s
   AND s.status = 'indexed'
+  AND s.is_current
+  AND (%(workspace_key)s::text IS NULL OR s.workspace_key IS NULL
+       OR s.workspace_key = %(workspace_key)s)
+  AND (%(source_ids)s::uuid[] IS NULL OR c.source_id = ANY(%(source_ids)s::uuid[]))
 ORDER BY c.chunk_index;
 
 -- name: prereq_upstream
@@ -15,8 +19,13 @@ JOIN courses target ON target.course_id = m.target_course_id
 JOIN chunks c ON c.locator_id = target.locator_id
 JOIN sources s ON s.source_id = c.source_id
 WHERE m.course_id = %(course_id)s
+  AND s.collection_id = %(collection_id)s
   AND m.kind IN ('prerequisite', 'corequisite')
   AND s.status = 'indexed'
+  AND s.is_current
+  AND (%(workspace_key)s::text IS NULL OR s.workspace_key IS NULL
+       OR s.workspace_key = %(workspace_key)s)
+  AND (%(source_ids)s::uuid[] IS NULL OR c.source_id = ANY(%(source_ids)s::uuid[]))
 ORDER BY c.chunk_index;
 
 -- name: prereq_downstream
@@ -26,8 +35,13 @@ JOIN courses dependent ON dependent.course_id = m.course_id
 JOIN chunks c ON c.locator_id = dependent.locator_id
 JOIN sources s ON s.source_id = c.source_id
 WHERE m.target_course_id = %(course_id)s
+  AND s.collection_id = %(collection_id)s
   AND m.kind IN ('prerequisite', 'corequisite')
   AND s.status = 'indexed'
+  AND s.is_current
+  AND (%(workspace_key)s::text IS NULL OR s.workspace_key IS NULL
+       OR s.workspace_key = %(workspace_key)s)
+  AND (%(source_ids)s::uuid[] IS NULL OR c.source_id = ANY(%(source_ids)s::uuid[]))
 ORDER BY c.chunk_index;
 
 -- name: get_course_id_by_code

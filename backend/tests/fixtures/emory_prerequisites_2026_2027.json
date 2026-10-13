@@ -1,0 +1,208 @@
+{
+  "catalog": "Emory College of Arts and Sciences Catalog",
+  "term": "2026-2027",
+  "retrieved_at": "2026-10-08",
+  "catalog_url": "https://college.catalog.emory.edu/courses",
+  "catalog_pdf_url": "https://coursedog-pdfs-public-prod.s3.us-east-2.amazonaws.com/emory_peoplesoft_direct/catalog/65efbd55-5e5d-4fa2-a84a-a6712c3a4be2-emory_peoplesoft_direct-catalog-1782830404257.pdf",
+  "retrieval_note": "Current public Emory College catalog course-detail records, not the gated live Course Atlas offerings. Raw prerequisite field copied from each detail view; no edges inferred.",
+  "courses": [
+    {
+      "code": "MATH 344",
+      "requisites": "(MATH 211 or PHYS 211 or MATH_OX 211 or MATH 276) and (MATH 221 or MATH_OX 221 or MATH 321) and (MATH 250 or MATH_OX 250 or MATH 276) or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0076832",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "MATH 345",
+      "requisites": "This course requires MATH 221 OR MATH_OX221 OR MATH 321 AND MATH 224 OR MATH 250 OR MATH_OX250 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0076841",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "MATH 346",
+      "requisites": "(MATH 221 or MATH_OX 221 or MATH 275 or MATH 321) and (CS 170 or CS_OX 170 or MATH 170) or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0076851",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "MATH 347",
+      "requisites": "(MATH 211 or PHYS 211 or MATH_OX 211 or MATH 276) and (MATH 221 or MATH_OX 221 or MATH 321) and (MATH 250 or MATH_OX 250 or MATH 276) or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0248071",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "MATH 351",
+      "requisites": "(MATH 211 or MATH_OX 211 or MATH 276) and (MATH 212 or MATH_OX 212) and (MATH 221 or MATH_OX 221 or MATH 275 or MATH 321) or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0138481",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "MATH 361",
+      "requisites": "MATH 210 or MATH_OX 210 or MATH 211 or PHYS 211 or MATH_OX 211 or MATH 276 or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0076881",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "MATH 362",
+      "requisites": "This course requires MATH 361 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0076901",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "MATH 315",
+      "requisites": "(MATH 221 or MATH_OX 221 or MATH 275 or MATH 321) and (CS 170 or CS_OX 170 or MATH 170) or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0076681",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "MATH 321",
+      "requisites": "MATH 250 or MATH_OX 250 or MATH_OX 250Q or MATH 276 or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0076711",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "CS 253",
+      "requisites": "CS 171 or 171Z or CS_OX 171 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0047311",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "CS 326",
+      "requisites": "(CS 170 or CS_OX 170) and (CS 171 or CS_OX 171) and (CS 224 or CS_OX 224) and CS 253, or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0254431",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "CS 350",
+      "requisites": "CS 253 and CS 255 or equivalent transfer credit as prerequisites.",
+      "url": "https://college.catalog.emory.edu/courses/0047371",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "CS 370",
+      "requisites": "CS 253 or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0047402",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "CS 325",
+      "requisites": "(CS 224 or CS_OX 224) and CS 253 or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0047491",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "CS 334",
+      "requisites": "(CS224 or CS_OX 224) and (CS 253 or CS_OX 253) and (MATH 221 or MATH_OX 221 or MATH 275 or MATH 321) or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0254441",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "CS 329",
+      "requisites": "This course requires CS 171 or CS 171Z or CS_OX 171 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0247231",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "CS 224",
+      "requisites": "(CS 170 or CS_OX 170) and (MATH 111 or MATH_OX 111) or equivalent transfer credit as prerequisites.",
+      "url": "https://college.catalog.emory.edu/courses/0047131",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "CS 171",
+      "requisites": "This course requires MUS 221 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0208521",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "BIOL 142",
+      "requisites": "This course requires BIOL 141 and BIOL 141L or BIOL 151or BIOL_OX141 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0043011",
+      "expected_status": "unparsed"
+    },
+    {
+      "code": "BIOL 241",
+      "requisites": "BIOL 142 and BIOL 142L, or BIOL_OX 142 or BIOL_OX 142X, or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0043661",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "BIOL 347",
+      "requisites": "[(BIOL 142 and BIOL 142L) or BIOL_OX 142 or BIOL_OX 142X] and (QTM 100 or QTM_OX 100) or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0251911",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "BIOL 450",
+      "requisites": "This course requires BIOL 360 or NBB 301 or IBS 514 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0044031",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "BIOL 264",
+      "requisites": "(BIOL 142 and BIOL 142L) or BIOL_OX 142 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0043831",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "BIOL 223",
+      "requisites": "(BIOL 142 and BIOL 142L) or BIOL_OX 142 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0043531",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "BIOL 301",
+      "requisites": "[(BIOL 142 and BIOL 142L) or (BIOL_OX 142)] and (CHEM 203 or CHEM 203Z or CHEM_OX 203 or CHEM 221 or CHEM_OX 221 or CHEM 221Z) or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0043981",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "BIOL 336",
+      "requisites": "(BIOL 142 and BIOL 142L) or BIOL_OX 142 or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0043631",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "BIOL 348",
+      "requisites": "(BIOL 142 or BIOL_OX 142) and (CHEM 141 or CHEM_OX 141 or CHEM 150 or CHEM_OX 150) or equivalent transfer credit as a prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0043731",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "CHEM 203",
+      "requisites": "CHEM 202 or CHEM_OX 202 or CHEM 202Z or CHEM 221 or CHEM_OX 221 or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0044991",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "CHEM 204",
+      "requisites": "CHEM 203 or CHEM_OX 203 or CHEM 222 or CHEM_OX 222 or CHEM 222Z or CHEM 203Z or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0252151",
+      "expected_status": "parsed"
+    },
+    {
+      "code": "CHEM 205",
+      "requisites": "(CHEM 203 or CHEM_OX 203 or CHEM 222 or CHEM_OX 222 or CHEM 222Z or CHEM 203Z) and (MATH 111 or MATH_OX 111 or MATH 112 or MATH 112Z or MATH_OX 112) or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0252171",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "CHEM 333",
+      "requisites": "(CHEM 204 or CHEM_OX 204) and (CHEM 204L or CHEM_OX 204L) and (CHEM 205 or CHEM_OX 205) and (CHEM 205L or CHEM_OX 205L) or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0112891",
+      "expected_status": "ambiguous"
+    },
+    {
+      "code": "CHEM 340",
+      "requisites": "(CHEM 204 or CHEM_OX 204) and (CHEM 204L or CHEM_OX 204L) and (BIOL 141 or BIOL_OX 141) or equivalent transfer credit as prerequisites. Students who took BIOL 301, or have transfer credit equivalent to BIOL 301, cannot take this course.",
+      "url": "https://college.catalog.emory.edu/courses/0112911",
+      "expected_status": "unparsed"
+    },
+    {
+      "code": "ENVS 250",
+      "requisites": "QTM 100 or QTM_OX 100 or BUS 350 or BUS_OX 350 or equivalent transfer credit as prerequisite.",
+      "url": "https://college.catalog.emory.edu/courses/0222621",
+      "expected_status": "parsed"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+FROM python:3.12.8-slim-bookworm
+ARG LIBREOFFICE_VERSION=4:7.4.7-1+deb12u14
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      libreoffice-calc=${LIBREOFFICE_VERSION} \
+      libreoffice-writer=${LIBREOFFICE_VERSION} \
+      fonts-liberation=1:1.07.4-11 \
+ && rm -rf /var/lib/apt/lists/* \
+ && useradd --system --uid 65532 --home-dir /nonexistent --shell /usr/sbin/nologin office
+COPY sandbox/office-convert.py /usr/local/bin/office-convert
+COPY sandbox/office-profile/ /opt/office-profile/
+RUN chmod 0555 /usr/local/bin/office-convert && chmod -R a+rX /opt/office-profile
+ENV HOME=/tmp SAL_USE_VCLPLUGIN=svp
+USER 65532:65532
+WORKDIR /output

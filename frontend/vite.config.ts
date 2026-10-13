@@ -7,8 +7,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': 'http://127.0.0.1:8000',
-      '/health': 'http://127.0.0.1:8000',
+      // Preserve the browser's Host so backend same-origin checks match Origin.
+      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: false },
+      '/health': { target: 'http://127.0.0.1:8000', changeOrigin: false },
     },
   },
 });

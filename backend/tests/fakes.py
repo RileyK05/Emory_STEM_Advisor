@@ -1,8 +1,11 @@
 """Deterministic test doubles. No models, no network, no randomness across runs."""
 
 import hashlib
+from datetime import UTC, datetime, timedelta
 
 import numpy as np
+
+from app.llm.base import GenerationResult, Usage
 
 
 class FakeEmbedder:
@@ -20,6 +23,9 @@ class FakeEmbedder:
             vec[0] = 1.0
             norm = 1.0
         return (vec / norm).astype(np.float32)
+
+    def count_tokens(self, text: str) -> int:
+        return whitespace_tokens(text)
 
     def embed_documents(self, texts: list[str]) -> np.ndarray:
         if not texts:
@@ -54,3 +60,54 @@ class FakeProvider:
         self.calls += 1
         self.last_messages = [dict(m) for m in messages]
         return self.text
+
+
+class ScriptedProvider:
+    """Provider double that returns one scripted `GenerationResult` per call.
+
+    Unlike `FakeProvider`, this implements the typed `generate` seam, so tests can
+    exercise finish reasons, provider refusals, tool calls, and usage accounting
+    without redefining a provider in each file. Requests are recorded for
+    inspection.
+    """
+
+    def __init__(
+        self,
+        text: str = "An answer citing [1] the context.",
+        *,
+        finish_reason: str = "stop",
+        refusal: str | None = None,
+        tool_calls=(),
+        usage: Usage | None = None,
+        model: str | None = None,
+    ) -> None:
+        if usage is None:
+            usage = Usage(prompt_tokens=8, completion_tokens=8, source="provider")
+        self.result = GenerationResult(
+            text=text,
+            tool_calls=tuple(tool_calls),
+            finish_reason=finish_reason,
+            usage=usage,
+            refusal=refusal,
+            model=model,
+        )
+        self.requests: list = []
+
+    def generate(self, request):
+        self.requests.append(request)
+        return self.result
+
+    def chat(self, messages, *, max_new_tokens: int | None = None) -> str:
+        self.requests.append(messages)
+        return self.result.text
+
+
+class FakeClock:
+    def __init__(self):
+        self.value = datetime(2026, 10, 7, tzinfo=UTC)
+
+    def __call__(self):
+        return self.value
+
+    def advance(self, seconds):
+        self.value += timedelta(seconds=seconds)

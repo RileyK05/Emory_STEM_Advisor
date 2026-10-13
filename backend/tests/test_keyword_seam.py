@@ -2,27 +2,9 @@
 
 import pytest
 
-from app.ingest.pipeline import ingest_file
-from app.retrieval.config import KeywordSeamConfig, load_retrieval_config
+from app.retrieval.config import KeywordSeamConfig
 from app.retrieval.seams.keyword import keyword_seam
-from tests.fakes import FakeEmbedder, whitespace_tokens
-
-pytestmark = pytest.mark.db
-
-
-def _ingest(db, collection, tmp_path, name, text, content_type="text/plain"):
-    path = tmp_path / name
-    path.write_text(text, encoding="utf-8")
-    return ingest_file(
-        db,
-        collection_id=collection,
-        path=path,
-        content_type=content_type,
-        count_tokens=whitespace_tokens,
-        embedder=FakeEmbedder(dim=8),
-        embed_model="fake-model",
-        config=load_retrieval_config(),
-    )
+from tests.helpers import ingest_text
 
 
 def _config(**overrides):
@@ -31,16 +13,9 @@ def _config(**overrides):
     return KeywordSeamConfig(**base)
 
 
-def test_or_match_finds_chunk_with_one_word(db, collection, tmp_path):
-    _ingest(db, collection, tmp_path, "a.txt", "alpha beta gamma delta\n")
-    result = keyword_seam(db, collection, "gamma", _config())
-    assert result.state == "active"
-    assert result.candidates
-
-
 def test_any_single_word_matches(db, collection, tmp_path):
-    _ingest(db, collection, tmp_path, "a.txt", "alpha beta\n")
-    _ingest(db, collection, tmp_path, "b.txt", "gamma delta\n")
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta\n")
+    ingest_text(db, collection, tmp_path, "b.txt", "gamma delta\n")
     result = keyword_seam(db, collection, "beta delta", _config())
     sources = {c.source_id for c in result.candidates}
     assert len(sources) == 2
@@ -51,7 +26,7 @@ def test_any_single_word_matches(db, collection, tmp_path):
     ["f(x) = x^2", "a <-> b & !c", "''", "((", ":*", "!!!", "a & | b"],
 )
 def test_hostile_queries_do_not_error(db, collection, tmp_path, query):
-    _ingest(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
     result = keyword_seam(db, collection, query, _config())
     assert result.state in {"active", "dormant"}
 
@@ -68,7 +43,7 @@ def test_disabled_in_config(db, collection):
 
 
 def test_failed_source_chunks_never_appear(db, collection, tmp_path):
-    source_id = _ingest(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
+    source_id = ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
     db.execute("UPDATE sources SET status = 'failed' WHERE source_id = %(s)s", {"s": source_id})
     db.commit()
     result = keyword_seam(db, collection, "alpha", _config())
@@ -76,8 +51,8 @@ def test_failed_source_chunks_never_appear(db, collection, tmp_path):
 
 
 def test_ordering_is_deterministic(db, collection, tmp_path):
-    _ingest(db, collection, tmp_path, "a.txt", "alpha beta\n")
-    _ingest(db, collection, tmp_path, "b.txt", "alpha gamma\n")
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta\n")
+    ingest_text(db, collection, tmp_path, "b.txt", "alpha gamma\n")
     first = keyword_seam(db, collection, "alpha", _config())
     second = keyword_seam(db, collection, "alpha", _config())
     assert [(c.source_id, c.chunk_index) for c in first.candidates] == [
@@ -92,6 +67,6 @@ def test_ordering_is_deterministic(db, collection, tmp_path):
 
 
 def test_min_token_len_respected(db, collection, tmp_path):
-    _ingest(db, collection, tmp_path, "a.txt", "alpha to beta\n")
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha to beta\n")
     result = keyword_seam(db, collection, "to", _config(min_token_len=3))
     assert result.state == "dormant"

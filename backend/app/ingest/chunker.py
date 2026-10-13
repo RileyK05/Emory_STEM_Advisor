@@ -3,6 +3,7 @@
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 
 from app.ingest.extract import LocatorSpan
 
@@ -65,11 +66,25 @@ def _units(
         cur_tokens = 0
         for word in _WORD_RE.finditer(text, s, e):
             word_tokens = count_tokens(text[word.start():word.end()])
+            if word_tokens > target_tokens:
+                # One "word" over budget (e.g. a form's "Name: ______" blank,
+                # where each underscore is a token): split it by characters.
+                if cur_start is not None:
+                    units.append(_Unit(cur_start, cur_end, cur_tokens))
+                    cur_start = None
+                units.extend(_split_word(text, word.start(), word.end(),
+                                         count_tokens=count_tokens,
+                                         target_tokens=target_tokens))
+                continue
             if cur_start is None:
                 cur_start, cur_end, cur_tokens = word.start(), word.end(), word_tokens
-            elif cur_tokens + word_tokens <= target_tokens:
+                continue
+            # Measure the joined span: BPE tokenizers spend tokens on the
+            # whitespace between words, so per-word counts don't add up.
+            joined = count_tokens(text[cur_start:word.end()])
+            if joined <= target_tokens:
                 cur_end = word.end()
-                cur_tokens += word_tokens
+                cur_tokens = joined
             else:
                 units.append(_Unit(cur_start, cur_end, cur_tokens))
                 cur_start, cur_end, cur_tokens = word.start(), word.end(), word_tokens
@@ -78,15 +93,35 @@ def _units(
     return units
 
 
-def _pack(units: list[_Unit], target_tokens: int, overlap_tokens: int) -> list[tuple[int, int]]:
+def _split_word(
+    text: str, start: int, end: int, *, count_tokens: Callable[[str], int], target_tokens: int
+) -> list[_Unit]:
+    units: list[_Unit] = []
+    piece_start = start
+    for cut in range(start + 1, end + 1):
+        if cut < end and count_tokens(text[piece_start:cut + 1]) <= target_tokens:
+            continue
+        units.append(_Unit(piece_start, cut, count_tokens(text[piece_start:cut])))
+        piece_start = cut
+    return units
+
+
+def _pack(
+    text: str,
+    units: list[_Unit],
+    *,
+    count_tokens: Callable[[str], int],
+    target_tokens: int,
+    overlap_tokens: int,
+) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     n = len(units)
     i = 0
     while i < n:
         end = i
-        total = 0
-        while end < n and total + units[end].tokens <= target_tokens:
-            total += units[end].tokens
+        # The span's own token count, not a sum of unit counts: separators
+        # between units cost tokens under BPE (runs of spaces in PDF text).
+        while end < n and count_tokens(text[units[i].start:units[end].end]) <= target_tokens:
             end += 1
         if end == i:
             end = i + 1
@@ -110,6 +145,9 @@ def chunk(
     target_tokens: int,
     overlap_tokens: int,
 ) -> list[ChunkSpan]:
+    # Unit spans are measured when split and again when packed (and on every
+    # overlap restart); the count of identical text is deterministic, so reuse it.
+    count_tokens = lru_cache(maxsize=8192)(count_tokens)
     chunks: list[ChunkSpan] = []
     for ordinal, locator in enumerate(locators):
         units = _units(
@@ -119,7 +157,8 @@ def chunk(
             start=locator.start_char,
             end=locator.end_char,
         )
-        for start, end in _pack(units, target_tokens, overlap_tokens):
+        for start, end in _pack(text, units, count_tokens=count_tokens,
+                                target_tokens=target_tokens, overlap_tokens=overlap_tokens):
             segment = text[start:end]
             lead = len(segment) - len(segment.lstrip())
             trail = len(segment) - len(segment.rstrip())

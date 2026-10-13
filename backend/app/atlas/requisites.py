@@ -11,10 +11,14 @@ from dataclasses import dataclass
 
 from app.atlas.records import normalize_code
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "4"
 
-_DIGITS = r"\d{3}[A-Za-z]?"
-_CODE_RE = re.compile(rf"([A-Za-z]{{2,5}})\s?({_DIGITS})|\b({_DIGITS})\b")
+# A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
+# uppercase, so ordinary words and "111or" are not read as codes. The catalog's
+# mixed-case suffix (202zL) is allowed, matching the program parser.
+_DIGITS = r"\d{3}(?:[A-Z]{1,2}|[a-z][A-Z]?)?"
+_SUBJECT = r"(?:[A-Z]{6,7}|[A-Za-z]{2,5})(?:_OX)?"
+_CODE_RE = re.compile(rf"({_SUBJECT})\s?({_DIGITS})\b|\b({_DIGITS})\b")
 _GRADE_RE = re.compile(
     r"with\s+(?:a\s+)?(?:minimum\s+)?grade\s+of\s+[A-D][+-]?\s+or\s+(?:better|higher)",
     re.IGNORECASE,
@@ -23,12 +27,14 @@ _GRADE_RE2 = re.compile(
     r"with\s+(?:a\s+)?[A-D][+-]?\s+or\s+(?:better|higher)", re.IGNORECASE
 )
 _LABEL_RE = re.compile(
-    r"\b(recommended\s+preparation|recommended|co-?requisites?|prerequisites?)\s*:\s*",
+    r"\b(recommended\s+preparation|recommended|co[ -]?requisites?|pre[ -]?requisites?)\s*:\s*",
     re.IGNORECASE,
 )
 _CONDITIONS = [
     (re.compile(r"(permission|consent)\s+of\s+(the\s+)?instructor", re.IGNORECASE),
      "permission of instructor"),
+    (re.compile(r"equivalent\s+transfer\s+credit\s+as\s+(?:a\s+)?prerequisites?\b", re.IGNORECASE),
+     "equivalent transfer credit"),
     (re.compile(r"equivalent", re.IGNORECASE), "equivalent"),
     (re.compile(r"(freshman|sophomore|junior|senior)\s+standing", re.IGNORECASE),
      None),  # canonical text is the matched phrase, so the year is kept
@@ -61,6 +67,19 @@ class AnyOf:
 
 
 Req = CourseRef | Condition | AllOf | AnyOf
+
+
+def requisite_text(raw: str | None, description: str) -> str | None:
+    """Use the official field, or an explicitly labeled description tail.
+
+    Preserve every word after the label. Cutting at the first sentence could
+    drop additional restrictions; unfamiliar prose must fail parsing instead.
+    An existing structured requisite field always retains precedence.
+    """
+    if raw and raw.strip():
+        return raw
+    match = re.search(r"\b(?:pre|co)[ -]?requisites?\s*:", description, re.IGNORECASE)
+    return description[match.start():].strip() if match else raw
 
 
 @dataclass(frozen=True)
@@ -115,8 +134,8 @@ def _scan(segment: str) -> list[tuple[str, str]]:
             tokens.append(("op", "or"))
             i += 1
             continue
-        if char in "()":
-            tokens.append(("paren", char))
+        if char in "()[]":
+            tokens.append(("paren", {"[": "(", "]": ")"}.get(char, char)))
             i += 1
             continue
         match = _AND_OR.match(segment, i)
@@ -242,6 +261,8 @@ def parse_requisites(text: str | None) -> ParsedRequisites:
         return ParsedRequisites("none", (), {}, ())
 
     stripped = text.strip()
+    # This catalog wrapper introduces the field; it has no prerequisite meaning.
+    stripped = re.sub(r"^This course requires\s+", "", stripped, flags=re.IGNORECASE)
     labels = list(_LABEL_RE.finditer(stripped))
     segments: list[tuple[str, str]] = []
     if not labels:

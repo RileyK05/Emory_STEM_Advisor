@@ -26,12 +26,19 @@ def embed_seam(
     model: str,
     config: EmbedSeamConfig,
     *,
+    source_ids: list[UUID] | None = None,
+    workspace_key: str | None = None,
     embedder: Embedder | None = None,
     query_vec: np.ndarray | None = None,
 ) -> SeamResult:
     if not config.enabled:
         return SeamResult(
             name="embed", enabled=False, state="disabled", reason="disabled in config"
+        )
+
+    if source_ids == []:
+        return SeamResult(
+            name="embed", enabled=True, state="dormant", reason="explicitly empty source scope"
         )
 
     if query_vec is None:
@@ -44,6 +51,8 @@ def embed_seam(
         queries.get("embed_search"),
         {
             "q": query_vec,
+            "source_ids": source_ids,
+            "workspace_key": workspace_key,
             "model": model,
             "dim": dim,
             "collection_id": collection_id,

@@ -28,6 +28,7 @@ class LocatorSpan:
 class Extracted:
     text: str
     locators: list[LocatorSpan]
+    warnings: tuple[str, ...] = ()
 
 
 def _assert_cover(text: str, locators: list[LocatorSpan]) -> None:
@@ -176,7 +177,15 @@ def _extract_pdf(raw: bytes) -> Extracted:
         offset += len(page_text) + 2
     if not locators:
         raise EmptyExtraction("no text layer; OCR is not supported")
-    return Extracted(text=text, locators=locators)
+    warnings: list[str] = []
+    for number, page_text in enumerate(pages, start=1):
+        if not page_text.strip():
+            warnings.append(
+                f"page {number}: no extracted text; may be blank or scanned; OCR unavailable"
+            )
+        if "\ufffd" in page_text:
+            warnings.append(f"page {number}: replacement characters; verify text and numbers")
+    return Extracted(text=text, locators=locators, warnings=tuple(warnings))
 
 
 def extract(raw: bytes, content_type: str, *, lines_per_locator: int = 40) -> Extracted:
@@ -184,7 +193,18 @@ def extract(raw: bytes, content_type: str, *, lines_per_locator: int = 40) -> Ex
         from app.atlas.records import load_atlas_lines, render_courses
 
         courses = load_atlas_lines(decode_text(raw).splitlines())
-        text, spans = render_courses(courses)
+        # Normalize each field before rendering so the rendered text and its
+        # locator spans stay aligned; otherwise control/invisible characters in
+        # scraped titles/descriptions reach chunks and embeddings.
+        normalized = [
+            course.model_copy(update={
+                "title": normalize_text(course.title),
+                "description": normalize_text(course.description),
+                "requisites": normalize_text(course.requisites) if course.requisites else None,
+            })
+            for course in courses
+        ]
+        text, spans = render_courses(normalized)
         result = Extracted(
             text=text,
             locators=[
@@ -203,5 +223,8 @@ def extract(raw: bytes, content_type: str, *, lines_per_locator: int = 40) -> Ex
     else:
         raise UnsupportedContentType(content_type)
 
+    if not result.text.strip():
+        # A whitespace-only document would otherwise "index" with zero chunks.
+        raise EmptyExtraction("no extractable text in document")
     _assert_cover(result.text, result.locators)
     return result

@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.ingest import extract as extract_module
 from app.ingest.extract import EmptyExtraction, UnsupportedContentType, extract
 from tests.fixtures.pdf import make_pdf
 
@@ -103,3 +104,51 @@ def test_pdf_without_text_layer_raises():
 def test_unsupported_content_type_raises():
     with pytest.raises(UnsupportedContentType):
         extract(b"data", "application/octet-stream")
+
+
+def test_mixed_pdf_missing_page_is_visible_and_page_identity_is_preserved():
+    result = extract(make_pdf(["First page", "", "Third page"]), "application/pdf")
+    assert [loc.label for loc in result.locators] == ["page 1", "page 3"]
+    assert any("page 2:" in warning for warning in result.warnings)
+
+
+def test_pdf_replacement_characters_are_warned_and_indexed(monkeypatch):
+    # A real text-layer PDF cannot easily carry U+FFFD through pypdf's simple
+    # font encodings, so pin the warning branch at the extraction boundary.
+    monkeypatch.setattr(
+        extract_module, "_read_pdf",
+        lambda raw: ("cour\ufffdse listing", ["cour\ufffdse listing"]),
+    )
+    result = extract(b"ignored", "application/pdf")
+    assert "\ufffd" in result.text
+    assert any("replacement characters" in warning for warning in result.warnings)
+    _assert_tiling(result.text, result.locators)
+
+
+def test_pdf_delimiter_characters_round_trip():
+    data = make_pdf(["CS 101 (3 credits) \\ lab"])
+    result = extract(data, "application/pdf")
+    assert "CS 101 (3 credits)" in result.text
+    assert "\\ lab" in result.text
+    _assert_tiling(result.text, result.locators)
+
+
+def test_pdf_page_offsets_keep_each_page_slice_distinct():
+    data = make_pdf(["alpha page", "beta page"])
+    result = extract(data, "application/pdf")
+    first, second = result.locators
+    assert [first.label, second.label] == ["page 1", "page 2"]
+    assert result.text[first.start_char : first.end_char].strip() == "alpha page"
+    assert result.text[second.start_char : second.end_char].strip() == "beta page"
+    assert first.end_char <= second.start_char
+    _assert_tiling(result.text, result.locators)
+
+
+def test_pdf_header_only_page_is_indexed_without_header_detection():
+    # Pins current behavior: a page holding only a running header is a passage,
+    # not silently dropped or specially warned about. Header detection is not
+    # implemented; this documents the boundary rather than claiming it is.
+    result = extract(make_pdf(["Page 3 of 12"]), "application/pdf")
+    assert [loc.label for loc in result.locators] == ["page 1"]
+    assert result.text.strip() == "Page 3 of 12"
+    assert result.warnings == ()

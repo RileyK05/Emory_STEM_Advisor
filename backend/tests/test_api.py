@@ -1,102 +1,31 @@
 """HTTP API tests. Fake provider/embedder; real Postgres. No models load."""
 
-from dataclasses import replace
-
-import pytest
-from fastapi.testclient import TestClient
-
-from app.api import create_app
-from app.config import load_settings
-from app.retrieval.config import load_retrieval_config
-from tests.fakes import FakeEmbedder, FakeProvider, whitespace_tokens
-
-pytestmark = pytest.mark.db
-
-_MODEL = "fake-model"
 
 
-def _lenient_config():
-    # FakeEmbedder similarity is arbitrary; disable floors so keyword routing
-    # is deterministic in these tests.
-    config = load_retrieval_config()
-    seams = replace(config.seams, embed=replace(config.seams.embed, min_similarity=0.0))
-    return replace(config, seams=seams, fusion=replace(config.fusion, min_score=0.0))
+from tests.fakes import FakeProvider
+from tests.helpers import api_client, collection_name, ingest_text
 
 
-def _client(db, collection, provider=None, embedder=None):
-    settings = load_settings()
-    app = create_app(
-        settings=settings,
-        config=_lenient_config(),
-        embedder=embedder or FakeEmbedder(dim=8),
-        provider=provider or FakeProvider(),
-    )
-    app.state.override_conn = db
-    return TestClient(app)
-
-
-def _ingest(db, collection, tmp_path, name, text):
-    from app.ingest.pipeline import ingest_file
-
-    path = tmp_path / name
-    path.write_text(text, encoding="utf-8")
-    return ingest_file(
-        db,
-        collection_id=collection,
-        path=path,
-        content_type="text/plain",
-        count_tokens=whitespace_tokens,
-        embedder=FakeEmbedder(dim=8),
-        embed_model=_MODEL,
-        config=_lenient_config(),
-    )
-
-
-def _collection_name(db, collection):
-    return db.execute(
-        "SELECT name FROM collections WHERE collection_id = %(c)s", {"c": collection}
-    ).fetchone()["name"]
-
-
-def test_health(db, collection):
-    client = _client(db, collection)
-    resp = client.get("/health")
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
-
-
-def test_list_collections(db, collection):
-    client = _client(db, collection)
-    resp = client.get("/api/collections")
-    assert resp.status_code == 200
-    names = {item["name"] for item in resp.json()}
-    assert _collection_name(db, collection) in names
-
-
-def test_list_sources(db, collection, tmp_path):
-    _ingest(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
-    client = _client(db, collection)
-    resp = client.get("/api/sources", params={"collection": _collection_name(db, collection)})
-    assert resp.status_code == 200
-    sources = resp.json()
+def test_read_endpoints_and_basic_error_statuses(db, collection, tmp_path):
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
+    client = api_client(db, collection)
+    name = collection_name(db, collection)
+    assert client.get("/health").json() == {"status": "ok"}
+    assert name in {item["name"] for item in client.get("/api/collections").json()}
+    sources = client.get("/api/sources", params={"collection": name}).json()
     assert [s["name"] for s in sources] == ["a.txt"]
-    assert sources[0]["status"] == "indexed"
-    assert sources[0]["chunkCount"] == 1
-
-
-def test_unknown_collection_is_404(db, collection):
-    client = _client(db, collection)
-    resp = client.get("/api/sources", params={"collection": "no-such"})
-    assert resp.status_code == 404
+    assert sources[0]["status"] == "indexed" and sources[0]["chunkCount"] == 1
+    assert client.get("/api/sources", params={"collection": "no-such"}).status_code == 404
+    assert client.post("/api/query", json={"query": ""}).status_code == 422
 
 
 def test_query_returns_grounded_answer(db, collection, tmp_path):
-    _ingest(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
     provider = FakeProvider(text="The answer is alpha [1].")
-    client = _client(db, collection, provider=provider)
+    client = api_client(db, collection, provider=provider)
     resp = client.post(
         "/api/query",
-        json={"query": "alpha", "collectionId": _collection_name(db, collection)},
+        json={"query": "alpha", "collectionId": collection_name(db, collection)},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -110,31 +39,56 @@ def test_query_returns_grounded_answer(db, collection, tmp_path):
 
 
 def test_query_refusal_does_not_call_model(db, collection, tmp_path):
-    _ingest(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
     provider = FakeProvider()
-    client = _client(db, collection, provider=provider)
+    client = api_client(db, collection, provider=provider)
     resp = client.post(
         "/api/query",
-        json={"query": "zzzzz qqqqq nothing", "collectionId": _collection_name(db, collection)},
+        json={"query": "zzzzz qqqqq nothing", "collectionId": collection_name(db, collection)},
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["type"] == "refusal"
     assert provider.calls == 0
+    gaps = client.get("/api/gaps").json()["gaps"]
+    assert len(gaps) == 1 and gaps[0]["query"] == "zzzzz qqqqq nothing"
+    assert gaps[0]["occurrenceCount"] == 1 and gaps[0]["sourceIds"] is None
 
 
-def test_query_empty_string_rejected(db, collection):
-    client = _client(db, collection)
-    resp = client.post("/api/query", json={"query": ""})
-    assert resp.status_code == 422
+def test_generation_gap_recurrence_and_provider_outage_are_distinct(db, collection, tmp_path):
+    from app.llm.base import ProviderTimeoutError
+
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
+    client = api_client(db, collection, provider=FakeProvider("Uncited assertion."))
+    request = {"query": "alpha", "collectionId": collection_name(db, collection)}
+    withheld = client.post("/api/query", json=request)
+    assert withheld.status_code == 200 and withheld.json()["type"] == "refusal"
+    gap = client.get("/api/gaps").json()["gaps"][0]
+    assert gap["state"] == "open" and gap["occurrenceCount"] == 1
+
+    client.app.state.provider = FakeProvider("Alpha [1].")
+    answered = client.post("/api/query", json=request)
+    assert answered.status_code == 200 and answered.json()["type"] == "answer"
+    observed = client.get("/api/gaps").json()
+    assert observed["gaps"][0]["gapId"] == gap["gapId"]
+    assert observed["gaps"][0]["state"] == "open"
+    assert observed["gaps"][0]["successfulRecurrenceCount"] == 1
+
+    class OfflineProvider:
+        def generate(self, _request):
+            raise ProviderTimeoutError("provider unavailable", provider="fake")
+
+    client.app.state.provider = OfflineProvider()
+    assert client.post("/api/query", json=request).status_code == 503
+    assert client.get("/api/gaps").json() == observed
 
 
 def test_upload_source(db, collection):
-    client = _client(db, collection)
+    client = api_client(db, collection)
     resp = client.post(
         "/api/sources",
         files={"file": ("notes.txt", b"alpha beta gamma\n", "text/plain")},
-        data={"collection": _collection_name(db, collection)},
+        data={"collection": collection_name(db, collection)},
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -142,6 +96,6 @@ def test_upload_source(db, collection):
     assert body["status"] == "indexed"
     assert body["chunkCount"] == 1
     listed = client.get(
-        "/api/sources", params={"collection": _collection_name(db, collection)}
+        "/api/sources", params={"collection": collection_name(db, collection)}
     ).json()
     assert any(s["name"] == "notes.txt" for s in listed)

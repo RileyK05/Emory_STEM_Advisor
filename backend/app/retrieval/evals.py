@@ -23,6 +23,12 @@ class EvalCase:
     collection: str
     query: str
     expected: tuple[tuple[str, str], ...]
+    case_type: str = "positive"
+
+    @property
+    def negative(self) -> bool:
+        """A negative case, or one with no expected positive labels; retrieval should abstain."""
+        return self.case_type == "negative" or not self.expected
 
 
 @dataclass
@@ -30,9 +36,14 @@ class EvalSummary:
     total: int = 0
     resolved: int = 0
     unresolved: list[str] = field(default_factory=list)
+    positive_resolved: int = 0
+    negative_resolved: int = 0
     seam_recall: dict[str, float] = field(default_factory=dict)
     fused_recall: float = 0.0
     fusion_beats_best_single: bool = False
+    negative_refusals: int = 0
+    negative_false_positives: int = 0
+    negative_irrelevant_chunks: int = 0
 
 
 def load_cases(path: Path) -> list[EvalCase]:
@@ -50,6 +61,7 @@ def load_cases(path: Path) -> list[EvalCase]:
                     (item["filename"], item["locator_label"])
                     for item in record["expected"]
                 ),
+                case_type=record.get("case_type", "positive"),
             )
         )
     return cases
@@ -111,6 +123,24 @@ def run_eval(
         summary.resolved += 1
         expected = set(case.expected)
 
+        if case.negative:
+            summary.negative_resolved += 1
+            outcome = retrieve(
+                conn,
+                collection_id=collection_id,
+                query=case.query,
+                embedder=embedder,
+                embed_model=embed_model,
+                config=config,
+            )
+            if hasattr(outcome, "chunks") and outcome.chunks:
+                summary.negative_false_positives += 1
+                summary.negative_irrelevant_chunks += len(outcome.chunks)
+            else:
+                summary.negative_refusals += 1
+            continue
+
+        summary.positive_resolved += 1
         seam_results: list[SeamResult] = [
             keyword_seam(conn, collection_id, case.query, config.seams.keyword),
             prereq_seam(conn, collection_id, case.query, config.seams.prereq),
@@ -147,7 +177,7 @@ def run_eval(
             found = {(c.source_name, c.locator_label) for c in outcome.chunks}
             fused_recall_sum += _recall(found, expected)
 
-    denominator = summary.resolved or 1
+    denominator = summary.positive_resolved or 1
     summary.seam_recall = {
         name: total / denominator for name, total in seam_recall_sum.items()
     }

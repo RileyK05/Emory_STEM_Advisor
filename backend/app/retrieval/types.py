@@ -50,6 +50,10 @@ class RetrievalTrace:
     embed_model: str | None
     refused: bool
     seams: tuple[SeamResult, ...]
+    # Mutable so a caller can append advisory messages (for example, gap
+    # tracking being unavailable) without rebuilding the trace. It is copied
+    # into the response trace by the API serializers.
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

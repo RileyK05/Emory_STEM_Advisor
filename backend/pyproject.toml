@@ -10,13 +10,12 @@ dependencies = [
     # Upgrade only after re-validating the model repo's code against it.
     "transformers==4.38.2",
     "tokenizers>=0.15,<0.19",
-    # sentence-transformers 4.x requires transformers>=4.41, which would
-    # break the MiniCPM pin above; 3.3.1 is the newest line compatible
-    # with 4.38.
-    "sentence-transformers==3.3.1",
+    # Validated with Transformers 4.38.2 and Granite embedding numerical parity.
+    "sentence-transformers==3.0.1",
     "accelerate>=0.26",
     "torch>=2.4",
     "psycopg[binary]>=3.2",
+    "psycopg-pool>=3.2",
     "pgvector>=0.3",
     "numpy",
     # Similarity-graph clustering (agglomerative linkage).
@@ -27,17 +26,27 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
+    "httpx>=0.28,<1",
+    "python-docx>=1.1,<2",
+    "openpyxl>=3.1,<4",
+    "defusedxml>=0.7,<1",
+    "cryptography>=44",
+    "authlib>=1.6,<2",
+    "joserfc>=1.6,<2",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "pgserver", "httpx"]
+dev = ["pytest", "pytest-timeout", "ruff", "pgserver", "emory-stem-advisor-backend[cloud]"]
+cloud = ["openai>=3.26,<4", "anthropic>=0.70,<1", "google-genai>=1.30,<2"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["db: needs Postgres"]
+markers = ["db: needs Postgres (applied automatically to tests that use a database fixture)"]
+addopts = "--strict-markers --durations=15"
+timeout = 300
 
 [tool.ruff]
 line-length = 100

@@ -1,0 +1,118 @@
+{
+  "title": "Emory grounded retrieval baseline sources",
+  "status": "pending_human_review",
+  "usage": "Retrieval evidence only. These concise summaries are manually paraphrased from the linked primary Emory pages; they are not approved answers or a complete catalog. Verify live source before advising.",
+  "sources": [
+    {
+      "file": "degree_requirements.md",
+      "url": "https://college.catalog.emory.edu/ecaspolicies/degreereqs",
+      "retrieved_on": "2026-10-08",
+      "term": "2026–2027",
+      "representation": "short manually written factual summary; not a page capture or official statement",
+      "review_status": "pending_human_review",
+      "support_location": "Emory catalog lines 118-141"
+    },
+    {
+      "file": "advising.md",
+      "url": "https://oue.college.emory.edu/advising/support/index.html",
+      "retrieved_on": "2026-10-08",
+      "term": "Current page accessed 2026-10-08; advising hours may change",
+      "representation": "short manually written factual summary; not a page capture or official statement",
+      "review_status": "pending_human_review",
+      "support_location": "OUE advising page lines 132-147"
+    },
+    {
+      "file": "course_atlas.md",
+      "url": "https://registrar.emory.edu/registration/scheduling-tools/course-atlas.html",
+      "retrieved_on": "2026-10-08",
+      "term": "Current page accessed 2026-10-08",
+      "representation": "short manually written factual summary; not a page capture or official statement",
+      "review_status": "pending_human_review",
+      "support_location": "Registrar Atlas page lines 57-73, 81-107, 120-132"
+    },
+    {
+      "file": "chemistry.md",
+      "url": "https://chemistry.emory.edu/undergraduate/index.html",
+      "retrieved_on": "2026-10-08",
+      "term": "Current page accessed 2026-10-08; check current catalog",
+      "representation": "short manually written factual summary; not a page capture or official statement",
+      "review_status": "pending_human_review",
+      "support_location": "Chemistry department overview lines 47-77"
+    },
+    {
+      "file": "biology.md",
+      "url": "https://biology.emory.edu/undergraduate/index.html",
+      "retrieved_on": "2026-10-08",
+      "term": "Current page accessed 2026-10-08; requirements depend on dates",
+      "representation": "short manually written factual summary; not a page capture or official statement",
+      "review_status": "pending_human_review",
+      "support_location": "Biology department overview lines 73-96"
+    },
+    {
+      "file": "sire.md",
+      "url": "https://college.emory.edu/undergraduate-research/fall-and-spring-programs/sire.html",
+      "retrieved_on": "2026-10-08",
+      "term": "Current page accessed 2026-10-08; program cycle may change",
+      "representation": "short manually written factual summary; not a page capture or official statement",
+      "review_status": "pending_human_review",
+      "support_location": "SIRE program page lines 32-56"
+    },
+    {
+      "file": "urp499.md",
+      "url": "https://college.emory.edu/undergraduate-research/summer-programs/urp-499.html",
+      "retrieved_on": "2026-10-08",
+      "term": "Current page accessed 2026-10-08; term-specific program",
+      "representation": "short manually written factual summary; not a page capture or official statement",
+      "review_status": "pending_human_review",
+      "support_location": "URP 499 page lines 30-57"
+    },
+    {
+      "file": "cs_bs.md",
+      "url": "https://college.catalog.emory.edu/pages/itcHXRrMDWIbMaaMvyet",
+      "retrieved_on": "2026-10-08",
+      "term": "2026–2027",
+      "representation": "short manually written factual summary; not a page capture or official statement",
+      "review_status": "pending_human_review",
+      "support_location": "Emory College catalog Computer Science BS page lines 107-146"
+    },
+    {
+      "file": "course_prerequisites.md",
+      "url": "https://college.catalog.emory.edu/courses",
+      "retrieved_on": "2026-10-08",
+      "term": "2026–2027; individual course pages listed in prerequisite fixture",
+      "representation": "short manually written factual summary; not a page capture or official statement",
+      "review_status": "pending_human_review",
+      "course_detail_urls": [
+        {
+          "code": "MATH 362",
+          "url": "https://college.catalog.emory.edu/courses/0076901",
+          "raw_prerequisite_fixture_status": "parsed"
+        },
+        {
+          "code": "CS 370",
+          "url": "https://college.catalog.emory.edu/courses/0047402",
+          "raw_prerequisite_fixture_status": "parsed"
+        },
+        {
+          "code": "BIOL 450",
+          "url": "https://college.catalog.emory.edu/courses/0044031",
+          "raw_prerequisite_fixture_status": "parsed"
+        },
+        {
+          "code": "CHEM 203",
+          "url": "https://college.catalog.emory.edu/courses/0044991",
+          "raw_prerequisite_fixture_status": "parsed"
+        }
+      ],
+      "support_location": "Individual course detail pages, URLs enumerated in this source record; source fixture stores raw prerequisite fields"
+    }
+  ],
+  "existing_prerequisite_fixture": {
+    "file": "backend/tests/fixtures/emory_prerequisites_2026_2027.json",
+    "url": "https://college.catalog.emory.edu/courses",
+    "retrieved_on": "2026-10-08",
+    "term": "2026–2027",
+    "note": "Used only as a provenance reference; no graph nodes or edges are generated by this evaluation corpus.",
+    "sha256": "616215cbf041479ceb9476ce60765c53a329ae74fb5aa8343c1720b30c0dc9cf"
+  }
+}

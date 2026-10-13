@@ -4,15 +4,46 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Test scratch dirs (pytest --basetemp and manual runs)
+.pytest-tmp*/
+.pytest-temp-*/
 
 # Node
 node_modules/
 dist/
+*.tsbuildinfo
+test-results/
+playwright-report/
 
-# Env & data
+# Env: real secrets never get committed. Templates and non-secret Vite mode
+# files the test scripts load are kept.
 .env
-data/
-*.egg-info/
+.env.*
+!.env.example
+!frontend/.env.browser-test
 
-# VS Code
+# Data: dev database, raw uploads, scraped Emory catalog/program files, eval
+# sets, model caches. Regenerate with the scrape/import scripts (see AGENTS.md).
+data/
+
+# Logs
+*.log
+
+# OpenCode tool state (session goals, locks); never source
+.opencode/
+
+# A literal "%SystemDrive%" folder some Windows tools create when the variable
+# isn't expanded (holds machine caches).
+%SystemDrive%/
+
+# Editors / OS
 .vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

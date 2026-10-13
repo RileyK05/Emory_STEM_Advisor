@@ -16,8 +16,8 @@ from app.retrieval.types import Candidate, SeamResult
 
 # A subject must be a whole word, so "and"/"or" before a number are not read as
 # subjects ("MATH 111 and 112" -> MATH 111, MATH 112; "Physics 141" -> nothing).
-_SUBJECT_RE = re.compile(r"\b([A-Za-z]{2,5})\s?(\d{3}[A-Za-z]?)\b")
-_NUMBER_RE = re.compile(r"\b(\d{3}[A-Za-z]?)\b")
+_SUBJECT_RE = re.compile(r"\b([A-Z]{6,7}|[A-Za-z]{2,5})\s?(\d{3}(?:[A-Z]{2}|[A-Za-z])?)\b")
+_NUMBER_RE = re.compile(r"\b(\d{3}(?:[A-Z]{2}|[A-Za-z])?)\b")
 _CARRY_SEP = re.compile(r"\s*(?:(?:,|/|and|or)\s*)*")
 _CONJUNCTIONS = frozenset({"and", "or"})
 
@@ -62,10 +62,18 @@ def prereq_seam(
     collection_id: UUID,
     query: str,
     config: PrereqSeamConfig,
+    *,
+    source_ids: list[UUID] | None = None,
+    workspace_key: str | None = None,
 ) -> SeamResult:
     if not config.enabled:
         return SeamResult(
             name="prereq", enabled=False, state="disabled", reason="disabled in config"
+        )
+
+    if source_ids == []:
+        return SeamResult(
+            name="prereq", enabled=True, state="dormant", reason="explicitly empty source scope"
         )
 
     codes = _codes(query)
@@ -87,7 +95,8 @@ def prereq_seam(
         if "self" in config.directions:
             for chunk in conn.execute(
                 queries.get("prereq_self_chunks"),
-                {"collection_id": collection_id, "code": code},
+                {"collection_id": collection_id, "code": code, "source_ids": source_ids,
+                 "workspace_key": workspace_key},
             ).fetchall():
                 gathered.setdefault(
                     chunk["chunk_id"],
@@ -101,7 +110,9 @@ def prereq_seam(
                 )
         if "upstream" in config.directions:
             for chunk in conn.execute(
-                queries.get("prereq_upstream"), {"course_id": course_id}
+                queries.get("prereq_upstream"), {"course_id": course_id,
+                    "collection_id": collection_id, "source_ids": source_ids,
+                    "workspace_key": workspace_key}
             ).fetchall():
                 gathered.setdefault(
                     chunk["chunk_id"],
@@ -115,7 +126,9 @@ def prereq_seam(
                 )
         if "downstream" in config.directions:
             for chunk in conn.execute(
-                queries.get("prereq_downstream"), {"course_id": course_id}
+                queries.get("prereq_downstream"), {"course_id": course_id,
+                    "collection_id": collection_id, "source_ids": source_ids,
+                    "workspace_key": workspace_key}
             ).fetchall():
                 gathered.setdefault(
                     chunk["chunk_id"],

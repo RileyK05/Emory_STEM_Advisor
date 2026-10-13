@@ -1,10 +1,58 @@
-"""Provider seam: one interface for every model call in the system.
+"""Typed provider seam and its configured factory."""
 
-Task + messages in, text out. Which model answers is a config decision; no
-model-specific code lives outside this package.
-"""
+from app.llm.base import (
+    AssistantToolMessage,
+    AuthenticationError,
+    GenerationRequest,
+    GenerationResult,
+    InvalidRequestError,
+    Message,
+    Provider,
+    ProviderError,
+    ProviderUnavailableError,
+    RateLimitError,
+    ReasoningEffort,
+    StreamEvent,
+    TextMessage,
+    ToolCall,
+    ToolDefinition,
+    ToolResultMessage,
+    TransientProviderError,
+    Usage,
+)
+from app.llm.batch import BatchItem, BatchItemResult, BatchProgress, BatchProvider, BatchSubmission
+from app.llm.decision import DecisionLevel, DecisionProvider, DecisionRequest, DecisionResult
+from app.llm.factory import get_batch_provider, get_decision_provider, get_provider
 
-from app.llm.base import Message, Provider
-from app.llm.factory import get_provider
-
-__all__ = ["Message", "Provider", "get_provider"]
+__all__ = [
+    "AssistantToolMessage",
+    "AuthenticationError",
+    "BatchItem",
+    "BatchItemResult",
+    "BatchProgress",
+    "BatchProvider",
+    "BatchSubmission",
+    "DecisionLevel",
+    "DecisionProvider",
+    "DecisionRequest",
+    "DecisionResult",
+    "GenerationRequest",
+    "GenerationResult",
+    "InvalidRequestError",
+    "Message",
+    "Provider",
+    "ProviderError",
+    "ProviderUnavailableError",
+    "RateLimitError",
+    "ReasoningEffort",
+    "StreamEvent",
+    "TextMessage",
+    "ToolCall",
+    "ToolDefinition",
+    "ToolResultMessage",
+    "TransientProviderError",
+    "Usage",
+    "get_batch_provider",
+    "get_decision_provider",
+    "get_provider",
+]

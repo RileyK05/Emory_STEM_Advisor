@@ -11,6 +11,10 @@ import numpy as np
 
 
 class Embedder(Protocol):
+    def count_tokens(self, text: str) -> int:
+        """Count actual embedding tokens, including special tokens, without truncation."""
+        ...
+
     def embed_documents(self, texts: list[str]) -> np.ndarray:
         """Embed corpus texts. Returns (n, dim) float32, L2-normalized."""
         ...
