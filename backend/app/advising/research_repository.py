@@ -30,7 +30,7 @@ from uuid import UUID
 from app.db import queries
 from app.util.digest import json_digest
 
-SCOPE_FORMAT_VERSION = "1"
+SCOPE_FORMAT_VERSION = "2"
 DOCUMENT_PAGE_BYTES = 8_000
 MAX_COURSE_CODES = 4
 
@@ -62,6 +62,19 @@ class SourcePin:
     acquired_at: str | None = None
     geography: str | None = None
     occupation_id: str | None = None
+    title: str | None = None
+    institution: str | None = None
+    issuing_unit: str | None = None
+    document_roles: tuple[str, ...] = ()
+    applicability: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+    applicability_status: str = "unknown"
+    metadata_revision: int = 0
+
+    def __post_init__(self):
+        # Freezing the dataclass alone would leave caller-owned lists/dicts mutable.
+        object.__setattr__(self, "document_roles", tuple(self.document_roles))
+        object.__setattr__(self, "applicability", MappingProxyType({
+            key: tuple(values) for key, values in self.applicability.items()}))
 
 
 @dataclass(frozen=True)
@@ -194,7 +207,12 @@ def _pin(row) -> SourcePin:
     return SourcePin(row["source_id"], row["index_revision"], row["filename"],
                      row["content_type"], row["origin_key"], _kind(row), row["publisher"],
                      row["source_url"], row["edition"], _iso(row["published_at"]),
-                     _iso(row["acquired_at"]), row["geography"], row["occupation_id"])
+                     _iso(row["acquired_at"]), row["geography"], row["occupation_id"],
+                     title=row["title"], institution=row["institution"],
+                     issuing_unit=row["issuing_unit"], document_roles=row["document_roles"] or (),
+                     applicability=row["applicability"] or {},
+                     applicability_status=row["applicability_status"] or "unknown",
+                     metadata_revision=row["metadata_revision"])
 
 
 def _manifest(collection_id, workspace_key, selection, sources, programs) -> dict:
@@ -203,7 +221,8 @@ def _manifest(collection_id, workspace_key, selection, sources, programs) -> dic
         "collection_id": str(collection_id),
         "workspace_key": workspace_key,
         "selection": None if selection is None else sorted(map(str, selection)),
-        "sources": [[str(pin.source_id), pin.index_revision, pin.source_kind]
+        "sources": [[str(pin.source_id), pin.index_revision, pin.source_kind,
+                     pin.metadata_revision]
                     for pin in sorted(sources.values(), key=lambda p: str(p.source_id))],
         "programs": [[str(pin.program_id), str(pin.source_id), pin.source_index_revision,
                       pin.parsed_content_digest, pin.binding_status]
@@ -267,10 +286,18 @@ def lock_sources(conn, *, collection_id: UUID, workspace_key: str | None,
 
 
 def verify_sources(conn, scope: ResearchScope, source_ids) -> None:
-    """`lock_sources` for the in-scope members of `source_ids`."""
+    """Lock content and metadata together for the in-scope members of `source_ids`."""
+    pins = {source_id: scope.sources[source_id] for source_id in source_ids
+            if source_id in scope.sources}
     lock_sources(conn, collection_id=scope.collection_id, workspace_key=scope.workspace_key,
-                 pinned={source_id: scope.sources[source_id].index_revision
-                         for source_id in source_ids if source_id in scope.sources})
+                 pinned={source_id: pin.index_revision for source_id, pin in pins.items()})
+    # Read provenance only after acquiring the source locks: a concurrent metadata
+    # writer may have committed while the locking statement was waiting.
+    current = source_pins(conn, collection_id=scope.collection_id,
+                          workspace_key=scope.workspace_key, source_ids=pins)
+    changed = {source_id for source_id, pin in pins.items() if current.get(source_id) != pin}
+    if changed:
+        raise ScopeChanged(changed)
 
 
 def source_pins(conn, *, collection_id: UUID, workspace_key: str | None,
@@ -285,18 +312,37 @@ def source_pins(conn, *, collection_id: UUID, workspace_key: str | None,
             "source_ids": source_ids}).fetchall()}
 
 
-def verify_manifest(conn, manifest: dict) -> None:
-    """Lock a persisted research scope for saved-turn publication."""
-    lock_sources(conn, collection_id=UUID(manifest["collection_id"]),
-                 workspace_key=manifest["workspace_key"],
-                 pinned={UUID(s): r for s, r, _kind in manifest["sources"]})
-    sources = source_pins(conn, collection_id=UUID(manifest["collection_id"]),
-                          workspace_key=manifest["workspace_key"],
-                          source_ids=[UUID(s) for s, _r, _k in manifest["sources"]])
-    changed = {UUID(s) for s, _r, kind in manifest["sources"]
-               if sources[UUID(s)].source_kind != kind}
+def manifest_source_pins(manifest: dict) -> dict[UUID, tuple[int, str, int]]:
+    """Read both manifests. Legacy runs did not pin provenance metadata.
+
+    Their zero metadata revision permits only sources without verified provenance. A run
+    that needs verified metadata must restart; saved evidence remains readable.
+    """
+    return {UUID(entry[0]): (entry[1], entry[2], entry[3] if len(entry) > 3 else 0)
+            for entry in manifest["sources"]}
+
+
+def verify_manifest_sources(conn, manifest: dict, source_ids=None) -> dict[UUID, SourcePin]:
+    """Lock a persisted selection, checking provenance after the source locks."""
+    pinned = manifest_source_pins(manifest)
+    if source_ids is not None:
+        pinned = {source_id: pinned[source_id] for source_id in source_ids if source_id in pinned}
+    collection_id = UUID(manifest["collection_id"])
+    lock_sources(conn, collection_id=collection_id, workspace_key=manifest["workspace_key"],
+                 pinned={source_id: pin[0] for source_id, pin in pinned.items()})
+    sources = source_pins(conn, collection_id=collection_id,
+                          workspace_key=manifest["workspace_key"], source_ids=pinned)
+    changed = {source_id for source_id, (_revision, kind, metadata_revision) in pinned.items()
+               if source_id not in sources or (sources[source_id].source_kind,
+                   sources[source_id].metadata_revision) != (kind, metadata_revision)}
     if changed:
         raise ScopeChanged(changed)
+    return sources
+
+
+def verify_manifest(conn, manifest: dict) -> None:
+    """Lock a persisted research scope for saved-turn publication."""
+    verify_manifest_sources(conn, manifest)
     wanted = {UUID(p): (UUID(s), revision, digest, status)
               for p, s, revision, digest, status in manifest["programs"]}
     current = {r["program_id"]: (r["source_id"], r["source_index_revision"],

@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import sys
 from pathlib import Path
 
 import httpx
@@ -17,8 +18,10 @@ from app.atlas.catalog import (
 )
 from app.atlas.records import load_atlas
 from app.atlas.requisites import AnyOf, Condition, CourseRef, parse_requisites
+from app.ingest.advising_documents import prepare_documents
 from app.programs.pages import page_to_markdown
 from scripts import scrape_catalog, scrape_programs
+from tests.fixtures.pdf import make_pdf
 
 CONFIGS = Path(__file__).resolve().parent.parent / "configs"
 
@@ -247,6 +250,43 @@ def test_bot_challenge_stops_the_run_and_keeps_progress(tmp_path):
     assert "bot challenge" in failures[-1]["error"]
 
 
+def test_local_catalog_preparation_writes_bound_requirements_without_department_config(
+    tmp_path, monkeypatch,
+):
+    pdf = tmp_path / "catalog.pdf"
+    pdf.write_bytes(make_pdf([
+        "2026-2027 Emory College",
+        "CHEMISTRY (BA)",
+        "DEGREE AWARDED BA",
+        "Requirements",
+        "CHEM 150",
+    ]))
+    staging = tmp_path / "staging"
+    monkeypatch.setenv("DATA_DIR", str(staging))
+    url = "https://example.test/catalog.pdf"
+    monkeypatch.setattr(sys, "argv", [
+        "scrape_programs", "--pdf", str(pdf), "--source-url", url,
+        "--config", str(tmp_path / "absent-department-config.toml"),
+    ])
+
+    scrape_programs.main()
+
+    root = staging / "programs"
+    records = [json.loads(line) for line in (root / "programs.jsonl").read_text().splitlines()]
+    assert [record["title"] for record in records] == ["CHEMISTRY (BA)"]
+    assert "CHEM 150" in records[0]["items"][-1]["courses"]
+    identity = records[0]["source"]
+    source = root / identity["manifest_path"]
+    manifest = json.loads((root / "ingest-manifest.json").read_text())
+    entry = manifest["sources"][identity["manifest_path"]]
+    assert entry["source_url"] == url
+    assert entry["provenance"]["title"] == records[0]["title"]
+    assert entry["provenance"]["applicability"]["catalog_edition"] == [records[0]["catalog"]]
+    assert identity["content_sha256"] == entry["content_sha256"] == (
+        hashlib.sha256(source.read_bytes()).hexdigest()
+    )
+
+
 def test_catalog_pdf_splits_policies_and_programs():
     from app.programs.catalog_pdf import split_catalog
 
@@ -265,6 +305,21 @@ def test_catalog_pdf_splits_policies_and_programs():
         ("Computer Science (BS)", 3, 3), ("MATHEMATICS (BA)", 4, 4)]
     assert "11 / 158" not in programs[0].text and "\u2022 CS 170" in programs[0].text
     assert departments == []
+
+
+def test_catalog_pdf_tolerates_dropped_degree_awarded_typos():
+    """EMO-003: the published PDF misspells DEGREE AWARDED for 3 programs."""
+    from app.programs.catalog_pdf import split_catalog
+
+    pages = [
+        ("EMORY COLLEGE OF ARTS AND SCIENCES PROGRAMS\nChemistry (BA)\n"
+         "DEZGREE AWRDED BA\nRequirements\n\u2022 CHEM 150\n"
+         "Classics (BA)\nDEGREE AWRDED BA\n\u2022 GREK 101\n"
+         "Data Science (Minor)\nDEGREE AWARDED N/A\n\u2022 QTM 100\n"),
+    ]
+    _policies, programs, _departments = split_catalog(pages)
+    assert [p.title for p in programs] == [
+        "Chemistry (BA)", "Classics (BA)", "Data Science (Minor)"]
 
 
 def test_catalog_pdf_stops_the_last_program_at_a_department_section():
@@ -292,3 +347,85 @@ def test_mark_headings_only_touches_caps_heading_lines():
 
     text = "ACADEMIC STANDING\nStudents must keep a 2.0.\nCS 170\nGPA\n"
     assert mark_headings(text) == "## ACADEMIC STANDING\nStudents must keep a 2.0.\nCS 170\nGPA\n"
+
+
+def _reviewed_advising_batch(tmp_path):
+    body = b"Main content\n\n# Program\n\n| Course | Choice |\n|---|---|\n| CS 170 | or CS 171 |\n"
+    wrapper = (b"# acquired-name\n\nSource: https://example.test/program\n"
+               b"Retrieved: 2026-10-15 (ET)\n\n---\n\n")
+    (tmp_path / "page.md").write_bytes(wrapper + body)
+    (tmp_path / "sheet.pdf").write_bytes(make_pdf(["Program requirements", "CS 170 or CS 171"]))
+    (tmp_path / "held.md").write_bytes(b"Needs review")
+    records = []
+    for filename, normalization in (("page.md", "acquisition_wrapper"),
+                                    ("sheet.pdf", "preserve_pdf")):
+        records.append({
+            "id": filename, "disposition": "include", "original_path": filename,
+            "original_sha256": hashlib.sha256((tmp_path / filename).read_bytes()).hexdigest(),
+            "reason": "Reviewed local institutional publication, applicability unknown.",
+            "origin_key": f"advising:test:{filename}", "canonical_filename": filename,
+            "normalization": normalization,
+            "provenance": {
+                "source_category": "institutional_publication", "publisher": "Example Office",
+                "source_url": "https://example.test/program", "title": "Program requirements",
+                "institution": "Example University", "issuing_unit": "Example Office",
+                "document_roles": ["requirements"], "applicability": {"program": ["Example"]},
+                "applicability_status": "unknown",
+            },
+        })
+    records.append({
+        "id": "held", "disposition": "hold", "original_path": "held.md",
+        "original_sha256": hashlib.sha256(b"Needs review").hexdigest(),
+        "reason": "Table interpretation requires review.",
+    })
+    return {"schema_version": 1, "acquired_at": "2026-10-15", "document": records}, body
+
+
+def test_reviewed_advising_preparation_preserves_evidence_and_ignores_acquisition_churn(tmp_path):
+    registry, body = _reviewed_advising_batch(tmp_path)
+    first = prepare_documents(registry, input_root=tmp_path, registry_sha256="a" * 64)
+    assert [doc.content for doc in first.documents] == [body, (tmp_path / "sheet.pdf").read_bytes()]
+    manifest = first.manifest()["sources"]
+    assert set(manifest) == {"documents/page.md", "documents/sheet.pdf"}
+    assert manifest["documents/page.md"]["content_sha256"] == hashlib.sha256(body).hexdigest()
+    item = first.lineage["documents"][0]
+    original = (tmp_path / "page.md").read_bytes()
+    assert original[item["canonical_byte_start"]:] == body
+    assert item["removed_wrapper"].encode() + body == original
+    registry["acquired_at"] = "2026-10-16"
+    updated = original.replace(b"Retrieved: 2026-10-15", b"Retrieved: 2026-10-16")
+    (tmp_path / "page.md").write_bytes(updated)
+    registry["document"][0]["original_sha256"] = hashlib.sha256(updated).hexdigest()
+    second = prepare_documents(registry, input_root=tmp_path, registry_sha256="b" * 64)
+    assert [doc.content for doc in second.documents] == [doc.content for doc in first.documents]
+    assert second.manifest()["sources"]["documents/page.md"]["content_sha256"] == (
+        manifest["documents/page.md"]["content_sha256"]
+    )
+    assert second.manifest()["sources"]["documents/page.md"]["acquired_at"] == "2026-10-16"
+
+
+@pytest.mark.parametrize("change,error", [
+    ("changed_original", "reviewed SHA-256"),
+    ("path_escape", "within the input directory"),
+    ("duplicate_origin", "duplicate included origin_key"),
+    ("duplicate_filename", "duplicate canonical_filename"),
+    ("wrong_wrapper_url", "wrapper disagrees with registry"),
+    ("historical_include", "historical applicability cannot be included"),
+])
+def test_advising_preparation_rejects_unreviewed_identity_or_applicability(tmp_path, change, error):
+    registry, _body = _reviewed_advising_batch(tmp_path)
+    page, pdf, _held = registry["document"]
+    if change == "changed_original":
+        (tmp_path / "held.md").write_bytes(b"Replaced after review")
+    elif change == "path_escape":
+        page["original_path"] = "../outside.md"
+    elif change == "duplicate_origin":
+        pdf["origin_key"] = page["origin_key"]
+    elif change == "duplicate_filename":
+        pdf["canonical_filename"] = page["canonical_filename"]
+    elif change == "wrong_wrapper_url":
+        page["provenance"]["source_url"] = "https://example.test/other-program"
+    elif change == "historical_include":
+        page["provenance"]["applicability_status"] = "historical"
+    with pytest.raises(ValueError, match=error):
+        prepare_documents(registry, input_root=tmp_path, registry_sha256="a" * 64)

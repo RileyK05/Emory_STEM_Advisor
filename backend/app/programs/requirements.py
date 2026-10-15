@@ -66,10 +66,13 @@ _CHOOSE_RES = (
 # A section heading such as "Mathematics (3 courses required, 11 CU)".
 _SECTION_COUNT_RE = re.compile(r"\(\s*(?:select\s+)?\d+[^)]*required", re.IGNORECASE)
 _META = (
-    (re.compile(r"^DEGREE AWARDED(?![A-Z])\s*"), "degree"),
-    (re.compile(r"^HOURS TO COMPLETE(?![A-Z])\s*"), "hours"),
-    (re.compile(r"^COURSES REQUIRED(?![A-Z])\s*"), "courses_required"),
-    (re.compile(r"^DEPARTMENT CONTACTS?(?![A-Z])\s*"), "department"),
+    # The published PDF misspells these labels ("DEZGREE AWRDED", "HOURS TO
+    # COMPLET"), so match them fuzzily; an exact match left hours/degree null
+    # and misclassified the program (EMO-019).
+    (re.compile(r"^D\w*GREE\s+A\w*RDED(?![A-Z])\s*"), "degree"),
+    (re.compile(r"^HOURS\s+TO\s+COMPLET\w*(?![A-Z])\s*"), "hours"),
+    (re.compile(r"^COURSES?\s+REQUIRED(?![A-Z])\s*"), "courses_required"),
+    (re.compile(r"^DEPARTMENT\s+CONTACTS?(?![A-Z])\s*"), "department"),
 )
 
 

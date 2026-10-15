@@ -1,6 +1,7 @@
 """Format-aware extraction: text plus locators that tile the text exactly."""
 
 import io
+import re
 from dataclasses import dataclass
 
 from pypdf import PdfReader
@@ -159,9 +160,24 @@ def _extract_markdown(text: str, lines_per_locator: int) -> list[LocatorSpan]:
     return locators
 
 
+_PDF_COURSE_SPLIT_RE = re.compile(r"\b([A-Z]{2,7}|[A-Z][a-z]{1,11})\s(\d{1,2})\s(\d{2})\b")
+
+
+def _repair_pdf_kerning(text: str) -> str:
+    """Rejoin a course number that pypdf split on kerning (EMO-014).
+
+    pypdf renders some course numbers with an inserted space ("Math 1 11",
+    "PHIL 1 15"), which defeats code parsing and keyword search. Join a
+    subject-shaped word followed by split digits; leave ordinary lowercase prose
+    ("page 1 11") alone.
+    """
+    return _PDF_COURSE_SPLIT_RE.sub(r"\1 \2\3", text)
+
+
 def _read_pdf(raw: bytes) -> tuple[str, list[str]]:
     reader = PdfReader(io.BytesIO(raw))
-    pages = [normalize_text(page.extract_text() or "") for page in reader.pages]
+    pages = [_repair_pdf_kerning(normalize_text(page.extract_text() or ""))
+             for page in reader.pages]
     return "\n\n".join(pages), pages
 
 

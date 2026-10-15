@@ -13,7 +13,10 @@ const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'
 const root = path.resolve(frontend, '..');
 const testRunsRoot = path.resolve(root, 'data', 'test-runs');
 const dataRoot = path.join(testRunsRoot, `live-browser-${randomUUID()}`);
-const python = process.env.PYTHON ?? path.join(root, '.venv', 'Scripts', 'python.exe');
+const python = process.env.PYTHON ?? path.join(
+  root, '.venv',
+  process.platform === 'win32' ? path.join('Scripts', 'python.exe') : path.join('bin', 'python'),
+);
 const chromePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
   path.join(process.env.ProgramFiles ?? 'C:/Program Files', 'Google/Chrome/Application/chrome.exe');
 let child;

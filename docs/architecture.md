@@ -410,7 +410,7 @@ stays unavailable until it is rebuilt.
 The audit record; see the evidence chain section. Migration 037 adds `kind`
 (`retrieval` for every existing row, `research` for a research run's root trace).
 
-### Program binding, source provenance, and research records (037–038)
+### Program binding, source provenance, and research records (037–040)
 
 The data layer of `docs/plans/research-advisor-v1.md`. No model writes any of it.
 
@@ -447,7 +447,8 @@ is permitted.
 
 **Source provenance.** `source_provenance` holds a verified classification
 (`institutional_catalog | institutional_department | institutional_policy |
-career_reference`) with publisher, URL, edition, geography, occupation id, and
+institutional_publication | career_reference`) with publisher, URL, edition,
+geography, occupation id, and
 publication/acquisition dates. Only verified importers write it:
 - an optional `provenance` object on an `--origin-manifest` entry, validated by
   `app/ingest/provenance.py` (unknown fields, untrusted categories, non-http(s)
@@ -461,6 +462,75 @@ The upload API cannot set it. A source without a row reads as `user_supplied`
 blanket-promoted. The scraper classifies catalog sections (`institutional_catalog`,
 policies as `institutional_policy`) and department pages
 (`institutional_department`).
+
+**Source-model extension (040, 2026-10-15).** The reviewed category
+`institutional_publication` covers official publications that do not fit
+the existing specific categories: advising offices, professional-school
+admissions, graduate/extended-degree programs, and partner institutions. Retain
+the existing categories and historical evidence snapshots. Migration 040 extends
+the database constraint; the manifest validator and research `SourceKind` accept
+the category. Ordinary uploads still cannot classify themselves.
+
+Keep publisher/institution/issuing unit, multiple document roles, and applicability
+(school, program/pathway, track, cohort, admissions cycle, term/session, or unknown)
+as independent facets. The provenance row stores `title`, `institution`,
+`issuing_unit`, `document_roles` (JSON array), `applicability` (dimension-to-label-array
+object), and `applicability_status` (`reviewed_default|historical|unknown`). Roles
+and topic labels can expand without a new exclusive
+category for each office. Official authorship does not make every statement a
+binding rule; preserve the source's requirements, recommendations, exceptions,
+qualifiers, and dates. Review authenticity, currency, and applicability separately.
+The validator bounds labels/dimensions and their combined UTF-8 metadata to 8 KiB;
+it canonicalizes label sets without inventing an applicability scope. Existing
+sources retain unknown applicability. `is_current` identifies
+the latest published version of an origin, not the applicability of its rules.
+
+The legacy planner directory and research document leads expose compact verified
+publisher, role, edition, and applicability metadata. Long discovery metadata is
+explicitly marked incomplete; exact document/program reads retain full bounded
+metadata. Applicability is descriptive, not an automatic eligibility or default
+corpus filter; the reviewed intake registry keeps historical/held material out
+of the initial pilot. Use descriptive
+canonical names for new documents, preserve original names/aliases, and retain
+stable origin keys independent of names. `metadata_revision` increments on changed
+provenance and remains stable on identical imports. The provenance upsert locks
+the owning source row, synchronizing changes with research share locks. Directory
+format 2 includes metadata revisions in its memo key. Research scope format 2 pins
+them; reads, evidence acquisition, and publication lock content first and then
+re-read metadata, rejecting changes with `ScopeChanged`. Old evidence snapshots
+retain their saved labels and honest defaults for absent metadata. Active format-1
+scopes cannot publish verified metadata they never pinned and must restart.
+Discovery metadata remains a lead, never evidence for a requirement.
+Research discovery version 2 adds `kind=document` for admissions, advising,
+handbooks and checklists. It ranks exact scoped source metadata alongside chunk
+hits; an `any` search interleaves program, document and course leads before
+paging, so matching programs cannot hide document leads. Matching metadata does
+not acquire evidence or widen the source selection. The tool version participates
+in the execution fingerprint.
+
+The research prompt checks institution, rule target, program/track, edition/cohort
+and admissions cycle before comparing authority. Undergraduate catalog precedence
+does not replace a professional school's admissions rules. Scope notices are
+derived only from evidence actually supplied after compaction. Unknown dates and
+applicability remain unknown; `reviewed_default` does not establish student
+eligibility. Conditional requirements retain their exact predicates, exceptions
+and table qualifiers. Recommendation judgments cite their factual premises and
+can explain conditional fit without claiming a universal best major. These prompt
+rules and citation validation do not prove semantic entailment; fact claims remain
+unreviewed until checked against their source text.
+The controller retains bounded handle titles across rebuilt contexts and, after
+two discovery-only rounds, offers exact source reads or finish before allowing
+more discovery. Factual lookups can keep candidates empty. Missing cohort data
+does not prevent describing captured rules conditionally with an applicability
+caveat; clarification-only answers are reserved for missing decision goals or
+preferences. These controls keep bounded research useful without supplying
+missing factual constraints.
+New reads and trusted cached read outputs move their already-issued evidence IDs
+to the front of the active set. This affects context selection, never immediate
+citation authority: only IDs actually supplied in the next request authorize its
+answer. Active-order changes count as research progress; identical cached no-ops
+still trigger bounded finalization. Explicit working-state updates retain control
+over their requested active order.
 
 **Scoped reads** (`app/advising/research_repository.py`). `build_scope` pins a
 `ResearchScope` with the workspace, collection, effective selection (`[]` is
@@ -577,6 +647,29 @@ The runner prints diagnostics unless `--output` is explicitly requested. Curated
 career references use the existing verified origin-manifest import; V1 has no
 arbitrary live URL fetch tool.
 
+### Advising direction and remaining scope (2026-10-15)
+
+The research workflow supports reasoned recommendations grounded in scoped facts.
+For an open decision such as choosing a major while preparing for professional
+school, the model may develop alternatives, compare interests and tradeoffs, and
+recommend a path. Factual premises such as required courses, credits saved,
+admissions statistics, equivalence, or popularity still need applicable evidence.
+Unknown rules and conflicts remain explicit; a judgment label cannot exempt an
+embedded factual claim from validation. Institutional requirements are interpreted
+within their institution, program, edition/cohort and admissions-cycle scope.
+No model or cleanup agent writes prerequisite facts or fills omitted rules.
+
+End-to-end advising remains a broader goal than document integration. The following
+need further design and implementation: academic records with verification status
+and provenance; evidence-bound composition of core, track and concentration rules;
+deterministic degree/admissions audits over those rules and records; and semester
+planning with actual offerings, loads, sequencing, approvals and student constraints.
+Current `program_items` preserve raw lines and course mentions, not executable
+whole-degree rules. Current dependency stages do not verify semester schedules or
+graduation. An audit must expose satisfied, outstanding and unresolved conditions
+rather than replace missing rule support with model judgment. The model can propose
+and explain paths while deterministic tools enforce the rules they support.
+
 ## Ingest
 
 ```mermaid
@@ -625,11 +718,32 @@ The generated `DATA_DIR/programs/ingest-manifest.json` binds each path to an ori
 and exact SHA-256. Run `scripts.ingest --origin-manifest MANIFEST` with the
 catalog/department files; the CLI excludes metadata sidecars and verifies all
 declared paths/hashes before constructing providers or opening the database.
+`scripts.scrape_programs --pdf PATH --source-url URL` prepares a supplied catalog
+PDF through the same renderer and manifest writer without a network client,
+department config, or department scraping. `DATA_DIR` selects the output root;
+use a separate staging directory to review regenerated documents before ingestion.
+Local preparation does not ingest or establish live program evidence bindings.
+`scripts.prepare_advising_documents [--check]` validates the explicitly reviewed
+`configs/advising_sources.toml` pilot registry against the unpacked original hashes.
+It preserves PDFs and removes only the exact acquisition wrapper from chosen
+Markdown captures. It writes canonical documents, an exact-SHA ingestion manifest,
+and separate derivation lineage under ignored data staging. Historical, held,
+alias, and unlisted inputs never enter that manifest. This is a document-preparation
+path, not an archive handler or a classifier inferred from filenames.
 For old scraper versions, `scripts.reconcile_source_origins --collection NAME
 --manifest MANIFEST` accepts explicit origin groups with `source_sha256s` and
-`current_sha256`. It verifies stored raw bytes, indexed shared Markdown, exact
-legacy headers, and official provenance before an atomic switch; no historical
-source/chunk/excerpt is deleted.
+`current_sha256`. Its default is a read-only dry run against an explicitly
+configured database, without automatic migrations. `--apply` additionally requires
+an explicit `--database-url`; rehearse on a separate database first. It verifies
+stored raw hashes and indexed shared sources. Markdown retains exact legacy-header
+checks. PDFs additionally require `provenance_by_sha256` with an exact configured
+department URL and matching logical origin. Configured acquisition intent is not
+independent HTTP verification or proof of academic applicability. Per-hash verified
+metadata may be assigned in the same transaction. Existing foreign origins or
+unlisted versions abort the operation; source and provenance changes during
+verification also abort after row locking and a fresh metadata read. No historical
+source/chunk/excerpt is deleted or reindexed, and identical metadata retains its
+revision on repeat reconciliation.
 
 ### Extraction (`app/ingest/extract.py`)
 
@@ -829,7 +943,7 @@ evidence-level review or dormancy, because the atlas is the source of truth.
 
 #### The parser (`app/atlas/requisites.py`)
 
-Pure functions over fixed rules; no model. `PARSER_VERSION = "1"`. It splits by
+Pure functions over fixed rules; no model. `PARSER_VERSION = "5"`. It splits by
 label (`Prerequisite:`, `Corequisite:`, `Recommended:`); collects every code,
 carrying the subject forward (`MATH 111, 112, or 115`); strips grade
 qualifiers; maps a fixed allowlist of conditions (`permission of instructor`,

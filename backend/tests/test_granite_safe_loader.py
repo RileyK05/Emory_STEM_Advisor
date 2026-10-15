@@ -54,3 +54,55 @@ def test_non_safetensors_model_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(granite, "Transformer", lambda *a, **k: pytest.fail("loaded legacy weights"))
     with pytest.raises(ValueError, match="safetensors"):
         granite._safe_model(snapshot, "cpu")
+
+
+def _symlinked_hf_cache(root: Path) -> Path:
+    """A Linux-HF-style cache: snapshot entries are links into a sibling blobs dir."""
+    repo = root / "models--ibm--granite-embedding-125m-english"
+    blobs = repo / "blobs"
+    blobs.mkdir(parents=True)
+    snapshot = repo / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    (snapshot / "1_Pooling").mkdir()
+    payloads = {
+        "modules.json": json.dumps([
+            {"idx": 0, "name": "0", "path": "", "type": "sentence_transformers.models.Transformer"},
+            {"idx": 1, "name": "1", "path": "1_Pooling",
+             "type": "sentence_transformers.models.Pooling"},
+            {"idx": 2, "name": "2", "path": "2_Normalize",
+             "type": "sentence_transformers.models.Normalize"},
+        ]),
+        "sentence_bert_config.json": json.dumps({"max_seq_length": 512, "do_lower_case": False}),
+        "config.json": json.dumps({"model_type": "roberta", "architectures": ["RobertaModel"]}),
+        "1_Pooling/config.json": json.dumps({
+            "word_embedding_dimension": 768, "pooling_mode_cls_token": True,
+            "pooling_mode_mean_tokens": False, "pooling_mode_max_tokens": False,
+            "pooling_mode_mean_sqrt_len_tokens": False,
+        }),
+    }
+    for relative, text in payloads.items():
+        blob = blobs / relative.replace("/", "--")
+        blob.write_text(text)
+        target = snapshot / relative
+        try:
+            target.symlink_to(blob)
+        except (OSError, NotImplementedError):  # pragma: no cover - Windows without privileges
+            pytest.skip("symlinks are unavailable on this platform")
+    weight = blobs / "model.safetensors"
+    weight.write_bytes(b"")
+    (snapshot / "model.safetensors").symlink_to(weight)
+    return snapshot
+
+
+def test_hf_style_symlinked_cache_loads_nested_module(tmp_path, monkeypatch):
+    """EMO-002: the nested 1_Pooling/config.json symlink must resolve against blobs."""
+    snapshot = _symlinked_hf_cache(tmp_path / "hub")
+    captured = {}
+    monkeypatch.setattr(granite, "Transformer", lambda *a, **k: captured.setdefault("transformer", (a, k)))
+    monkeypatch.setattr(granite, "Pooling", lambda *a, **k: captured.setdefault("pooling", (a, k)))
+    monkeypatch.setattr(granite, "Normalize", lambda *a, **k: object())
+    monkeypatch.setattr(granite, "SentenceTransformer",
+                        lambda modules, device: captured.setdefault("modules", modules))
+    assert granite._safe_model(snapshot, "cpu") is not None
+    assert captured["pooling"][0] == (768,)
+    assert captured["pooling"][1]["pooling_mode_cls_token"] is True

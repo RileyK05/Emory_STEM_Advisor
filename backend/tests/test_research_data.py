@@ -85,6 +85,7 @@ def test_scope_pins_accessible_current_sources_and_their_bound_programs(db, coll
     # The atlas is classified by its configured importer; the plain upload is not.
     assert everything.sources[corpus["atlas"]].source_kind == "institutional_catalog"
     assert everything.sources[corpus["policy"]].source_kind == "unclassified"
+    assert everything.sources[corpus["policy"]].applicability_status == "unknown"
     # An explicit empty selection is empty, not "everything".
     nothing = _scope(db, collection, source_ids=[])
     assert not nothing.sources and not nothing.programs
@@ -100,7 +101,16 @@ def test_scope_pins_accessible_current_sources_and_their_bound_programs(db, coll
     assert _scope(db, collection).digest == everything.digest
 
 
-def test_curated_career_reference_is_classified_readable_and_scoped(db, collection, tmp_path):
+@pytest.mark.parametrize("category,status,large_metadata,metadata_only", [
+    ("career_reference", "historical", False, False),
+    ("institutional_publication", "unknown", False, False),
+    ("institutional_publication", "unknown", True, False),
+    ("institutional_publication", "unknown", False, True)])
+def test_curated_reference_is_classified_readable_and_scoped(
+        db, collection, tmp_path, category, status, large_metadata, metadata_only):
+    from app.advising.research_types import EvidenceRecord
+    from app.config import load_settings
+    from app.generation.research_tools import ReadInput, ResearchSession, SearchInput
     from app.ingest.pipeline import ingest_file
     from app.ingest.provenance import provenance_from_manifest
     from tests.fakes import FakeEmbedder, whitespace_tokens
@@ -113,8 +123,18 @@ def test_curated_career_reference_is_classified_readable_and_scoped(db, collecti
     # The manifest entry is the verified import; the document cannot classify itself.
     entry = {"origin_key": "careers:fixture:data-engineers", "acquired_at": "2026-10-12",
              "source_url": "https://careers.example.test/data-engineers",
-             "provenance": {"source_category": "career_reference", "publisher": "Fixture",
-                            "geography": "United States", "published_at": "2026-01-15"}}
+             "provenance": {"source_category": category, "publisher": "Fixture",
+                            "geography": "United States", "published_at": "2026-01-15",
+                            "title": "Data engineering preparation", "institution": "Fixture University",
+                            "issuing_unit": "Advising office", "edition": "2026",
+                            "document_roles": ["career_preparation"],
+                            "applicability": {"school": ["College"], "audience": ["undergraduate"]},
+                            "applicability_status": status}}
+    if large_metadata:
+        # Accepted provenance near the 8 KiB ceiling still fits a discovery page.
+        entry["provenance"]["applicability"].update({
+            f"additional_scope_{dimension}": [f"{label:02d}" + "x" * 198 for label in range(9)]
+            for dimension in range(4)})
     career = ingest_file(db, collection_id=collection, path=path, content_type="text/markdown",
                          count_tokens=whitespace_tokens, embedder=FakeEmbedder(8),
                          embed_model=MODEL, config=lenient_config(),
@@ -124,9 +144,60 @@ def test_curated_career_reference_is_classified_readable_and_scoped(db, collecti
     scope = _scope(db, collection)
     pin = scope.sources[career]
     assert (pin.source_kind, pin.publisher, pin.published_at) == (
-        "career_reference", "Fixture", "2026-01-15")
+        category, "Fixture", "2026-01-15")
+    assert pin.document_roles == ("career_preparation",)
+    with pytest.raises(TypeError):
+        pin.applicability["school"] = ("Other school",)
     page = read_document(db, scope, career)
     assert "data pipelines" in page.chunks[0].text
+    store = ResearchStore(db, "development")
+    run, _ = store.start(scope, run_id=uuid4(), prompt_version="t1", config_version="6")
+    config = lenient_config()
+    if metadata_only:
+        config = replace(config, seams=replace(config.seams,
+            keyword=replace(config.seams.keyword, enabled=False),
+            embed=replace(config.seams.embed, enabled=False),
+            prereq=replace(config.seams.prereq, enabled=False)))
+    session = ResearchSession(db, scope, store, run,
+        settings=replace(load_settings(), embedding_model_id=MODEL),
+        config=config, embedder=FakeEmbedder(8))
+    # Historical/unknown applicability is surfaced, never guessed or filtered away.
+    leads = session.search(SearchInput(
+        query="Fixture University Advising office" if metadata_only else "data pipelines",
+        kind="document" if metadata_only else "any"), None).data["leads"]
+    if metadata_only:
+        assert leads[0]["filename"] == path.name
+        assert all(lead["kind"] == "document" and lead["snippet"] == "" for lead in leads)
+    lead = next(lead for lead in leads if lead["kind"] == "document"
+                and lead["filename"] == path.name)
+    document = session.document(ReadInput(handle=lead["handle"]), None).data
+    for result in (lead, document):
+        assert result["title"] == "Data engineering preparation"
+        assert result["institution"] == "Fixture University"
+        assert result["issuing_unit"] == "Advising office"
+        assert result["document_roles"] == ["career_preparation"]
+        assert result["applicability_status"] == status
+    assert document["applicability"] == entry["provenance"]["applicability"]
+    if large_metadata:
+        assert lead["metadata_truncated"] and "applicability" in lead["metadata_omitted_fields"]
+        assert len(json.dumps(lead, ensure_ascii=False).encode("utf-8")) < 2048
+        assert lead["applicability_status"] == "unknown"
+        assert lead["applicability"]["school"] == ["College"]
+    else:
+        assert lead["applicability"] == document["applicability"]
+        assert not lead["metadata_truncated"] and lead["metadata_omitted_fields"] == []
+    evidence = store.evidence(run.run_id)[0]
+    assert evidence.title == pin.title and evidence.applicability_status == status
+    assert evidence.applicability["school"] == ("College",)
+    with pytest.raises(TypeError):
+        evidence.applicability["school"] = ("Other school",)
+    # Evidence saved before these fields existed retains honest unknown defaults.
+    legacy = evidence.model_dump(mode="json")
+    for key in ("title", "institution", "issuing_unit", "document_roles", "applicability",
+                "applicability_status", "metadata_revision"):
+        legacy.pop(key)
+    old = EvidenceRecord.model_validate(legacy, strict=False)
+    assert old.applicability_status == "unknown" and old.title is None
     # Selecting only institutional files keeps the career reference out.
     institutional = _scope(db, collection, source_ids=[corpus["atlas"], corpus["policy"]])
     with pytest.raises(NotInScope):
@@ -196,7 +267,7 @@ def test_course_and_document_reads_stay_in_scope_and_page_whole_chunks(db, colle
         read_document(db, scope, corpus["private"])
 
 
-@pytest.mark.parametrize("read", ["program", "courses", "document"])
+@pytest.mark.parametrize("read", ["program", "courses", "document", "metadata"])
 def test_a_reindex_cannot_land_between_a_reads_check_and_its_content(
         db, collection, tmp_path, migrated_dsn, monkeypatch, read):
     corpus = _corpus(db, collection, tmp_path)
@@ -213,8 +284,17 @@ def test_a_reindex_cannot_land_between_a_reads_check_and_its_content(
             for source_id in source_ids:
                 attempted.append(source_id)
                 try:
-                    other.execute(queries.get("claim_source_index_attempt"), {
-                        "source_id": source_id, "expected_index_revision": None})
+                    if read == "metadata":
+                        from app.ingest.provenance import SourceProvenance
+
+                        source = other.execute("SELECT file_hash FROM sources WHERE source_id = %s",
+                                               (source_id,)).fetchone()
+                        other.execute(queries.get("upsert_source_provenance"),
+                            SourceProvenance("institutional_policy", publisher="Verified office").row(
+                                source_id, source["file_hash"]))
+                    else:
+                        other.execute(queries.get("claim_source_index_attempt"), {
+                            "source_id": source_id, "expected_index_revision": None})
                     other.commit()
                 except errors.LockNotAvailable:
                     other.rollback()
@@ -223,7 +303,8 @@ def test_a_reindex_cannot_land_between_a_reads_check_and_its_content(
     monkeypatch.setattr(research_repository, "verify_sources", check_then_reindex)
     {"program": lambda: read_program(db, scope, corpus["bs"]),
      "courses": lambda: read_courses(db, scope, ["ECON 201"]),
-     "document": lambda: read_document(db, scope, corpus["policy"])}[read]()
+     "document": lambda: read_document(db, scope, corpus["policy"]),
+     "metadata": lambda: read_document(db, scope, corpus["policy"])}[read]()
     # The reindex waits for the read, so content is never stamped with a stale revision.
     assert attempted and blocked == attempted
 
@@ -267,8 +348,18 @@ def test_evidence_ids_are_stable_deduplicated_and_replayed(db, collection, tmp_p
     assert len(store.evidence(run.run_id)) == 2 and len(store.steps(run.run_id)) == 2
 
 
-def test_evidence_comes_only_from_the_runs_pinned_sources(db, collection, tmp_path):
+@pytest.mark.parametrize("mutation", ["reindex", "metadata"])
+def test_evidence_comes_only_from_the_runs_pinned_sources(db, collection, tmp_path, mutation):
     corpus = _corpus(db, collection, tmp_path)
+    if mutation == "metadata":
+        from app.ingest.provenance import SourceProvenance
+
+        row = db.execute("SELECT file_hash FROM sources WHERE source_id = %s",
+                         (corpus["policy"],)).fetchone()
+        db.execute(queries.get("upsert_source_provenance"),
+            SourceProvenance("institutional_policy", publisher="Original office").row(
+                corpus["policy"], row["file_hash"]))
+        db.commit()
     everything = _scope(db, collection)
     (course,) = read_courses(db, everything, ["ECON 101"])
     atlas_chunk, atlas = course.chunks[0], everything.sources[corpus["atlas"]]
@@ -281,7 +372,8 @@ def test_evidence_comes_only_from_the_runs_pinned_sources(db, collection, tmp_pa
         Acquired(atlas_chunk, atlas),  # a source the run never selected
         Acquired(policy_chunk, atlas),  # chunk and source disagree
         Acquired(replace(policy_chunk, text="Rule 1: pass/fail applies."), policy),  # forged
-        Acquired(policy_chunk, replace(policy, source_kind="institutional_policy")),  # relabeled
+        Acquired(policy_chunk, replace(policy, source_kind="institutional_catalog")),  # relabeled
+        Acquired(policy_chunk, replace(policy, publisher="Forged publisher")),
     ):
         with pytest.raises(InvalidResearchRecord):
             store.acquire(run.run_id, [bad], action_kind="read_document", summary="Bad read")
@@ -289,13 +381,38 @@ def test_evidence_comes_only_from_the_runs_pinned_sources(db, collection, tmp_pa
     good = store.acquire(run.run_id, [Acquired(policy_chunk, policy)],
                          action_kind="read_document", summary="Read the policy")
     assert good.evidence_ids == ("e1",)
-    # A pinned source reindexed since the run started stops it instead.
-    db.execute(queries.get("claim_source_index_attempt"), {
-        "source_id": corpus["policy"], "expected_index_revision": None})
+    # Content or metadata updates stop a run; saved evidence keeps its original labels.
+    if mutation == "reindex":
+        db.execute(queries.get("claim_source_index_attempt"), {
+            "source_id": corpus["policy"], "expected_index_revision": None})
+    else:
+        from app.ingest.provenance import SourceProvenance
+
+        db.execute(queries.get("upsert_source_provenance"),
+            SourceProvenance("institutional_policy", publisher="Verified office",
+                institution="Fixture University", title="Grading information",
+                applicability_status="reviewed_default").row(corpus["policy"], row["file_hash"]))
     db.commit()
+    assert store.evidence(run.run_id)[0].publisher == policy.publisher
     with pytest.raises(ScopeChanged):
         store.acquire(run.run_id, [Acquired(policy_chunk, policy)],
                       action_kind="read_document", summary="Read again")
+    with pytest.raises(ScopeChanged):
+        read_document(db, everything, corpus["policy"])
+    with pytest.raises(ScopeChanged):
+        store.record_decision(run.run_id, FinalDecision(outcome="information", completeness="complete",
+            blocks=(DecisionBlock(kind="fact", text="Letter grades apply.", evidence_ids=("e1",)),)),
+            render_version="r1")
+    if mutation == "metadata":
+        refreshed = _scope(db, collection)
+        assert refreshed.digest != everything.digest
+        assert refreshed.sources[corpus["policy"]].index_revision == policy.index_revision
+        # Format 1 is readable, but cannot approve metadata it never pinned.
+        legacy = everything.manifest()
+        legacy["format"] = "1"
+        legacy["sources"] = [source[:3] for source in legacy["sources"]]
+        with pytest.raises(ScopeChanged):
+            research_repository.verify_manifest(db, legacy)
 
 
 def test_state_is_optimistic_and_cites_only_issued_evidence(db, collection, tmp_path):
@@ -389,7 +506,7 @@ def _research_provider(monkeypatch, script):
     return provider
 
 
-@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "preparation", "search_document", "saved_clarification", "schema_repair"])
+@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "preparation", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "cached_read_priority"])
 def test_research_answers_progressively_and_persists_its_decision(
         db, collection, tmp_path, monkeypatch, scenario):
     from app.api.query_service import query_response
@@ -404,12 +521,54 @@ def test_research_answers_progressively_and_persists_its_decision(
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
         tools_enabled=True, advising_research_enabled=True, routing_enabled=False,
         embedding_model_id=MODEL, db_pool_max_size=0)
+    observed = {}
     def script(context, index):
         def call(name, args):
             return [ToolCall(f"call-{index}", "advisor_" + name, args)]
         if scenario in {"clarification", "saved_clarification"}:
             return call("finish", {"decision": {"outcome": "clarification", "completeness": "complete",
                 "blocks": [{"kind": "question", "text": "Which career are you considering?"}]}})
+        if scenario == "cached_read_priority":
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            if index == 0:
+                return call("read_courses", {"course_codes": ["ECON 101"]})
+            if index == 1:
+                observed["first"] = ids[0]
+                return call("update_research", {"expected_revision": 0, "state": {
+                    "revision": 0, "decision_question": "What is ECON 101?", "active_evidence_ids": ids}})
+            if index == 2:
+                return call("read_courses", {"course_codes": ["ECON 201"]})
+            if index == 3:
+                assert ids[0] != observed["first"]
+                observed["second"] = ids[0]
+            if index in {3, 4, 5}:
+                if index >= 4:
+                    assert ids[0] == observed["first"]
+                    assert not context["finish_required"]
+                return call("read_courses", {"course_codes": ["ECON 101"]})
+            assert context["finish_required"] and ids[0] == observed["first"]
+            return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+                "blocks": [{"kind": "fact", "text": "ECON 101 is in the catalog.",
+                            "evidence_ids": [observed["first"]]}]}})
+        if scenario == "discovery_read_cadence":
+            if index in {0, 1, 2}:
+                if index == 2:
+                    assert context["source_read_requested"]
+                return call("search", {"query": "letter grades" if index < 2 else "letter grade policy",
+                                       "kind": "document"})
+            if index == 3:
+                assert context["source_read_requested"]
+                source = next(h for h in context["issued_handles"] if h["kind"] == "document"
+                              and h.get("title") == "grading-policy.txt")
+                return call("read_document", {"handle": source["handle"]})
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            if index == 4:
+                return call("update_research", {"expected_revision": 0, "state": {
+                    "revision": 0, "decision_question": "What does this policy cover?",
+                    "active_evidence_ids": ids, "candidates": []}})
+            return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+                "blocks": [{"kind": "fact", "text": "The policy describes letter grades.",
+                            "evidence_ids": ids}]}})
         if scenario == "search_document":
             if index == 0:
                 return call("search", {"query": "letter grades", "kind": "any"})
@@ -435,6 +594,26 @@ def test_research_answers_progressively_and_persists_its_decision(
                 "candidate_ids": ["econ_path"], "blocks": [{"kind": "judgment",
                     "text": "This economics course looks worth exploring.",
                     "evidence_ids": ids, "candidate_ids": ["econ_path"]}]}})
+        if scenario == "document_state_repair":
+            if index == 0:
+                return call("search", {"query": "letter grades", "kind": "document"})
+            handle = next(h["handle"] for h in context["issued_handles"] if h["kind"] == "document")
+            if index == 1:
+                return call("read_document", {"handle": handle})
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            if index in {2, 3}:
+                if index == 3:
+                    assert "never document or section handles" in context["instruction"]
+                return call("update_research", {"expected_revision": 0, "state": {
+                    "revision": 0, "decision_question": "What does this policy cover?",
+                    "active_evidence_ids": ids, "candidates": [{"id": "document_lookup",
+                        "program_handles": [handle], "description": "Read a policy", "status": "investigating"}]
+                        if index == 2 else []}})
+            if index == 5:
+                assert "use fact or limitation" in context["instruction"]
+            return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+                "blocks": [{"kind": "judgment" if index == 4 else "fact",
+                    "text": "The policy describes letter grades.", "evidence_ids": ids}]}})
         if scenario == "program_comparison":
             handles = [h["handle"] for h in context["issued_handles"] if h["kind"] == "program"]
             if index == 0:
@@ -479,8 +658,22 @@ def test_research_answers_progressively_and_persists_its_decision(
     response = query_response(QueryRequest(query="Help choose a path", collectionId=collection_name(db, collection),
         sourceIds=sources), db, settings, lenient_config(), FakeEmbedder(8), provider, **conversation_args)
     assert response.type == "answer"
-    assert response.research.completeness == "complete"
+    assert response.research.completeness == ("partial" if scenario == "cached_read_priority" else "complete")
     run = ResearchStore(db, "development").get(UUID(response.research.runId))
+    if scenario == "document_state_repair":
+        assert run.state.revision == 1 and not run.state.candidates
+        assert run.state.active_evidence_ids
+    if scenario == "discovery_read_cadence":
+        steps = ResearchStore(db, "development").steps(run.run_id)
+        assert any(step["action_kind"] == "read_document" for step in steps)
+        assert not any(step["action_kind"] == "search"
+                       and step["details"]["query"] == "letter grade policy" for step in steps)
+        assert any(step["action_kind"] == "rejected_finish" for step in steps)
+    if scenario == "cached_read_priority":
+        evidence = ResearchStore(db, "development").evidence(run.run_id)
+        assert {record.evidence_id for record in evidence} == {observed["first"], observed["second"]}
+        steps = ResearchStore(db, "development").steps(run.run_id)
+        assert sum(step["action_kind"] == "read_courses" for step in steps) == 2
     if scenario == "saved_clarification":
         assert run.status == "running"
         conversations.finish(conversation_id, request_id, response.model_dump(mode="json"))
@@ -488,7 +681,8 @@ def test_research_answers_progressively_and_persists_its_decision(
         evidence = conversations.turns(conversation_id)["turns"][-1]["evidence"]
         assert evidence["research"]["runId"] == response.research.runId
         assert evidence["research"]["outcome"] == "clarification"
-    assert run.status == ("clarification" if scenario in {"clarification", "saved_clarification"} else "completed")
+    assert run.status == ("clarification" if scenario in {"clarification", "saved_clarification"}
+                          else "partial" if scenario == "cached_read_priority" else "completed")
     if scenario in {"clarification", "saved_clarification"}:
         assert response.citations == [] and response.trace.contextBlock == []
     else:
@@ -571,6 +765,10 @@ def test_program_discovery_prefers_title_matches_to_incidental_requirement_menti
     assert result.data["leads"][0]["title"] == "Computer Science (BS)"
     assert all(lead["kind"] == "program" for lead in result.data["leads"])
     assert session.discovery_count == len(result.data["leads"])
+    # Broad discovery still offers a document and course before paging through
+    # every program matched by a common requirement mention.
+    broad = session.search(SearchInput(query="computer science major"), None).data["leads"]
+    assert {lead["kind"] for lead in broad[:3]} == {"program", "document", "course"}
 
 
 @pytest.mark.parametrize("scenario", ["overflow", "changed_call_id", "stale_source", "cancelled"])

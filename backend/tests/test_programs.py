@@ -74,6 +74,16 @@ def test_parse_program_metadata_sections_and_wrapped_lines():
     assert program.courses[:3] == ("MATH 111", "CS 170", "CS 370")
 
 
+def test_parse_program_tolerates_catalog_metadata_typos():
+    """EMO-019: "DEZGREE AWRDED" / "HOURS TO COMPLET" must still parse."""
+    text = ("CHEMISTRY (BA)\nDEZGREE AWRDED BA\nHOURS TO COMPLET 56\n"
+            "COURSES REQUIRED 18\nDEPARTMENT CONTACTS Chemistry\n"
+            "Requirements\nCHEM 150\nCHEM 202\n")
+    program = parse_program("CHEMISTRY (BA)", text)
+    assert (program.kind, program.degree, program.hours, program.courses_required,
+            program.department) == ("major", "BA", "56", "18", "Chemistry")
+
+
 def _write_programs(tmp_path, *titles_and_texts):
     path = tmp_path / "programs.jsonl"
     lines = [json.dumps(to_record(parse_program(title, text), catalog="Test Catalog",

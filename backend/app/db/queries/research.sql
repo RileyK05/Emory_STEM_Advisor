@@ -167,7 +167,9 @@ ORDER BY created_at;
 -- name: list_research_scope_sources
 SELECT s.source_id, s.index_revision, s.filename, s.content_type, s.origin_key,
        s.workspace_key, p.source_category, p.classification_origin, p.publisher,
-       p.source_url, p.edition, p.published_at, p.acquired_at, p.geography, p.occupation_id
+       p.source_url, p.edition, p.published_at, p.acquired_at, p.geography, p.occupation_id,
+       p.title, p.institution, p.issuing_unit, p.document_roles, p.applicability,
+       p.applicability_status, COALESCE(p.metadata_revision, 0) AS metadata_revision
 FROM sources s
 LEFT JOIN source_provenance p ON p.source_id = s.source_id
 WHERE s.collection_id = %(collection_id)s

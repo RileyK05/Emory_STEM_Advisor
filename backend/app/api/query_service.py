@@ -22,7 +22,7 @@ from app.connections.models import (
 )
 from app.connections.selection import StaleProfileSelection, resolve, resolve_quality_fallback
 from app.db import queries
-from app.db.connection import connector
+from app.db.connection import connector, resolved_database_url
 from app.embeddings.base import Embedder
 from app.gaps.store import GapError, GapStore
 from app.generation.answer import GenerationRejected, answer_from_context, citation_repair_hint
@@ -31,7 +31,7 @@ from app.generation.controller import ToolConversationController, ToolConversati
 from app.generation.evidence import persist_response, record_attempt
 from app.generation.operation import GenerationOperation
 from app.generation.query_plan import PlanRejected, parse_plan, planning_request
-from app.llm.base import Provider, ProviderError
+from app.llm.base import Provider, ProviderError, RateLimitError, TransientProviderError
 from app.operations.budget import OperationBudgetError
 from app.retrieval.config import RetrievalConfig
 from app.retrieval.directory import load_directory
@@ -42,6 +42,34 @@ from app.tools.executions import ToolExecutionLedger, ToolLedgerError
 
 def _noop(*args):
     pass
+
+
+_DEFAULT_RETRY_DELAY_SECONDS = 1.0
+_MAX_RETRY_DELAY_SECONDS = 30.0
+
+
+def _answer_with_provider_retry(generate_answer, *, remaining_calls: int,
+                                remaining_seconds: float, check_cancelled,
+                                max_retries: int = 1):
+    """Re-run a rate-limited or transient provider call inside the operation fence.
+
+    A provider rate limit used to surface immediately as a 503 that blamed the
+    settings (EMO-029). Retry once within the remaining call/time budget, honoring
+    ``retry_after``; anything else still propagates.
+    """
+    retries = 0
+    while True:
+        try:
+            return generate_answer()
+        except (RateLimitError, TransientProviderError) as exc:
+            retries += 1
+            delay = min(float(getattr(exc, "retry_after", None)
+                              or _DEFAULT_RETRY_DELAY_SECONDS), _MAX_RETRY_DELAY_SECONDS)
+            if retries > max_retries or remaining_calls - 1 < retries or remaining_seconds <= delay:
+                raise
+            check_cancelled()
+            time.sleep(delay)
+            remaining_seconds -= delay
 
 
 def _requests_course_sequence(query: str) -> bool:
@@ -203,7 +231,7 @@ def _tool_answer_provider(conn, body, outcome, operation, settings, provider, se
         # The ledger's short transitions use a dedicated pool role, never the
         # pool held by this HTTP request or worker execution (RT-02): a nested
         # same-pool borrow can self-wait under a small pool.
-        ledger=ToolExecutionLedger(connector(settings, conn.info.dsn, pool_name="tool_execution"),
+        ledger=ToolExecutionLedger(connector(settings, resolved_database_url(settings, conn), pool_name="tool_execution"),
                                    max_tool_calls=settings.tool_max_calls),
         operation_id=operation.operation_id, workspace_key=workspace_key,
         scope_fingerprint=fingerprint,
@@ -386,8 +414,14 @@ def query_response(
         )
 
     try:
+        operation_status = operation.controller.get(operation.conn, operation.operation_id)
         try:
-            answer = generate_answer()
+            answer = _answer_with_provider_retry(
+                generate_answer,
+                remaining_calls=operation_status.remaining_calls,
+                remaining_seconds=operation_status.remaining_seconds,
+                check_cancelled=check_cancelled,
+            )
         except GenerationRejected as first_rejection:
             if first_rejection.recoverable_integrity and on_provisional_reset is not None:
                 on_provisional_reset()
@@ -429,7 +463,13 @@ def query_response(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ProviderError as exc:
         persist_response(conn, outcome, status="failed", reason=type(exc).__name__)
-        raise HTTPException(status_code=503, detail="model connection failed; check provider settings") from exc
+        if isinstance(exc, RateLimitError):
+            retry_after = getattr(exc, "retry_after", None)
+            detail = ("the model is rate-limited"
+                      + (f"; retry in {round(retry_after)}s" if retry_after else "; retry shortly"))
+        else:
+            detail = "model connection failed; check provider settings"
+        raise HTTPException(status_code=503, detail=detail) from exc
     except (ToolConversationError, ToolLedgerError) as exc:
         persist_response(conn, outcome, status="failed", reason=type(exc).__name__)
         raise HTTPException(status_code=422, detail="native tool execution could not be completed safely") from exc

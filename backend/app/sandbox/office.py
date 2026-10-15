@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import re
 import shutil
-import stat
 import tempfile
 import threading
 import time
@@ -18,6 +17,7 @@ from app.sandbox.runner import (
     DockerCliRuntime,
     SandboxRunner,
     _memory_limit,
+    _retry_after_chmod,
     _validate_image,
 )
 from app.sandbox.types import (
@@ -211,14 +211,8 @@ class OfficeRunner:
                 hashlib.sha256(generated).hexdigest(), elapsed,
             )
         finally:
-            def retry_after_chmod(function, path, _exc_info):
-                import os
-
-                os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
-                function(path)
-
             try:
-                shutil.rmtree(task_dir, onerror=retry_after_chmod)
+                shutil.rmtree(task_dir, onerror=_retry_after_chmod)
             except OSError as exc:
                 raise IsolationUnavailable("Office temporary files could not be removed safely.") from exc
 

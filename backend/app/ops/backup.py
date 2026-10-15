@@ -29,22 +29,61 @@ class BackupError(RuntimeError):
     """The backup cannot be created, verified, or restored safely."""
 
 
-def _pg_bin(name: str) -> Path:
+def _pg_candidates(name: str) -> list[Path]:
+    """Candidate client tools, most-preferred first (bundled pgserver, then PATH)."""
+    candidates: list[Path] = []
     try:
         import pgserver
 
-        candidate = Path(pgserver.__file__).parent / "pginstall" / "bin" / f"{name}.exe"
-        if candidate.is_file():
-            return candidate
-        candidate = candidate.with_suffix("")
-        if candidate.is_file():
-            return candidate
+        base = Path(pgserver.__file__).parent / "pginstall" / "bin"
+        for suffix in (".exe", ""):
+            candidate = base / f"{name}{suffix}"
+            if candidate.is_file():
+                candidates.append(candidate)
+                break
     except ImportError:
         pass
-    candidate = shutil.which(name)
-    if candidate:
-        return Path(candidate)
-    raise BackupError(f"{name} is unavailable; install matching PostgreSQL client tools")
+    which = shutil.which(name)
+    if which:
+        candidates.append(Path(which))
+    return candidates
+
+
+def _tool_major(path: Path) -> int | None:
+    """The major version a PostgreSQL client tool reports, or None if unreadable."""
+    try:
+        result = subprocess.run([str(path), "--version"], capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    parts = result.stdout.split()
+    if result.returncode or len(parts) < 3:
+        return None
+    try:
+        return int(parts[2].split(".")[0])
+    except ValueError:
+        return None
+
+
+def _pg_bin(name: str, *, server_major: int | None = None) -> Path:
+    """Locate a client tool, preferring the one whose major matches the server.
+
+    pgserver bundles its own client tools; preferring them unconditionally picks
+    a pg_dump whose major does not match a newer server and fails the backup
+    outright (EMO-018).
+    """
+    candidates = _pg_candidates(name)
+    if not candidates:
+        raise BackupError(f"{name} is unavailable; install matching PostgreSQL client tools")
+    if server_major is not None:
+        for candidate in candidates:
+            if _tool_major(candidate) == server_major:
+                return candidate
+        available = sorted({major for major in map(_tool_major, candidates) if major is not None})
+        raise BackupError(
+            f"{name} major version must match the source database "
+            f"(have {available or 'unknown'}, need {server_major})"
+        )
+    return candidates[0]
 
 
 def _pg_env(dsn: str) -> dict[str, str]:
@@ -155,7 +194,7 @@ def create_backup(
         temp = Path(temp_name)
         dump = temp / "database.dump"
         env = _pg_env(dsn)
-        dump_tool = _pg_bin("pg_dump")
+        dump_tool = _pg_bin("pg_dump", server_major=version // 10000)
         dump_version = _run([str(dump_tool), "--version"], env)
         dump_major = int(dump_version.split()[2].split(".")[0])
         if dump_major != version // 10000:
@@ -299,7 +338,7 @@ def restore_backup(conn, *, dsn: str, archive_path: Path, data_dir: Path) -> dic
         source_major = int(manifest["postgres_server_version_num"]) // 10000
         if target_version // 10000 != source_major:
             raise BackupError("restore target PostgreSQL major version must match the backup")
-        restore_tool = _pg_bin("pg_restore")
+        restore_tool = _pg_bin("pg_restore", server_major=source_major)
         env = _pg_env(dsn)
         restore_version = _run([str(restore_tool), "--version"], env)
         if int(restore_version.split()[2].split(".")[0]) != source_major:

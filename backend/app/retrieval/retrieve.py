@@ -242,9 +242,18 @@ def _planned(conn, collection_id, query, plan, embed_model, config: RetrievalCon
     sections.append([(hits[rank], True) for rank in range(limits.search_slots)
                      for hits in per_query if rank < len(hits)])
 
+    plan_candidates = list(planned_courses)
+    seen_plan = {candidate.chunk_id for candidate in plan_candidates}
+    for section in sections[1:]:
+        for item, from_plan in section:
+            if from_plan and item.chunk_id not in seen_plan:
+                seen_plan.add(item.chunk_id)
+                plan_candidates.append(Candidate(item.chunk_id, item.source_id,
+                                                 item.chunk_index, "plan", 1.0))
     runs.append(SeamResult(
-        name="plan", enabled=True, state="active" if planned_courses or documents else "dormant",
-        candidates=planned_courses, reason=plan.summary()))
+        name="plan", enabled=True,
+        state="active" if plan_candidates else "dormant",
+        candidates=plan_candidates, reason=plan.summary()))
     ordered: dict[UUID, FusedChunk] = {}
     for section in sections:
         for item, from_plan in section:

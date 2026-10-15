@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from app.atlas.records import normalize_code
 
-PARSER_VERSION = "4"
+PARSER_VERSION = "5"
 
 # A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
 # uppercase, so ordinary words and "111or" are not read as codes. The catalog's
@@ -108,6 +108,21 @@ def _kind_for_label(label: str) -> str:
 
 def _strip_grades(text: str) -> str:
     return _GRADE_RE.sub("", _GRADE_RE2.sub("", text))
+
+
+# "BIOL 151or", "PHYS 461or": a missing space glues a code to the conjunction.
+_RUN_TOGETHER_RE = re.compile(r"(\d{3}[A-Za-z]?)(and|or)\b", re.IGNORECASE)
+# "Prerequisite or co-requisite" is one combined label; corequisite is the
+# weaker (concurrent) interpretation.
+_COMBINED_LABEL_RE = re.compile(
+    r"\bpre[ -]?requisite\s+or\s+co[ -]?requisite\s*:?\s*", re.IGNORECASE)
+# A trailing "... or equivalent transfer credit ..." is a modifier, not an `or`
+# operand; keeping it as an operand makes mixed and/or look ambiguous (EMO-028).
+# Only a clause that ends the segment qualifies, so a following restriction
+# sentence (CHEM 340) is never dropped.
+_TRANSFER_TAIL_RE = re.compile(
+    r"\s*(?:,|;|or|and)?\s*equivalent\s+transfer\s+credit\b[^.]*\.?\s*\Z",
+    re.IGNORECASE)
 
 
 class _Ambiguous(Exception):
@@ -256,6 +271,31 @@ class _Parser:
         raise _Ambiguous(f"unexpected token {token!r}")
 
 
+def _parse_with_transfer_tail(segment: str) -> Req | None:
+    """Retry a segment whose only ambiguity is a trailing transfer-credit clause.
+
+    "(A or A_OX) and (B or B_OX) or equivalent transfer credit as a prerequisite"
+    mixes and/or only because the transfer clause is written as another `or`
+    operand. Strip that trailing clause and attach it as a modifier instead
+    (EMO-028). A segment that stays mixed after stripping, or has no such tail,
+    keeps its ambiguity.
+    """
+    tail = _TRANSFER_TAIL_RE.search(segment)
+    if tail is None:
+        return None
+    prefix = segment[: tail.start()].strip().strip(",").strip()
+    if not prefix:
+        return None
+    tokens = _scan(prefix)
+    if any(ttype == "leftover" for ttype, _ in tokens):
+        return None
+    try:
+        tree = _Parser(tokens).parse()
+    except _Ambiguous:
+        return None
+    return AllOf((tree, Condition("equivalent transfer credit")))
+
+
 def parse_requisites(text: str | None) -> ParsedRequisites:
     if text is None or not text.strip():
         return ParsedRequisites("none", (), {}, ())
@@ -263,6 +303,9 @@ def parse_requisites(text: str | None) -> ParsedRequisites:
     stripped = text.strip()
     # This catalog wrapper introduces the field; it has no prerequisite meaning.
     stripped = re.sub(r"^This course requires\s+", "", stripped, flags=re.IGNORECASE)
+    # Repair run-together codes and normalize the combined label (EMO-028).
+    stripped = _RUN_TOGETHER_RE.sub(r"\1 \2", stripped)
+    stripped = _COMBINED_LABEL_RE.sub("co-requisite: ", stripped)
     labels = list(_LABEL_RE.finditer(stripped))
     segments: list[tuple[str, str]] = []
     if not labels:
@@ -301,8 +344,10 @@ def parse_requisites(text: str | None) -> ParsedRequisites:
         try:
             tree = _Parser(tokens).parse()
         except _Ambiguous:
-            ambiguous = True
-            continue
+            tree = _parse_with_transfer_tail(segment)
+            if tree is None:
+                ambiguous = True
+                continue
         if kind in trees:
             ambiguous = True
             continue

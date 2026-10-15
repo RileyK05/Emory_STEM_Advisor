@@ -26,6 +26,10 @@ docker compose up --build
 
 The frontend is at http://localhost:5173, the API at http://localhost:8000, and Postgres is published on localhost:5432. The API applies database migrations when the first database-backed request arrives. Postgres data persists in a named volume; uploaded and ingested files live in the gitignored `data/` directory.
 
+Use the Vite origin (http://localhost:5173) to reach the API through its proxy. A host-side request sent straight to http://127.0.0.1:8000 arrives from the compose bridge gateway address, not loopback, so development auth returns 401; that is expected, not a credential problem.
+
+The backend image runs as root with `--reload` on 0.0.0.0 as development scaffolding only. Do not deploy it as-is; a production image must run as a non-root user without the reloader.
+
 The Docker stack is development scaffolding and has not been exercised on this machine. The backend dependency resolver and installed-environment `pip check` pass with `sentence-transformers==3.0.1` and the MiniCPM-required `transformers==4.38.2`. The guarded Granite loader was revalidated against the previous embedding baseline with identical CPU vectors, ranking, and token boundaries. A fresh Docker build and Linux runtime checks remain required.
 
 The image is intended to install CPU-only PyTorch without downloading model weights during build; the first model-backed request may download them. Configure provider settings through a root `.env` copied from [.env.example](.env.example). Never commit keys or credentials.
@@ -82,7 +86,7 @@ The repository does not commit catalog, program, or eval data. From `backend/`,
 the following rebuilds the same corpus a teammate can verify against:
 
 ```powershell
-python -m scripts.migrate                                   # reaches migration 038
+python -m scripts.migrate                                   # reaches migration 040
 python -m scripts.scrape_programs --skip-departments       # catalog PDF -> data/programs/catalog/
 python -m scripts.ingest --collection NAME --origin-manifest ../data/programs/ingest-manifest.json ../data/programs/catalog/*
 python -m scripts.import_programs --collection NAME        # after ingest: binds programs to their sources

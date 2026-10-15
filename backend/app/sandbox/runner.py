@@ -105,8 +105,18 @@ def _check_run_limits(config: SandboxConfig, language: str, timeout_seconds: int
 
 
 def _retry_after_chmod(function, path, _exc_info) -> None:
-    """rmtree error hook: the sandbox leaves read-only inputs behind."""
+    """rmtree error hook: the sandbox leaves read-only inputs behind.
+
+    Making the file writable is not enough when its parent directory is 0o555 —
+    unlinking still needs write+execute on the directory (EMO-004).
+    """
     os.chmod(path, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    parent = os.path.dirname(path)
+    if parent:
+        try:
+            os.chmod(parent, stat.S_IRWXU)
+        except OSError:
+            pass
     function(path)
 
 

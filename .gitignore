@@ -30,6 +30,7 @@ playwright-report/
 # Data: dev database, raw uploads, scraped Emory catalog/program files, eval
 # sets, model caches. Regenerate with the scrape/import scripts (see AGENTS.md).
 data/
+uploads/
 
 # Logs
 *.log

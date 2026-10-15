@@ -48,6 +48,20 @@ def _drop_database(dsn: str, name: str) -> None:
     )
 
 
+def test_pg_bin_prefers_the_client_whose_major_matches_the_server(monkeypatch, tmp_path):
+    """EMO-018: pgserver's bundled pg_dump 16 must not beat a matching system 17."""
+    from app.ops import backup
+
+    bundled, system = tmp_path / "pg_dump-16", tmp_path / "pg_dump-17"
+    majors = {bundled: 16, system: 17}
+    monkeypatch.setattr(backup, "_pg_candidates", lambda _name: [bundled, system])
+    monkeypatch.setattr(backup, "_tool_major", lambda path: majors[path])
+    assert backup._pg_bin("pg_dump", server_major=17) == system
+    assert backup._pg_bin("pg_dump", server_major=16) == bundled
+    with pytest.raises(BackupError, match="major version must match"):
+        backup._pg_bin("pg_dump", server_major=18)
+
+
 @pytest.fixture
 def short_dir():
     """A short scratch path: pytest's tmp_path plus the originals layout exceeds MAX_PATH on Windows."""

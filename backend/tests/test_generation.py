@@ -67,6 +67,34 @@ def test_uncited_heading_is_not_exempt_from_paragraph_coverage():
         ))
 
 
+def test_each_bullet_needs_its_own_citation_not_a_sibling_bullet():
+    """EMO-027: a bullet list must not let one cited bullet cover every uncited one."""
+    with pytest.raises(GenerationRejected, match="paragraph has no valid supporting citations"):
+        answer_from_context(chunks(1), "question", provider=FakeProvider(
+            "- Supported [1].\n- Uncited bullet.\n- Also supported [1]."
+        ))
+    answer = answer_from_context(chunks(1), "question", provider=FakeProvider(
+        "- Supported [1].\n- Also supported [1]."
+    ))
+    assert answer.text == "- Supported [1].\n- Also supported [1]."
+
+
+def test_trailing_space_bullet_does_not_swallow_uncited_self_talk():
+    with pytest.raises(GenerationRejected, match="paragraph has no valid supporting citations"):
+        answer_from_context(chunks(1), "question", provider=FakeProvider(
+            "- NBB 280 Intro to Neuroethology [1]. \n\n"
+            "Wait - I must not paraphrase loosely. Let me correct: NBB 280 is Neuroethics."
+        ))
+
+
+def test_resource_id_tokens_are_stripped_from_the_published_answer():
+    answer = answer_from_context(chunks(1), "question", provider=FakeProvider(
+        "CS 253 requires CS 171 [1][resource:5b643eea-3cc8-5751-883b-403cb2e03796]."
+    ))
+    assert answer.text == "CS 253 requires CS 171 [1]."
+    assert "[resource:" not in answer.text
+
+
 def test_single_rewrite_is_accounted_and_still_validated():
     class RewriteProvider:
         def __init__(self):
@@ -227,3 +255,34 @@ def test_stream_invalid_completion_is_a_typed_provider_failure():
                             on_attempt=lambda result, failure: attempts.append((result, failure)))
     assert len(attempts) == 1 and attempts[0][0] is None
     assert "untrusted" not in str(attempts[0][1])
+
+
+def test_rate_limited_provider_is_retried_once_within_the_operation_budget():
+    from app.api.query_service import _answer_with_provider_retry
+    from app.llm.base import RateLimitError
+
+    calls = []
+
+    def generate():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RateLimitError("slow down", provider="fake", retry_after=0.01)
+        return "ok"
+
+    result = _answer_with_provider_retry(generate, remaining_calls=2, remaining_seconds=30,
+                                         check_cancelled=lambda: None)
+    assert result == "ok" and len(calls) == 2
+
+
+def test_rate_limit_is_not_retried_without_a_spare_call_or_time():
+    from app.api.query_service import _answer_with_provider_retry
+    from app.llm.base import RateLimitError
+
+    def generate():
+        raise RateLimitError("slow down", provider="fake", retry_after=0.01)
+
+    for remaining_calls, remaining_seconds in [(1, 30), (2, 0.0)]:
+        with pytest.raises(RateLimitError):
+            _answer_with_provider_retry(generate, remaining_calls=remaining_calls,
+                                        remaining_seconds=remaining_seconds,
+                                        check_cancelled=lambda: None)

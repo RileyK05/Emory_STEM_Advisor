@@ -18,7 +18,7 @@ from typing import Any
 from app.auth.housekeeping import PURGE_INTERVAL_SECONDS, purge_expired_auth
 from app.config import configure_runtime_database, load_settings
 from app.db.bootstrap import prepare_database
-from app.db.connection import connector, open_connection
+from app.db.connection import connector, open_connection, resolved_database_url
 from app.jobs.runtime import RunExecutor
 from app.jobs.store import JobStore, LeaseLost
 from app.jobs.worker import run_once
@@ -76,7 +76,7 @@ def main() -> None:
     # the block would stop the server the loop still needs.
     with open_connection(settings) as startup_conn:
         prepare_database(startup_conn, settings.default_collection)
-        dsn = startup_conn.info.dsn
+        dsn = resolved_database_url(settings, startup_conn)
         configure_runtime_database(dsn)
         settings = replace(settings, database_url=dsn)
         factory_path = args.handler_factory or settings.run_handler_factory

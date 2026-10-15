@@ -34,11 +34,11 @@ from psycopg.types.json import Jsonb
 from app.advising.research_repository import (
     ChunkRead,
     ResearchScope,
-    ScopeChanged,
     SourcePin,
     exact_chunks,
-    lock_sources,
-    source_pins,
+    manifest_source_pins,
+    verify_manifest,
+    verify_manifest_sources,
 )
 from app.advising.research_types import (
     MAX_EVIDENCE_BYTES,
@@ -326,8 +326,7 @@ class ResearchStore:
         each other or with the database, is InvalidResearchRecord. A pinned source
         that has since changed revision or classification is ScopeChanged.
         """
-        pinned = {UUID(source_id): (revision, kind)
-                  for source_id, revision, kind in run["scope_manifest"]["sources"]}
+        pinned = manifest_source_pins(run["scope_manifest"])
         problems = []
         for read in reads:
             chunk, source = read.chunk, read.source
@@ -343,17 +342,12 @@ class ResearchStore:
         if problems:
             raise InvalidResearchRecord(problems)
         revisions = {read.chunk.source_id: pinned[read.chunk.source_id][0] for read in reads}
-        lock_sources(self.conn, collection_id=run["collection_id"],
-                     workspace_key=self.workspace_key, pinned=revisions)
-        sources = source_pins(self.conn, collection_id=run["collection_id"],
-                              workspace_key=self.workspace_key, source_ids=revisions)
-        reclassified = {source_id for source_id in revisions
-                        if sources[source_id].source_kind != pinned[source_id][1]}
-        if reclassified:
-            raise ScopeChanged(reclassified)
+        sources = verify_manifest_sources(self.conn, run["scope_manifest"], revisions)
         chunks = exact_chunks(self.conn, revisions, [read.chunk.chunk_id for read in reads])
         problems = [f"chunk {read.chunk.chunk_id} is not the indexed text of its source"
                     for read in reads if chunks.get(read.chunk.chunk_id) != read.chunk]
+        problems.extend(f"source {read.source.source_id} metadata does not match its pinned source"
+                        for read in reads if sources[read.chunk.source_id] != read.source)
         if problems:
             raise InvalidResearchRecord(problems)
         return [(chunks[read.chunk.chunk_id], sources[read.chunk.source_id]) for read in reads]
@@ -368,6 +362,10 @@ class ResearchStore:
             publisher=source.publisher, geography=source.geography, occupation_id=source.occupation_id,
             source_url=source.source_url, edition=source.edition,
             acquired_at=source.acquired_at, published_at=source.published_at,
+            title=source.title, institution=source.institution, issuing_unit=source.issuing_unit,
+            document_roles=source.document_roles, applicability=dict(source.applicability),
+            applicability_status=source.applicability_status,
+            metadata_revision=source.metadata_revision,
             chunk_id=str(chunk.chunk_id),
             locator_id=str(chunk.locator_id) if chunk.locator_id else None,
             locator_label=chunk.locator_label[:400] or "(unlabeled)", exact_text=chunk.text,
@@ -412,7 +410,8 @@ class ResearchStore:
         payload = decision.model_dump(mode="json")
         digest = json_digest(payload)
         with self.conn.transaction():
-            self._lock(run_id)
+            run = self._lock(run_id)
+            verify_manifest(self.conn, run["scope_manifest"])
             self.conn.execute(queries.get("insert_research_decision"), {
                 "run_id": run_id, "response_id": response_id, "render_version": render_version,
                 "decision": Jsonb(payload), "digest": digest})

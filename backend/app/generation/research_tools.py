@@ -3,6 +3,7 @@
 import json
 import re
 from dataclasses import asdict, replace
+from itertools import zip_longest
 from typing import Any, Literal
 from uuid import uuid5
 
@@ -43,12 +44,12 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "1"
+RESEARCH_TOOLS_VERSION = "2"
 
 
 class SearchInput(ToolInputModel):
     query: str = Field(min_length=1, max_length=300)
-    kind: Literal["program", "course", "policy", "career_reference", "any"] = "any"
+    kind: Literal["program", "course", "document", "policy", "career_reference", "any"] = "any"
     department: str | None = Field(default=None, max_length=100)
     cursor: str | None = Field(default=None, max_length=128)
 
@@ -78,14 +79,36 @@ class PreparationInput(ToolInputModel):
     completed_codes: list[CourseCode] = Field(default_factory=list, max_length=30)
 
 
+def _coerce_embedded_json(value, model, *, unwrap_key: str):
+    """Validate a tool argument that may arrive as a JSON-encoded string (EMO-006).
+
+    Some OpenAI-compatible providers (MiMo) send an object field as a JSON string
+    and occasionally wrap it once more as ``{"<unwrap_key>": {...}}``. Accept all
+    three shapes so a valid decision is not rejected for serialization style.
+    """
+    if isinstance(value, str):
+        value = json.loads(value)
+    if isinstance(value, dict) and set(value) == {unwrap_key}:
+        value = value[unwrap_key]
+        if isinstance(value, str):
+            value = json.loads(value)
+    # Route through JSON parsing: the strict models require tuple fields, and
+    # strict JSON input accepts an array for a tuple where `model_validate`
+    # would not.
+    return model.model_validate_json(json.dumps(value))
+
+
 class StateInput(ToolInputModel):
-    expected_revision: int = Field(ge=0)
+    # A provider may omit the optimistic revision; only the model writes its own
+    # run state, so the current revision is what it last saw. Default to it rather
+    # than rejecting the update and stranding its candidates.
+    expected_revision: int | None = Field(default=None, ge=0)
     state: ResearchState
 
     @field_validator("state", mode="before")
     @classmethod
     def from_json(cls, value):
-        return ResearchState.model_validate_json(json.dumps(value))
+        return _coerce_embedded_json(value, ResearchState, unwrap_key="state")
 
 
 class FinishInput(ToolInputModel):
@@ -94,7 +117,7 @@ class FinishInput(ToolInputModel):
     @field_validator("decision", mode="before")
     @classmethod
     def from_json(cls, value):
-        return FinalDecision.model_validate_json(json.dumps(value))
+        return _coerce_embedded_json(value, FinalDecision, unwrap_key="decision")
 
 
 class ResearchResult(ToolOutputModel):
@@ -102,6 +125,79 @@ class ResearchResult(ToolOutputModel):
     data: dict[str, Any] = Field(default_factory=dict)
     next_cursor: str | None = None
     limitations: list[str] = Field(default_factory=list)
+
+
+def _discovery_words(text):
+    return set(re.findall(r"[\w]+", text.casefold())) - {
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "i", "in",
+        "is", "it", "of", "on", "or", "that", "the", "this", "to", "what", "which", "with",
+    }
+
+
+def _document_matches(sources, query):
+    """Rank scoped metadata as discovery leads; matches establish no facts."""
+    words = _discovery_words(query)
+    ranked = []
+    for pin in sources:
+        title = _discovery_words(pin.title or "")
+        labels = _discovery_words(" ".join((pin.filename, pin.publisher or "",
+            pin.institution or "", pin.issuing_unit or "", pin.edition or "",
+            *pin.document_roles, *(label for values in pin.applicability.values()
+                                  for label in values))))
+        score = 3 * len(words & title) + len(words & labels)
+        if score:
+            ranked.append((-score, pin.filename, str(pin.source_id), pin))
+    return [entry[-1] for entry in sorted(ranked)]
+
+
+def _source_metadata(pin, *, compact=False):
+    """Verified discovery metadata, including explicit unknown applicability."""
+    metadata = {
+        "source_kind": pin.source_kind, "filename": pin.filename, "source_title": pin.title,
+        "publisher": pin.publisher, "institution": pin.institution, "issuing_unit": pin.issuing_unit,
+        "source_url": pin.source_url, "edition": pin.edition, "published_at": pin.published_at,
+        "acquired_at": pin.acquired_at, "geography": pin.geography, "occupation_id": pin.occupation_id,
+        "document_roles": list(pin.document_roles),
+        "applicability": {key: list(values) for key, values in pin.applicability.items()},
+        "applicability_status": pin.applicability_status, "metadata_revision": pin.metadata_revision,
+    }
+    if not compact:
+        return metadata
+    omitted = set()
+    for name, limit in {"filename": 180, "source_title": 180, "publisher": 180,
+                        "institution": 120, "issuing_unit": 120, "source_url": 240,
+                        "edition": 120, "geography": 120, "occupation_id": 100}.items():
+        value = metadata[name]
+        if value is not None and len(value.encode("utf-8")) > limit:
+            metadata[name] = value.encode("utf-8")[:limit - 3].decode("utf-8", errors="ignore") + "…"
+            omitted.add(name)
+    # Keep whole short labels: cutting a restriction midway could change its meaning.
+    roles = [role for role in metadata["document_roles"]
+             if len(role.encode("utf-8")) <= 120][:3]
+    if roles != metadata["document_roles"]:
+        omitted.add("document_roles")
+    metadata["document_roles"] = roles
+    short_labels = {dimension: [label for label in labels if len(label.encode("utf-8")) <= 120][:2]
+                    for dimension, labels in metadata["applicability"].items()}
+    applicability = {dimension: labels for dimension, labels in short_labels.items() if labels}
+    applicability = dict(list(applicability.items())[:3])
+    if applicability != metadata["applicability"]:
+        omitted.add("applicability")
+    metadata["applicability"] = applicability
+    # 30 browse leads must fit the tool's 64 KiB envelope, including their handles.
+    secondary = iter(("source_url", "source_title", "issuing_unit", "institution",
+                      "applicability", "document_roles", "published_at", "acquired_at",
+                      "geography", "occupation_id"))
+    while True:
+        metadata["metadata_truncated"] = bool(omitted)
+        metadata["metadata_omitted_fields"] = sorted(omitted)
+        if omitted:
+            metadata["metadata_note"] = "Read this handle for complete source metadata."
+        if len(json.dumps(metadata, ensure_ascii=False).encode("utf-8")) <= 1536:
+            return metadata
+        name = next(secondary)
+        metadata.pop(name)
+        omitted.add(name)
 
 
 class ResearchRegistry(ToolRegistry):
@@ -206,7 +302,9 @@ class ResearchSession:
                      tuple(refs.get(c.chunk_id, ())) if isinstance(refs, dict) else tuple(refs),
                      complete) for c in chunks
         ], action_kind=action, summary=action, tool_execution_id=self.execution_id)
-        self.active = list(dict.fromkeys([*self.active, *result.evidence_ids]))
+        # A reread must bring its exact evidence back into the next bounded
+        # request, rather than leave it behind older chunks that already filled it.
+        self.active = list(dict.fromkeys([*result.evidence_ids, *self.active]))
         self.new_evidence += len(self.store.evidence(self.run.run_id)) - before
         records = {e.chunk_id: e.evidence_id for e in self.store.evidence(self.run.run_id)}
         for chunk in chunks:
@@ -221,15 +319,19 @@ class ResearchSession:
 
         pins = list_programs(self.scope, kind=value.kind, department=value.department)
         page, cursor = self.page(pins, value, 30, "browse")
+        verify_sources(self.conn, self.scope, {pin.source_id for pin in page})
+        self.conn.commit()
         return ResearchResult(data={"programs": [
             {"handle": self.handle("program", p.program_id), "title": p.title,
-             "kind": p.kind, "binding_status": p.binding_status} for p in page
+             "kind": p.kind, "binding_status": p.binding_status,
+             **_source_metadata(self.scope.sources[p.source_id], compact=True)} for p in page
         ]}, next_cursor=cursor)
 
     def search(self, value, _scope):
         sources = [s.source_id for s in self.scope.sources.values() if
                    value.kind not in {"policy", "career_reference"} or s.source_kind == (
                        "institutional_policy" if value.kind == "policy" else "career_reference")]
+        verify_sources(self.conn, self.scope, sources)
         self.conn.commit()
         outcome = retrieve(self.conn, collection_id=self.scope.collection_id, query=value.query,
                            config=replace(self.config, fusion=replace(
@@ -255,8 +357,8 @@ class ResearchSession:
                 if pin.program_id in ranks and (not value.department or
                         value.department.casefold() in (pin.department or "").casefold()):
                     leads.append({"kind": "program", "_identity": pin.program_id,
-                                  "title": pin.title, "source_kind": self.scope.sources[
-                                      pin.source_id].source_kind})
+                                  "title": pin.title,
+                                  **_source_metadata(self.scope.sources[pin.source_id], compact=True)})
         if value.kind in {"any", "course"}:
             locators = [c.locator_id for c in self._lead_chunks(chunks)]
             courses = self.conn.execute(queries.get("research_lead_courses"), {
@@ -268,17 +370,25 @@ class ResearchSession:
                     seen.add(row["canonical_code"])
                     leads.append({"kind": "course", "_identity": row["code"],
                                   "code": row["code"], "title": row["title"],
-                                  "source_kind": self.scope.sources[row["source_id"]].source_kind})
+                                  **_source_metadata(self.scope.sources[row["source_id"]], compact=True)})
         if value.kind not in {"course", "program"}:
+            snippets = {chunk.source_id: chunk.text[:400] for chunk in reversed(chunks)}
             seen = set()
-            for chunk in chunks:
-                if chunk.source_id in seen:
+            matches = _document_matches((self.scope.sources[s] for s in sources), value.query)
+            for pin in [*matches, *(self.scope.sources[c.source_id] for c in chunks)]:
+                if pin.source_id in seen:
                     continue
-                seen.add(chunk.source_id)
-                pin = self.scope.sources[chunk.source_id]
+                seen.add(pin.source_id)
+                metadata = _source_metadata(pin, compact=True)
                 leads.append({"kind": "document", "_identity": pin.source_id,
-                              "title": pin.filename, "source_kind": pin.source_kind,
-                              "snippet": chunk.text[:400], "discovery_only": True})
+                              "title": metadata.get("source_title") or metadata["filename"], **metadata,
+                              "snippet": snippets.get(pin.source_id, ""), "discovery_only": True})
+        if value.kind == "any":
+            # Every discovery kind gets room on the first page. Otherwise a broad
+            # program match can hide the admissions or checklist document entirely.
+            groups = [[lead for lead in leads if lead["kind"] == kind]
+                      for kind in ("program", "document", "course")]
+            leads = [lead for row in zip_longest(*groups) for lead in row if lead is not None]
         self.conn.commit()
         page, cursor = self.page(leads, value, 12, "search")
         for lead in page:
@@ -316,6 +426,7 @@ class ResearchSession:
         self.program_reads[value.handle] = replace(read, items=tuple(
             i for i in read.items if i.position in positions))
         return ResearchResult(data={"title": read.pin.title, "handle": value.handle,
+            **_source_metadata(self.scope.sources[read.pin.source_id]),
             "fields": {k: {"text": v.text, "evidence_ids": evidence(v)} for k, v in read.fields.items()},
             "sections": list(dict.fromkeys(i.section for i in read.items)),
             "items": [{"position": i.position, "text": i.line.text, "choose": i.choose,
@@ -355,7 +466,8 @@ class ResearchSession:
             cursor = "c_" + uuid5(self.run.run_id, f"{key}:{page.next_chunk}").hex
             self.cursors[cursor] = (key, page.next_chunk)
         return ResearchResult(status="incomplete" if page.incomplete else "ok", data={
-            "source_kind": page.source.source_kind, "evidence_ids": ids,
+            **_source_metadata(page.source), "title": page.source.title or page.source.filename,
+            "evidence_ids": ids,
             "sections": [{"handle": self.handle("section", (source, s.first_chunk)),
                           "title": s.label, "chunk_count": s.chunk_count} for s in page.sections[:80]]},
             next_cursor=cursor, limitations=list(page.limitations))
@@ -453,11 +565,20 @@ class ResearchSession:
                 records[eid].source_kind == "career_reference" for eid in criterion.evidence_ids
                 if eid in records) for criterion in state.criteria):
             raise InvalidResearchRecord(["career_evidence criteria need a read career reference; otherwise label an assumption"])
-        for candidate in state.candidates:
-            for h in candidate.program_handles:
-                self.resolve(h, "program")
-        self.state = self.store.update_state(self.run.run_id, state,
-                                             expected_revision=value.expected_revision)
+        try:
+            for candidate in state.candidates:
+                for h in candidate.program_handles:
+                    self.resolve(h, "program")
+        except NotInScope:
+            self.validation_hint = (
+                "program_handles must use program handles issued in this run, never document or section "
+                "handles. For a factual document lookup, use candidates=[] and keep active_evidence_ids.")
+            raise InvalidResearchRecord([self.validation_hint]) from None
+        self.state = self.store.update_state(
+            self.run.run_id, state,
+            expected_revision=(value.expected_revision if value.expected_revision is not None
+                               else (self.state.revision if self.state is not None else 0)))
+        self.validation_hint = ""
         self.active = list(self.state.active_evidence_ids)
         return ResearchResult(data={"state_revision": self.state.revision})
 
@@ -484,7 +605,7 @@ class ResearchSession:
                     return ResearchResult(status="conflict", limitations=[str(exc)])
             return invoke
         entries = [
-            ("search", "Discover leads; results are not evidence until read.", SearchInput, self.search, ()),
+            ("search", "Discover leads; use kind=document for admissions, guidance, checklists or handbooks. Source metadata and snippets are not evidence until read.", SearchInput, self.search, ()),
             ("list_programs", "Browse exact majors and minors in scope.", BrowseInput, self.browse, ()),
             ("read_program", "Read up to eight raw requirements and acquire exact evidence; follow cursor.", ReadInput, self.program, ("handle",)),
             ("read_courses", "Read one to four exact course records, descriptions and restrictions.", CoursesInput, self.courses, ("handles",)),

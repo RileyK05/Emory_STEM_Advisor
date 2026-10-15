@@ -139,7 +139,7 @@ def test_raw_upload_goes_to_data_dir(db, collection, tmp_path):
 
 
 def test_verified_provenance_publishes_with_the_indexed_version(db, collection, tmp_path):
-    from app.ingest.provenance import SourceProvenance
+    from app.ingest.provenance import provenance_from_manifest
 
     path = tmp_path / "data-engineer.md"
     path.write_text("# Data engineers\n\nThey build data pipelines.\n", encoding="utf-8")
@@ -153,11 +153,42 @@ def test_verified_provenance_publishes_with_the_indexed_version(db, collection, 
     assert db.execute("SELECT 1 FROM source_provenance WHERE source_id = %(s)s",
                       {"s": plain}).fetchone() is None
     # Re-importing the same content through a verified manifest records it.
-    verified = ingest_file(db, **common, provenance=SourceProvenance(
-        "career_reference", publisher="BLS", geography="United States"))
+    metadata = {
+        "source_category": "institutional_publication", "publisher": "Emory University",
+        "title": "Data science careers", "institution": "Emory University",
+        "issuing_unit": "Career Center", "document_roles": ["career exploration", "advising"],
+        "applicability": {"audience": ["undergraduate", "prospective student"]},
+        "applicability_status": "reviewed_default",
+    }
+    verified = ingest_file(db, **common,
+                           provenance=provenance_from_manifest({"provenance": metadata}))
     row = db.execute("SELECT * FROM source_provenance WHERE source_id = %(s)s",
                      {"s": verified}).fetchone()
     assert verified == plain
     assert (row["source_category"], row["classification_origin"], row["publisher"]) == (
-        "career_reference", "verified_import", "BLS")
+        "institutional_publication", "verified_import", "Emory University")
     assert len(row["content_hash"]) == 64
+    assert (row["title"], row["institution"], row["issuing_unit"]) == (
+        metadata["title"], metadata["institution"], metadata["issuing_unit"])
+    assert row["document_roles"] == ["advising", "career exploration"]
+    assert row["applicability"] == {"audience": ["prospective student", "undergraduate"]}
+    assert row["applicability_status"] == "reviewed_default"
+    revision = row["metadata_revision"]
+    # Reordering set-like labels is the same provenance, not a reason to stale evidence.
+    metadata["document_roles"].reverse()
+    metadata["applicability"]["audience"].reverse()
+    ingest_file(db, **common, provenance=provenance_from_manifest({"provenance": metadata}))
+    unchanged = db.execute("SELECT * FROM source_provenance WHERE source_id = %(s)s",
+                           {"s": verified}).fetchone()
+    assert unchanged["metadata_revision"] == revision
+    assert unchanged["updated_at"] == row["updated_at"]
+    # A reviewed applicability correction changes metadata without changing content identity.
+    metadata["applicability_status"] = "historical"
+    corrected = ingest_file(db, **common,
+                            provenance=provenance_from_manifest({"provenance": metadata}))
+    changed = db.execute("SELECT * FROM source_provenance WHERE source_id = %(s)s",
+                         {"s": corrected}).fetchone()
+    assert corrected == verified
+    assert changed["metadata_revision"] == revision + 1
+    assert changed["applicability_status"] == "historical"
+    assert changed["content_hash"] == row["content_hash"]

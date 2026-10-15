@@ -2,6 +2,10 @@
 
 Usage (from backend/):
     python -m scripts.scrape_programs [--config configs/programs.toml] [--skip-departments]
+    python -m scripts.scrape_programs --pdf PATH --source-url URL
+
+The local --pdf mode prepares the catalog only, without a network client or
+department configuration. Set DATA_DIR to a separate directory to stage output.
 
 Two sources, each written with a provenance header:
 
@@ -198,7 +202,15 @@ def write_catalog(pdf: bytes, *, url: str, catalog_id: str, out_dir: Path,
             "source_url": url,
             "content_sha256": sha,
             "provenance": {"source_category": category, "publisher": _PUBLISHER,
-                           "edition": catalog},
+                           "edition": catalog, "title": section.title,
+                           "institution": "Emory University", "issuing_unit": _PUBLISHER,
+                           "document_roles": [
+                               "academic_policy" if category == "institutional_policy" else
+                               "program_requirements" if section.title in program_titles else
+                               "department_overview"],
+                           "applicability": {"school": [_PUBLISHER],
+                                             "catalog_edition": [catalog]},
+                           "applicability_status": "reviewed_default"},
         }
         if section.title in program_titles and section.title not in identities:
             identities[section.title] = {
@@ -259,31 +271,48 @@ def main() -> None:
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--catalog-id", default=CATALOG_ID)
+    parser.add_argument("--pdf", type=Path, help="prepare a local catalog PDF without network access")
+    parser.add_argument("--source-url", help="original public URL of the local catalog PDF")
     parser.add_argument("--skip-departments", action="store_true")
     parser.add_argument("--delay", type=float, default=1.0)
     args = parser.parse_args()
 
-    names, pages = load_config(args.config)
+    if args.pdf is not None:
+        if not args.pdf.is_file():
+            parser.error("--pdf must name an existing file")
+        if not args.source_url or not re.fullmatch(r"https?://[^\s<>\"']+", args.source_url):
+            parser.error("--pdf requires an http(s) --source-url")
+    elif args.source_url is not None:
+        parser.error("--source-url requires --pdf")
+
     root = load_settings().data_dir / "programs"
     retrieved = dt.datetime.now(dt.UTC).date().isoformat()
-    with make_client() as client:
-        url = catalog_pdf_url(client, args.catalog_id)
-        catalog_docs = write_catalog(get(client, url).content, url=url,
+    if args.pdf is not None:
+        catalog_docs = write_catalog(args.pdf.read_bytes(), url=args.source_url,
                                      catalog_id=args.catalog_id, out_dir=root / "catalog",
                                      retrieved=retrieved)
-        print(f"wrote {len(catalog_docs)} catalog documents to {root / 'catalog'}")
-        if not args.skip_departments:
-            written, failures = scrape(client, names=names, pages=pages,
-                                       out_dir=root / "departments", delay=args.delay,
-                                       retrieved=retrieved)
-            print(f"wrote {len(written)} department documents to {root / 'departments'}")
-            for failure in failures:
-                print(f"  !! {failure['url']}: {failure['error']}")
+    else:
+        names, pages = load_config(args.config)
+        with make_client() as client:
+            url = catalog_pdf_url(client, args.catalog_id)
+            catalog_docs = write_catalog(get(client, url).content, url=url,
+                                         catalog_id=args.catalog_id, out_dir=root / "catalog",
+                                         retrieved=retrieved)
+            if not args.skip_departments:
+                written, failures = scrape(client, names=names, pages=pages,
+                                           out_dir=root / "departments", delay=args.delay,
+                                           retrieved=retrieved)
+                print(f"wrote {len(written)} department documents to {root / 'departments'}")
+                for failure in failures:
+                    print(f"  !! {failure['url']}: {failure['error']}")
+    print(f"wrote {len(catalog_docs)} catalog documents to {root / 'catalog'}")
     print(f"wrote parsed requirements to {root / 'programs.jsonl'}")
+    inputs = f"{root}/catalog/*"
+    if args.pdf is None and not args.skip_departments:
+        inputs += f" {root}/departments/*"
     print(f"next: python -m scripts.ingest --collection default --origin-manifest "
-          f"{root}/ingest-manifest.json {root}/catalog/* "
-          f"{root}/departments/*")
-    print("      python -m scripts.import_programs --collection default")
+          f"{root}/ingest-manifest.json {inputs}")
+    print(f"      python -m scripts.import_programs --collection default {root}/programs.jsonl")
 
 
 if __name__ == "__main__":

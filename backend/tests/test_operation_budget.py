@@ -1,4 +1,3 @@
-import json
 import math
 
 import pytest
@@ -36,13 +35,15 @@ def test_operation_limits_require_finite_positive_budgets():
         Usage(source="bogus")
 
 
-def test_prompt_reservation_uses_bounded_utf8_bytes_not_exact_token_count():
+def test_prompt_reservation_is_a_bounded_token_estimate():
+    from app.operations.budget import estimate_prompt_bytes
+
     req = GenerationRequest(messages=({"role": "user", "content": "hello 🧪"},))
     estimate = estimate_prompt_reservation(req)
-    serialized_bytes = len(json.dumps({
-        "messages": list(req.messages), "schema": None, "tools": [],
-    }, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-    assert estimate >= serialized_bytes
+    prompt_bytes = estimate_prompt_bytes(req)
+    # A token estimate is positive and never larger than the byte count it is
+    # derived from, so the reservation stays conservative (EMO-005).
+    assert 1 <= estimate <= prompt_bytes
     with pytest.raises(BudgetExceeded, match="operation input budget"):
         estimate_prompt_reservation(req, max_serialized_bytes=1)
     conversation = GenerationRequest((TextMessage("user", "calculate"),

@@ -1,0 +1,400 @@
+# Reviewed local upload pilot. No live web recheck or import is implied.
+# Unlisted files are excluded. Add rows only after review; never glob the originals.
+# Stable origin keys intentionally reuse department scraper identities where present.
+schema_version = 1
+input_subdir = "advising_uploads/2026-10-15/originals/sheets"
+acquired_at = "2026-10-15"
+review_notes = "Reviewed local copies and supplied INDEX/header URLs on 2026-10-15. Acquisition claims are supplied, not independently re-fetched. Unknown edition, cohort and admissions cycle remain unknown; this registry does not authorize automatic source publication or structured rule inference."
+
+[[document]]
+id = "datasci-major-core"
+disposition = "include"
+original_path = "data-science/datasci-2026-major-checklist.pdf"
+original_sha256 = "ff1e933cc748d262ab6363be6a2436d84305bee5c194025d35e2607b4eeb166c"
+reason = "Official departmental checklist. Body explicitly says core only, with additional track requirements. Supplied URL and INDEX label it 2026; no printed edition or cohort was established. Blank form fields and placeholders are not requirements."
+origin_key = "programs:department:datascience-documents-2026-major-checklist"
+canonical_filename = "emory-college-datasci-major-core-checklist-undated.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "Data Science Major Core Checklist"
+source_category = "institutional_department"
+publisher = "Emory University — Department of Data and Decision Sciences"
+institution = "Emory University"
+issuing_unit = "Department of Data and Decision Sciences"
+source_url = "https://datascience.emory.edu/documents/2026_major_checklist.pdf"
+document_roles = ["requirements", "checklist"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["QSSBS"]
+
+[[document]]
+id = "datasci-minor"
+disposition = "include"
+original_path = "data-science/datasci-2026-minor-checklist.pdf"
+original_sha256 = "710e2da20a49fb7a4679259057b90f31a11713f4dc11dd4628a6da46cccd3fcd"
+reason = "Official departmental minor checklist selected over the supplied 2025 copy. URL and INDEX label it 2026; PDF has no printed edition or verified entering cohort. QTM equivalence is scoped to the statement in this document."
+origin_key = "programs:department:datascience-documents-checklists-2026-2026-datasci-minor-checklist"
+canonical_filename = "emory-college-datasci-minor-checklist-undated.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "Data Science Minor Checklist"
+source_category = "institutional_department"
+publisher = "Emory University — Department of Data and Decision Sciences"
+institution = "Emory University"
+issuing_unit = "Department of Data and Decision Sciences"
+source_url = "https://datascience.emory.edu/documents/checklists-2026/2026-datasci_minor_checklist.pdf"
+document_roles = ["requirements", "checklist"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["QSSMIN"]
+
+[[document]]
+id = "datasci-ai-track"
+disposition = "include"
+original_path = "data-science/datasci-2026-track-checklist-ai-track.pdf"
+original_sha256 = "7b7d7f954b9977264998d5f374a133b45e51ba7fe18da4e33f616e5d50adad52"
+reason = "Official track supplement; does not replace the core checklist. DATASCI F1 and blank rows are placeholders. URL and INDEX label it 2026, but no printed edition or cohort is established; table interpretation needs review before structured extraction."
+origin_key = "programs:department:datascience-documents-checklists-2026-2026-ai-track-checklist"
+canonical_filename = "emory-college-datasci-ai-track-checklist-undated.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "Data Science Major: AI Track Checklist"
+source_category = "institutional_department"
+publisher = "Emory University — Department of Data and Decision Sciences"
+institution = "Emory University"
+issuing_unit = "Department of Data and Decision Sciences"
+source_url = "https://datascience.emory.edu/documents/checklists-2026/2026-ai-track-checklist.pdf"
+document_roles = ["requirements", "track_supplement", "checklist"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["QSSBS"]
+track = ["Artificial Intelligence"]
+
+[[document]]
+id = "cs-bs"
+disposition = "include"
+original_path = "ai-econ-cs/cs-bs-page.md"
+original_sha256 = "e425881e0163413ee3252ded67fb55af9d1a9941829aa04233319d0454519657"
+reason = "Reviewed local official-page capture; reuse scraper logical origin, so a future import must reconcile the existing source before publication. Undated snapshot does not establish cohort. Only acquisition wrapper removed; body and tables remain verbatim."
+origin_key = "programs:department:computerscience-undergraduate-degrees-and-requirements-cs-bs"
+canonical_filename = "emory-college-computer-science-bs-requirements-undated.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Computer Science BS Requirements"
+source_category = "institutional_department"
+publisher = "Emory University — Department of Computer Science"
+institution = "Emory University"
+issuing_unit = "Department of Computer Science"
+source_url = "https://computerscience.emory.edu/undergraduate/degrees-and-requirements/cs-bs.html"
+document_roles = ["requirements", "advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["COMPSCIBS"]
+
+[[document]]
+id = "cs-bs-ai"
+disposition = "include"
+original_path = "ai-econ-cs/cs-bs-ai-concentration.md"
+original_sha256 = "58fad391b6d42e97a0091eafba8d079bc0f402db7abbc74a6aa6517c038ff798"
+reason = "Reviewed local official-page capture; concentration requirements are scoped separately from the standard CS BS. Undated snapshot and no entering cohort. Body and tables preserved after exact acquisition wrapper removal."
+origin_key = "programs:department:computerscience-undergraduate-degrees-and-requirements-cs-bs-ai-concentration"
+canonical_filename = "emory-college-computer-science-bs-ai-concentration-requirements-undated.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Computer Science BS, AI Concentration Requirements"
+source_category = "institutional_department"
+publisher = "Emory University — Department of Computer Science"
+institution = "Emory University"
+issuing_unit = "Department of Computer Science"
+source_url = "https://computerscience.emory.edu/undergraduate/degrees-and-requirements/cs-bs-ai-concentration.html"
+document_roles = ["requirements", "concentration", "advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["COMPSCIBS"]
+track = ["Artificial Intelligence concentration"]
+
+[[document]]
+id = "chemistry-guide"
+disposition = "include"
+original_path = "chemistry/chemistry-undergraduate-advising-guide.pdf"
+original_sha256 = "7ba58730d09275884a4104aacfdd0669cf18156a2fc4b50fca64349a3cb90f06"
+reason = "Official guide includes BA and BS information. Supplied INDEX assumes currency from a July 2025 PDF revision; no explicit academic edition or cohort established. Retain unknown applicability and original PDF page locators."
+origin_key = "programs:department:chemistry-documents-undergraduate-undergraduate-advising-guide"
+canonical_filename = "emory-college-chemistry-advising-guide-undated.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "Chemistry Undergraduate Advising Guide"
+source_category = "institutional_department"
+publisher = "Emory University — Department of Chemistry"
+institution = "Emory University"
+issuing_unit = "Department of Chemistry"
+source_url = "https://chemistry.emory.edu/documents/undergraduate/undergraduate-advising-guide.pdf"
+document_roles = ["requirements", "advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["CHEMBA", "CHEMBS"]
+
+[[document]]
+id = "nbb-major"
+disposition = "include"
+original_path = "biology-nbb/nbb-major-requirements.md"
+original_sha256 = "8251f27f6c5d19f407e8bf4be38f1d1086feb60f38c2f5ca06378320fd063a52"
+reason = "Reuse existing scraper logical origin and reconcile before future import. Preserve suggested sequences as guidance and explicit conditions as written; do not write atlas graph edges. Undated capture has no verified cohort."
+origin_key = "programs:department:nbb-academics-nbb-major-requirements"
+canonical_filename = "emory-college-nbb-major-requirements-undated.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Neuroscience and Behavioral Biology Major Requirements"
+source_category = "institutional_department"
+publisher = "Emory University — Neuroscience and Behavioral Biology Program"
+institution = "Emory University"
+issuing_unit = "Neuroscience and Behavioral Biology Program"
+source_url = "https://nbb.emory.edu/academics/nbb-major-requirements.html"
+document_roles = ["requirements", "advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["NEUROBBBS"]
+
+[[document]]
+id = "nbb-electives"
+disposition = "include"
+original_path = "biology-nbb/nbb-electives-list.md"
+original_sha256 = "63e27c60cb08ade504f44cb9572922a4bbfa57331d197cdfd2965ca78e98eedb"
+reason = "Official elective combinations, approval conditions and cautions about changing offerings retained verbatim. A list of electives is not a verified term schedule. Undated snapshot has no confirmed cohort."
+origin_key = "programs:department:nbb-academics-electives"
+canonical_filename = "emory-college-nbb-elective-requirements-undated.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Neuroscience and Behavioral Biology Elective Courses"
+source_category = "institutional_department"
+publisher = "Emory University — Neuroscience and Behavioral Biology Program"
+institution = "Emory University"
+issuing_unit = "Neuroscience and Behavioral Biology Program"
+source_url = "https://nbb.emory.edu/academics/electives.html"
+document_roles = ["requirements", "elective_list"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["NEUROBBBS"]
+
+[[document]]
+id = "ila-handbook"
+disposition = "include"
+original_path = "issc/ila-handbook-2026-27-v10.pdf"
+original_sha256 = "1599e55ceb9bb4ba023d93eeb616f233a89b4e9d3e8d44712eff752c2f64344b"
+reason = "Cover explicitly states 2026–27, consistent with supplied INDEX. Selected default for this reviewed edition; individual student cohort applicability still requires checking. Original PDF retained."
+origin_key = "programs:department:ila-documents-ila-handbook-v-10"
+canonical_filename = "emory-college-ila-american-interdisciplinary-studies-handbook-2026-27.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "American Studies and Interdisciplinary Studies Handbook 2026–27"
+source_category = "institutional_department"
+publisher = "Emory University — Institute for the Liberal Arts"
+institution = "Emory University"
+issuing_unit = "Institute for the Liberal Arts"
+source_url = "https://ila.emory.edu/documents/ila-handbook-v-10.pdf"
+document_roles = ["requirements", "advising_guidance", "handbook"]
+applicability_status = "reviewed_default"
+edition = "2026-27, version 10"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["American Studies", "Interdisciplinary Studies in Society and Culture"]
+academic_year = ["2026-27"]
+
+[[document]]
+id = "prehealth-medicine"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-medicine-prereqs-and-mcat.md"
+original_sha256 = "48350db4290bb52941647681968f4bd5026b927ae20ca7c99df0467ac75efc54"
+reason = "Official Emory advising office guidance about medicine generally; not a binding requirement set for every medical school. Undated capture and admissions cycle unknown."
+origin_key = "advising:emory:prehealth:medicine"
+canonical_filename = "emory-college-prehealth-medicine-preparation-guidance-undated.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Medicine Preparation and MCAT"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/explore/medicine.html"
+document_roles = ["advising_guidance", "admissions_preparation"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+pathway = ["Pre-medicine"]
+admissions_cycle = ["unknown"]
+
+[[document]]
+id = "emory-md-admissions"
+disposition = "include"
+original_path = "prehealth-prelaw/emory-som-md-course-requirements.md"
+original_sha256 = "afc51ef1348687abccf66e0c563962317bcdf62536c6158ca19044433ad4367f"
+reason = "Local capture of an official Emory School of Medicine admissions page, scoped only to the Emory MD program. Original wrapper supplies URL absent from INDEX. Admissions cycle is unknown; exceptions remain as written."
+origin_key = "advising:emory:medicine:md-admissions-course-requirements"
+canonical_filename = "emory-medicine-md-admissions-course-requirements-undated.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Emory School of Medicine MD Admissions Course Requirements"
+source_category = "institutional_publication"
+publisher = "Emory University — School of Medicine MD Admissions"
+institution = "Emory University"
+issuing_unit = "School of Medicine MD Admissions"
+source_url = "https://med.emory.edu/education/programs/md/admissions/step1/index.html"
+document_roles = ["admissions_requirements"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory School of Medicine"]
+pathway = ["Emory MD"]
+admissions_cycle = ["unknown"]
+
+[[document]]
+id = "laney-four-plus-one"
+disposition = "include"
+original_path = "4plus1/laney-graduate-school-4plus1-programs.md"
+original_sha256 = "a280237ebac1b56402e0d1ed59089c39a5cf501e5bddb5d24d4851de3db151c5"
+reason = "Official Laney overview scoped to Emory undergraduates and named pathways; not a complete program admissions rule set. Undated capture and admissions cycle unknown."
+origin_key = "advising:emory:laney:four-plus-one"
+canonical_filename = "emory-laney-four-plus-one-programs-guidance-undated.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Laney Graduate School 4+1 Bachelor/Master Programs"
+source_category = "institutional_publication"
+publisher = "Emory University — Laney Graduate School"
+institution = "Emory University"
+issuing_unit = "Laney Graduate School"
+source_url = "https://gs.emory.edu/degree-programs/fourplusone.html"
+document_roles = ["pathway_overview", "advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Laney Graduate School", "Emory College of Arts and Sciences"]
+pathway = ["4+1 bachelor/master"]
+admissions_cycle = ["unknown"]
+
+[[document]]
+id = "datasci-handbook-2025-26"
+disposition = "historical"
+original_path = "data-science/datasci-undergraduate-handbook-march2026.pdf"
+original_sha256 = "7d6d0822b40e4c801497eae84b3a981909a9c2f8cc78d92b041502b2d1d45d15"
+reason = "Cover explicitly states 2025–2026, revised March 2026. Supplied INDEX labels CURRENT based on revision month, which does not establish 2026–27 applicability. Keep out of default corpus until cohort handling is designed."
+
+[[document]]
+id = "datasci-minor-2025"
+disposition = "historical"
+original_path = "data-science/datasci-2025-minor-checklist-OLDER.pdf"
+original_sha256 = "33de5c9bc2bc89581e3113d9040a7249e3da254262b5a1a8daac98b9436f9fc5"
+reason = "Supplied INDEX explicitly says superseded by the 2026 checklist. Preserve original outside default pilot."
+superseded_by = "datasci-minor"
+
+[[document]]
+id = "ila-handbook-2025-26"
+disposition = "historical"
+original_path = "issc/ila-handbook-2025-26-OLDER.pdf"
+original_sha256 = "2a6fc296160ba80a6feaca5da9767021ea7901329398f956d5d5f353b048df4c"
+reason = "Cover 2025–26 and supplied INDEX explicitly superseded by version 10, 2026–27."
+superseded_by = "ila-handbook"
+
+[[document]]
+id = "cpd-graduate-school"
+disposition = "hold"
+original_path = "careers/cpd-applying-to-graduate-school.md"
+original_sha256 = "d7cded50847da797dc8f3f0cc2b97c45cc4880934ba7c4985cc385ab5ab51ebf"
+reason = "Guidance is mixed with Sidebar resource feeds, filters, resume examples and other boilerplate. No reviewed body ranges for cleanup; do not infer missing boundaries or index transient feeds."
+
+[[document]]
+id = "nursing-scan"
+disposition = "hold"
+original_path = "prehealth-prelaw/prehealth-nursing-bsn-requirements-blue-ger-oct2023.pdf"
+original_sha256 = "d8e1b9b8ac7ca40c5597cc3fbf7e341f1f61d179556f8e26aa618f1c0e7219ea"
+reason = "October 2023 Blue Plan BSN sheet is image-only and text extraction is empty. Needs targeted verified OCR/transcription and cohort review before use."
+
+[[document]]
+id = "unofficial-qtm-map"
+disposition = "hold"
+original_path = "data-science/qtm-to-datasci-course-map.md"
+original_sha256 = "86a4145fbb54d78a89003716a5fbef0cbd81738344129627a45660dc182f3aba"
+reason = "Self-identifies as an unofficial compilation. Use only for discovery/review; official equivalence claims must cite the actual department statement. Never use to fill prerequisite graph facts."
+
+[[document]]
+id = "biology-bs-legacy-overlap"
+disposition = "hold"
+original_path = "biology-nbb/biology-bs-requirements-2020-upd2023.pdf"
+original_sha256 = "7272b4c7b184cab3b31115dd98935f4958cd7146fbe77b2ba9f14b62b269dd0d"
+reason = "Exact bytes match historically ingested source 07feb903-9208-57a0-b2f3-02131417f8a8. Older sheet; inspect current database origin, status and provenance before any reconciliation. No new upload origin is assigned."
+
+[[document]]
+id = "dual-degree-transfer-table"
+disposition = "hold"
+original_path = "dual-degree/emory-georgia-tech-course-equivalency-chart.pdf"
+original_sha256 = "dcac0535d0d0fbb210b569b50ed552dc9acc3f727773775d9df81670c49c4b83"
+reason = "July 2024 transfer table requires row/column and footnote review plus applicability verification. Plain text extraction cannot establish transfer decisions."
+
+[[document]]
+id = "registrar-calendar"
+disposition = "hold"
+original_path = "policies-calendar/registrar-2026-2027-academic-calendar.pdf"
+original_sha256 = "59e9a493821fa5dbc7da864489809f27fb06e0dbf7af103b6c511ef77469c55f"
+reason = "Calendar mixes schools, terms and sessions. Defer until deterministic table extraction and scope mapping have been reviewed."
+
+[[document]]
+id = "cs-bs-capture-pdf"
+disposition = "alias"
+original_path = "ai-econ-cs/cs-bs-page.pdf"
+original_sha256 = "e86eb27d430ba7fad26a3cffe979f1b59618863c53a2c30ae0bc447f9e2c9080"
+reason = "Alternate browser PDF capture of selected Markdown source; preserve original without adding a second searchable source."
+alias_of = "cs-bs"
+
+
+[[document]]
+id = "datasci-major-tracks"
+disposition = "include"
+original_path = "data-science/datasci-majors-requirements-page.md"
+original_sha256 = "e86badbd97b9726f48d1ff1f7a22b9ba8e77ddcb80b9d5daf3f8b88f48c24765"
+reason = "Official department page supplies named AI focus-track alternatives, elective exclusions, experiential-learning choices and approval conditions omitted from checklist placeholders. It also states the core-plus-track relationship. Exact local capture; undated edition and student cohort remain unknown. Body is unchanged after the verified acquisition wrapper."
+origin_key = "programs:department:datascience-undergraduate-majors-requirements"
+canonical_filename = "emory-college-datasci-major-tracks-requirements-undated.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Data Science Major and Track Requirements (including AI)"
+source_category = "institutional_department"
+publisher = "Emory University — Department of Data and Decision Sciences"
+institution = "Emory University"
+issuing_unit = "Department of Data and Decision Sciences"
+source_url = "https://datascience.emory.edu/undergraduate/majors-requirements/index.html"
+document_roles = ["requirements", "track_requirements", "advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+program = ["QSSBS"]

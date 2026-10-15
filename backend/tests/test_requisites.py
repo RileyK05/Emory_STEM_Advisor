@@ -49,6 +49,15 @@ _PARSED = {
                                       Condition("permission of instructor"))), None),
     "long subject and two-letter suffix": ("DATASCI 220 and AAS 490RW",
                                            AllOf(_c("DATASCI 220", "AAS 490RW")), None),
+    "transfer credit tail is a modifier": (
+        ("(CHEM 150 or CHEM 150Z) and (CHEM 202 or CHEM 202Z) or equivalent transfer credit "
+         "as a prerequisite"),
+        AllOf((AllOf((AnyOf(_c("CHEM 150", "CHEM 150Z")), AnyOf(_c("CHEM 202", "CHEM 202Z")))),
+               Condition("equivalent transfer credit"))),
+        ["CHEM 150", "CHEM 150Z", "CHEM 202", "CHEM 202Z"]),
+    "run-together code and conjunction": ("BIOL 151or CHEM 150",
+                                          AnyOf(_c("BIOL 151", "CHEM 150")),
+                                          ["BIOL 151", "CHEM 150"]),
 }
 
 
@@ -94,6 +103,14 @@ def test_prerequisite_and_corequisite_labels():
         ("prerequisite", "ECON 101"), ("corequisite", "MATH 211")}
 
 
+def test_combined_prerequisite_or_corequisite_label_parses():
+    """EMO-028: "prerequisite or co-requisite" is one label, not unparsed prose."""
+    result = parse_requisites("Prerequisite or co-requisite: CHEM 150L")
+    assert result.status == "parsed"
+    assert result.trees == {"corequisite": CourseRef("CHEM 150L")}
+    assert [(m.kind, m.code) for m in result.mentions] == [("corequisite", "CHEM 150L")]
+
+
 def test_description_requirements_are_extracted_only_when_explicit():
     text = requisite_text(None, "Algorithm analysis. Pre-requisite: CS 120. "
                           "Open only to approved honors candidates.")
@@ -115,7 +132,10 @@ def test_ordinary_long_words_before_numbers_are_not_subjects():
 
 @pytest.mark.parametrize(("query", "codes"), [
     ("MATH 111 and 112", ["MATH 111", "MATH 112"]),  # "and" is not a subject; subject carries
-    ("Physics 141", []),  # "141" has no valid subject before it
+    ("Physics 141", ["PHYS 141"]),  # a spelled-out subject maps to its code
+    ("Chemistry 150 and 202", ["CHEM 150", "CHEM 202"]),
+    ("Biology 141", ["BIOL 141"]),
+    ("Physics 152 prerequisite", ["PHYS 152"]),
     ("what do I need for econ301?", ["ECON 301"]),
     ("section 111 applies", []),  # a bare number is ignored
     ("MATH 111 and MATH 111 or ECON 101", ["MATH 111", "ECON 101"]),  # deduped, in order

@@ -88,6 +88,31 @@ def test_followup_retrieval_carries_the_courses_the_last_answer_named(answer, ex
     assert _effective_scope(rows, body)[2] == expected
 
 
+@pytest.mark.parametrize(("query", "rows", "expected"), [
+    ("What about the major?",
+     [{"sequence": 1, "role": "user",
+       "text": "What are the requirements for the computer science minor?", "evidence": {}},
+      {"sequence": 2, "role": "assistant",
+       "text": "The minor requires MATH 111 and CS 170 [1].", "evidence": {}}],
+     ("What are the requirements for the computer science minor?\n"
+      "Courses discussed: MATH 111, CS 170\nFollow-up: What about the major?")),
+    ("Which of those require CS 253 first?",
+     [{"sequence": 1, "role": "user",
+       "text": "What are the requirements for the computer science minor?", "evidence": {}},
+      {"sequence": 2, "role": "assistant",
+       "text": "The minor requires MATH 111 and CS 170 [1].", "evidence": {}},
+      {"sequence": 3, "role": "user", "text": "What about the major?", "evidence": {}},
+      {"sequence": 4, "role": "assistant", "text": "The CS BS requires CS 253 [1].", "evidence": {}}],
+     ("What are the requirements for the computer science minor?\n"
+      "Courses discussed: CS 253\nFollow-up: Which of those require CS 253 first?")),
+])
+def test_followup_without_pronoun_folds_in_the_earlier_topic(query, rows, expected):
+    from app.api.routes.conversations import ConversationQuery, _effective_scope
+
+    body = ConversationQuery(query=query, requestId=uuid4(), expectedSequence=99)
+    assert _effective_scope(rows, body)[2] == expected
+
+
 def test_followup_without_pronouns_keeps_raw_query_and_null_resets_scope(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is a documented course concept.")
     provider = FakeProvider("Alpha is documented [1].")
@@ -169,21 +194,26 @@ def test_context_overflow_keeps_every_saved_turn_and_never_calls_provider(db, co
     assert provider.calls == 0
 
 
-def test_history_and_its_budget_carry_cited_passages_not_every_retrieved_one(db, collection):
+def test_history_carries_citation_labels_not_retrieved_passage_bodies(db, collection):
     store = ConversationStore(db, "development")
     conversation = UUID(store.create("Planned context")["conversationId"])
     request_id = uuid4()
     store.begin(conversation, request_id, 0, {"query": "data engineering?"})
     context = [{"chunkId": f"c{i}", "sourceId": "s", "sourceName": "atlas",
                 "locatorLabel": f"CS {i}", "text": "passage " * 200} for i in range(20)]
-    store.finish(conversation, request_id, {"type": "answer", "answer": "Take CS 1 [2].",
+    store.finish(conversation, request_id, {"type": "answer",
+        "answer": "Take CS 1 [2]. " + "y" * 3000,
         "citations": [{"chunkId": "c1", "sourceId": "s", "sourceName": "atlas",
                        "locatorLabel": "CS 1"}], "trace": {"contextBlock": context}})
-    # Twenty retrieved passages (~32 KB) were saved, but history needs only the cited one.
-    rows = store.context(conversation, max_bytes=4096)
+    # Twenty retrieved passages (~32 KB) were saved for display, but history
+    # re-sends only the answer text and compact citation labels (EMO-017).
+    rows = store.context(conversation, max_bytes=8192)
     assert len(rows[-1]["evidence"]["contextBlock"]) == 20
     history = json.loads(history_prompt(rows))
-    assert [item["chunkId"] for item in history[-1]["evidence"]["contextBlock"]] == ["c1"]
+    assert "passage" not in json.dumps(history)
+    assert history[-1]["evidence"]["citations"] == [
+        {"chunkId": "c1", "sourceName": "atlas", "locatorLabel": "CS 1"}]
+    assert history[0]["evidence"] == {}
     with pytest.raises(HTTPException):
         store.context(conversation, max_bytes=1024)
 

@@ -111,6 +111,41 @@ def _answer_course_codes(text: str) -> list[str]:
     return codes[:_MAX_FOLLOW_UP_CODES]
 
 
+# A bare follow-up does not name its own topic, so its retrieval query folds in
+# the topic of an earlier question (EMO-007). These markers are deliberately
+# broad: a pronoun, a leading "and/what about", or a very short query with no
+# course code and no topic noun.
+_FOLLOW_UP_START_RE = re.compile(r"^\s*(and|also|then|or|what about|how about)\b", re.IGNORECASE)
+_ANAPHORA_RE = re.compile(
+    r"\b(it|its|they|them|their|that|those|this|these|one|ones|the same|such)\b", re.IGNORECASE)
+_TOPIC_NOUN_RE = re.compile(
+    r"\b(major|majors|minor|minors|requirements?|degree|degrees|course|courses|class|classes|"
+    r"program|programs|bs|ba|bba|track|tracks|concentration|certificate|prerequisite|"
+    r"prerequisites|prereq|prereqs|curriculum|sequence|gpa|credit|credits|semester|honors)\b",
+    re.IGNORECASE)
+# Case-insensitive on purpose: a typed follow-up may use lower-case codes.
+_FOLLOW_UP_CODE_RE = re.compile(r"\b([A-Za-z]{2,7}) ?(\d{3}[A-Za-z]{0,2})\b")
+
+
+def _looks_like_bare_follow_up(query: str) -> bool:
+    stripped = (query or "").strip()
+    if not stripped:
+        return False
+    if _FOLLOW_UP_START_RE.match(stripped) or _ANAPHORA_RE.search(stripped):
+        return True
+    if _FOLLOW_UP_CODE_RE.search(stripped) or _TOPIC_NOUN_RE.search(stripped):
+        return False
+    return len(stripped.split()) <= 5
+
+
+def _topic_anchor(prior_users):
+    """The most recent earlier question that named a topic, not a bare follow-up."""
+    for row in reversed(prior_users):
+        if not _looks_like_bare_follow_up(row["text"]):
+            return row
+    return prior_users[-1]
+
+
 def _effective_scope(rows, body):
     """Resolve the collection/source scope a saved follow-up inherits.
 
@@ -124,14 +159,15 @@ def _effective_scope(rows, body):
     if "sourceIds" not in body.model_fields_set:
         source_ids = prior.get("sourceIds")
     retrieval_query = body.query
-    if prior_users and re.search(r"\b(it|its|they|them|their|that|those|this|these)\b", body.query, re.IGNORECASE):
-        # "Those courses" usually names what the last answer listed, not the
-        # last question, so its course codes join the retrieval query too.
-        answers = [row for row in rows if row["role"] == "assistant"
-                   and row["sequence"] > prior_users[-1]["sequence"]]
+    if prior_users and _looks_like_bare_follow_up(body.query):
+        # "Those courses" usually names what the last answer listed, and the topic
+        # anchor is the last earlier question that actually named one, so a chain
+        # of pronoun/marker follow-ups keeps talking about the same subject.
+        anchor = _topic_anchor(prior_users)
+        answers = [row for row in rows if row["role"] == "assistant"]
         codes = _answer_course_codes(answers[-1]["text"]) if answers else []
         discussed = f"\nCourses discussed: {', '.join(codes)}" if codes else ""
-        retrieval_query = f"{prior_users[-1]['text']}{discussed}\nFollow-up: {body.query}"
+        retrieval_query = f"{anchor['text']}{discussed}\nFollow-up: {body.query}"
         if len(retrieval_query) > 20000:
             raise HTTPException(422, "follow-up retrieval query exceeds the input budget")
     return prior, source_ids, retrieval_query

@@ -1,5 +1,6 @@
 """Query planning: a model proposes bounded searches from the scoped catalog directory."""
 
+import hashlib
 import json
 import re
 from dataclasses import replace
@@ -12,7 +13,9 @@ from fastapi.testclient import TestClient
 from app.api import create_app
 from app.atlas.importer import import_atlas
 from app.config import load_settings
+from app.db import queries
 from app.generation.query_plan import PlanRejected, parse_plan
+from app.ingest.provenance import provenance_from_manifest
 from app.llm.base import GenerationResult, Usage
 from app.retrieval.config import PlanningConfig, load_retrieval_config
 from app.retrieval.directory import CatalogDirectory, load_directory
@@ -101,6 +104,27 @@ def test_directory_lists_only_the_query_scope_and_cannot_be_impersonated(db, col
     only_atlas = load_directory(db, collection_id=collection, workspace_key="development",
                                 source_ids=[atlas])
     assert not only_atlas.documents and "CS 230" in only_atlas.course_codes
+
+    provenance = provenance_from_manifest({"provenance": {
+        "source_category": "institutional_publication", "title": "Grading guidance",
+        "publisher": "Emory", "institution": "Emory University", "issuing_unit": "College",
+        "edition": "2026-27", "document_roles": ["advising", "academic_policy"],
+        "applicability": {"schools": ["Emory College"], "cohorts": ["2026-27"]},
+        "applicability_status": "reviewed_default",
+    }})
+    raw_hash = hashlib.sha256((tmp_path / "grading-policy.txt").read_bytes()).hexdigest()
+    db.execute(queries.get("upsert_source_provenance"), provenance.row(policy, raw_hash))
+    db.commit()
+    refreshed = load_directory(db, collection_id=collection, workspace_key="development",
+                               source_ids=[policy])
+    assert refreshed.digest != only_policy.digest
+    metadata = json.loads(next(line.split("|", 1)[1] for line in refreshed.text.splitlines()
+                               if line.startswith("grading-policy|")))
+    assert metadata["title"] == "Grading guidance"
+    assert metadata["category"] == "institutional_publication"
+    assert metadata["edition"] == "2026-27"
+    assert "Emory College" in metadata["applicability"]
+    assert metadata["applicability_status"] == "reviewed_default"
 
 
 class _PlanningProvider:

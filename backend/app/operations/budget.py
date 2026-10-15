@@ -179,8 +179,17 @@ class OperationBudgetController:
                          else requested_output_tokens)
             if isinstance(requested, bool) or not isinstance(requested, int):
                 raise TypeError("requested output tokens must be an integer")
-            if requested < 1 or available_output < 1:
+            if requested < 1:
                 raise BudgetExceeded("token_budget", "The generation operation token budget was exhausted.")
+            if available_output < 1:
+                # The prompt plus the history has already consumed the token
+                # budget before any model call, so say that instead of implying
+                # provider usage ran out (EMO-023).
+                raise BudgetExceeded(
+                    "token_budget",
+                    "The prompt is too large for the operation token budget; "
+                    "start a new conversation or shorten the request.",
+                )
             output_grant = min(requested, row["per_call_output_cap"], available_output)
             if minimum_output_tokens is not None:
                 if (isinstance(minimum_output_tokens, bool)
@@ -308,13 +317,12 @@ class OperationBudgetController:
             raise ValueError("workspace key must contain 1-200 characters")
 
 
-def estimate_prompt_reservation(request: GenerationRequest, *,
-                                max_serialized_bytes: int = MAX_PROMPT_SERIALIZED_BYTES) -> int:
-    """Estimate reservation from bounded serialized UTF-8 bytes and fixed overhead.
+def estimate_prompt_bytes(request: GenerationRequest, *,
+                          max_serialized_bytes: int = MAX_PROMPT_SERIALIZED_BYTES) -> int:
+    """Bounded serialized UTF-8 byte count of a prompt plus fixed overhead.
 
-    This deliberately reserves one planning unit per serialized byte. Hidden
-    provider prompt templates and provider tokenizers are outside this estimate;
-    observed provider usage is recorded even if it exceeds the reservation.
+    This is a byte ceiling (used where a policy is denominated in bytes, such as
+    research's maximum prompt size), not a token reservation.
     """
     records: dict[str, Any] = {
         "messages": [normalize_message(m) for m in request.messages],
@@ -332,4 +340,26 @@ def estimate_prompt_reservation(request: GenerationRequest, *,
     if request.response_schema:
         fixed_overhead += 256
     fixed_overhead += 64 * len(request.tools)
-    return max(1, byte_count + fixed_overhead)
+    return byte_count + fixed_overhead
+
+
+# Conservative bytes-per-token ratio for the reservation estimate. Real
+# provider tokenizers average roughly four bytes per token on English prose; 3.5
+# keeps the estimate slightly conservative while making the persisted token
+# budget usable for a realistic prompt (EMO-005).
+_BYTES_PER_RESERVED_TOKEN = 3.5
+
+
+def estimate_prompt_reservation(request: GenerationRequest, *,
+                                max_serialized_bytes: int = MAX_PROMPT_SERIALIZED_BYTES) -> int:
+    """Estimate the persisted token reservation for one provider call.
+
+    The estimate is derived from bounded serialized UTF-8 bytes and converted to
+    an approximate token count (EMO-005). Reserving one unit per byte charged the
+    token budget about four times too fast, so a saved conversation failed on its
+    third turn with a prompt far below the model's real context window. Hidden
+    provider prompt templates and tokenizers remain outside this estimate;
+    observed provider usage is recorded even if it exceeds the reservation.
+    """
+    byte_count = estimate_prompt_bytes(request, max_serialized_bytes=max_serialized_bytes)
+    return max(1, math.ceil(byte_count / _BYTES_PER_RESERVED_TOKEN))

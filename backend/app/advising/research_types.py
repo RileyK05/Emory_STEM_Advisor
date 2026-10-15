@@ -20,9 +20,11 @@ are sufficient for every question.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 # --- Bounds ------------------------------------------------------------------
 
@@ -43,6 +45,7 @@ SourceKind = Literal[
     "institutional_catalog",
     "institutional_department",
     "institutional_policy",
+    "institutional_publication",
     "career_reference",
     "user_supplied",
     "unclassified",
@@ -97,6 +100,14 @@ class EvidenceRecord(_Frozen):
     edition: str | None = Field(default=None, max_length=200)
     acquired_at: str | None = Field(default=None, max_length=64)
     published_at: str | None = Field(default=None, max_length=64)
+    title: str | None = Field(default=None, max_length=2000)
+    institution: str | None = Field(default=None, max_length=2000)
+    issuing_unit: str | None = Field(default=None, max_length=2000)
+    document_roles: tuple[str, ...] = ()
+    applicability: Mapping[str, tuple[str, ...]] = Field(
+        default_factory=lambda: MappingProxyType({}))
+    applicability_status: Literal["reviewed_default", "historical", "unknown"] = "unknown"
+    metadata_revision: int = Field(default=0, ge=0)
     chunk_id: str = Field(min_length=1, max_length=64)
     locator_id: str | None = Field(default=None, max_length=64)
     locator_label: str = Field(min_length=1, max_length=400)
@@ -106,6 +117,15 @@ class EvidenceRecord(_Frozen):
     acquired_step: int = Field(ge=0)
     child_trace_id: str | None = Field(default=None, max_length=64)
     content_completeness: ContentCompleteness
+
+    @field_validator("applicability", mode="after")
+    @classmethod
+    def freeze_applicability(cls, value):
+        return MappingProxyType({key: tuple(values) for key, values in value.items()})
+
+    @field_serializer("applicability")
+    def serialize_applicability(self, value):
+        return {key: list(values) for key, values in value.items()}
 
 
 # --- Working state -----------------------------------------------------------

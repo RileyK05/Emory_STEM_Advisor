@@ -8,6 +8,7 @@ from app.generation.citations import (
     InvalidCitation,
     citation_numbers_visible,
     citation_visible_text,
+    strip_resource_markers,
 )
 from app.generation.claims import answer_paragraph_spans
 from app.llm.base import (
@@ -252,7 +253,7 @@ def answer_from_context(
         from app.generation.controller import _aggregate_usage
 
         result = replace(result, usage=_aggregate_usage([initial_usage, result.usage]))
-    text = result.text.strip()
+    text = strip_resource_markers(result.text).strip()
     answer = GeneratedAnswer(
         text=text, citations=(), system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt,
         prompt_tokens=result.usage.prompt_tokens,

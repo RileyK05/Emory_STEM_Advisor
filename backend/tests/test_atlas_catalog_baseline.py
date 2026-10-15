@@ -61,12 +61,20 @@ def test_explicit_catalog_or_alternatives_keep_transfer_credit_as_a_condition():
     ))
 
 
-def test_transfer_credit_scope_and_unparenthesized_mixed_operators_stay_ambiguous():
+def test_transfer_credit_tail_is_a_modifier_but_true_mixed_operators_stay_ambiguous():
     data = json.loads(FIXTURE.read_text(encoding="utf-8"))
     by_code = {row["code"]: row for row in data["courses"]}
-    assert parse_requisites(by_code["CS 350"]["requisites"]).status == "ambiguous"
+    # EMO-028: "... or equivalent transfer credit" is a modifier, so the mixed
+    # and/or is not a genuine ambiguity.
+    assert parse_requisites(by_code["CS 350"]["requisites"]).trees["prerequisite"] == AllOf((
+        AllOf((CourseRef("CS 253"), CourseRef("CS 255"))),
+        Condition("equivalent transfer credit"),
+    ))
+    # A real unparenthesized mix (no trailing clause to blame) stays ambiguous.
     assert parse_requisites(by_code["MATH 345"]["requisites"]).status == "ambiguous"
-    assert parse_requisites(by_code["BIOL 142"]["requisites"]).status == "unparsed"
+    # The run-together conjunction is repaired, but the and/or mix remains.
+    assert parse_requisites(by_code["BIOL 142"]["requisites"]).status == "ambiguous"
+    # A restriction after the transfer clause is never dropped.
     assert parse_requisites(by_code["CHEM 340"]["requisites"]).status == "unparsed"
 
 

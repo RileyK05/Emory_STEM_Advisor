@@ -28,6 +28,12 @@ from app.llm.base import InvalidRequestError, normalize_message
 
 ROOT = Path(__file__).resolve().parents[3]
 CASES = [
+    ("uploads-premed", "research", "I am interested in medicine and enjoy both biology and chemistry. Compare Biology, Chemistry and NBB as possible majors for premed. Recommend based on the actual requirements and my interests. Separate general pre-health guidance from Emory MD admissions rules; do not claim one major has the best admission rate or that I am eligible."),
+    ("uploads-md-admissions", "research", "What coursework does Emory School of Medicine require for its MD program? Preserve the published amounts, labs, alternatives and exceptions. Explain whether the captured page establishes requirements for my next admissions cycle or for every medical school."),
+    ("uploads-datasci-ai", "research", "I want to study Data Science with the AI track. What does the core sheet say and what is additional on the AI track sheet? Read both, preserve the course choices and unnamed elective slots, and flag unknown cohort applicability. Do not treat a course mention as verified eligibility."),
+    ("uploads-chemistry-ba", "research", "What are the Chemistry BA requirements in the catalog? Use its own section and distinguish it from Chemistry BS and Biophysics. Disclose anything you have not read."),
+    ("uploads-transfer-negative", "negative", "Will Emory CS 170 definitely transfer to Georgia Tech and fulfill its CS 1301 requirement for me next year? Verify the institution, transfer direction, applicable year, conditions and approval. Do not infer equivalence from similar course numbers."),
+    ("uploads-calendar-negative", "negative", "What is the exact last day I can change my Emory College schedule in spring 2027? Use the applicable calendar and session. Do not infer a date from a course catalog or a different school's calendar."),
     ("research-data-major", "research", "I want to become a data engineer. Compare credible majors or minors here, read their requirements and relevant course descriptions, and recommend a path with tradeoffs. Do not claim credit savings without a double-counting policy."),
     ("research-beginner", "research", "I have completed no math or programming. I want to explore computing. Research beginner courses and their actual restrictions, and explain an appropriate starting point."),
     ("research-clarify", "research", "Help me choose a major. I have not decided on a career or subject interest yet."),
@@ -74,6 +80,7 @@ class RecordingProvider:
         self.max_calls = max_calls
         self.token_budget = token_budget
         self.tokens = 0
+        self.exhausted = False
         self.calls: list[dict] = []
         self.case_id = ""
         self.on_update = None
@@ -87,6 +94,7 @@ class RecordingProvider:
         reservation = len(json.dumps(envelope, ensure_ascii=False).encode("utf-8"))
         reservation += request.max_output_tokens or 1024
         if len(self.calls) >= self.max_calls or self.tokens + reservation > self.token_budget:
+            self.exhausted = True
             raise InvalidRequestError("manual smoke run budget exhausted", provider="smoke")
         row = {"case_id": self.case_id, "messages": messages,
                "tool_definitions": envelope["tools"], "max_output_tokens": request.max_output_tokens,
@@ -111,7 +119,8 @@ class RecordingProvider:
                         "tool_calls": [asdict(call) for call in result.tool_calls]})
             if self.verbose_tools:
                 print(json.dumps({"case": self.case_id, "provider_call": len(self.calls),
-                    "tools": [call.name for call in result.tool_calls],
+                    "tools": [{"name": call.name, "arguments": call.arguments}
+                              for call in result.tool_calls],
                     "finish_reason": result.finish_reason, "text_chars": len(result.text)}), flush=True)
             if result.usage.total_tokens is not None:
                 self.tokens += result.usage.total_tokens - reservation
@@ -131,6 +140,9 @@ def main() -> None:
     parser.add_argument("--max-calls", type=int, default=48)
     parser.add_argument("--token-budget", type=int, default=250000)
     parser.add_argument("--base-url", help="Process-local diagnostic override; does not edit .env")
+    parser.add_argument("--data-dir", type=Path,
+                        help="Borrow an already-running isolated database and its raw files")
+    parser.add_argument("--collection", help="Process-local collection override")
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--max-output-tokens", type=int, default=4096)
     parser.add_argument("--format-guidance", action="store_true",
@@ -153,6 +165,9 @@ def main() -> None:
         parser.error("unknown case id")
     selected = selected[:args.limit]
     settings = load_settings()
+    settings = replace(settings,
+                       data_dir=args.data_dir.resolve() if args.data_dir else settings.data_dir,
+                       default_collection=args.collection or settings.default_collection)
     if settings.llm_provider == "hf-local" or not settings.llm_api_key:
         parser.error("configure a real cloud provider and key locally")
     if settings.routing_enabled:
@@ -160,13 +175,12 @@ def main() -> None:
     if not settings.database_url:
         # Borrow the already-running development server, without pgserver's
         # cleanup handler taking ownership of it.
-        pid_file = ROOT / "data" / "pgserver" / "postmaster.pid"
+        pid_file = settings.data_dir / "pgserver" / "postmaster.pid"
         if not pid_file.exists():
             parser.error("start the existing dev server or configure DATABASE_URL")
         port = pid_file.read_text().splitlines()[3]
         settings = replace(settings, database_url=f"postgresql://postgres:@127.0.0.1:{port}/postgres")
-    settings = replace(settings, data_dir=ROOT / "data",
-                       llm_base_url=args.base_url or settings.llm_base_url,
+    settings = replace(settings, llm_base_url=args.base_url or settings.llm_base_url,
                        llm_timeout_seconds=args.timeout,
                        llm_max_output_tokens=args.max_output_tokens)
     with connect(settings.database_url) as conn:
@@ -247,6 +261,9 @@ def main() -> None:
                         payload = response.json()
                     except ValueError:
                         payload = {"type": "non_json_error"}
+                    if recording.exhausted:
+                        payload = {"type": "diagnostic_budget_exhausted",
+                                   "reason": "Manual smoke run budget reached; not a provider or answer-quality result."}
                     if args.graph_only:
                         payload = {"type": "recommendations", "groups": payload}
                     row = {"case_id": case_id, "category": category, "mode": mode,
@@ -261,10 +278,17 @@ def main() -> None:
                     print(json.dumps({"case": recording.case_id, "http": response.status_code,
                                       "type": payload.get("type"), "seconds": row["latency_seconds"],
                                       "calls_so_far": len(recording.calls), "tokens": recording.tokens,
-                                      "answer": payload.get("answer"), "reason": payload.get("reason")}),
+                                      "answer": payload.get("answer"),
+                                      "reason": payload.get("reason", payload.get("detail")),
+                                      "citations": payload.get("citations"),
+                                      "research": {key: value for key, value in
+                                          (payload.get("research") or {}).items() if key != "blocks"},
+                                      "block_kinds": [block["kind"] for block in
+                                          (payload.get("research") or {}).get("blocks", [])]}),
                           flush=True)
                     if response.status_code >= 500:
-                        report["stopped_reason"] = "server/provider failure; inspect before spending more"
+                        report["stopped_reason"] = ("run budget reached" if recording.exhausted else
+                            "server/provider failure; inspect before spending more")
                         return
                     if len(recording.calls) >= args.max_calls or recording.tokens >= args.token_budget:
                         report["stopped_reason"] = "run budget reached"

@@ -1,4 +1,7 @@
 import io
+import os
+import shutil
+import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -140,6 +143,20 @@ def test_unscoped_or_invalid_resource_names_are_rejected_before_runtime(tmp_path
             )
         )
     assert runtime.called is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory permission semantics")
+def test_cleanup_hook_removes_a_read_only_input_tree(tmp_path):
+    """EMO-004: a 0o555 input directory blocks unlink even after the file is writable."""
+    from app.sandbox.runner import _retry_after_chmod
+
+    task = tmp_path / "task"
+    (task / "input").mkdir(parents=True)
+    (task / "input" / "file.txt").write_text("x")
+    os.chmod(task / "input" / "file.txt", 0o444)
+    os.chmod(task / "input", 0o555)
+    shutil.rmtree(task, onerror=_retry_after_chmod)
+    assert not task.exists()
 
 
 @pytest.mark.parametrize(

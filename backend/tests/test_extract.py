@@ -133,6 +133,16 @@ def test_pdf_delimiter_characters_round_trip():
     _assert_tiling(result.text, result.locators)
 
 
+def test_pdf_split_course_numbers_are_rejoined():
+    """EMO-014: pypdf kerning inserts a space inside a course number."""
+    from app.ingest.extract import _repair_pdf_kerning
+
+    assert _repair_pdf_kerning("Math 1 11 and PHIL 1 15") == "Math 111 and PHIL 115"
+    assert _repair_pdf_kerning("Psychology 1 10") == "Psychology 110"
+    # Ordinary lowercase prose is not joined.
+    assert _repair_pdf_kerning("page 1 11") == "page 1 11"
+
+
 def test_pdf_page_offsets_keep_each_page_slice_distinct():
     data = make_pdf(["alpha page", "beta page"])
     result = extract(data, "application/pdf")

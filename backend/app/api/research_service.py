@@ -13,7 +13,7 @@ from app.api.serialize import answer_response
 from app.connections.models import required_data_scopes
 from app.connections.selection import StaleProfileSelection
 from app.db import queries
-from app.db.connection import connector
+from app.db.connection import connector, resolved_database_url
 from app.generation.controller import GenerationCancelled, ToolConversationError
 from app.generation.evidence import persist_response
 from app.generation.operation import GenerationOperation
@@ -84,7 +84,7 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
         check_cancelled()
         if selection:
             selection.assert_current(conn)
-    ledger = ToolExecutionLedger(connector(settings, conn.info.dsn, pool_name="tool_execution"),
+    ledger = ToolExecutionLedger(connector(settings, resolved_database_url(settings, conn), pool_name="tool_execution"),
                                  max_tool_calls=settings.research_max_tool_calls)
     try:
         decision, usage, system, user, model = ResearchController().run(

@@ -156,6 +156,19 @@ def connector(settings: Settings, dsn: str | None = None, *,
                                   pool_name=pool_name)
 
 
+def resolved_database_url(settings: Settings, conn: psycopg.Connection) -> str:
+    """Return the runtime DSN without dropping the configured password (EMO-001).
+
+    psycopg exposes ``conn.info.dsn`` without the password, so round-tripping a
+    password-authenticated `DATABASE_URL` through it loses the credential and
+    every pooled connection later fails with ``fe_sendauth: no password
+    supplied``. Keep the configured URL when one is set; the connection's DSN is
+    only needed for the embedded `pgserver` case, where no URL is configured and
+    the server uses trust auth.
+    """
+    return settings.database_url or conn.info.dsn
+
+
 def close_pools() -> None:
     """Close every pool (process exit and test teardown)."""
     with _pools_lock:

@@ -54,6 +54,19 @@ def _offline_http_transports(monkeypatch):
         monkeypatch.setattr(client.AsyncHTTPTransport, "handle_async_request", reject_async_http)
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_model_env(monkeypatch):
+    """A developer's exported LLM_*/EMBEDDING_* must not change test behavior.
+
+    The suite otherwise reads real values such as LLM_MAX_OUTPUT_TOKENS or
+    LLM_PROVIDER, so the same code passes or fails depending on the shell
+    (EMO-031).
+    """
+    for name in list(os.environ):
+        if name.startswith(("LLM_", "EMBEDDING_")):
+            monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _isolated_data_dir():
     """Keep ingest's raw uploads out of the repo's real `data/` folder."""

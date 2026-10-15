@@ -87,23 +87,32 @@ WHERE source_id = %(source_id)s AND status = 'indexed'
   AND origin_key = %(origin_key)s;
 
 -- name: list_origin_reconciliation_sources
-SELECT source_id, file_hash, raw_path, content_type, status, workspace_key,
-       origin_key, is_current
-FROM sources
-WHERE collection_id = %(collection_id)s
-  AND workspace_key IS NOT DISTINCT FROM %(workspace_key)s
-  AND file_hash = ANY(%(file_hashes)s::text[])
-ORDER BY file_hash, source_id;
+SELECT s.source_id, s.file_hash, s.raw_path, s.content_type, s.status, s.workspace_key,
+       s.origin_key, s.is_current, s.index_revision, to_jsonb(p) AS provenance
+FROM sources s
+LEFT JOIN source_provenance p ON p.source_id = s.source_id
+WHERE s.collection_id = %(collection_id)s
+  AND s.workspace_key IS NOT DISTINCT FROM %(workspace_key)s
+  AND s.file_hash = ANY(%(file_hashes)s::text[])
+ORDER BY s.file_hash, s.source_id;
 
 -- name: lock_origin_reconciliation_sources
 SELECT source_id, file_hash, raw_path, content_type, status, workspace_key,
-       origin_key, is_current
+       origin_key, is_current, index_revision
 FROM sources
 WHERE collection_id = %(collection_id)s
   AND workspace_key IS NOT DISTINCT FROM %(workspace_key)s
   AND source_id = ANY(%(source_ids)s::uuid[])
 ORDER BY source_id
 FOR UPDATE;
+
+-- name: list_origin_reconciliation_members
+SELECT source_id, file_hash
+FROM sources
+WHERE collection_id = %(collection_id)s
+  AND workspace_key IS NOT DISTINCT FROM %(workspace_key)s
+  AND origin_key = %(origin_key)s
+ORDER BY source_id;
 
 -- name: deactivate_sources_for_origin
 UPDATE sources
@@ -117,7 +126,8 @@ UPDATE sources
 SET origin_key = %(origin_key)s, is_current = false, updated_at = now()
 WHERE source_id = %(source_id)s AND collection_id = %(collection_id)s
   AND workspace_key IS NOT DISTINCT FROM %(workspace_key)s
-  AND file_hash = %(file_hash)s AND status = 'indexed';
+  AND file_hash = %(file_hash)s AND status = 'indexed'
+  AND (origin_key IS NULL OR origin_key = %(origin_key)s);
 
 -- name: delete_source
 DELETE FROM sources WHERE source_id = %(source_id)s;

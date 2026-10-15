@@ -9,7 +9,14 @@ import re
 from dataclasses import dataclass
 
 _FOOTER_RE = re.compile(r"^\s*(Emory University|\d+\s*/\s*\d+)\s*$")
-_PROGRAM_START = "DEGREE AWARDED"
+# The catalog's "DEGREE AWARDED" label carries typos in the published PDF
+# ("DEGREE AWRDED", "DEZGREE AWRDED"), so match it fuzzily instead of requiring
+# the exact string (EMO-003). A missed typo merges one program into the next.
+_PROGRAM_START_RE = re.compile(r"^\s*D[A-Z]*GREE\s+A[A-Z]*RDED\b", re.IGNORECASE)
+# A program title line ends in a short degree marker, e.g. "Computer Science (BS)".
+_PROGRAM_TITLE_RE = re.compile(
+    r"^\s*[A-Z0-9][^()]{0,90}\([A-Za-z/&+ ]{1,14}\)\s*$"
+)
 _POLICIES_START = re.compile(r"^\s*ABOUT EMORY COLLEGE\s*$", re.IGNORECASE)
 # A department front-matter heading ("African American Studies Department",
 # "Department of History"). It is title case, never the all-caps body line.
@@ -65,6 +72,15 @@ def _is_department_heading(line: str) -> bool:
     )
 
 
+def _title_index_for(lines: list[tuple[int, str]], degree_index: int) -> int:
+    """The program title line that belongs to a degree-awarded line (EMO-003)."""
+    for back in (1, 2):
+        candidate = degree_index - back
+        if candidate >= 0 and _PROGRAM_TITLE_RE.match(lines[candidate][1]):
+            return candidate
+    return degree_index - 1
+
+
 def split_catalog(
     pages: list[str],
 ) -> tuple[CatalogSection | None, list[CatalogSection], list[CatalogSection]]:
@@ -77,8 +93,8 @@ def split_catalog(
     preceding program.
     """
     lines = _lines(pages)
-    starts = [i - 1 for i, (_, line) in enumerate(lines)
-              if line.strip().startswith(_PROGRAM_START) and i > 0]
+    starts = [_title_index_for(lines, i) for i, (_, line) in enumerate(lines)
+              if i > 0 and _PROGRAM_START_RE.match(line)]
 
     # The table of contents repeats every heading, so policies start at the
     # last "ABOUT EMORY COLLEGE" heading before the first program (or the

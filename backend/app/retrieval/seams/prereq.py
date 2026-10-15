@@ -11,25 +11,42 @@ from psycopg import Connection
 
 from app.atlas.records import normalize_code
 from app.db import queries
+from app.programs.requirements import SUBJECT_ALIASES
 from app.retrieval.config import PrereqSeamConfig
 from app.retrieval.types import Candidate, SeamResult
 
 # A subject must be a whole word, so "and"/"or" before a number are not read as
-# subjects ("MATH 111 and 112" -> MATH 111, MATH 112; "Physics 141" -> nothing).
-_SUBJECT_RE = re.compile(r"\b([A-Z]{6,7}|[A-Za-z]{2,5})\s?(\d{3}(?:[A-Z]{2}|[A-Za-z])?)\b")
+# subjects ("MATH 111 and 112" -> MATH 111, MATH 112). The catalog also spells
+# out subjects ("Physics 151", "Chemistry 150", "Biology 141"); those map through
+# SUBJECT_ALIASES so the seam does not go dormant on a spelled-out subject
+# (EMO-015).
+_SUBJECT_RE = re.compile(r"\b([A-Za-z]{2,11})\s?(\d{3}(?:[A-Z]{2}|[A-Za-z])?)\b")
 _NUMBER_RE = re.compile(r"\b(\d{3}(?:[A-Z]{2}|[A-Za-z])?)\b")
 _CARRY_SEP = re.compile(r"\s*(?:(?:,|/|and|or)\s*)*")
 _CONJUNCTIONS = frozenset({"and", "or"})
+_SUBJECT_ALIASES = {word.lower(): code for word, code in SUBJECT_ALIASES.items()}
+
+
+def _resolve_subject(word: str) -> str | None:
+    alias = _SUBJECT_ALIASES.get(word.lower())
+    if alias is not None:
+        return alias
+    if re.fullmatch(r"[A-Z]{2,7}", word):
+        return word
+    return None
 
 
 def _find_codes(query: str) -> list[tuple[int, int, str | None, str]]:
     """(start, end, subject, tail) for every code-shaped span. A bare number
     span has subject None. Subjects are whole words and never `and`/`or`."""
-    matches = [
-        (m.start(), m.end(), m.group(1), m.group(2))
-        for m in _SUBJECT_RE.finditer(query)
-        if m.group(1).lower() not in _CONJUNCTIONS
-    ]
+    matches = []
+    for m in _SUBJECT_RE.finditer(query):
+        if m.group(1).lower() in _CONJUNCTIONS:
+            continue
+        subject = _resolve_subject(m.group(1))
+        if subject is None:
+            continue
+        matches.append((m.start(), m.end(), subject, m.group(2)))
     for m in _NUMBER_RE.finditer(query):
         if not any(start <= m.start() < end for start, end, _, _ in matches):
             matches.append((m.start(), m.end(), None, m.group(1)))

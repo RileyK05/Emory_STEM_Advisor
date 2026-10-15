@@ -6,6 +6,8 @@ _FENCE_START = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _INLINE = re.compile(r"(`+).*?\1")
 _MARKER = re.compile(r"\[([+-]?[0-9][0-9\s,;\-–]*)([\])])")
 _UNCLOSED = re.compile(r"\[[0-9][0-9\s,;\-–]*(?=$|\n)")
+# Raw tool-evidence tokens a model sometimes echoes instead of a numbered marker.
+_RESOURCE_MARKER = re.compile(r"\[resource(?::|_id=)[^\]\n]{0,200}\]", re.IGNORECASE)
 
 
 class InvalidCitation(ValueError):
@@ -43,6 +45,16 @@ def _mask_non_newlines(chars: list[str], start: int, end: int) -> None:
 
 def citation_numbers(text: str, context_count: int) -> tuple[int, ...]:
     return citation_numbers_visible(citation_visible_text(text), context_count)
+
+
+def strip_resource_markers(text: str) -> str:
+    """Strip raw ``[resource:<id>]`` tokens a model echoes as citations (EMO-033).
+
+    Tool/planning mode advertises ``resource_id=<uuid>`` in the context block;
+    some models copy it verbatim into the answer, where it reaches the student.
+    Removing the token leaves the surrounding numbered citation intact.
+    """
+    return _RESOURCE_MARKER.sub("", text)
 
 
 def citation_numbers_visible(visible: str, context_count: int) -> tuple[int, ...]:

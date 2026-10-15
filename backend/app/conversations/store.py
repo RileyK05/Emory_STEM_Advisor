@@ -409,25 +409,37 @@ def public_conversation(row):
             "createdAt": row["created_at"].isoformat(), "updatedAt": row["updated_at"].isoformat()}
 
 
+_HISTORY_CITATION_KEYS = ("chunkId", "sourceName", "locatorLabel")
+
+
 def history_turn(row):
     """One turn as the model sees it in history, and as the context budget counts it.
 
-    An answer keeps its citations and the passages it cited. Retrieved passages it
-    did not cite stay saved for display and audit but are not history: they were
-    never shown as support, and a planned query can retrieve dozens of them.
+    History re-sends the answer text and compact citation labels (source name and
+    locator), never the bodies of cited passages or a turn's source snapshot.
+    Re-sending each answer's full evidence grew history by ~9-10 KB per turn and
+    hit the 12 KB context wall after two or three turns (EMO-017); the passage
+    bodies stay saved on the turn's own evidence for display and audit.
     """
-    evidence = row["evidence"]
-    if row["role"] == "assistant" and "contextBlock" in evidence:
-        cited = {item.get("chunkId") for item in evidence.get("citations", [])}
-        evidence = {**evidence, "contextBlock": [
-            item for item in evidence["contextBlock"] if item.get("chunkId") in cited]}
+    if row["role"] == "assistant":
+        evidence = row["evidence"]
+        citations = [
+            {key: item[key] for key in _HISTORY_CITATION_KEYS if item.get(key) is not None}
+            for item in evidence.get("citations", []) if isinstance(item, dict)
+        ]
+        turn_evidence = {"citations": citations}
+        if evidence.get("type") is not None:
+            turn_evidence["type"] = evidence["type"]
+    else:
+        turn_evidence = {}
     return {"sequence": row["sequence"], "role": row["role"], "text": row["text"],
-            "evidence": evidence}
+            "evidence": turn_evidence}
 
 
 def history_prompt(rows) -> str:
-    # Every retained turn is included exactly once. No truncation or title-only
-    # artifact substitution is allowed; overflow fails before a provider call.
+    # Every retained turn is included exactly once, stripped to text and
+    # citation labels. Overflow still fails before a provider call rather than
+    # silently dropping a turn.
     return json.dumps([history_turn(row) for row in rows], ensure_ascii=False,
                       separators=(",", ":"))
 

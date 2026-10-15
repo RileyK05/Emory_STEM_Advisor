@@ -16,11 +16,30 @@ from app.advising.research_types import (
 from app.atlas.records import normalize_code
 from app.generation.answer import Citation, GeneratedAnswer
 from app.llm.base import Usage
+from app.programs.requirements import course_mentions
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-1"
+RESEARCH_PROMPT_VERSION = "research-2"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
+
+
+def _program_requirement_mentions(records, cited: set[str]) -> set[str]:
+    """Codes a cited program read establishes as requirements.
+
+    Naming such a code is a requirement mention, not a recommendation to enroll;
+    only codes absent from cited program evidence need a separate course read.
+    Program evidence carries the issued program handle as an entity reference,
+    while course evidence carries the course codes. The program parser's own
+    extractor handles catalog shorthand such as ``BIOL 141/141L``.
+    """
+    mentioned: set[str] = set()
+    for evidence_id in cited:
+        record = records.get(evidence_id)
+        if record is None or not any(ref.startswith("h_") for ref in record.entity_refs):
+            continue
+        mentioned.update(course_mentions(record.exact_text))
+    return mentioned
 
 
 class DecisionRejected(ValueError):
@@ -41,11 +60,14 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
         problems.append("block text contains a raw citation marker; use evidence_ids")
     for block in decision.blocks:
         if block.kind == "judgment" and (not block.candidate_ids or not block.evidence_ids):
-            problems.append("judgment requires a candidate and supporting evidence")
+            problems.append("judgment requires a candidate and supporting evidence; "
+                            "use fact or limitation for source-scope conclusions, "
+                            "and judgment only for candidate preferences")
     cited = {e for b in decision.blocks for e in b.evidence_ids}
     refs = {ref for e in cited if e in records for ref in records[e].entity_refs}
     if entity_evidence is not None:
         refs = {entity for entity, ids in entity_evidence.items() if ids & cited}
+    requirement_mentions = _program_requirement_mentions(records, cited)
     course_recommendations = set(decision.recommended_course_codes)
     if decision.outcome == "recommendation":
         if not decision.candidate_ids or not any(b.kind == "judgment" for b in decision.blocks):
@@ -63,7 +85,9 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
         code = normalize_code(requested)
         if code is None:
             problems.append(f"invalid recommended course code {requested!r}")
-        elif code not in refs and not any(
+        elif code in refs or code in requirement_mentions:
+            continue  # read, or a cited program requirement mention rather than a recommendation
+        elif not any(
             b.kind == "limitation" and code in b.text
             and re.search(r"missing|unavailable|unknown|not read", b.text, re.IGNORECASE)
             for b in decision.blocks

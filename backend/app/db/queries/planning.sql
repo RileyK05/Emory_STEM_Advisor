@@ -3,8 +3,9 @@
 -- selection is given, to the selected sources. An empty selection is empty.
 
 -- name: list_directory_source_revisions
-SELECT s.source_id, s.index_revision
+SELECT s.source_id, s.index_revision, COALESCE(p.metadata_revision, 0) AS metadata_revision
 FROM sources s
+LEFT JOIN source_provenance p ON p.source_id = s.source_id
 WHERE s.collection_id = %(collection_id)s
   AND s.status = 'indexed'
   AND s.is_current
@@ -25,8 +26,11 @@ WHERE co.collection_id = %(collection_id)s
 ORDER BY co.subject, co.code;
 
 -- name: list_directory_documents
-SELECT s.source_id, s.filename
+SELECT s.source_id, s.filename, s.workspace_key, p.title, p.source_category, p.publisher,
+       p.institution, p.issuing_unit, p.edition, p.document_roles, p.applicability,
+       p.applicability_status, p.source_url, p.published_at, p.acquired_at
 FROM sources s
+LEFT JOIN source_provenance p ON p.source_id = s.source_id
 WHERE s.collection_id = %(collection_id)s
   AND s.status = 'indexed'
   AND s.is_current
