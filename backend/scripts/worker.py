@@ -1,6 +1,8 @@
 """Run the persistent run queue.
 
 The configured run handler factory accepts Settings and returns a {kind: handler} mapping.
+`--concurrency` runs several claim/execute threads in one process; each thread
+owns its connections and leases, while the model and embedder seams are shared.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ import importlib
 import os
 import socket
 import sys
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import replace
@@ -65,10 +68,14 @@ def main() -> None:
     parser.add_argument("--worker-id", default=f"{socket.gethostname()}-{os.getpid()}")
     parser.add_argument("--lease-seconds", type=int, default=60)
     parser.add_argument("--idle-seconds", type=float, default=1.0)
+    parser.add_argument("--concurrency", type=int, default=1,
+                        help="claim/execute threads in this process (1-32)")
     parser.add_argument("--once", action="store_true", help="claim at most one job, then exit")
     args = parser.parse_args()
     if not 1 <= args.lease_seconds <= 3600 or not 0.05 <= args.idle_seconds <= 60:
         parser.error("worker timing settings are outside supported bounds")
+    if not 1 <= args.concurrency <= 32:
+        parser.error("--concurrency must be between 1 and 32")
 
     settings = load_settings()
     # Keep the connection context open for the whole worker lifetime: when
@@ -111,18 +118,49 @@ def main() -> None:
 
         executor = AdvisorExecutor()
         store = JobStore(connector(settings))
+
+        if args.once:
+            run_once(store, args.worker_id, executor, lease_seconds=args.lease_seconds)
+            return
+
+        stop = threading.Event()
+
+        def work(index: int) -> None:
+            worker_id = (args.worker_id if args.concurrency == 1
+                         else f"{args.worker_id}-{index}")
+            while not stop.is_set():
+                try:
+                    job = run_once(
+                        store, worker_id, executor, lease_seconds=args.lease_seconds)
+                except LeaseLost:
+                    job = None
+                except Exception as exc:  # noqa: BLE001 - one thread must not stop the queue
+                    print(f"worker {worker_id} failed: {type(exc).__name__}",
+                          file=sys.stderr)
+                    stop.wait(max(0.5, args.idle_seconds))
+                    continue
+                if job is None:
+                    stop.wait(args.idle_seconds)
+
+        threads = [
+            threading.Thread(target=work, args=(index,), daemon=True,
+                             name=f"advisor-worker-{index}")
+            for index in range(args.concurrency)
+        ]
+        for thread in threads:
+            thread.start()
         next_purge = 0.0
-        while True:
-            next_purge = _purge_auth_if_due(connector(settings), next_purge)
-            store.recover_expired(limit=100)
-            try:
-                job = run_once(store, args.worker_id, executor, lease_seconds=args.lease_seconds)
-            except LeaseLost:
-                job = None
-            if args.once:
-                return
-            if job is None:
-                time.sleep(args.idle_seconds)
+        try:
+            while True:
+                next_purge = _purge_auth_if_due(connector(settings), next_purge)
+                store.recover_expired(limit=100)
+                stop.wait(5.0)
+        except KeyboardInterrupt:
+            stop.set()
+        finally:
+            stop.set()
+            for thread in threads:
+                thread.join(timeout=min(30.0, float(args.lease_seconds)))
 
 
 if __name__ == "__main__":

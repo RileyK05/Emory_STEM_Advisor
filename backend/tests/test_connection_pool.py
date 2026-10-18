@@ -32,6 +32,16 @@ def _borrow(dsn, size=3, timeout=2.0):
     return pooled_connect(dsn, max_size=size, timeout=timeout)
 
 
+def _settings_pool(dsn, size, timeout, role="default"):
+    """The pool `connector(settings)` created, including its server-side limits."""
+    settings = load_settings()
+    return connection._pool_for(
+        dsn, size, timeout, role,
+        statement_timeout_ms=settings.db_statement_timeout_ms,
+        idle_timeout_ms=settings.db_idle_transaction_timeout_ms,
+    )
+
+
 def test_borrowed_connection_returns_dict_rows_and_vectors(dsn):
     conn = _borrow(dsn)
     row = conn.execute("SELECT 1 AS one, '[1,2,3]'::vector AS v").fetchone()
@@ -114,6 +124,24 @@ def test_pool_settings_are_validated():
         replace(load_settings(), db_pool_max_size=-1)
     with pytest.raises(ValueError, match="DB_POOL_TIMEOUT_SECONDS"):
         replace(load_settings(), db_pool_timeout_seconds=0)
+    with pytest.raises(ValueError, match="DB_STATEMENT_TIMEOUT_MS"):
+        replace(load_settings(), db_statement_timeout_ms=-1)
+    with pytest.raises(ValueError, match="DB_IDLE_TRANSACTION_TIMEOUT_MS"):
+        replace(load_settings(), db_idle_transaction_timeout_ms=-1)
+
+
+def test_pooled_connections_apply_the_configured_statement_timeout(dsn):
+    settings = replace(load_settings(), database_url=dsn, db_pool_max_size=1,
+                       db_pool_timeout_seconds=2.0, db_statement_timeout_ms=100,
+                       db_idle_transaction_timeout_ms=0)
+    conn = connector(settings)()
+    try:
+        with pytest.raises(psycopg.errors.QueryCanceled):
+            conn.execute("SELECT pg_sleep(1)")
+        conn.rollback()  # recover the transaction the server aborted
+        assert conn.execute("SELECT 1 AS one").fetchone()["one"] == 1
+    finally:
+        conn.close()
 
 
 def test_returning_a_connection_after_a_read_only_query_does_not_log_a_pool_warning(dsn, caplog):
@@ -137,7 +165,7 @@ def test_api_requests_share_a_small_pool_and_return_every_connection(dsn):
     for _ in range(25):
         assert client.get("/api/collections").status_code == 200
 
-    pool = connection._pool_for(dsn, 2, 5.0)  # the pool the requests actually used
+    pool = _settings_pool(dsn, 2, 5.0)  # the pool the requests actually used
     stats = pool.get_stats()
     assert stats["pool_size"] <= 2
     assert stats["requests_num"] >= 25            # every request borrowed from the pool
@@ -164,7 +192,7 @@ def test_run_routes_do_not_hold_bootstrap_connection_while_job_store_borrows(dsn
     assert client.get(f"/api/runs/{run_id}").json()["state"] == "queued"
     assert client.get(f"/api/runs/{run_id}/events").status_code == 200
     assert client.post(f"/api/runs/{run_id}/cancel").json()["state"] == "cancelled"
-    pool = connection._pool_for(dsn, 1, 1.0)
+    pool = _settings_pool(dsn, 1, 1.0)
     stats = pool.get_stats()
     assert stats["pool_size"] <= 1
     assert stats["pool_available"] == stats["pool_size"]
@@ -190,8 +218,8 @@ def test_conversation_execution_lease_does_not_block_job_control_pool(dsn):
         context.check_cancelled()
     finally:
         execution_conn.close()
-    control_pool = connection._pool_for(dsn, 1, 0.5)
-    execution_pool = connection._pool_for(dsn, 1, 0.5, "conversation_execution")
+    control_pool = _settings_pool(dsn, 1, 0.5)
+    execution_pool = _settings_pool(dsn, 1, 0.5, "conversation_execution")
     assert control_pool.get_stats()["pool_size"] <= 1
     assert execution_pool.get_stats()["pool_size"] <= 1
 
@@ -230,7 +258,7 @@ def test_conversation_abandon_releases_the_request_borrow_before_job_cancel(dsn,
     assert abandoned.json()["type"] == "abandoned"
     job = db.execute(queries.get("get_job"), {"job_id": job_id}).fetchone()
     assert job is not None and job["status"] == "cancelled"
-    stats = connection._pool_for(dsn, 1, 1.0).get_stats()
+    stats = _settings_pool(dsn, 1, 1.0).get_stats()
     assert stats["pool_available"] == stats["pool_size"]
 
 

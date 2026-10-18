@@ -148,6 +148,11 @@ class Settings:
     # 0 disables pooling.
     db_pool_max_size: int = 20
     db_pool_timeout_seconds: float = 10.0
+    # Server-side limits for pooled application connections, so a slow plan or a
+    # request that leaves a transaction open cannot pin a slot indefinitely.
+    # 0 disables the corresponding server setting.
+    db_statement_timeout_ms: int = 30_000
+    db_idle_transaction_timeout_ms: int = 60_000
 
     def __post_init__(self) -> None:
         stop_tokens = self.hf_stop_token_strings
@@ -167,6 +172,12 @@ class Settings:
             raise ValueError("DB_POOL_MAX_SIZE must be between 0 (disabled) and 200")
         if not math.isfinite(self.db_pool_timeout_seconds) or not 0.1 <= self.db_pool_timeout_seconds <= 120:
             raise ValueError("DB_POOL_TIMEOUT_SECONDS must be between 0.1 and 120")
+        if type(self.db_statement_timeout_ms) is not int or not 0 <= self.db_statement_timeout_ms <= 600_000:
+            raise ValueError("DB_STATEMENT_TIMEOUT_MS must be between 0 (disabled) and 600000")
+        if (type(self.db_idle_transaction_timeout_ms) is not int
+                or not 0 <= self.db_idle_transaction_timeout_ms <= 3_600_000):
+            raise ValueError(
+                "DB_IDLE_TRANSACTION_TIMEOUT_MS must be between 0 (disabled) and 3600000")
         if not math.isfinite(self.batch_operation_timeout_seconds) or not 3600 <= self.batch_operation_timeout_seconds <= 604800:
             raise ValueError("BATCH_OPERATION_TIMEOUT_SECONDS must be between 3600 and 604800")
         if not 1024 <= self.conversation_context_max_bytes <= 1_000_000:
@@ -327,6 +338,8 @@ def load_settings() -> Settings:
         office_max_output_bytes=_int("OFFICE_MAX_OUTPUT_BYTES", 32 * 1024 * 1024),
         db_pool_max_size=_int("DB_POOL_MAX_SIZE", 20),
         db_pool_timeout_seconds=float(os.environ.get("DB_POOL_TIMEOUT_SECONDS", "10")),
+        db_statement_timeout_ms=_int("DB_STATEMENT_TIMEOUT_MS", 30_000),
+        db_idle_transaction_timeout_ms=_int("DB_IDLE_TRANSACTION_TIMEOUT_MS", 60_000),
 
     )
 

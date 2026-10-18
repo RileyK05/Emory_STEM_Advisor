@@ -96,21 +96,36 @@ def register_vector_adapter(conn: "psycopg.Connection | PooledConnection") -> No
     register_vector(conn._conn if isinstance(conn, PooledConnection) else conn)
 
 
-_pools: dict[tuple[str, int, float, str], ConnectionPool] = {}
+_pools: dict[tuple[str, int, float, str, int, int], ConnectionPool] = {}
 _pools_lock = threading.Lock()
 
 
-def _pool_for(dsn: str, max_size: int, timeout: float, pool_name: str = "default") -> ConnectionPool:
-    key = (dsn, max_size, timeout, pool_name)
+def _server_options(statement_timeout_ms: int, idle_timeout_ms: int) -> str | None:
+    """Libpq `options` for the per-connection server limits (None when both are off)."""
+    parts = []
+    if statement_timeout_ms > 0:
+        parts.append(f"-c statement_timeout={statement_timeout_ms}")
+    if idle_timeout_ms > 0:
+        parts.append(f"-c idle_in_transaction_session_timeout={idle_timeout_ms}")
+    return " ".join(parts) or None
+
+
+def _pool_for(dsn: str, max_size: int, timeout: float, pool_name: str = "default", *,
+              statement_timeout_ms: int = 0,
+              idle_timeout_ms: int = 0) -> ConnectionPool:
+    key = (dsn, max_size, timeout, pool_name, statement_timeout_ms, idle_timeout_ms)
     pool = _pools.get(key)
     if pool is None:
         with _pools_lock:
             pool = _pools.get(key)
             if pool is None:
+                kwargs = {"row_factory": dict_row, "autocommit": False}
+                options = _server_options(statement_timeout_ms, idle_timeout_ms)
+                if options is not None:
+                    kwargs["options"] = options
                 pool = ConnectionPool(
                     dsn, min_size=1, max_size=max_size, timeout=timeout, open=False,
-                    kwargs={"row_factory": dict_row, "autocommit": False},
-                    configure=_configure_pooled,
+                    kwargs=kwargs, configure=_configure_pooled,
                 )
                 pool.open()
                 _pools[key] = pool
@@ -118,9 +133,11 @@ def _pool_for(dsn: str, max_size: int, timeout: float, pool_name: str = "default
 
 
 def pooled_connect(dsn: str, *, max_size: int, timeout: float,
-                   pool_name: str = "default") -> PooledConnection:
+                   pool_name: str = "default", statement_timeout_ms: int = 0,
+                   idle_timeout_ms: int = 0) -> PooledConnection:
     """Borrow a connection from the shared pool for `dsn` (raises `PoolTimeout` when exhausted)."""
-    pool = _pool_for(dsn, max_size, timeout, pool_name)
+    pool = _pool_for(dsn, max_size, timeout, pool_name,
+                     statement_timeout_ms=statement_timeout_ms, idle_timeout_ms=idle_timeout_ms)
     conn = pool.getconn()
     try:
         # TypesRegistry has no __contains__, so membership tests against a
@@ -152,8 +169,12 @@ def connector(settings: Settings, dsn: str | None = None, *,
     if max_size <= 0:
         return lambda: connect(dsn)
     timeout = settings.db_pool_timeout_seconds
-    return lambda: pooled_connect(dsn, max_size=max_size, timeout=timeout,
-                                  pool_name=pool_name)
+    statement_timeout_ms = getattr(settings, "db_statement_timeout_ms", 0)
+    idle_timeout_ms = getattr(settings, "db_idle_transaction_timeout_ms", 0)
+    return lambda: pooled_connect(
+        dsn, max_size=max_size, timeout=timeout, pool_name=pool_name,
+        statement_timeout_ms=statement_timeout_ms, idle_timeout_ms=idle_timeout_ms,
+    )
 
 
 def resolved_database_url(settings: Settings, conn: psycopg.Connection) -> str:
@@ -174,7 +195,7 @@ def pool_stats() -> list[dict[str, int | str]]:
     with _pools_lock:
         entries = [(key, pool) for key, pool in _pools.items()]
     snapshots = []
-    for (_dsn, max_size, _timeout, pool_name), pool in entries:
+    for (_dsn, max_size, _timeout, pool_name, _statement, _idle), pool in entries:
         current = pool.get_stats()
         snapshots.append({
             "pool": pool_name,
