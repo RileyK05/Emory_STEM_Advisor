@@ -12,6 +12,13 @@ WHERE s.collection_id = %(collection_id)s AND s.status = 'indexed' AND s.is_curr
   AND (s.workspace_key IS NULL OR s.workspace_key = %(workspace_key)s)
 ORDER BY ch.source_id, ch.chunk_index, ch.chunk_id;
 
+-- name: count_chunks_for_collection
+SELECT count(*) AS chunks
+FROM chunks c
+JOIN sources s ON s.source_id = c.source_id
+WHERE s.collection_id = %(collection_id)s
+  AND s.status = 'indexed' AND s.is_current;
+
 -- name: diagnostic_recent_research_runs
 SELECT run_id, operation_id, status, stop_reason FROM research_runs
 WHERE workspace_key = %(workspace_key)s ORDER BY created_at DESC LIMIT 5;

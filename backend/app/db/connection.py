@@ -169,6 +169,24 @@ def resolved_database_url(settings: Settings, conn: psycopg.Connection) -> str:
     return settings.database_url or conn.info.dsn
 
 
+def pool_stats() -> list[dict[str, int | str]]:
+    """This process's pool snapshots for load diagnostics and readiness metrics."""
+    with _pools_lock:
+        entries = [(key, pool) for key, pool in _pools.items()]
+    snapshots = []
+    for (_dsn, max_size, _timeout, pool_name), pool in entries:
+        current = pool.get_stats()
+        snapshots.append({
+            "pool": pool_name,
+            "maxSize": max_size,
+            "size": current.get("pool_size", 0),
+            "available": current.get("pool_available", 0),
+            "waiting": current.get("requests_waiting", 0),
+            "errors": current.get("requests_errors", 0),
+        })
+    return snapshots
+
+
 def close_pools() -> None:
     """Close every pool (process exit and test teardown)."""
     with _pools_lock:
