@@ -161,14 +161,14 @@ def test_cited_program_requirement_is_a_mention_not_an_unread_recommendation():
     validate_final(mentioned_only, state, [record], {"e1"}, {})
 
 
-@pytest.mark.parametrize("prompt_bytes", [9000, 12000])
+@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(9000, False), (12000, False), (48000, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
     ("unknown", None, "edition_not_recorded"),
     ("reviewed_default", "2026-27", "guidance_requires_passage_scope_check"),
 ])
 def test_context_compaction_preserves_exact_passages_and_accounts_omission_metadata(
-        prompt_bytes, scope_status, edition, notice):
+        prompt_bytes, workspace_loaded, scope_status, edition, notice):
     import json
     from dataclasses import replace
     from types import SimpleNamespace
@@ -192,17 +192,45 @@ def test_context_compaction_preserves_exact_passages_and_accounts_omission_metad
         applicability={"school": ("College",), "academic_year": ("2025-26",)},
         locator_label="Requirements", exact_text="Conditional requirement λ. " * 80,
         text_digest="a" * 64, acquired_step=n, content_completeness="complete") for n in range(1, 21)]
-    session = SimpleNamespace(settings=replace(load_settings(), research_max_prompt_bytes=prompt_bytes),
-        store=SimpleNamespace(evidence=lambda _run: records), run=SimpleNamespace(run_id=uuid4()),
-        active=[r.evidence_id for r in records], state=None, scope=SimpleNamespace(sources={}, programs={}),
-        handles={}, checks={}, actions=[], program_reads={}, supplied=set(), remaining_limits={})
+    session = ResearchSession(None, SimpleNamespace(sources={}, programs={}),
+        SimpleNamespace(evidence=lambda _run: records), SimpleNamespace(run_id=uuid4()),
+        settings=replace(load_settings(), research_max_prompt_bytes=prompt_bytes),
+        config=lenient_config(), embedder=None)
+    session.active = [r.evidence_id for r in records]
+    registry = SimpleNamespace(definitions=())
+    history = None
+    if workspace_loaded:
+        from app.advising.research_types import ResearchNote, ResearchState
+        from app.conversations.store import research_history_prompt
+
+        session.workspace = object()
+        session.prior_workspace = {"notebook": ResearchState(revision=0, decision_question="Continue",
+            notes=tuple(ResearchNote(id=f"n{i}", text="z" * 850, basis="user_report") for i in range(8))
+        ).model_dump(mode="json")}
+        for _ in range(40):
+            sid = uuid4()
+            session.scope.sources[sid] = SourcePin(sid, 1, "λ" * 180, "text/plain", None,
+                "institutional_publication", title="A long discovery title " * 20)
+            session.handle("document", sid)
+        session.recall_page = {"data": {"references": [{"handle": f"h_memory{i}",
+            "source_name": "λ" * 180, "locator_label": "λ" * 180} for i in range(12)]}}
+        session.conversation_page = {"status": "ok", "data": {"turns_untrusted": [
+            {"sequence": 1, "role": "user", "text": "Remember this preference. " * 200}]},
+            "next_cursor": "c_next"}
+        history = research_history_prompt([{"sequence": 2, "role": "user", "text": "h" * 5000,
+                                           "evidence": {}}], max_bytes=6000)
+        registry = session.registry()
     previous = [AssistantToolMessage((ToolCall("read", "advisor_read_document", {}),)),
                 ToolResultMessage("read", "advisor_read_document", "x" * 7000)]
-    request, user = ResearchController().request(session, SimpleNamespace(definitions=()),
-        "Which option?", None, previous, "", False)
+    request, user = ResearchController().request(session, registry,
+        "Which option?", history, previous, "", False)
     context = json.loads(user)
     assert estimate_prompt_bytes(request) <= prompt_bytes
     assert context["omitted_evidence_ids"] and context["exact_evidence_untrusted"]
+    if workspace_loaded:
+        assert context["conversation_page_untrusted"] == session.conversation_page
+        assert context["prior_workspace_untrusted"] == session.prior_workspace
+        assert context["context_omissions"]
     assert len(request.messages) == 2  # Drop the whole native round, never an orphan result.
     supplied = {e["evidence_id"] for e in context["exact_evidence_untrusted"]}
     assert session.supplied == supplied
@@ -232,8 +260,8 @@ def test_context_compaction_preserves_exact_passages_and_accounts_omission_metad
     session.entity_evidence, session.new_evidence, session.read_count = {}, 0, 0
     ResearchSession.acquire(session, [ChunkRead(UUID(reread.chunk_id), source_id, 1, 0, None,
         reread.locator_label, reread.exact_text)], action="read_document")
-    request, user = ResearchController().request(session, SimpleNamespace(definitions=()),
-        "Which option?", None, [], "", False)
+    request, user = ResearchController().request(session, registry,
+        "Which option?", history, [], "", False)
     refreshed = json.loads(user)
     actual = {record["evidence_id"] for record in refreshed["exact_evidence_untrusted"]}
     assert reread.evidence_id in actual and session.supplied == actual
@@ -245,12 +273,25 @@ def test_context_compaction_preserves_exact_passages_and_accounts_omission_metad
     assert estimate_prompt_bytes(request) <= prompt_bytes
 
 
-def test_state_input_allows_an_omitted_expected_revision():
+@pytest.mark.parametrize("notes,valid", [
+    ([], True),
+    ([{"id": "idea", "text": "Consider a minor", "basis": "hypothesis"}], True),
+    ([{"id": "source", "text": "A summary", "basis": "evidence_summary", "evidence_ids": ["e1"]}], True),
+    ([{"id": "source", "text": "A summary", "basis": "evidence_summary"}], False),
+])
+def test_state_input_allows_an_omitted_expected_revision(notes, valid):
     """A provider that omits the revision must not strand its candidates."""
+    from pydantic import ValidationError
+
     from app.generation.research_tools import StateInput
 
+    arguments = {"state": {"revision": 0, "decision_question": "Which path?", "notes": notes}}
+    if not valid:
+        with pytest.raises(ValidationError):
+            StateInput.model_validate(arguments)
+        return
     parsed = StateInput.model_validate(
-        {"state": {"revision": 0, "decision_question": "Which path?"}})
+        arguments)
     assert parsed.expected_revision is None
     assert parsed.state.decision_question == "Which path?"
 

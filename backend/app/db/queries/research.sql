@@ -25,6 +25,80 @@ INSERT INTO research_runs (
 )
 RETURNING run_id, created_at;
 
+-- A checkpoint becomes reusable only with its published assistant turn.
+-- Failed/abandoned requests and other workspaces never seed an investigation.
+-- name: research_conversation_checkpoint
+SELECT r.run_id, r.state, r.scope_manifest
+FROM research_runs r
+JOIN conversations c ON c.conversation_id = r.conversation_id
+JOIN conversation_turns t ON t.conversation_id = r.conversation_id
+    AND t.request_id = r.conversation_request_id AND t.role = 'assistant'
+JOIN conversation_requests q ON q.conversation_id = t.conversation_id
+    AND q.request_id = t.request_id
+WHERE c.conversation_id = %(conversation_id)s AND c.workspace_key = %(workspace_key)s
+  AND r.workspace_key = %(workspace_key)s AND r.collection_id = %(collection_id)s
+  AND t.status = 'answer' AND q.state = 'completed' AND r.state IS NOT NULL
+  AND r.status IN ('completed', 'partial', 'clarification', 'insufficient_evidence')
+ORDER BY t.sequence DESC LIMIT 1;
+
+-- Search every earlier published citation/read, not just the warm eight.
+-- The live chunk join and pinned source IDs remove retired and excluded material.
+-- name: research_conversation_references
+WITH published AS (
+    SELECT t.conversation_id, t.request_id, t.sequence, t.evidence
+    FROM conversation_turns t
+    JOIN conversations c ON c.conversation_id = t.conversation_id
+    JOIN conversation_requests q ON q.conversation_id = t.conversation_id
+        AND q.request_id = t.request_id
+    WHERE c.conversation_id = %(conversation_id)s AND c.workspace_key = %(workspace_key)s
+      AND t.role = 'assistant' AND t.status = 'answer' AND q.state = 'completed'
+), archive AS (
+    SELECT p.sequence, b->>'chunkId' AS chunk_id, b->>'sourceId' AS source_id
+    FROM published p,
+         LATERAL jsonb_array_elements(CASE
+             WHEN jsonb_typeof(p.evidence->'contextBlock') = 'array'
+             THEN p.evidence->'contextBlock' ELSE '[]'::jsonb END) b
+    WHERE EXISTS (
+        SELECT 1 FROM jsonb_array_elements(CASE
+            WHEN jsonb_typeof(p.evidence->'citations') = 'array'
+            THEN p.evidence->'citations' ELSE '[]'::jsonb END) cit
+        WHERE cit->>'chunkId' = b->>'chunkId'
+    )
+    UNION ALL
+    SELECT p.sequence, e.snapshot->>'chunk_id', e.snapshot->>'source_id'
+    FROM published p
+    JOIN research_runs r ON r.conversation_id = p.conversation_id
+        AND r.conversation_request_id = p.request_id
+    JOIN research_evidence e ON e.run_id = r.run_id
+    WHERE r.workspace_key = %(workspace_key)s AND r.collection_id = %(collection_id)s
+      AND r.status IN ('completed', 'partial', 'clarification', 'insufficient_evidence')
+), refs AS (
+    SELECT chunk_id, source_id, max(sequence) AS sequence
+    FROM archive GROUP BY chunk_id, source_id
+)
+SELECT ch.chunk_id, ch.source_id, s.filename, l.label AS locator_label
+FROM refs r
+JOIN chunks ch ON ch.chunk_id::text = r.chunk_id AND ch.source_id::text = r.source_id
+JOIN sources s ON s.source_id = ch.source_id
+JOIN locators l ON l.locator_id = ch.locator_id
+WHERE ch.source_id = ANY(%(source_ids)s::uuid[])
+  AND (%(query)s = '' OR to_tsvector('english', s.filename || ' ' || ch.text)
+       @@ websearch_to_tsquery('english', %(query)s))
+ORDER BY r.sequence DESC, ch.chunk_id
+OFFSET %(offset)s LIMIT 13;
+
+-- name: research_conversation_turns
+SELECT t.sequence, t.role, t.text
+FROM conversation_turns t
+JOIN conversations c ON c.conversation_id = t.conversation_id
+JOIN conversation_requests q ON q.conversation_id = t.conversation_id
+    AND q.request_id = t.request_id
+WHERE c.conversation_id = %(conversation_id)s AND c.workspace_key = %(workspace_key)s
+  AND q.state = 'completed' AND t.sequence >= %(sequence)s
+  AND (%(query)s = '' OR to_tsvector('english', t.text)
+       @@ websearch_to_tsquery('english', %(query)s))
+ORDER BY t.sequence LIMIT 7;
+
 -- name: get_research_run
 SELECT run_id, operation_id, root_trace_id, workspace_key, collection_id,
        conversation_id, conversation_request_id, scope_manifest, scope_digest,

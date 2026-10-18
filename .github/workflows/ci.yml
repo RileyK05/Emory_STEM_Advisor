@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -33,6 +37,9 @@ jobs:
           --health-retries 5
     env:
       TEST_DATABASE_URL: postgresql://advisor:advisor@localhost:5432/advisor
+      # Several tests rebuild a DSN from conn.info.dsn, which omits the password.
+      # libpq still authenticates when this matches the service password.
+      PGPASSWORD: advisor
     defaults:
       run:
         working-directory: backend
@@ -83,10 +90,6 @@ jobs:
     defaults:
       run:
         working-directory: frontend
-    env:
-      # Chromium behavior checks launch Google Chrome, preinstalled on the
-      # GitHub-hosted Ubuntu image.
-      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: /usr/bin/google-chrome
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -98,6 +101,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run format:check
+      - uses: ./.github/actions/setup-chromium
       - run: npm test
 
   frontend-integration:
@@ -112,7 +116,6 @@ jobs:
         working-directory: frontend
     env:
       PYTHON: python
-      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH: /usr/bin/google-chrome
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -130,4 +133,5 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+      - uses: ./.github/actions/setup-chromium
       - run: npm run test:integration

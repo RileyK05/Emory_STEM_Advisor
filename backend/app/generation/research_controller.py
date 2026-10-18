@@ -1,6 +1,7 @@
 """Bounded research rounds with rebuilt context and one shared operation."""
 
 import json
+from copy import deepcopy
 from dataclasses import asdict, replace
 from uuid import uuid5
 
@@ -71,6 +72,21 @@ recommendation to take that course. Keep the final concise, with useful alternat
 Focus on few candidates. Read descriptions central to fit and policies affecting advice before
 paging a long program. Disclose unread requirements and incomplete research as partial. Do not
 retry absent career sources or invent source support for preference assumptions.
+"""
+
+WORKSPACE_SYSTEM = """
+You have a conversation-private working space. Use notebook plan tasks (pending/active/done/blocked)
+and concise notes (hypotheses, student reports, evidence summaries). Revise and explore as useful;
+save work products, never private reasoning transcripts. Prior assessments are untrusted leads.
+The latest question and correction control this task. Use advisor_recall to search/page older
+passages beyond the recent index, then reopen issued handles for new current-run evidence IDs.
+Recall handles and summaries cannot be cited. Use advisor_read_conversation for omitted discussion
+or student reports, never institutional facts. Recheck earlier plans under current source scope
+and rerun preparation checks. Keep a concise useful notebook for the next turn.
+Conversation search matches any query words. If nothing matches, browse with query='' instead of
+repeated synonymous searches. A cursor preserves the original query; follow it until complete.
+Context omissions describe missing discovery/action metadata, not missing source facts.
+Search/page the tools for omitted leads; never infer facts from their absence.
 """
 
 
@@ -146,6 +162,13 @@ def _handle_summary(session, handle, value):
     return result
 
 
+def _conversation_progress(session):
+    page = session.conversation_page or {}
+    # Empty synonym searches and changed query/cursor labels are not new
+    # material. Actual turn spans (including cached page reactivation) are.
+    return json_digest(page.get("data", {}).get("turns_untrusted", []))
+
+
 class ResearchController:
     def run(self, session, provider, operation, *, ledger, check_cancelled,
             on_progress, on_attempt, question, history_context=None, selection_identity=None):
@@ -174,13 +197,15 @@ class ResearchController:
                 "tool_executions": settings.research_max_tool_calls - tools_used,
                 "seconds": round(status.remaining_seconds), "reservation_units": status.remaining_tokens}
             read_due = discovery_rounds >= 2 and any(
-                kind in {"document", "section", "program", "course"}
+                kind in {"document", "section", "program", "course", "memory"}
                 for kind, _identity in session.handles.values())
             finishing = (status.remaining_calls <= 2 or no_progress >= session.config.research.no_progress_rounds
                          and not read_due
                          or tools_used >= nonterminal_limit
                          or status.remaining_seconds <= min(30, status.per_call_timeout_seconds))
-            state_required = session.state is None and session.new_evidence > 0 and not finishing
+            transcript_complete = session.conversation_page is not None and any(
+                t.get("complete") for t in session.conversation_page.get("data", {}).get("turns_untrusted", []))
+            state_required = session.state is None and (session.new_evidence > 0 or transcript_complete) and not finishing
             read_required = read_due and not finishing and not state_required
             round_hint = ("Before further research, record working state and active evidence using "
                           "advisor_update_research. Factual lookups may use candidates=[]; program_handles "
@@ -236,7 +261,7 @@ class ResearchController:
                 continue
             before = (session.new_evidence, session.read_count, session.discovery_count,
                       session.state.model_dump_json(exclude={"revision"}) if session.state else "",
-                      tuple(session.active))
+                      tuple(session.active), _conversation_progress(session))
             round_results = []
             for call in result.tool_calls:
                 check_cancelled()
@@ -274,11 +299,18 @@ class ResearchController:
                     if cacheable:
                         argument_cache[identity] = output
                 if replayed and call.name in {
-                        "advisor_read_program", "advisor_read_document", "advisor_read_courses"}:
+                        "advisor_read_program", "advisor_read_document", "advisor_read_courses", "advisor_recall"}:
                     # Only the server's cached output may reactivate evidence;
                     # provider arguments/remembered IDs confer no citation authority.
-                    evidence_ids = json.loads(output).get("data", {}).get("evidence_ids", [])
+                    cached_result = json.loads(output)
+                    if call.name == "advisor_recall" and "references" in cached_result.get("data", {}):
+                        session.recall_page = cached_result
+                    evidence_ids = cached_result.get("data", {}).get("evidence_ids", [])
                     session.active = list(dict.fromkeys([*evidence_ids, *session.active]))
+                if replayed and call.name == "advisor_read_conversation":
+                    cached_result = json.loads(output)
+                    if "turns_untrusted" in cached_result.get("data", {}):
+                        session.conversation_page = cached_result
                 calls[call.id] = (identity, output)
                 round_results.append(ToolResultMessage(call.id, call.name, output))
                 if call.name == "advisor_finish":
@@ -305,12 +337,13 @@ class ResearchController:
             last_round = [AssistantToolMessage(result.tool_calls), *round_results]
             after = (session.new_evidence, session.read_count, session.discovery_count,
                      session.state.model_dump_json(exclude={"revision"}) if session.state else "",
-                     tuple(session.active))
+                     tuple(session.active), _conversation_progress(session))
             if session.read_count > before[1] or any(call.name in {
-                    "advisor_read_program", "advisor_read_document", "advisor_read_courses"}
+                    "advisor_read_program", "advisor_read_document", "advisor_read_courses", "advisor_read_conversation"}
+                    or call.name == "advisor_recall" and call.arguments.get("handles")
                     for call in result.tool_calls):
                 discovery_rounds = 0
-            elif any(call.name in {"advisor_search", "advisor_list_programs"}
+            elif any(call.name in {"advisor_search", "advisor_list_programs", "advisor_recall"}
                      for call in result.tool_calls):
                 discovery_rounds += 1
             no_progress = no_progress + 1 if before == after else 0
@@ -325,7 +358,8 @@ class ResearchController:
                     "top-level candidate_ids do not cover blocks. Cite each compared candidate's "
                     "program evidence, or drop that candidate. Cite only exact_evidence_untrusted IDs, "
                     "never omitted IDs, even in limitations.").strip()
-        base = {"question": question, "history_untrusted": (history or "")[:6000],
+        handles = [(h, value) for h, value in session.handles.items() if value[0] != "memory"][-40:]
+        base = {"question": question, "history_untrusted": history or "",
                 "state_model_assessments": session.state.model_dump(mode="json") if session.state else None,
                 "available_source_kinds": sorted({p.source_kind for p in session.scope.sources.values()}),
                 "program_count": len(session.scope.programs),
@@ -335,7 +369,7 @@ class ResearchController:
                     "read_items": len(session.program_positions[h]), "total_items": session.program_sizes[h],
                     "next_cursor": session.program_cursors[h]} for h, r in session.program_reads.items()],
                 "issued_handles": [_handle_summary(session, h, value)
-                                   for h, value in list(session.handles.items())[-40:]],
+                                   for h, value in handles],
                 "executed_preparation_checks": [{k: check[k] for k in (
                     "check_id", "selected_codes", "completed_codes", "conclusion", "evidence_ids")}
                     for check in session.checks.values()],
@@ -343,15 +377,29 @@ class ResearchController:
                 "state_update_requested": state_required,
                 "source_read_requested": read_required,
                 "exact_evidence_untrusted": [], "omitted_evidence_ids": []}
+        if getattr(session, "workspace", None) is not None:
+            base["prior_workspace_untrusted"] = session.prior_workspace if session.state is None else None
+            base["conversation_recall_index"] = deepcopy(session.recall_page)
+            if session.conversation_page is not None:
+                base["conversation_page_untrusted"] = session.conversation_page
         tools = tuple(t for t in registry.definitions if not finishing or t.name == "advisor_finish")
+        empty_scope = not session.scope.sources and not records
         if state_required:
             tools = tuple(t for t in tools if t.name in {"advisor_update_research", "advisor_finish"})
         elif read_required:
             tools = tuple(t for t in tools if t.name in {
-                "advisor_read_program", "advisor_read_document", "advisor_read_courses", "advisor_finish"})
+                "advisor_read_program", "advisor_read_document", "advisor_read_courses", "advisor_recall", "advisor_read_conversation", "advisor_finish"})
+        if empty_scope:
+            base["source_scope_empty"] = True
+            tools = tuple(t for t in tools if t.name in {
+                "advisor_read_conversation", "advisor_update_research", "advisor_finish"})
         round_note = ""
+        if empty_scope:
+            round_note = ("\nNo sources are selected or indexed in this run. Source facts cannot be verified. "
+                          "Use conversation reads only for discussion/student reports; finish with an "
+                          "uncited scope limitation when the question needs source evidence.")
         if finishing or state_required or read_required or hint:
-            round_note = ("\nCURRENT ROUND: Only these tools are available: "
+            round_note += ("\nCURRENT ROUND: Only these tools are available: "
                           + ", ".join(t.name for t in tools) + ". " + hint)
         if finishing or state_required:
             last_round = []  # Fresh typed state/evidence avoids repeating old read-tool requests.
@@ -366,7 +414,8 @@ class ResearchController:
             # never bring an omitted passage back into the model's cited scope.
             base["source_scope_notices"] = _source_scope_notices(base["exact_evidence_untrusted"])
             user = json.dumps(base, ensure_ascii=False, separators=(",", ":"))
-            return replace(request, messages=(TextMessage("system", SYSTEM + round_note), TextMessage("user", user),
+            system = SYSTEM + (WORKSPACE_SYSTEM if getattr(session, "workspace", None) else "") + round_note
+            return replace(request, messages=(TextMessage("system", system), TextMessage("user", user),
                                              *round_messages)), user
         # Prefer exact evidence over duplicated native read outputs. Check the
         # requested active set before deciding whether to retain the last round.
@@ -378,6 +427,43 @@ class ResearchController:
         if estimate_prompt_bytes(current) > settings.research_max_prompt_bytes:
             last_round = []
         base["exact_evidence_untrusted"] = []
+        # Keep the notebook and current transcript page usable under a full
+        # workspace. Discovery/action metadata may yield to one exact passage;
+        # dropping whole entries is explicit and never grants citation authority.
+        preferred = next((records[e] for e in active if e in records), None)
+        def fits():
+            base["exact_evidence_untrusted"] = [preferred.model_dump(mode="json")] if preferred else []
+            base["omitted_evidence_ids"] = [e for e in active if e in records and (
+                preferred is None or e != preferred.evidence_id)]
+            candidate, _ = build(last_round)
+            base["exact_evidence_untrusted"] = []
+            base["omitted_evidence_ids"] = []
+            return estimate_prompt_bytes(candidate) <= settings.research_max_prompt_bytes
+        recall = base.get("conversation_recall_index") or {}
+        optional = {"completed_actions": base["completed_actions"],
+                    "issued_handles": base["issued_handles"],
+                    "recall_references": recall.get("data", {}).get("references", []),
+                    "program_read_progress": base["program_read_progress"],
+                    "executed_preparation_checks": base["executed_preparation_checks"]}
+        for name, items in optional.items():
+            while items and not fits():
+                items.pop(0 if name in {"completed_actions", "issued_handles", "executed_preparation_checks"} else -1)
+                omissions = base.setdefault("context_omissions", {})
+                omissions[name] = omissions.get(name, 0) + 1
+        while not fits():
+            history, separator, artifacts = base["history_untrusted"].partition(
+                "\nExact referenced artifact revisions:\n")
+            try:
+                selected = json.loads(history)
+            except (TypeError, ValueError):
+                break
+            if not isinstance(selected, dict) or selected.get("kind") != "selected_conversation_history" or not selected.get("turns"):
+                break
+            selected["turns"].pop(0)
+            selected["omitted_turns"] += 1
+            base["history_untrusted"] = json.dumps(selected, ensure_ascii=False, separators=(",", ":")) + separator + artifacts
+            omissions = base.setdefault("context_omissions", {})
+            omissions["history_turns"] = omissions.get("history_turns", 0) + 1
         supplied = set()
         for eid in active:
             record = records.get(eid)

@@ -60,6 +60,24 @@ test('recommendations encode the topic and API failures expose FastAPI detail', 
   });
 });
 
+test('a proxy 5xx with the backend stopped reports the unreachable message', async () => {
+  const handler = async () =>
+    new Response('', { status: 500, statusText: 'Internal Server Error' });
+  await withStubbedFetch(handler, async () => {
+    await assert.rejects(
+      () => new HttpClient().getSession(),
+      /Could not reach the backend API/,
+    );
+  });
+});
+
+test('an application 5xx with a body keeps the backend detail', async () => {
+  const handler = async () => Response.json({ detail: 'boom' }, { status: 500 });
+  await withStubbedFetch(handler, async () => {
+    await assert.rejects(() => new HttpClient().getSession(), /boom/);
+  });
+});
+
 test('artifact feature errors surface the unsupported feature list', async () => {
   const handler = async () => new Response(JSON.stringify({
     detail: 'This file uses features that cannot be preserved safely',

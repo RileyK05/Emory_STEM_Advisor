@@ -34,6 +34,15 @@ The Docker stack is development scaffolding and has not been exercised on this m
 
 The image is intended to install CPU-only PyTorch without downloading model weights during build; the first model-backed request may download them. Configure provider settings through a root `.env` copied from [.env.example](.env.example). Never commit keys or credentials.
 
+With `ADVISING_RESEARCH_ENABLED=true`, `TOOLS_ENABLED=true`, and a permitted
+tools-capable connection, the advisor can maintain a private plan and notebook,
+revisit earlier passages, and search older conversation turns. Published work
+carries between turns in the same chat; source selection and fresh citation checks
+still apply. Long research chats use paged history instead of the legacy 12 KB
+transcript limit. API and worker processes must both load the same configuration;
+restart them after changing it. See the [working-space contract](docs/architecture.md)
+and [implementation plan](docs/plans/advisor-workspace.md).
+
 ## Run backend checks against real Postgres
 
 Compose sets `TEST_DATABASE_URL` to its healthy Postgres service, so DB tests execute instead of being skipped:
@@ -59,7 +68,8 @@ must never share it. Keep test scratch under ignored `data/test-runs/`.
 ## Schema baseline and existing data
 
 Fresh databases apply [032_schema.sql](backend/app/db/baseline/032_schema.sql)
-once, followed by [033_department_topics.sql](backend/app/db/migrations/033_department_topics.sql).
+once, followed by the post-baseline
+[migrations](backend/app/db/migrations/) (`033`–`040`).
 Existing databases and backups keep their original migration history and upgrade
 through the byte-preserved [legacy archive](backend/app/db/legacy_migrations/),
 then the same post-baseline migrations. Neither path requires resetting the database.
@@ -103,11 +113,15 @@ Notes:
   the 2026-10-11 catalog binds all 152.
 - A manifest entry may carry a `provenance` object that classifies the source
   (`institutional_catalog`, `institutional_department`, `institutional_policy`,
-  or `career_reference`) with optional `publisher`, `source_url`, `edition`,
-  `geography`, `occupation_id`, `published_at`, `acquired_at`, `attribution`.
-  The scraper writes it for catalog and department files; curated career
-  references use the same `--origin-manifest` import with a hand-verified entry.
-  Uploads cannot set it.
+  `institutional_publication`, or `career_reference`) with optional `publisher`,
+  `source_url`, `edition`, `geography`, `occupation_id`, `published_at`,
+  `acquired_at`, `attribution`, and the publication facets `title`,
+  `institution`, `issuing_unit`, `document_roles`, `applicability`, and
+  `applicability_status`. The scraper writes it for catalog and department files;
+  curated career references use the same `--origin-manifest` import with a
+  hand-verified entry, and the reviewed advising-upload pilot is prepared by
+  `scripts.prepare_advising_documents` and ingested the same way. Ordinary uploads
+  cannot set it.
 - `reconcile_source_origins` merges duplicated legacy program sources only for
   groups explicitly verified. The last session derived its manifest with
   [reconcile_cloned_program_sources_20261009.py](backend/scripts/manual/reconcile_cloned_program_sources_20261009.py);

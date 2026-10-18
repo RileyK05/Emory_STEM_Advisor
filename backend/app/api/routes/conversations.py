@@ -21,7 +21,13 @@ from app.api.schemas import (
 from app.artifacts.storage import ArtifactStore
 from app.atlas.records import normalize_code
 from app.auth.dependencies import get_workspace_key
-from app.conversations.store import ConversationStore, fingerprint, history_prompt
+from app.conversations.store import (
+    ConversationStore,
+    fingerprint,
+    history_prompt,
+    research_history_prompt,
+    warm_citations,
+)
 from app.conversations.worker import PROGRESS_STAGES
 from app.db import queries
 from app.db.connection import PooledConnection
@@ -173,6 +179,19 @@ def _effective_scope(rows, body):
     return prior, source_ids, retrieval_query
 
 
+def _warm_citations(rows, source_ids):
+    allowed = None if source_ids is None else {str(item) for item in source_ids}
+    return warm_citations(rows, allowed_source_ids=allowed)
+
+
+def _research_scope(store, conversation_id, body):
+    prior = store.last_advising_context(conversation_id)
+    source_ids = body.sourceIds if "sourceIds" in body.model_fields_set else prior.get("sourceIds")
+    # The research model resolves the question from its notebook/transcript;
+    # legacy retrieval rewrites are not part of this workflow.
+    return prior, source_ids, body.query
+
+
 def _load_references(conn, settings, workspace, body):
     """Load referenced artifact revisions under the conversation byte budget."""
     artifacts = ArtifactStore(conn, workspace_key=workspace, data_dir=settings.data_dir)
@@ -190,8 +209,10 @@ def _load_references(conn, settings, workspace, body):
 
 
 def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, store):
-    rows = store.context(conversation_id, max_bytes=settings.conversation_context_max_bytes)
-    prior, source_ids, retrieval_query = _effective_scope(rows, body)
+    research = settings.advising_research_enabled and body.mode == "advising"
+    rows = store.context(conversation_id, max_bytes=settings.conversation_context_max_bytes, archive=research)
+    prior, source_ids, retrieval_query = (_research_scope(store, conversation_id, body)
+                                         if research else _effective_scope(rows, body))
     collection_name = body.collectionId or prior.get("collectionId")
     if collection_name is None:
         collection_name = settings.default_collection
@@ -207,8 +228,10 @@ def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, s
                        if source_ids is None or source_id in {str(item) for item in source_ids}}
 
     references = _load_references(conn, settings, workspace, body)
-    history_context = history_prompt(rows)
     artifact_context = json.dumps(references, ensure_ascii=False, separators=(",", ":"))
+    history_context = (research_history_prompt(rows, max_bytes=min(
+        6000, settings.conversation_context_max_bytes - len(artifact_context.encode("utf-8"))))
+        if research else history_prompt(rows))
     if len((history_context + artifact_context).encode("utf-8")) > settings.conversation_context_max_bytes:
         raise HTTPException(422, "conversation and artifact revisions exceed the context budget")
     conn.commit()
@@ -223,7 +246,8 @@ def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, s
             "artifactReferences": references,
             "sourceSnapshot": source_snapshot,
         },
-        "context": {"historyContext": history_context},
+        "context": {"historyContext": history_context,
+                    "warmCitations": _warm_citations(rows, source_ids)},
     }
     return snapshot
 
@@ -328,18 +352,22 @@ def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
     if replay is not None:
         return replay
     settings = request.app.state.settings
-    rows = store.context(conversation_id, max_bytes=settings.conversation_context_max_bytes)
+    research = settings.advising_research_enabled and body.mode == "advising"
+    rows = store.context(conversation_id, max_bytes=settings.conversation_context_max_bytes, archive=research)
     # The sequence check under the publication lock also fences context loaded
     # before another request's completion.
-    prior, source_ids, retrieval_query = _effective_scope(rows, body)
+    prior, source_ids, retrieval_query = (_research_scope(store, conversation_id, body)
+                                         if research else _effective_scope(rows, body))
     collection = body.collectionId or prior.get("collectionId")
     references = _load_references(conn, settings, workspace, body)
     conn.commit()
     snapshot["effective"] = {"collectionId": collection,
                              "sourceIds": [str(item) for item in source_ids] if source_ids is not None else None,
                              "retrievalQuery": retrieval_query, "artifactReferences": references}
-    history_context = history_prompt(rows)
     artifact_context = json.dumps(references, ensure_ascii=False, separators=(",", ":"))
+    history_context = (research_history_prompt(rows, max_bytes=min(
+        6000, settings.conversation_context_max_bytes - len(artifact_context.encode("utf-8"))))
+        if research else history_prompt(rows))
     if len((history_context + artifact_context).encode("utf-8")) > settings.conversation_context_max_bytes:
         raise HTTPException(422, "conversation and artifact revisions exceed the context budget")
     replay = store.begin(conversation_id, body.requestId, body.expectedSequence, snapshot)
@@ -368,6 +396,7 @@ def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
                 connection_runtime=request.app.state.connection_runtime,
                 retrieval_query=retrieval_query,
                 history_context=history_context + "\nExact referenced artifact revisions:\n" + artifact_context,
+                warm_citations=_warm_citations(rows, source_ids),
                 check_cancelled=check_current,
                 conversation_id=conversation_id, conversation_request_id=body.requestId,
             ).model_dump(mode="json")

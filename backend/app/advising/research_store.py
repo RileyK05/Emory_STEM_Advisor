@@ -224,6 +224,11 @@ class ResearchStore:
         cited = set(state.active_evidence_ids)
         cited.update(e for criterion in state.criteria for e in criterion.evidence_ids)
         cited.update(e for candidate in state.candidates for e in candidate.evidence_ids)
+        cited.update(e for item in (*state.plan, *state.notes) for e in item.evidence_ids)
+        for name in ("plan", "notes"):
+            items = getattr(state, name)
+            if len({item.id for item in items}) != len(items):
+                problems.append(f"{name} IDs must be unique")
         problems.extend(f"state cites evidence {e!r} this run never issued"
                         for e in sorted(cited - issued))
         stored = state.model_copy(update={"revision": expected_revision + 1})

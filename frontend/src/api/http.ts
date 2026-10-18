@@ -95,6 +95,10 @@ async function fetchOrThrow(
   if (!response.ok) {
     if (response.status === 401 && !path.startsWith('/api/auth/'))
       window.dispatchEvent(new Event('advisor-session-invalid'));
+    // A 5xx with an empty body is the dev proxy failing to reach a stopped API,
+    // not an application error. Report it as unreachable rather than a
+    // misleading "500 Internal Server Error".
+    if (response.status >= 500 && (await response.clone().text()).length === 0) throw new Error(unreachableMessage);
     throw await errorDetail(response, errorPrefix);
   }
   return response;

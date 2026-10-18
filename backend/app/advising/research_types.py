@@ -176,6 +176,31 @@ class OpenQuestion(_Strict):
     next_action: QuestionNextAction
 
 
+class ResearchTask(_Strict):
+    """A concise, revisable work item, not a prerequisite or degree-plan fact."""
+
+    id: str = Field(min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+    task: str = Field(min_length=1, max_length=600)
+    status: Literal["pending", "active", "done", "blocked"] = "pending"
+    evidence_ids: tuple[str, ...] = Field(default=(), max_length=20)
+
+
+class ResearchNote(_Strict):
+    """A small work product with an explicit basis; never citable evidence."""
+
+    id: str = Field(min_length=1, max_length=32, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+    text: str = Field(min_length=1, max_length=1000)
+    basis: Literal["hypothesis", "user_report", "evidence_summary"]
+    evidence_ids: tuple[str, ...] = Field(default=(), max_length=20, validate_default=True)
+
+    @field_validator("evidence_ids", mode="after")
+    @classmethod
+    def summary_needs_evidence(cls, value, info):
+        if info.data.get("basis") == "evidence_summary" and not value:
+            raise ValueError("an evidence summary needs read evidence")
+        return value
+
+
 class ResearchState(_Strict):
     """The model's own bounded working comparison.
 
@@ -192,6 +217,8 @@ class ResearchState(_Strict):
         default=(), max_length=MAX_OPEN_QUESTIONS
     )
     active_evidence_ids: tuple[str, ...] = ()
+    plan: tuple[ResearchTask, ...] = Field(default=(), max_length=8)
+    notes: tuple[ResearchNote, ...] = Field(default=(), max_length=8)
 
 
 # --- Final decision ----------------------------------------------------------

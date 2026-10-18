@@ -70,8 +70,13 @@ class ConversationStore:
         self.conn.commit()
         return [public_summary(row) for row in rows]
 
-    def context(self, conversation_id, *, max_bytes: int):
+    def context(self, conversation_id, *, max_bytes: int, archive: bool = False):
         self.get(conversation_id)
+        if archive:
+            rows = self.conn.execute(queries.get("conversation_recent_context"), {
+                "conversation_id": conversation_id}).fetchall()
+            self.conn.commit()
+            return list(reversed(rows))
         rows = self.conn.execute(queries.get("conversation_turns"), {
             "conversation_id": conversation_id, "after": 0, "limit": 1000}).fetchall()
         size = len(history_prompt(rows).encode("utf-8"))
@@ -90,6 +95,12 @@ class ConversationStore:
             return None
         self._check_replay(row, snapshot)
         return row["result"]
+
+    def last_advising_context(self, conversation_id):
+        row = self.conn.execute(queries.get("last_advising_context"), {
+            **self._params(conversation_id)}).fetchone()
+        self.conn.commit()
+        return (row["effective"] or {}) if row else {}
 
     @staticmethod
     def _check_same_inputs(row, snapshot):
@@ -422,10 +433,10 @@ def history_turn(row):
     bodies stay saved on the turn's own evidence for display and audit.
     """
     if row["role"] == "assistant":
-        evidence = row["evidence"]
+        evidence = row["evidence"] or {}
         citations = [
             {key: item[key] for key in _HISTORY_CITATION_KEYS if item.get(key) is not None}
-            for item in evidence.get("citations", []) if isinstance(item, dict)
+            for item in evidence.get("citations") or [] if isinstance(item, dict)
         ]
         turn_evidence = {"citations": citations}
         if evidence.get("type") is not None:
@@ -439,9 +450,76 @@ def history_turn(row):
 def history_prompt(rows) -> str:
     # Every retained turn is included exactly once, stripped to text and
     # citation labels. Overflow still fails before a provider call rather than
-    # silently dropping a turn.
+    # silently dropping a turn. Cited passage bodies stay out of this JSON;
+    # warm_citations reattaches them to the next numbered context instead.
     return json.dumps([history_turn(row) for row in rows], ensure_ascii=False,
                       separators=(",", ":"))
+
+
+def research_history_prompt(rows, *, max_bytes: int) -> str:
+    """An explicit whole-turn selection; archive tools can recover everything omitted."""
+    total = rows[-1].get("total_turns", len(rows)) if rows else 0
+    selected = []
+    def render():
+        return json.dumps({"kind": "selected_conversation_history", "total_turns": total,
+            "omitted_turns": total - len(selected), "turns": selected,
+            "read_older_with": "advisor_read_conversation"}, ensure_ascii=False, separators=(",", ":"))
+    for row in reversed(rows):
+        selected.insert(0, history_turn(row))
+        if len(render().encode("utf-8")) > max_bytes:
+            selected.pop(0)
+            break
+    return render()
+
+
+_WARM_CITATION_LIMIT = 8
+_WARM_CITATION_BYTES = 12_000
+
+
+def warm_citations(rows, *, allowed_source_ids: set[str] | None = None) -> list[dict]:
+    """Passage bodies for citations this conversation already used.
+
+    Newest citation first. Uncited retrieved passages stay out, and so does a
+    passage whose source is outside an explicit source selection. The byte cap
+    is separate from the history transcript budget.
+    """
+    chosen: list[dict] = []
+    seen: set[str] = set()
+    used = 0
+    for row in reversed(rows):
+        if row["role"] != "assistant":
+            continue
+        evidence = row["evidence"] or {}
+        bodies = {item.get("chunkId"): item for item in evidence.get("contextBlock") or []
+                  if isinstance(item, dict) and item.get("chunkId")}
+        for citation in evidence.get("citations") or []:
+            if not isinstance(citation, dict):
+                continue
+            chunk_id = citation.get("chunkId")
+            if not chunk_id or chunk_id in seen:
+                continue
+            body = bodies.get(chunk_id)
+            text = body.get("text") if isinstance(body, dict) else None
+            source_id = body.get("sourceId") if isinstance(body, dict) else None
+            if not isinstance(text, str) or not text or not source_id:
+                continue
+            seen.add(chunk_id)
+            if allowed_source_ids is not None and str(source_id) not in allowed_source_ids:
+                continue
+            size = len(text.encode("utf-8"))
+            if size > _WARM_CITATION_BYTES or used + size > _WARM_CITATION_BYTES:
+                continue
+            chosen.append({
+                "chunkId": str(chunk_id),
+                "sourceId": str(source_id),
+                "sourceName": str(body.get("sourceName") or citation.get("sourceName") or ""),
+                "locatorLabel": str(body.get("locatorLabel") or citation.get("locatorLabel") or ""),
+                "text": text,
+            })
+            used += size
+            if len(chosen) >= _WARM_CITATION_LIMIT:
+                return chosen
+    return chosen
 
 
 def public_turn(row):

@@ -87,6 +87,8 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
     ledger = ToolExecutionLedger(connector(settings, resolved_database_url(settings, conn), pool_name="tool_execution"),
                                  max_tool_calls=settings.research_max_tool_calls)
     try:
+        guard()
+        session.open_workspace(conversation_id)
         decision, usage, system, user, model = ResearchController().run(
             session, provider, operation, ledger=ledger, check_cancelled=guard,
             on_progress=on_progress, question=body.query, history_context=history_context,

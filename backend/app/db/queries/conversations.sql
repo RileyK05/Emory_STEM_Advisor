@@ -45,6 +45,21 @@ WHERE conversation_id = %(conversation_id)s AND request_id = %(request_id)s AND 
 SELECT * FROM conversation_turns WHERE conversation_id = %(conversation_id)s
 AND sequence > %(after)s ORDER BY sequence LIMIT %(limit)s;
 
+-- Research keeps a bounded recent view; older turns remain available by tool.
+-- name: conversation_recent_context
+SELECT *, count(*) OVER () AS total_turns
+FROM conversation_turns WHERE conversation_id = %(conversation_id)s
+ORDER BY sequence DESC LIMIT 50;
+
+-- Source selection survives even when its last advising turn is outside the
+-- recent view (for example after many explicit history-mode requests).
+-- name: last_advising_context
+SELECT t.evidence->'effective' AS effective
+FROM conversation_turns t JOIN conversations c ON c.conversation_id = t.conversation_id
+WHERE c.conversation_id = %(conversation_id)s AND c.workspace_key = %(workspace_key)s
+  AND t.role = 'user' AND coalesce(t.evidence->'request'->>'mode', 'advising') = 'advising'
+ORDER BY t.sequence DESC LIMIT 1;
+
 -- name: insert_claim
 INSERT INTO claims (claim_id, response_id, ordinal, text, citation_numbers)
 VALUES (%(claim_id)s, %(response_id)s, %(ordinal)s, %(text)s, %(citation_numbers)s);

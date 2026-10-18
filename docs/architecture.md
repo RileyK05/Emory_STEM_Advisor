@@ -553,7 +553,9 @@ never cuts a chunk, and reports an oversized chunk as incomplete.
 
 **Research records** (`app/advising/research_store.py`):
 - **Runs.** `research_runs` stores the pinned manifest and digest, prompt/config
-  versions, bounded state with an optimistic `state_revision`, status and stop
+  versions, bounded state with an optimistic `state_revision` (the update tool may
+  omit the expected revision; only the model writes its own run, so it defaults to
+  the current revision), status and stop
   reason. A conversation request binds at most one run (unique), and a duplicate
   start returns the existing run. Only a `running` run is writable: `finish`
   ends it once in a terminal status (repeating the same ending is a no-op), after
@@ -570,6 +572,10 @@ never cuts a chunk, and reports an oversized chunk as incomplete.
   (unique `(run_id, tool_execution_id)`, migration 038) returns its recorded step
   and IDs. A step that would exceed the register bounds keeps nothing.
 - **State.** State may cite only issued evidence and must fit `MAX_STATE_BYTES`.
+  It includes up to eight revisable tasks (`pending|active|done|blocked`) and
+  eight concise notes (`hypothesis|user_report|evidence_summary`). Evidence
+  summaries require issued evidence; note/task IDs are unique within each list.
+  These are model work products, never source facts or prerequisite graph data.
 - **Decisions.** `research_decisions` stores structurally valid decisions (limits,
   issued evidence only, every fact cited) with their digest.
 
@@ -605,7 +611,9 @@ completed courses. No model writes prerequisite or similarity graph facts.
 bounded history, comparison state, issued handles, compact checks and active exact
 evidence. It retains only the last complete assistant/tool round and drops it as
 a unit when necessary. Evidence that cannot fit is explicitly listed as omitted
-and cannot be cited. Calls reuse the existing accounting and durable tool ledger,
+and cannot be cited. Evidence backing a declared candidate's program handles is
+retained ahead of newer reads, so a compared program stays citable. Calls reuse
+the existing accounting and durable tool ledger,
 with a stable scope/provider/tool/prompt fingerprint. Changed arguments on a reused
 call ID fail closed. Identical read/discovery calls can reuse their result within
 the run. Research-specific settings replace legacy operation limits in one persisted
@@ -640,9 +648,70 @@ progress and a partial-result notice. Saved runs settle in the same transaction
 as their assistant turn; abandonment/failure closes any still-running research.
 History is untrusted context, and old evidence must be read again in the next run.
 
+**Conversation working space (2026-10-16).** Saved research turns reopen the latest
+published notebook in the same workspace, conversation and collection, using
+`advising/research_workspace.py`. Existing run/state/evidence JSON holds these
+records; no new schema or migration is needed. Failed, abandoned, interrupted and
+unpublished work cannot seed another investigation. The prior notebook is explicitly
+untrusted and is replaced in the prompt once the model saves its current state.
+Student reports and pending work can survive a source-selection change; source
+summaries and candidates whose supporting sources/revisions/metadata are no longer
+available are discarded. Surviving program handles are rebound to the new run and
+candidates return to investigating. Prior `eN` references are replaced with opaque
+recall handles, preventing collisions with new-run evidence IDs. Oversized rebound
+notebooks omit whole entries and report the omission.
+Recall-hint lists yield before useful notes when that rebinding expands the
+notebook; source-dependent work still never gains citation authority by surviving.
+
+`advisor_recall` searches/pages every earlier published citation and research read,
+including read-but-uncited research passages. Its default index holds twelve leads
+and a cursor; it is not the evidence context and is not restricted to the warm eight.
+With up to four issued handles it reopens the current exact database chunks under
+the pinned source locks, preserving their real identities and indexes before issuing
+current-run evidence. Excluded/retired sources never appear, and removed chunks are
+reported unavailable. Cached recall reads reactivate only their server-issued IDs.
+Program recommendations and preparation conclusions still require their ordinary
+program reads and newly executed deterministic checks.
+
+Research requests use an explicit whole-turn recent-history selection (at most
+6,000 UTF-8 bytes, further bounded by `CONVERSATION_CONTEXT_MAX_BYTES`) instead of
+failing when the complete transcript exceeds 12 KB. The selection reports its total
+and omitted turn counts. `advisor_read_conversation` searches/pages the saved
+published transcript as untrusted discussion, with a cursor inside long turns and
+at most 6,000 text bytes per page. This recovers student reports and earlier goals;
+it never acquires source evidence. Referenced artifact revisions retain their
+existing size checks. Both synchronous and streamed turns use this shared working
+space. Current source scope, privacy, cancellation, final-answer validation and the
+existing shared operation limits remain in force; this enables no background work,
+arbitrary network/filesystem access or global student memory.
+
+Transcript pages are bounded to 6,000 serialized JSON bytes, including metadata
+and escaping. Cursors preserve the original search and character position even
+when a model omits or rewords the query; unknown and cross-tool cursors read as
+not found. Conversation search matches any query words, with an explicit browse
+hint on empty results. The latest page is retained as untrusted context after a
+native tool round is discarded. Page movement counts as progress; identical cached
+pages do not. Completed transcript reads request an initial notebook checkpoint
+before more investigation when the budget permits. Read spans are recorded in
+private step details. Old records with null citation/context lists remain readable.
+
+Prompt compaction may omit whole discovery/action summaries before dropping exact
+evidence, preserving the current notebook and transcript page. It reports metadata
+omission counts and reserves space for evidence-omission IDs themselves; it can
+remove additional whole selected-history turns without dropping referenced artifact
+revisions. A run with no scoped sources advertises only conversation reads,
+notebook updates and finish, so source verification cannot spend calls on an empty
+corpus. Source facts still require actually supplied exact evidence.
+
 Manual judgment checks: `python -m scripts.smoke.live_advising --mode research
 --case research-data-major --limit 1 --max-calls 12 --token-budget 640000`.
 Use `research-beginner` and `research-clarify` for restrictions and clarification.
+`python -m scripts.smoke.research_workspace --max-calls 12 --token-budget 400000`
+checks older evidence, long student reports and empty source selection with the
+configured real provider in a disposable fixture database. It uses no developer
+database or corpus, loads no embedding model, prints diagnostics, and supports
+`--case` to repeat only a failed check. Its call/token ceilings apply across all
+selected checks. The isolated Postgres instance is stopped before scratch cleanup.
 The runner prints diagnostics unless `--output` is explicitly requested. Curated
 career references use the existing verified origin-manifest import; V1 has no
 arbitrary live URL fetch tool.
@@ -1846,15 +1915,23 @@ Omitted `sourceIds` inherits the last advising selection; `[]` remains empty and
 explicit null resets to all authorized sources. History reads do not change the
 advising topic. A pronoun follow-up deterministically includes the previous
 advising question in retrieval; this conservative heuristic still needs real
-follow-up quality evaluation. Every retained turn is included once in the bounded
-model context, fenced as untrusted history. Historical citation numbers and prior
-answers never become current institutional evidence.
+follow-up quality evaluation. On the legacy answer path every retained turn is
+included once in the bounded model context, fenced as untrusted history. Historical citation numbers and prior
+answers never become current institutional evidence. Passage bodies for citations
+the conversation already used are reattached to the next turn's numbered context
+(newest first, at most eight passages and 12 KB of text, and only sources still
+inside an explicit source selection). That set is separate from the history
+transcript, so uncited retrieved passages still do not enlarge it. A passage
+already returned by the new search is not duplicated. Old citation numbers are
+not reused; the model cites the new numbers.
 
-There is currently no automatic summary. Context or referenced revisions larger
+There is currently no automatic summary. On the legacy path, context or referenced revisions larger
 than `CONVERSATION_CONTEXT_MAX_BYTES` (default 12000) fail before a new turn/model
 call, retain all saved history, and explain the limit. A successful-summary
-coverage boundary remains required before long conversations can continue
-without this limit. Normal answers expose `claims` as
+coverage boundary remains required before the legacy path can continue
+without this limit. Opt-in research uses the explicit recent-history selection,
+paged transcript/evidence reads and published notebook described above instead.
+It does not claim that a selected view covers every archived turn. Normal answers expose `claims` as
 `{text, citationChunkIds, reviewStatus:'unreviewed'}`; these are paragraph review
 units, not proven facts or atomic claim decomposition.
 Review-unit extraction retains every nonempty paragraph, including uncited units
@@ -2040,6 +2117,9 @@ supply evidence, not additional instructions. There is no separate build plan.
   summaries aid context, never become factual evidence. Follow-ups resolve the
   current topic and selected sources before retrieval; questions about the
   conversation use conversation history rather than unrelated readings.
+  The research working space may instead select recent whole turns with explicit
+  omission counts and on-demand archive reads; it must not present that selection
+  as complete transcript coverage.
 
 ### Native artifacts and imports
 

@@ -1,10 +1,14 @@
 # Uploaded advising materials: initial integration plan
 
-Status: revised on 2026-10-15 after review. One-time unpacking, Git exclusion,
-the offline catalog option, and staged catalog regeneration are complete.
-Source-model extensions, discovery metadata, and reviewed pilot preparation are
-implemented. Shared-corpus publication and structured degree auditing remain
-future work; the isolated pilot validation is recorded below.
+Status: revised again on 2026-10-15 after the follow-up research-fidelity work.
+One-time unpacking, Git exclusion, the offline catalog option, staged catalog
+regeneration, source-model extensions, discovery metadata, and reviewed pilot
+preparation are complete. The three follow-up items below (retain a candidate's
+program evidence, make terminal correction reliable, distinguish required-course
+mentions) are implemented and tested; a bounded live rerun recorded two passing
+cases and one now-passing stored proposal. Shared-corpus publication and
+structured degree auditing remain future work; the isolated pilot validation is
+recorded below.
 `docs/architecture.md` remains the design contract. Update its ingest, provenance,
 program binding, and research sections when implementing any new behavior below.
 The existing database was inspected read-only; shared source rows were not changed.
@@ -480,13 +484,27 @@ Continuation findings on 2026-10-15:
 - The final affected preparation/research/reconciliation/contract/no-model suite
   passed 116 tests; Ruff passed. Real-provider checks remain manual and outside
   pytest.
+- Follow-up the same day implemented the three items below. The finish request now
+  retains a declared candidate's program evidence ahead of newer reads, so a
+  compared program stays citable; `research_final` treats a code a cited program
+  requirement establishes as a mention, not an unread recommendation; and the
+  state-update tool defaults an omitted `expected_revision` to the run's current
+  revision instead of stranding candidates. A live six-case rerun (default smoke
+  budget) recorded `uploads-md-admissions` and `uploads-datasci-ai` publishing
+  valid answers, and left `uploads-premed` failing only on the recommendation
+  distinction; re-validating that stored proposal against its saved evidence with
+  the new validator now passes without spending more provider tokens.
+  `uploads-chemistry-ba` failed on the omitted revision before the fix, and the two
+  negative cases were not reached before the budget ended; both still need a fresh
+  live run. No invalid final proposal was published. Regression tests were added to
+  `test_research_types.py`.
 
-Shared publication remains gated. The next focused work is to retain adequate
-program evidence for each compared candidate within the bounded prompt, make
-terminal schema/reference correction reliable, and distinguish required-course
-mentions from recommendations to enroll. Repeat the broad comparison and exact
-core-plus-track document case after those changes. Passing source lookup or
-structural citation checks alone does not close this gate.
+Shared publication remains gated. The three focused items above are implemented
+and tested; the remaining step is a fresh bounded live rerun of the broad
+comparison (`uploads-premed`), the exact core-plus-track document case
+(`uploads-datasci-ai`, now passing), and the still-unconfirmed
+`uploads-chemistry-ba` and negative cases. Passing source lookup or structural
+citation checks alone does not close this gate.
 
 Known source conflicts are deliberate coverage gaps: the catalog's QTM 150+151
 does not establish substitution by the checklist's DATASCI 160; a same-number

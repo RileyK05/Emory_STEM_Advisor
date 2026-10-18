@@ -1,0 +1,16 @@
+name: Install Chromium
+description: Install the Playwright Chromium build the frontend browser checks launch.
+runs:
+  using: composite
+  steps:
+    - name: Install Chromium
+      shell: bash
+      working-directory: ${{ github.workspace }}/frontend
+      run: node node_modules/playwright-core/cli.js install --with-deps chromium
+    - name: Export Chromium path
+      shell: bash
+      working-directory: ${{ github.workspace }}/frontend
+      run: |
+        browser="$(node --input-type=module -e 'import { chromium } from "playwright-core"; process.stdout.write(chromium.executablePath())')"
+        test -x "$browser"
+        echo "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=$browser" >> "$GITHUB_ENV"

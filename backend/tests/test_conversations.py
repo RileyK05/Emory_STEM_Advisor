@@ -8,7 +8,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.auth.dependencies import get_workspace_key
-from app.conversations.store import ConversationStore, history_prompt
+from app.conversations.store import (
+    ConversationStore,
+    history_prompt,
+    research_history_prompt,
+    warm_citations,
+)
 from app.db import queries
 from app.db.connection import connect
 from app.jobs.store import JobStore, SafeJobError
@@ -216,6 +221,90 @@ def test_history_carries_citation_labels_not_retrieved_passage_bodies(db, collec
     assert history[0]["evidence"] == {}
     with pytest.raises(HTTPException):
         store.context(conversation, max_bytes=1024)
+    archived = store.context(conversation, max_bytes=1024, archive=True)
+    selected = research_history_prompt(archived, max_bytes=1024)
+    assert len(selected.encode("utf-8")) <= 1024
+    assert json.loads(selected)["omitted_turns"] == 2
+    assert json.loads(selected)["turns"] == []
+    assert archived[-1]["text"] == rows[-1]["text"]
+
+
+def test_warm_citations_keep_cited_bodies_newest_first():
+    rows = [
+        {"role": "assistant", "evidence": {
+            "citations": [{"chunkId": "c-old", "sourceName": "Handbook", "locatorLabel": "pay"}],
+            "contextBlock": [
+                {"chunkId": "c-old", "sourceId": "s-old", "sourceName": "Handbook",
+                 "locatorLabel": "pay", "text": "WARMTOKEN handbook body"},
+                {"chunkId": "c-unused", "sourceId": "s-old", "sourceName": "Handbook",
+                 "locatorLabel": "other", "text": "retrieved but never cited"},
+            ],
+        }},
+        {"role": "assistant", "evidence": {
+            "citations": [
+                {"chunkId": "c-new", "sourceName": "Atlas", "locatorLabel": "CS 170"},
+                {"chunkId": "c-old", "sourceName": "Handbook", "locatorLabel": "pay"},
+            ],
+            "contextBlock": [
+                {"chunkId": "c-new", "sourceId": "s-new", "sourceName": "Atlas",
+                 "locatorLabel": "CS 170", "text": "four credit hours"},
+                {"chunkId": "c-old", "sourceId": "s-old", "sourceName": "Handbook",
+                 "locatorLabel": "pay", "text": "WARMTOKEN handbook body"},
+            ],
+        }},
+    ]
+    warm = warm_citations(rows)
+    assert [item["chunkId"] for item in warm] == ["c-new", "c-old"]
+    assert "retrieved but never cited" not in json.dumps(warm)
+    assert [item["chunkId"] for item in warm_citations(rows, allowed_source_ids={"s-new"})] == ["c-new"]
+    huge = [{"role": "assistant", "evidence": {
+        "citations": [{"chunkId": "c-big"}],
+        "contextBlock": [{"chunkId": "c-big", "sourceId": "s", "sourceName": "s",
+                          "locatorLabel": "s", "text": "x" * 20_000}],
+    }}]
+    assert warm_citations(huge) == []
+
+
+def test_followup_keeps_a_cited_passage_when_retrieval_moves_on(db, collection, tmp_path, monkeypatch):
+    ingest_text(db, collection, tmp_path, "handbook.txt",
+                "WARMTOKEN handbook body about software developer pay.")
+    ingest_text(db, collection, tmp_path, "course.txt",
+                "CS 170 is four credit hours of programming.")
+    provider = FakeProvider("Noted [1].")
+    client = api_client(db, collection, provider=provider)
+    made = client.post("/api/conversations", json={"title": "Warm citations"}).json()
+    path = "/api/conversations/" + made["conversationId"]
+    name = collection_name(db, collection)
+    first = client.post(path + "/turns", json={
+        "query": "WARMTOKEN handbook", "collectionId": name,
+        "requestId": str(uuid4()), "expectedSequence": 0})
+    assert first.status_code == 200, first.text
+    assert "WARMTOKEN" in first.json()["trace"]["contextBlock"][0]["text"]
+
+    from app.api import query_service
+    real_retrieve = query_service.retrieve
+
+    def without_handbook(*args, **kwargs):
+        outcome = real_retrieve(*args, **kwargs)
+        chunks = getattr(outcome, "chunks", None)
+        if not chunks:
+            return outcome
+        kept = [chunk for chunk in chunks if "WARMTOKEN" not in chunk.text]
+        return replace(outcome, chunks=kept)
+
+    monkeypatch.setattr(query_service, "retrieve", without_handbook)
+    second = client.post(path + "/turns", json={
+        "query": "how many credit hours is CS 170", "collectionId": name,
+        "requestId": str(uuid4()), "expectedSequence": 2})
+    assert second.status_code == 200, second.text
+    prompt = provider.last_messages[-1]["content"]
+    assert "WARMTOKEN handbook body" in prompt
+    assert "four credit hours" in prompt
+    texts = [item["text"] for item in second.json()["trace"]["contextBlock"]]
+    assert any("WARMTOKEN" in text for text in texts)
+    assert any("four credit hours" in text for text in texts)
+    history = json.loads(history_prompt(client.get(path).json()["turns"]))
+    assert "WARMTOKEN handbook body" not in json.dumps(history)
 
 
 def test_artifact_context_binds_exact_revision_not_current_title_only(db, collection):

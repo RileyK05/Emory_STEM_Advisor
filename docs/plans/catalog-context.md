@@ -1,8 +1,9 @@
 # Catalog context and search planning: implementation handoff
 
-Status: requested work, not implemented. This file is the implementation handoff
-requested by the user. `architecture.md` remains the design contract; update its
-relevant sections when implementing this change rather than creating further plans.
+Status: implemented. The scoped catalog directory (`retrieval/directory.py`) and
+opt-in query planning (`generation/query_plan.py`, `QUERY_PLANNING_ENABLED`) are
+in place; `docs/architecture.md` is the current contract and supersedes this
+handoff wherever they differ.
 
 ## 1. Outcome
 

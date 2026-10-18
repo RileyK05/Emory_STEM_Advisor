@@ -5,7 +5,7 @@ Real Postgres, real ingest and program binding, no model.
 
 import json
 from dataclasses import replace
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 import pytest
 from psycopg import errors
@@ -416,6 +416,8 @@ def test_evidence_comes_only_from_the_runs_pinned_sources(db, collection, tmp_pa
 
 
 def test_state_is_optimistic_and_cites_only_issued_evidence(db, collection, tmp_path):
+    from app.advising.research_types import ResearchNote, ResearchTask
+
     corpus, scope, store, run = _run(db, collection, tmp_path)
     (course,) = read_courses(db, scope, ["ECON 101"])
     store.acquire(run.run_id, [Acquired(course.chunks[0], scope.sources[corpus["atlas"]])],
@@ -429,6 +431,269 @@ def test_state_is_optimistic_and_cites_only_issued_evidence(db, collection, tmp_
     with pytest.raises(InvalidResearchRecord, match="never issued"):
         store.update_state(run.run_id, state.model_copy(update={
             "active_evidence_ids": ("e9",)}), expected_revision=1)
+    for field, item in (
+        ("plan", ResearchTask(id="read", task="Check the course", evidence_ids=("e9",))),
+        ("notes", ResearchNote(id="read", text="A working summary", basis="evidence_summary",
+                               evidence_ids=("e9",))),
+    ):
+        with pytest.raises(InvalidResearchRecord, match="never issued"):
+            store.update_state(run.run_id, state.model_copy(update={field: (item,)}), expected_revision=1)
+
+
+@pytest.mark.parametrize("scope_kind, publication", [
+    ("all", "answer"), ("crowded", "answer"), ("legacy_null", "answer"), ("narrow", "answer"), ("empty", "answer"),
+    ("other_workspace", "answer"), ("other_conversation", "answer"),
+    ("changed", "answer"), ("all", "failed"), ("all", "abandoned"),
+])
+def test_conversation_workspace_reuses_only_published_scoped_work(
+        db, collection, tmp_path, scope_kind, publication):
+    from app.advising.research_types import Candidate, ResearchNote, ResearchTask, StudentContext
+    from app.config import load_settings
+    from app.conversations.store import ConversationStore
+    from app.generation.research_tools import ResearchSession
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import lenient_config
+
+    corpus = _corpus(db, collection, tmp_path)
+    if scope_kind == "crowded":
+        from tests.test_atlas_import import _SAMPLE
+
+        extra = "\n".join(json.dumps({"code": f"TEST {100 + i}", "title": f"Fixture {i}"})
+                          for i in range(99))
+        corpus["atlas"] = import_atlas_sample(db, collection, tmp_path, text=_SAMPLE + "\n" + extra)
+    conversations = ConversationStore(db, "development")
+    conversation = UUID(conversations.create("Workspace")["conversationId"])
+    request = uuid4()
+    conversations.begin(conversation, request, 0, {"query": "Compare paths"})
+    scope, store = _scope(db, collection), ResearchStore(db, "development")
+    run, _ = store.start(scope, run_id=uuid4(), prompt_version="test", config_version="6",
+                         conversation_id=conversation, request_id=request)
+    course = read_courses(db, scope, ["ECON 201"])[0]
+    store.acquire(run.run_id, [Acquired(c, scope.sources[c.source_id]) for c in course.chunks],
+                  action_kind="read_courses", summary="Read course")
+    if scope_kind == "crowded":
+        for start in range(0, 99, 4):
+            reads = read_courses(db, scope, [f"TEST {100 + i}" for i in range(start, min(start + 4, 99))])
+            store.acquire(run.run_id, [Acquired(c, scope.sources[c.source_id]) for r in reads for c in r.chunks],
+                          action_kind="read_courses", summary="Additional fixture readings")
+    evidence_ids = tuple(r.evidence_id for r in store.evidence(run.run_id))
+    old_handle = "h_" + uuid5(run.run_id, f"program:{corpus['bs']}").hex
+    store.update_state(run.run_id, ResearchState(revision=0, decision_question="Compare paths",
+        student_context=(StudentContext(statement="I prefer flexibility", basis="user_report"),),
+        candidates=(Candidate(id="cs", program_handles=(old_handle,), description="Investigate CS",
+                              status="conditional", evidence_ids=("e1",)),),
+        notes=(ResearchNote(id="course", text="Check this course's restrictions", basis="evidence_summary",
+                            evidence_ids=("e1",)), *(ResearchNote(id=f"preference{i}", text="p" * 650,
+                            basis="user_report") for i in range(7) if scope_kind == "crowded")),
+        plan=(ResearchTask(id="compare", task="Compare the alternatives", status="active"),),
+        active_evidence_ids=evidence_ids), expected_revision=0)
+    result = {"type": publication, "answer": "Saved work", "research": {
+        "runId": str(run.run_id), "outcome": "information", "completeness": "complete"}}
+    if scope_kind == "legacy_null":
+        result.update(citations=None, trace={"contextBlock": None})
+    conversations.finish(conversation, request, result,
+                         state={"answer": "completed", "failed": "failed", "abandoned": "abandoned"}[publication])
+    if scope_kind == "changed":
+        import_atlas_sample(db, collection, tmp_path, text=(
+            '{"code":"ECON 201","title":"New edition","description":"Different material."}'))
+    workspace_key = "other" if scope_kind == "other_workspace" else "development"
+    sources = [] if scope_kind == "empty" else [corpus["policy"]] if scope_kind == "narrow" else None
+    scope = build_scope(db, collection_id=collection, workspace_key=workspace_key, source_ids=sources)
+    store = ResearchStore(db, workspace_key)
+    new_run, _ = store.start(scope, run_id=uuid4(), prompt_version="test", config_version="6")
+    session = ResearchSession(db, scope, store, new_run, settings=load_settings(),
+                              config=lenient_config(), embedder=FakeEmbedder(8))
+    selected = UUID(conversations.create("Separate")["conversationId"]) if (
+        scope_kind == "other_conversation") else conversation
+    session.open_workspace(selected)
+    checkpoint = session.prior_workspace
+    if publication != "answer" or scope_kind in {"other_workspace", "other_conversation"}:
+        assert checkpoint is None and not session.recall_page["data"]["references"]
+    else:
+        notebook = checkpoint["notebook"]
+        assert notebook["student_context"][0]["statement"] == "I prefer flexibility"
+        assert notebook["plan"][0]["task"] == "Compare the alternatives"
+        assert "evidence_ids" not in json.dumps(notebook) and not session.active
+        if scope_kind in {"all", "crowded", "legacy_null"}:
+            assert notebook["notes"][0]["recall_handles"]
+            assert notebook["candidates"][0]["program_handles"] != [old_handle]
+            assert notebook["candidates"][0]["status"] == "investigating"
+            assert [identity for kind, identity in session.handles.values() if kind == "program"] == [corpus["bs"]]
+            if scope_kind == "crowded":
+                assert len(notebook["notes"]) == 8
+                assert len(notebook["recall_handles"]) < len(evidence_ids)
+                assert checkpoint["omitted_items"] > 0
+                cursor = session.recall_page["next_cursor"]
+                registry = session.registry()
+                denied = registry.invoke("advisor_read_conversation", {"cursor": cursor},
+                                         session.tool_scope(lambda: None))
+                assert denied.status == "not_found" and not session.conversation_page
+                continued = registry.invoke("advisor_recall", {"cursor": cursor, "query": "reworded"},
+                                            session.tool_scope(lambda: None))
+                assert continued.status == "ok" and continued.data["query"] == ""
+                assert continued.data["references"] and not session.active
+        else:
+            assert not notebook["notes"] and not notebook["candidates"]
+            assert checkpoint["unavailable_references"]
+
+
+@pytest.mark.parametrize("resume", ["evidence", "conversation", "escaped_conversation", "reworded_conversation", "natural_query_conversation", "empty_search_conversation"])
+def test_saved_research_reopens_evidence_beyond_warm_history_and_continues_its_plan(
+        db, collection, tmp_path, monkeypatch, resume):
+    from app.advising.research_workspace import ConversationWorkspace
+    from app.api.routes.conversations import ConversationQuery, _prepare_stream_snapshot
+    from app.config import load_settings
+    from app.conversations.store import ConversationStore, warm_citations
+    from app.generation.research_tools import ResearchSession, StateInput
+    from app.llm.base import ToolCall
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import api_client, collection_name, lenient_config
+
+    corpus = _corpus(db, collection, tmp_path)
+    extra = [ingest_text(db, collection, tmp_path, f"seminar-{i}.txt", f"Seminar {i}: one credit.")
+             for i in range(14)]
+    conversations = ConversationStore(db, "development")
+    conversation = UUID(conversations.create("Long investigation")["conversationId"])
+    first = uuid4()
+    filler = '\\"\x01' * 2500 if resume == "escaped_conversation" else "λ" * 7000
+    original_report = "I prefer flexibility. " + filler + " I prefer afternoon classes."
+    conversations.begin(conversation, first, 0, {"query": original_report})
+    scope, store = _scope(db, collection), ResearchStore(db, "development")
+    run, _ = store.start(scope, run_id=uuid4(), prompt_version="test", config_version="6",
+                         conversation_id=conversation, request_id=first)
+    session = ResearchSession(db, scope, store, run, settings=load_settings(),
+                              config=lenient_config(), embedder=FakeEmbedder(8))
+    course = read_courses(db, scope, ["ECON 201"])[0]
+    ids = session.acquire(list(course.chunks), refs=("ECON 201",), action="read_courses")
+    session.update(StateInput.model_validate({"state": {"revision": 0,
+        "decision_question": "Explore economics", "active_evidence_ids": ids,
+        "plan": [{"id": "next", "task": "Check the preparation rules", "status": "pending"}],
+        "notes": [{"id": "macro", "text": "Reopen the economics course", "basis": "evidence_summary",
+                   "evidence_ids": ids}]}}), None)
+    conversations.finish(conversation, first, {"type": "answer", "answer": "Economics is worth exploring.",
+        "research": {"runId": str(run.run_id), "outcome": "information", "completeness": "partial"}})
+    noise = uuid4()
+    selected_sources = [str(corpus["atlas"]), *map(str, extra)]
+    conversations.begin(conversation, noise, 2, {"query": "List seminars", "effective": {
+        "collectionId": collection_name(db, collection), "sourceIds": selected_sources}})
+    bodies = [{"chunkId": str(c.chunk_id), "sourceId": str(c.source_id), "sourceName": "Seminar",
+               "locatorLabel": c.locator_label, "text": c.text}
+              for sid in extra for c in read_document(db, scope, sid).chunks]
+    conversations.finish(conversation, noise, {"type": "answer", "answer": "Seminars listed.",
+        "citations": bodies, "trace": {"contextBlock": bodies}})
+    rows = conversations.context(conversation, max_bytes=1024, archive=True)
+    assert len(warm_citations(rows)) == 8
+    assert all(c["sourceId"] != str(corpus["atlas"]) for c in warm_citations(rows))
+    # The last advising scope must survive falling outside the 50-turn recent
+    # view; these transcript-only turns do not reset that source selection.
+    for sequence in range(4, 56, 2):
+        request = uuid4()
+        conversations.begin(conversation, request, sequence, {"query": "history", "request": {"mode": "history"}})
+        conversations.finish(conversation, request, {"type": "history", "answer": "Saved transcript view."})
+    workspace = ConversationWorkspace(db, scope, store, conversation)
+    if resume == "evidence":
+        from app.util.digest import canonical_json_bytes
+
+        boundary = UUID(conversations.create("Serialized page boundary")["conversationId"])
+        metadata = [{"sequence": 1, "role": "user", "text": "", "text_offset": 0, "complete": True}]
+        request = uuid4()
+        conversations.begin(boundary, request, 0, {"query": "x" * (6000 - len(canonical_json_bytes(metadata)))})
+        conversations.finish(boundary, request, {"type": "history", "answer": ""})
+        boundary_reader = ConversationWorkspace(db, scope, store, boundary)
+        boundary_page, next_position = boundary_reader.turns()
+        assert len(canonical_json_bytes(boundary_page)) <= 6000 and next_position == (2, 0)
+        last_page, next_position = boundary_reader.turns(sequence=2)
+        assert last_page[0]["text"] == "" and next_position is None
+    transcript, position = workspace.turns()
+    assert position and not transcript[0]["complete"]
+    recovered = transcript[0]["text"]
+    while position and position[0] == 1:
+        assert len(json.dumps(transcript, ensure_ascii=False, separators=(",", ":")).encode()) <= 6000
+        transcript, position = workspace.turns(sequence=position[0], offset=position[1])
+        recovered += next(t["text"] for t in transcript if t["sequence"] == 1)
+    assert recovered == rows[0]["text"]
+    observed = {}
+    def script(context, index):
+        def call(name, args):
+            return [ToolCall(f"workspace-{index}", "advisor_" + name, args)]
+        if resume == "empty_search_conversation":
+            if index < 2:
+                return call("read_conversation", {"query": f"unmatchedtoken{index}"})
+            assert context["finish_required"] and not context["exact_evidence_untrusted"]
+            return call("finish", {"decision": {"outcome": "insufficient_evidence", "completeness": "partial",
+                "blocks": [{"kind": "limitation", "text": "The searches did not locate that earlier report."}]}})
+        if resume.endswith("conversation"):
+            page = context.get("conversation_page_untrusted")
+            if page is None:
+                observed["pages"] = []
+                return call("read_conversation", {"query": "original afternoon schedule preference"
+                                                  if resume == "natural_query_conversation" else "afternoon"})
+            text = "".join(turn["text"] for turn in page["data"]["turns_untrusted"])
+            if page.get("next_cursor") not in observed["pages"]:
+                observed.setdefault("report", "")
+                observed["report"] += text
+                observed["pages"].append(page.get("next_cursor"))
+            if page["next_cursor"]:
+                assert not context["finish_required"]
+                arguments = {"cursor": page["next_cursor"]}
+                if resume != "escaped_conversation":
+                    arguments["query"] = "another query" if resume == "reworded_conversation" else "afternoon"
+                return call("read_conversation", arguments)
+            assert observed["report"] == original_report
+            if not context["state_model_assessments"]:
+                return call("update_research", {"state": {"revision": 0, "decision_question": "Continue",
+                    "plan": [{"id": "next", "task": "Recover the reported preference", "status": "done"}],
+                    "notes": [{"id": "preference", "text": "Student prefers afternoon classes", "basis": "user_report"}]}})
+            return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+                "blocks": [{"kind": "assumption", "text": "You reported preferring afternoon classes."}]}})
+        if index == 0:
+            previous = context["prior_workspace_untrusted"]["notebook"]
+            assert previous["plan"][0]["task"] == "Check the preparation rules"
+            assert not context["exact_evidence_untrusted"]
+            assert json.loads(context["history_untrusted"].split("\nExact referenced")[0])["omitted_turns"] > 0
+            observed["handle"] = previous["notes"][0]["recall_handles"][0]
+            assert context["conversation_recall_index"]["next_cursor"]
+            return call("recall", {"cursor": context["conversation_recall_index"]["next_cursor"]})
+        if index == 1:
+            assert observed["handle"] in {r["handle"] for r in context["conversation_recall_index"]["data"]["references"]}
+            return call("recall", {"handles": [observed["handle"]]})
+        ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+        assert ids and "Intermediate Macroeconomics" in context["exact_evidence_untrusted"][0]["exact_text"]
+        if index == 2:
+            return call("update_research", {"state": {"revision": 0, "decision_question": "Continue",
+                "active_evidence_ids": ids, "plan": [{"id": "next", "task": "Check preparation",
+                                                       "status": "done", "evidence_ids": ids}]}})
+        if index == 3:
+            return call("recall", {"handles": [observed["handle"]]})
+        return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+            "blocks": [{"kind": "fact", "text": "ECON 201 lists ECON 101 as preparation.",
+                        "evidence_ids": ids}]}})
+    provider = _research_provider(monkeypatch, script)
+    client = api_client(db, collection, provider=provider)
+    client.app.state.settings = replace(client.app.state.settings, llm_provider="openai", llm_model_id="fake",
+        tools_enabled=True, advising_research_enabled=True, routing_enabled=False, db_pool_max_size=0,
+        conversation_context_max_bytes=1024)
+    stream_snapshot = _prepare_stream_snapshot(conversation,
+        ConversationQuery(query="Continue that work", requestId=uuid4(), expectedSequence=56),
+        db, client.app.state.settings, "development", conversations)
+    assert json.loads(stream_snapshot["context"]["historyContext"])["omitted_turns"] > 0
+    assert set(stream_snapshot["effective"]["sourceIds"]) == set(selected_sources)
+    response = client.post(f"/api/conversations/{conversation}/turns", json={"query": "Continue that work",
+        "requestId": str(uuid4()), "expectedSequence": 56})
+    assert response.status_code == 200, response.text
+    if resume == "evidence":
+        assert response.json()["citations"][0]["chunkId"] == str(course.chunks[0].chunk_id)
+    elif resume != "empty_search_conversation":
+        assert not response.json()["citations"] and "afternoon" in response.json()["answer"]
+    else:
+        assert not response.json()["citations"]
+    saved = store.get(UUID(response.json()["research"]["runId"]))
+    if resume == "empty_search_conversation":
+        assert saved.status == "insufficient_evidence" and saved.state is None
+        assert len(provider.requests) == 3
+    else:
+        assert saved.status == "completed" and saved.state.plan[0].status == "done"
+    assert set(saved.scope_manifest["selection"]) == set(selected_sources)
 
 
 def test_decision_facts_need_issued_evidence_and_runs_are_workspace_private(

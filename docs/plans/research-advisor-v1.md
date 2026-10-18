@@ -1,7 +1,9 @@
 # Research advisor V1: end-to-end implementation handoff
 
-Status: proposed implementation, requested 2026-10-12. No feature described as
-new in this document is implemented by writing this plan.
+Status: implemented. Migrations 037–040 and the `app/advising/research_*.py` /
+`app/generation/research_*.py` modules implement V1; `docs/architecture.md` is the
+current contract and supersedes this handoff wherever they differ. This file is
+kept as the requested design history.
 
 `docs/architecture.md` remains the single design contract. This is the requested
 handoff: implement its decisions in bounded milestones and update the relevant

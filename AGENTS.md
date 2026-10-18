@@ -4,8 +4,11 @@ RAG advisor (Python backend + React frontend). The data layer is built
 (keyword, embeddings, prerequisite graph, similarity graph; fusion, traces,
 eval runner). An HTTP API serves retrieval, grounded answer generation,
 sources, and recommendations; the frontend runs on a mock client by default
-and has a real `HttpClient`. `docs/architecture.md` is the single design
-doc and the contract that new code and the frontend API types must match. It
+and has a real `HttpClient`. An optional research advisor (migrations 037–040,
+`ADVISING_RESEARCH_ENABLED`) compares programs and documents under a pinned
+source scope and returns a typed, evidence-linked decision. `docs/architecture.md`
+is the single design doc and the contract that new code and the frontend API
+types must match. It
 folds in the Stacks provenance notes and an appendix of prior-system failure
 modes; there is no separate build plan.
 
@@ -22,29 +25,40 @@ modes; there is no separate build plan.
     runner, and the named-query loader. Fresh installs apply `db/baseline/032_schema.sql`.
     `db/legacy_migrations/001`–`032` is the immutable upgrade archive for existing
     databases/backups. Future numbered changes start at `db/migrations/033_*.sql`;
-    never edit an applied file or the baseline. Every
+    the current head is `040_source_applicability.sql`. Never edit an applied file or
+    the baseline. Every
     SQL statement is a `-- name:` block in `db/queries/*.sql`; no inline SQL in
     app code.
-  - `ingest/` — extract, normalize, locators, chunk, embed (`pipeline.py`).
+  - `ingest/` — extract, normalize, locators, chunk, embed (`pipeline.py`),
+    verified source provenance (`provenance.py`), and the deterministic preparation
+    of explicitly reviewed advising documents (`advising_documents.py`).
   - `atlas/` — course atlas records, the deterministic requisites parser, the
     importer, and `catalog.py` (Coursedog catalog page -> atlas record).
-  - `advising/` — read-only, citation-scoped atlas/topic snapshots and a pure
-    deterministic prerequisite/corequisite sequence planner. Missing evidence,
+  - `advising/` — read-only, citation-scoped atlas/topic snapshots, the pure
+    deterministic prerequisite/corequisite sequence planner, mention comparison
+    (`comparison.py`), the scoped catalog reader (`catalog.py`), and the research
+    advisor's persisted data layer (`research_repository.py` pins an immutable
+    source/program manifest; `research_store.py` records runs, steps, evidence and
+    decisions; `research_types.py` holds the bounded types). Missing evidence,
     alternatives and conditions produce blockers. Never infer graph facts with
     a model; dependency stages are not verified semester or graduation plans.
   - `programs/` — program requirements: the official catalog PDF split per
-    program, and department pages converted to Markdown (ingested as ordinary
-    documents), plus `requirements.py`, a deterministic parser that keeps each
-    requirement line raw and reads off course codes and explicit "choose N"
-    counts into `programs` / `program_items` / `program_course_mentions`
-    (migration 031). Never feeds the prerequisite graph; no model.
+    program (`catalog_pdf.py`), department pages converted to Markdown
+    (`pages.py`, ingested as ordinary documents), the deterministic parser
+    (`requirements.py`) that keeps each requirement line raw and reads off course
+    codes and explicit "choose N" counts into `programs` / `program_items` /
+    `program_course_mentions` (migration 031), and the exact-identity binder
+    (`binding.py`, `importer.py`) that ties each program to the source revision it
+    was parsed from. Never feeds the prerequisite graph; no model.
   - `retrieval/` — config loader, seams (`keyword`, `embed`, `prereq`),
     fusion, trace, `retrieve()`, eval runner, and the scoped catalog
     `directory` that opt-in query planning (`generation/query_plan.py`,
     `QUERY_PLANNING_ENABLED`) reads before retrieval.
   - `generation/` — assembles the grounded answer prompt and maps the model's
-    inline citations back to chunks. Calls the provider seam; never imports a
-    concrete provider.
+    inline citations back to chunks, plus the research loop
+    (`research_controller.py`, `research_tools.py`, `research_final.py`), factual
+    claim units (`claims.py`), and opt-in query planning (`query_plan.py`). Calls
+    the provider seam; never imports a concrete provider.
   - `api/` — FastAPI app factory, shared dependencies, serializers, and
     request/response schemas (mirroring
     `frontend/src/api/types.ts`). Route modules live in `api/routes/`, grouped
@@ -81,15 +95,18 @@ modes; there is no separate build plan.
 - `backend/configs/` — `retrieval.toml` (versioned tunables; unknown keys are
   errors), `routing.toml` (task-to-model-role routing signals),
   `simgraph_nudges.toml` (hand-written cluster nudges), and
-  `programs.toml` (hand-picked department requirement pages), and
-  `catalog-directory.md` (the supplied discovery directory for LLM planning;
-  not citable evidence).
+  `programs.toml` (hand-picked department requirement pages),
+  `advising_sources.toml` (the reviewed allowlist for the local advising-upload
+  pilot; unlisted files are excluded), and `catalog-directory.md` (the supplied
+  discovery directory for LLM planning; not citable evidence).
 - `backend/scripts/` — `scrape_catalog`, `scrape_programs`, `import_programs`,
   `ingest`, `import_atlas`, `build_simgraph`, `eval_retrieval`, `serve`,
   `worker` (background jobs), `migrate`, `backup`, `rotate_profile_key`,
   `schema_baseline` (disposable schema parity check), `restore_consolidated`
-  (verified backup into a new embedded baseline database), and
-  `reconcile_source_origins` (explicit legacy program versions) (run with
+  (verified backup into a new embedded baseline database),
+  `reconcile_source_origins` (explicit legacy program versions), and
+  `prepare_advising_documents` (prepare the reviewed advising-upload pilot;
+  `--check` validates the registry) (run with
   `python -m scripts.<name>` from `backend/`). They use `DATABASE_URL`, or an
   embedded `pgserver` database under `DATA_DIR/pgserver` when it is unset.
   `scripts/smoke/` holds explicit model/service smoke checks, invoked as
@@ -173,6 +190,7 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.import_programs --collection NAME   # after ingest: parsed requirements -> DB, bound to exact sources
 ../.venv/Scripts/python -m scripts.import_atlas --collection NAME FILE
 ../.venv/Scripts/python -m scripts.build_simgraph --collection NAME [--nudges FILE]
+../.venv/Scripts/python -m scripts.prepare_advising_documents           # reviewed uploads -> data/staging/
 ../.venv/Scripts/python -m scripts.eval_retrieval [--cases FILE]
 ../.venv/Scripts/python -m scripts.serve                 # HTTP API on :8000
 ../.venv/Scripts/python -m scripts.schema_baseline       # baseline == legacy final schema, disposable DBs
@@ -212,6 +230,14 @@ npm run format:check    # Prettier over src/**/*.{ts,tsx}; `npm run format` fixe
 - Program acquisition timestamps/download URLs belong in sidecars, outside
   canonical Markdown identity. Use the scraper's exact-SHA origin manifest for
   ingestion; reconcile legacy duplicates only with explicitly verified groups.
+- Source provenance is a verified classification
+  (`institutional_catalog | institutional_department | institutional_policy |
+  institutional_publication | career_reference`) with independent title,
+  institution, issuing unit, document roles, applicability facets and an
+  applicability status. Only verified importers write it; ordinary uploads cannot
+  classify themselves. `is_current` is the latest published version of an origin,
+  not the applicability of its rules. The reviewed advising-upload allowlist
+  (`configs/advising_sources.toml`) is explicit; never glob the originals.
 
 - `transformers==4.38.2` is pinned exactly: MiniCPM-2B-128k ships remote code
   against the 4.38 API. `sentence-transformers==3.0.1` was revalidated with

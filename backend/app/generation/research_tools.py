@@ -13,6 +13,7 @@ from app.advising.catalog import load_advising_context
 from app.advising.comparison import compare_mentions
 from app.advising.research_repository import (
     NotInScope,
+    exact_chunks,
     read_courses,
     read_document,
     read_program,
@@ -25,6 +26,7 @@ from app.advising.research_store import (
     StateConflict,
 )
 from app.advising.research_types import FinalDecision, ResearchState
+from app.advising.research_workspace import ConversationWorkspace
 from app.advising.sequence import CourseRequirement, plan_sequence
 from app.atlas.requisites import AllOf, AnyOf, CourseRef
 from app.db import queries
@@ -44,7 +46,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "2"
+RESEARCH_TOOLS_VERSION = "4"
 
 
 class SearchInput(ToolInputModel):
@@ -77,6 +79,21 @@ class CompareInput(ToolInputModel):
 class PreparationInput(ToolInputModel):
     selected_codes: list[CourseCode] = Field(min_length=1, max_length=30)
     completed_codes: list[CourseCode] = Field(default_factory=list, max_length=30)
+
+
+class RecallInput(ToolInputModel):
+    query: str = Field(default="", max_length=300,
+        description="New search when cursor is absent; a cursor preserves its original query.")
+    handles: list[str] = Field(default_factory=list, max_length=4)
+    cursor: str | None = Field(default=None, max_length=128,
+        description="Continue a prior recall search using its original query, even if query is reworded.")
+
+
+class ConversationInput(ToolInputModel):
+    query: str = Field(default="", max_length=300,
+        description="New search when cursor is absent; a cursor preserves its original query.")
+    cursor: str | None = Field(default=None, max_length=128,
+        description="Continue the original query's next page, including within a long turn. Omit cursor to start a different search.")
 
 
 def _coerce_embedded_json(value, model, *, unwrap_key: str):
@@ -230,7 +247,7 @@ class ResearchSession:
         self.conn, self.scope, self.store, self.run = conn, scope, store, run
         self.settings, self.config, self.embedder = settings, config, embedder
         self.handles: dict[str, tuple[str, Any]] = {}
-        self.cursors: dict[str, tuple[str, int]] = {}
+        self.cursors: dict[str, tuple[str, Any]] = {}
         self.program_reads = {}
         self.program_positions = {}
         self.program_sizes = {}
@@ -248,6 +265,87 @@ class ResearchSession:
         self.state = None
         self.validation_hint = ""
         self.remaining_limits = {}
+        self.workspace = None
+        self.prior_workspace = None
+        self.recall_page = None
+        self.conversation_page = None
+
+    def open_workspace(self, conversation_id):
+        if conversation_id is None:
+            return
+        self.workspace = ConversationWorkspace(self.conn, self.scope, self.store, conversation_id)
+        self.prior_workspace = self.workspace.checkpoint(
+            self.handle, max_bytes=self.config.research.max_state_bytes)
+        self.recall_page = self.recall(RecallInput(), None).model_dump(mode="json")
+        self.store.record_action(self.run.run_id, action_kind="workspace_opened", details={
+            "checkpoint_run_id": self.prior_workspace.get("run_id") if self.prior_workspace else None,
+            "recall_handles": [item["handle"] for item in self.recall_page["data"]["references"]]})
+
+    def recall(self, value, _scope):
+        if self.workspace is None:
+            return ResearchResult(status="not_found")
+        if value.handles:
+            if value.cursor or value.query:
+                return ResearchResult(status="conflict", limitations=[
+                    "Reopen handles separately from searching or paging the archive."])
+            identities = [self.resolve(h, "memory") for h in value.handles]
+            sources = {source for source, _chunk in identities}
+            with self.conn.transaction():
+                verify_sources(self.conn, self.scope, sources)
+                chunks = exact_chunks(
+                    self.conn,
+                    {s: self.scope.sources[s].index_revision for s in sources if s in self.scope.sources},
+                    [chunk for _source, chunk in identities],
+                )
+            self.conn.commit()
+            ids = self.acquire(list(chunks.values()), action="recall_evidence")
+            missing = [h for h, (_s, chunk) in zip(value.handles, identities, strict=True)
+                       if chunk not in chunks]
+            return ResearchResult(status="incomplete" if missing else "ok", data={
+                "evidence_ids": ids, "unavailable_handles": missing},
+                limitations=["Some earlier chunks are no longer indexed; search current sources."]
+                if missing else [])
+        query, key, offset = self._workspace_position(value, "recall:", 0)
+        rows, next_offset = self.workspace.references(query, offset)
+        references = [{"handle": self.handle("memory", (r["source_id"], r["chunk_id"])),
+                       "source_name": r["filename"][:180], "locator_label": (r["locator_label"] or "")[:180],
+                       "discovery_only": True} for r in rows]
+        cursor = self._workspace_cursor(key, next_offset) if next_offset is not None else None
+        result = ResearchResult(data={"references": references, "discovery_only": True, "query": query}, next_cursor=cursor)
+        self.recall_page = result.model_dump(mode="json")
+        return result
+
+    def conversation(self, value, _scope):
+        if self.workspace is None:
+            return ResearchResult(status="not_found")
+        query, key, (sequence, offset) = self._workspace_position(value, "conversation:", (1, 0))
+        turns, next_position = self.workspace.turns(query, sequence=sequence, offset=offset)
+        cursor = self._workspace_cursor(key, next_position) if next_position is not None else None
+        result = ResearchResult(data={"turns_untrusted": turns, "is_source_evidence": False, "query": query},
+                                next_cursor=cursor, limitations=[
+                                    "No conversation turns matched. Use query='' without a cursor to browse saved turns."]
+                                if not turns and query else [])
+        self.conversation_page = result.model_dump(mode="json")
+        self.store.record_action(self.run.run_id, action_kind="read_conversation", details={
+            "query": query, "turn_spans": [{"sequence": t["sequence"],
+                "text_offset": t["text_offset"], "text_characters": len(t["text"]),
+                "complete": t["complete"]} for t in turns], "next_cursor": cursor})
+        return result
+
+    def _workspace_position(self, value, prefix, default):
+        if value.cursor:
+            issued = self.cursors.get(value.cursor)
+            if issued is None or not issued[0].startswith(prefix):
+                raise NotInScope(value.cursor)
+            key, position = issued
+            return key[len(prefix):], key, position
+        key = prefix + value.query
+        return value.query, key, default
+
+    def _workspace_cursor(self, key, position):
+        cursor = "c_" + uuid5(self.run.run_id, f"{key}:{position}").hex
+        self.cursors[cursor] = (key, position)
+        return cursor
 
     def tool_scope(self, check_cancelled):
         return ToolScope(self.scope.workspace_key,
@@ -615,6 +713,11 @@ class ResearchSession:
             ("update_research", "Replace bounded comparison state, set active exact evidence and expected revision.", StateInput, self.update, ()),
             ("finish", "Propose typed final answer. Must be the sole tool call. Cite active evidence IDs, never raw markers.", FinishInput, self.finish, ()),
         ]
+        if self.workspace is not None:
+            entries[0:0] = [
+                ("recall", "Search or page this conversation's earlier cited/read passages; with handles, reopen up to four as current exact evidence. References alone are not evidence.", RecallInput, self.recall, ("handles",)),
+                ("read_conversation", "Search or page earlier published turns as untrusted conversation context, including long turns. Never source evidence.", ConversationInput, self.conversation, ()),
+            ]
         return ResearchRegistry([ToolSpec("advisor_" + name, description, model, ResearchResult,
             ToolCapability.SOURCE_READ if resources else ToolCapability.CORPUS_RESEARCH,
             safe(handler), resources, max_output_bytes=64_000)

@@ -677,10 +677,20 @@ test('Enter during an IME composition does not send the message', async () => {
   } finally { await context.close(); }
 });
 
-test('phone, small-phone, and tablet viewports keep chat and source controls reachable without overflow', async () => {
-  const { context, page } = await setupPage();
+test('desktop, phone, and tablet viewports keep long chat lists separate from reachable navigation', async () => {
+  const initialConversations = Array.from({ length: 40 }, (_, index) => ({
+    conversationId: `layout-chat-${index}`, title: `Saved chat ${index + 1}`, lastSequence: 0,
+    pendingRequestId: null, createdAt: '2026-10-08T00:00:00Z', updatedAt: '2026-10-08T00:00:00Z',
+  }));
+  const { context, page } = await setupPage({
+    initialConversations,
+    initialConversationRecords: initialConversations.map((item) => ({ ...item, turns: [] })),
+  });
   try {
-    for (const size of [{ width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 320, height: 568 }]) {
+    const navigation = page.getByRole('navigation', { name: 'Chats and library' });
+    const chats = navigation.getByRole('list', { name: 'Recent chats' });
+    await chats.getByRole('button').last().waitFor({ state: 'attached' });
+    for (const size of [{ width: 1280, height: 738 }, { width: 1024, height: 480 }, { width: 390, height: 844 }, { width: 768, height: 1024 }, { width: 320, height: 568 }]) {
       await page.setViewportSize(size);
       const scope = page.getByRole('button', { name: /^Search in:/ });
       await scope.focus();
@@ -690,10 +700,28 @@ test('phone, small-phone, and tablet viewports keep chat and source controls rea
       assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).isVisible(), true);
       const viewport = await page.evaluate(() => ({ width: window.innerWidth, scrollWidth: document.documentElement.scrollWidth }));
       assert.ok(viewport.scrollWidth <= viewport.width, `overflow at ${size.width}px: ${JSON.stringify(viewport)}`);
+
+      if (size.width < 900) await page.getByRole('button', { name: 'Open menu' }).click();
+      await navigation.getByRole('button', { name: 'New chat', exact: true }).hover();
+      const links = navigation.locator('.sidebar-links');
+      const linksBefore = await links.boundingBox();
+      const listBounds = await chats.boundingBox();
+      assert.ok(listBounds.y + listBounds.height <= linksBefore.y, `chats overlap navigation at ${size.width}px`);
+      assert.ok(linksBefore.y + linksBefore.height <= size.height, `navigation is offscreen at ${size.width}px`);
+      await chats.getByRole('button').last().scrollIntoViewIfNeeded();
+      assert.equal((await links.boundingBox()).y, linksBefore.y, 'scrolling chats keeps navigation in place');
+      for (const button of await links.getByRole('button').all()) {
+        assert.equal(await button.evaluate((el) => {
+          const rect = el.getBoundingClientRect();
+          return el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+        }), true, `${await button.innerText()} is covered at ${size.width}px`);
+      }
+      await chats.getByRole('button').last().click();
+      if (size.width < 900) await page.getByRole('button', { name: 'Open menu' }).click();
+      await openSidebar(page, /^Sources/);
+      await page.getByRole('heading', { name: 'Your sources' }).waitFor();
+      await page.keyboard.press('Escape');
     }
-    await page.getByRole('button', { name: 'Open menu' }).click();
-    await openSidebar(page, /^Sources/);
-    await page.getByRole('heading', { name: 'Your sources' }).waitFor();
   } finally { await context.close(); }
 });
 

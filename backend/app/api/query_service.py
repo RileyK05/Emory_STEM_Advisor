@@ -36,7 +36,7 @@ from app.operations.budget import OperationBudgetError
 from app.retrieval.config import RetrievalConfig
 from app.retrieval.directory import load_directory
 from app.retrieval.retrieve import retrieve
-from app.retrieval.types import Refusal
+from app.retrieval.types import CitedChunk, Refusal, Retrieved
 from app.tools.executions import ToolExecutionLedger, ToolLedgerError
 
 
@@ -267,6 +267,36 @@ def _publish_answer(conn, outcome, operation, attempt_selections, answer) -> Non
         raise HTTPException(422, detail=str(exc)) from exc
 
 
+def _append_warm_citations(chunks: list[CitedChunk], warm) -> list[CitedChunk]:
+    """Add previously cited passages that this retrieval did not already return."""
+    if not warm:
+        return list(chunks)
+    present = {str(chunk.chunk_id) for chunk in chunks}
+    merged = list(chunks)
+    for item in warm:
+        if not isinstance(item, dict):
+            continue
+        chunk_id = str(item.get("chunkId") or "")
+        if not chunk_id or chunk_id in present:
+            continue
+        text = item.get("text")
+        if not isinstance(text, str) or not text:
+            continue
+        try:
+            parsed_chunk = UUID(chunk_id)
+            parsed_source = UUID(str(item.get("sourceId") or ""))
+        except ValueError:
+            continue
+        merged.append(CitedChunk(
+            chunk_id=parsed_chunk, source_id=parsed_source, chunk_index=0,
+            source_name=str(item.get("sourceName") or ""),
+            locator_label=str(item.get("locatorLabel") or ""), text=text, seams=(),
+            normalized_score=0.0, source_slot=0, rank=len(merged) + 1,
+        ))
+        present.add(chunk_id)
+    return merged
+
+
 def query_response(
     body: QueryRequest, conn, settings: Settings, config: RetrievalConfig,
     embedder: Embedder, provider: Provider, *,
@@ -282,6 +312,7 @@ def query_response(
     connection_runtime=None,
     retrieval_query: str | None = None,
     history_context: str | None = None,
+    warm_citations: list | None = None,
     conversation_id: UUID | None = None,
     conversation_request_id: UUID | None = None,
 ) -> AnswerResponse | RefusalResponse:
@@ -290,7 +321,7 @@ def query_response(
     collection_id, _ = deps.resolve_collection(conn, settings, body.collectionId)
     effective_source_ids = _fence_sources(conn, workspace_key, collection_id, body, source_snapshot)
     conn.commit()  # No read transaction across query embedding or generation.
-    if settings.advising_research_enabled:
+    if settings.advising_research_enabled and getattr(body, "mode", "advising") == "advising":
         from app.api.research_service import research_response
 
         return research_response(
@@ -354,10 +385,20 @@ def query_response(
     if plan_warning:
         outcome.trace.warnings.append("query planning skipped: " + plan_warning)
     check_cancelled()
+    kept = _append_warm_citations(
+        [] if isinstance(outcome, Refusal) else outcome.chunks, warm_citations)
     if isinstance(outcome, Refusal):
-        persist_response(conn, outcome, status="refusal", reason=outcome.reason)
-        _observe_gap(conn, workspace_key, collection_id, body, outcome, "retrieval_refusal")
-        return refusal_response(outcome, settings=settings, latency_ms=latency_ms())
+        if not kept:
+            persist_response(conn, outcome, status="refusal", reason=outcome.reason)
+            _observe_gap(conn, workspace_key, collection_id, body, outcome, "retrieval_refusal")
+            return refusal_response(outcome, settings=settings, latency_ms=latency_ms())
+        outcome = Retrieved(chunks=kept, trace=outcome.trace)
+        outcome.trace.warnings.append(
+            "Previously cited passages were kept in the numbered context.")
+    elif len(kept) != len(outcome.chunks):
+        outcome = replace(outcome, chunks=kept)
+        outcome.trace.warnings.append(
+            "Previously cited passages were kept in the numbered context.")
 
     if selection_failure is not None:
         _fail_selection(conn, outcome, selection_failure)

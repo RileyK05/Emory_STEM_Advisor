@@ -192,6 +192,7 @@ class ConversationTurnExecutor:
                 connection_runtime=self.connection_runtime,
                 retrieval_query=effective.get("retrievalQuery"),
                 history_context=_history_context(snapshot, effective),
+                warm_citations=snapshot.get("context", {}).get("warmCitations") or [],
                 conversation_id=conversation_id, conversation_request_id=request_id,
             )
             stream.flush()
