@@ -342,7 +342,7 @@ async def _run_conversations(app, collection: str, requests: int, concurrency: i
                         body = events.json()
                         after = body.get("nextEventId", after)
                         if body.get("done"):
-                            statuses[body.get("requestState") or body.get("jobState")] += 1
+                            statuses[f"{body.get('requestState')}/{body.get('jobState')}"] += 1
                             break
                         await asyncio.sleep(poll_seconds)
                 except Exception as exc:  # noqa: BLE001 - a failed request is a datum
