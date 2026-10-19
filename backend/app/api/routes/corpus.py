@@ -24,6 +24,8 @@ from app.api.schemas import (
 from app.auth.dependencies import get_workspace_key
 from app.config import Settings
 from app.db import queries
+from app.debug.dependencies import get_debug
+from app.debug.store import AppliedDebug
 from app.embeddings.base import Embedder
 from app.ingest.pipeline import ingest_file
 from app.llm.base import Provider
@@ -95,13 +97,17 @@ def list_sources(
 def query(
     body: QueryRequest, request: Request, conn: Conn, settings: SettingsDep, config: ConfigDep,
     embedder: EmbedderDep, provider: ProviderDep, workspace: WorkspaceDep,
+    debug: Annotated[AppliedDebug | None, Depends(get_debug)],
 ) -> AnswerResponse | RefusalResponse:
     from app.api.query_service import query_response
 
-    return query_response(body, conn, settings, config, embedder, provider,
+    effective_settings = debug.settings if debug is not None else settings
+    effective_config = debug.config if debug is not None else config
+    return query_response(body, conn, effective_settings, effective_config, embedder, provider,
                           workspace_key=workspace,
                           connection_profiles=request.app.state.connection_profiles,
-                          connection_runtime=request.app.state.connection_runtime)
+                          connection_runtime=request.app.state.connection_runtime,
+                          system_prompt=debug.system_prompt if debug is not None else None)
 
 
 @router.post("/api/sources", response_model=SourceDoc)

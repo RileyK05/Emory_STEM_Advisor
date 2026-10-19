@@ -325,6 +325,60 @@ def test_artifact_context_binds_exact_revision_not_current_title_only(db, collec
     assert reference["spec"]["blocks"][0]["text"] == "Immutable original paragraph"
 
 
+def _admission_client(db, collection, provider, *, database_url=None, **overrides):
+    from fastapi.testclient import TestClient
+
+    from app.api import create_app
+    from app.config import load_settings
+    from tests.fakes import FakeEmbedder
+
+    settings = replace(load_settings(), **overrides)
+    if database_url is not None:
+        settings = replace(settings, database_url=database_url)
+    app = create_app(settings=settings, allow_test_client=True,
+                     embedder=FakeEmbedder(dim=8), provider=provider)
+    app.state.override_conn = db
+    return TestClient(app)
+
+
+def _start(client, collection_name_value, query="alpha"):
+    made = client.post("/api/conversations", json={"title": query}).json()
+    path = "/api/conversations/" + made["conversationId"]
+    body = {"query": query, "collectionId": collection_name_value,
+            "requestId": str(uuid4()), "expectedSequence": 0}
+    return path, body, client.post(path + "/turns/stream", json=body)
+
+
+def test_stream_start_enforces_workspace_admission_cap(db, migrated_dsn, collection, tmp_path):
+    ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is documented.")
+    client = _admission_client(db, collection, FakeProvider("Alpha [1]."),
+                               database_url=migrated_dsn,
+                               admission_max_pending_workspace=1)
+    name = collection_name(db, collection)
+    first_path, first_body, first = _start(client, name)
+    assert first.status_code == 202, first.text
+
+    second_path, second_body, second = _start(client, name, "beta")
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "5"
+
+    # A terminal request releases its slot: abandoning the first admits the second.
+    client.post(f"{first_path}/turns/{first_body['requestId']}/abandon")
+    assert client.post(second_path + "/turns/stream", json=second_body).status_code == 202
+
+
+def test_stream_start_enforces_global_admission_cap(db, migrated_dsn, collection, tmp_path):
+    ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is documented.")
+    client = _admission_client(db, collection, FakeProvider("Alpha [1]."),
+                               database_url=migrated_dsn,
+                               admission_max_pending_global=1)
+    name = collection_name(db, collection)
+    _, _, first = _start(client, name)
+    assert first.status_code == 202, first.text
+    _, _, second = _start(client, name, "beta")
+    assert second.status_code == 429
+
+
 def test_stream_request_replay_inspects_job_before_reloading_context(db, collection):
     provider = FakeProvider("This provider must not be called by stream submission.")
     client = api_client(db, collection, provider=provider)

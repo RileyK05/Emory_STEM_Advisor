@@ -22,7 +22,7 @@ from app.connections.models import (
 )
 from app.connections.selection import StaleProfileSelection, resolve, resolve_quality_fallback
 from app.db import queries
-from app.db.connection import connector, resolved_database_url
+from app.db.connection import connector, release_borrow, resolved_database_url
 from app.embeddings.base import Embedder
 from app.gaps.store import GapError, GapStore
 from app.generation.answer import GenerationRejected, answer_from_context, citation_repair_hint
@@ -178,6 +178,7 @@ def _plan_query(conn, settings, provider, selection, operation, config, question
     directory = load_directory(conn, collection_id=collection_id, workspace_key=workspace_key,
                                source_ids=source_ids)
     conn.commit()  # Release the read before provider I/O.
+    release_borrow(conn)
     if directory.empty:
         return None, "no catalog entries in scope"
     try:
@@ -244,6 +245,7 @@ def _tool_answer_provider(conn, body, outcome, operation, settings, provider, se
         if settings.answer_citation_repair_enabled else None,
         required_tool_names=frozenset({"advisor_plan_course_sequence"})
         if _requests_course_sequence(body.query) else frozenset(),
+        before_provider_call=lambda: release_borrow(conn),
     )
 
 
@@ -315,6 +317,7 @@ def query_response(
     warm_citations: list | None = None,
     conversation_id: UUID | None = None,
     conversation_request_id: UUID | None = None,
+    system_prompt: str | None = None,
 ) -> AnswerResponse | RefusalResponse:
     check_cancelled()
     on_progress({"stage": "retrieving"})
@@ -452,6 +455,8 @@ def query_response(
             on_provisional_text=(on_provisional_text if not settings.tools_enabled else None),
             repair_citations=settings.answer_citation_repair_enabled and not settings.tools_enabled,
             on_provisional_reset=on_provisional_reset,
+            before_provider_call=lambda: release_borrow(conn),
+            system_prompt=system_prompt,
         )
 
     try:

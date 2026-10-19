@@ -80,7 +80,7 @@ class ToolAnswerProvider:
                  operation_id, workspace_key, scope_fingerprint,
                  on_attempt, cancellation, on_progress, on_provisional_text=None,
                  on_provisional_reset=None, final_repair=None,
-                 required_tool_names=frozenset()):
+                 required_tool_names=frozenset(), before_provider_call=None):
         self._provider = provider
         self._controller = controller
         self._registry = registry
@@ -97,6 +97,7 @@ class ToolAnswerProvider:
         self._on_provisional_reset = on_provisional_reset
         self._final_repair = final_repair
         self._required_tool_names = required_tool_names
+        self._before_provider_call = before_provider_call
 
     def generate(self, request: GenerationRequest) -> GenerationResult:
         return self._controller.run(
@@ -116,4 +117,5 @@ class ToolAnswerProvider:
             on_attempt=self._on_attempt,
             final_repair=self._final_repair,
             required_tool_names=self._required_tool_names,
+            before_provider_call=self._before_provider_call,
         )

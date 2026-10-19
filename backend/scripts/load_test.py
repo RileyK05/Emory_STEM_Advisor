@@ -212,16 +212,21 @@ def _percentile(values: list[float], fraction: float) -> float:
 
 
 def _summary(label: str, statuses: Counter, latencies: list[float], elapsed: float,
-             extra: str = "") -> None:
+             extra: str = "", waits: list[float] | None = None) -> None:
     print(f"\n{label}")
     if extra:
         print(f"  {extra}")
     print("  status: " + ", ".join(f"{key}={value}" for key, value in sorted(statuses.items())))
     if latencies:
-        print(f"  latency ms: p50={_percentile(latencies, 0.50) * 1000:.0f} "
+        print(f"  service ms: p50={_percentile(latencies, 0.50) * 1000:.0f} "
               f"p95={_percentile(latencies, 0.95) * 1000:.0f} "
               f"p99={_percentile(latencies, 0.99) * 1000:.0f} "
               f"max={max(latencies) * 1000:.0f} mean={statistics.mean(latencies) * 1000:.0f}")
+    if waits:
+        print(f"  queue wait ms: p50={_percentile(waits, 0.50) * 1000:.0f} "
+              f"p95={_percentile(waits, 0.95) * 1000:.0f} "
+              f"p99={_percentile(waits, 0.99) * 1000:.0f} "
+              f"max={max(waits) * 1000:.0f}")
         print(f"  throughput: {len(latencies) / elapsed:.2f} req/s over {elapsed:.1f}s")
 
 
@@ -237,9 +242,68 @@ def _pools() -> None:
               f"available={item['available']} waiting={item['waiting']} errors={item['errors']}")
 
 
+async def _run_arrivals(app, collection: str, rate: float, duration: float,
+                        max_inflight: int, timeout: float
+                        ) -> tuple[Counter, list[float], float, str, list[float]]:
+    """Open-loop scheduled arrivals: measure queue wait separately from service."""
+    statuses: Counter = Counter()
+    details: Counter = Counter()
+    latencies: list[float] = []
+    waits: list[float] = []
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost",
+                                 timeout=timeout) as client:
+        gate = asyncio.Semaphore(max_inflight)
+        tasks = []
+
+        async def one(index: int, scheduled: float) -> None:
+            async with gate:
+                started = time.perf_counter()
+                waits.append(started - scheduled)
+                try:
+                    response = await client.post(
+                        "/api/query",
+                        json={"query": QUERIES[index % len(QUERIES)], "collectionId": collection},
+                    )
+                    statuses[str(response.status_code)] += 1
+                    if response.status_code >= 400:
+                        try:
+                            details[str(response.json().get("detail"))[:80]] += 1
+                        except Exception:  # noqa: BLE001 - diagnostics only
+                            details[response.text[:80]] += 1
+                except Exception as exc:  # noqa: BLE001 - a failed request is a datum
+                    statuses[type(exc).__name__] += 1
+                finally:
+                    latencies.append(time.perf_counter() - started)
+
+        started = time.perf_counter()
+        total = max(1, int(rate * duration))
+        for index in range(total):
+            scheduled = started + index / rate
+            delay = scheduled - time.perf_counter()
+            if delay > 0:
+                await asyncio.sleep(delay)
+            tasks.append(asyncio.create_task(one(index, scheduled)))
+        await asyncio.gather(*tasks)
+        elapsed = time.perf_counter() - started
+    extra = f"rate={rate}/s duration={duration:.0f}s inflight<={max_inflight}"
+    if details:
+        extra += " errors=" + ", ".join(f"{key}×{value}" for key, value in details.items())
+    return statuses, latencies, elapsed, extra, waits
+
+
+async def _warmup(app, timeout: float) -> None:
+    """Run one request so per-process schema bootstrap is not measured as load."""
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://localhost",
+                                 timeout=timeout) as client:
+        await client.get("/api/collections")
+
+
 async def _run_queries(app, collection: str, requests: int, concurrency: int,
                        timeout: float) -> tuple[Counter, list[float], float, str]:
     statuses: Counter = Counter()
+    details: Counter = Counter()
     latencies: list[float] = []
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://localhost",
@@ -255,6 +319,11 @@ async def _run_queries(app, collection: str, requests: int, concurrency: int,
                         json={"query": QUERIES[index % len(QUERIES)], "collectionId": collection},
                     )
                     statuses[str(response.status_code)] += 1
+                    if response.status_code >= 400:
+                        try:
+                            details[str(response.json().get("detail"))[:80]] += 1
+                        except Exception:  # noqa: BLE001 - diagnostics only
+                            details[response.text[:80]] += 1
                 except Exception as exc:  # noqa: BLE001 - a failed request is a datum
                     statuses[type(exc).__name__] += 1
                 finally:
@@ -263,7 +332,10 @@ async def _run_queries(app, collection: str, requests: int, concurrency: int,
         started = time.perf_counter()
         await asyncio.gather(*(one(index) for index in range(requests)))
         elapsed = time.perf_counter() - started
-    return statuses, latencies, elapsed, f"concurrency={concurrency}"
+    extra = f"concurrency={concurrency}"
+    if details:
+        extra += " errors=" + ", ".join(f"{key}×{value}" for key, value in details.items())
+    return statuses, latencies, elapsed, extra
 
 
 def _worker_loop(store, executor, worker_id: str, stop: threading.Event) -> None:
@@ -363,6 +435,12 @@ def main() -> None:
     parser.add_argument("--scenario", choices=("query", "conversation"), default="query")
     parser.add_argument("--requests", type=int, default=100)
     parser.add_argument("--concurrency", type=int, default=10)
+    parser.add_argument("--arrival-rate", type=float, default=0,
+                        help="query scenario: open-loop arrivals per second (0 = closed loop)")
+    parser.add_argument("--duration", type=float, default=30,
+                        help="query scenario: seconds to offer --arrival-rate")
+    parser.add_argument("--max-inflight", type=int, default=0,
+                        help="query scenario: execution cap (default max(10, --concurrency))")
     parser.add_argument("--workers", type=int, default=1,
                         help="conversation worker threads (one job at a time each)")
     parser.add_argument("--documents", type=int, default=40)
@@ -377,11 +455,17 @@ def main() -> None:
     parser.add_argument("--collection", default=None)
     parser.add_argument("--keep-data", action="store_true",
                         help="keep the per-run data directory (raw uploads, embedded database)")
+    parser.add_argument("--sample-pools", action="store_true",
+                        help="print pool occupancy every second during the run")
+    parser.add_argument("--explain", action="store_true",
+                        help="print EXPLAIN (ANALYZE, BUFFERS) for the vector seam")
     args = parser.parse_args()
     if args.requests < 1 or args.concurrency < 1 or args.workers < 0:
         parser.error("requests and concurrency must be positive; workers cannot be negative")
     if args.scenario == "conversation" and args.workers < 1:
         parser.error("the conversation scenario needs at least one worker")
+    if args.arrival_rate < 0 or args.duration <= 0 or args.max_inflight < 0:
+        parser.error("arrival rate, duration and max in-flight must be positive")
 
     dsn, root, server = _dsn_and_root(args)
     try:
@@ -394,6 +478,7 @@ def main() -> None:
             db_pool_max_size=args.pool_size, auth_mode="development",
             tools_enabled=False, query_planning_enabled=False,
             advising_research_enabled=False,
+            http_threadpool_tokens=max(64, args.concurrency),
         )
         config = _lenient_config(settings)
         embedder = LatencyEmbedder(delay_seconds=args.embed_latency_ms / 1000)
@@ -413,11 +498,58 @@ def main() -> None:
         print(f"database={'external' if args.database_url else 'disposable'} "
               f"collection={collection} chunks={chunks} "
               f"poolSize={settings.db_pool_max_size}")
+        if args.explain:
+            from app.db import queries as named_queries
+
+            explain_conn = connect(dsn)
+            try:
+                plan = explain_conn.execute(
+                    "EXPLAIN (ANALYZE, BUFFERS) " + named_queries.get("embed_search"),
+                    {
+                        "q": embedder.embed_query(QUERIES[0]),
+                        "source_ids": None, "workspace_key": "development",
+                        "model": settings.embedding_model_id, "dim": embedder.dim,
+                        "collection_id": collection_id,
+                        "limit": config.seams.embed.limit,
+                        "min_similarity": config.seams.embed.min_similarity,
+                    },
+                ).fetchall()
+            finally:
+                explain_conn.close()
+            print("vector plan:")
+            for row in plan:
+                print("  " + row["QUERY PLAN"])
 
         app = create_app(settings=settings, config=config, embedder=embedder,
                          provider=provider)
+        asyncio.run(_warmup(app, args.timeout_seconds))
         stop = threading.Event()
+        sampler = None
+        if args.sample_pools:
+            from app.db import queries
+            from app.db.connection import borrow_diagnostics, connect, pool_stats
+
+            def connection_states() -> str:
+                conn = connect(dsn)
+                try:
+                    rows = conn.execute(queries.get("diagnostic_connection_states")).fetchall()
+                    return ",".join(f"{row['state']}={row['connections']}" for row in rows)
+                finally:
+                    conn.close()
+
+            def sample_pools() -> None:
+                while not stop.wait(1.0):
+                    snapshots = pool_stats()
+                    print("  pool sample: " + ", ".join(
+                        f"{item['pool']}={item['size']}/{item['maxSize']}"
+                        f"(free {item['available']}, wait {item['waiting']})"
+                        for item in snapshots)
+                        + f" borrows={borrow_diagnostics()} pg={connection_states()}")
+
+            sampler = threading.Thread(target=sample_pools, daemon=True)
+            sampler.start()
         workers = []
+        waits = None
         try:
             if args.scenario == "conversation":
                 workers = _start_workers(settings, config, embedder, provider,
@@ -425,6 +557,11 @@ def main() -> None:
                 statuses, latencies, elapsed, extra = asyncio.run(
                     _run_conversations(app, collection, args.requests, args.concurrency,
                                        args.timeout_seconds, args.poll_ms / 1000))
+            elif args.arrival_rate > 0:
+                statuses, latencies, elapsed, extra, waits = asyncio.run(
+                    _run_arrivals(app, collection, args.arrival_rate, args.duration,
+                                  args.max_inflight or max(10, args.concurrency),
+                                  args.timeout_seconds))
             else:
                 statuses, latencies, elapsed, extra = asyncio.run(
                     _run_queries(app, collection, args.requests, args.concurrency,
@@ -433,10 +570,12 @@ def main() -> None:
             stop.set()
             for worker in workers:
                 worker.join(timeout=5)
+            if sampler is not None:
+                sampler.join(timeout=2)
 
         from app.db.connection import close_pools
 
-        _summary(args.scenario, statuses, latencies, elapsed, extra=extra)
+        _summary(args.scenario, statuses, latencies, elapsed, extra=extra, waits=waits)
         print(f"  provider calls: {provider.calls}")
         print(f"  corpus: {chunks} chunks in collection {collection_id}")
         _pools()

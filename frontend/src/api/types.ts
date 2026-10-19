@@ -458,6 +458,7 @@ export interface AuthSession {
   workspaceKey?: string;
   displayName?: string | null;
   email?: string | null;
+  role?: 'student' | 'admin' | null;
 }
 export interface NativeArtifactSummary {
   artifactId: string;
@@ -777,4 +778,166 @@ export interface AdvisorClient {
   logout(): Promise<void>;
   listArtifacts(): Promise<NativeArtifactSummary[]>;
   beginLogin(): void;
+}
+
+export interface AdminOverview {
+  users: number;
+  admins: number;
+  disabledUsers: number;
+  activeSessions: number;
+  conversations: number;
+  turns: number;
+  summaries: number;
+  queuedJobs: number;
+  runningJobs: number;
+  failedJobs: number;
+  sources: number;
+  artifacts: number;
+  traces: number;
+}
+
+export interface AdminUser {
+  userId: string;
+  issuer: string;
+  subject: string;
+  workspaceKey: string;
+  displayName?: string | null;
+  email?: string | null;
+  role: 'student' | 'admin';
+  status: 'active' | 'disabled';
+  conversationCount: number;
+  activeSessions: number;
+  createdAt: string;
+  updatedAt: string;
+  lastSeenAt?: string | null;
+}
+
+export interface AdminUserUpdate {
+  role: 'student' | 'admin';
+  status: 'active' | 'disabled';
+}
+
+export interface AdminAuditEntry {
+  auditId: string;
+  actorUserId?: string | null;
+  actorWorkspace: string;
+  action: string;
+  targetType: string;
+  targetId?: string | null;
+  detail: Record<string, unknown>;
+  createdAt: string;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
+}
+
+export interface AdminConversation {
+  conversationId: string;
+  workspaceKey: string;
+  title: string;
+  lastSequence: number;
+  pendingRequestId?: string | null;
+  turnCount: number;
+  summaryCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminConversationTurn {
+  sequence: number;
+  requestId: string;
+  role: 'user' | 'assistant';
+  text: string;
+  status: string;
+  evidence: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AdminTranscript {
+  conversation: AdminConversation;
+  turns: AdminConversationTurn[];
+}
+
+export interface AdminJob {
+  jobId: string;
+  kind: string;
+  scopeKey: string;
+  status: string;
+  attemptCount: number;
+  maxAttempts: number;
+  cancelRequested: boolean;
+  error?: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt?: string | null;
+}
+
+export interface AdminSource {
+  sourceId: string;
+  collectionId: string;
+  filename: string;
+  contentType: string;
+  status: string;
+  workspaceKey?: string | null;
+  indexRevision: number;
+  isCurrent: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DebugSetting {
+  name: string;
+  label: string;
+  group: string;
+  type: 'int' | 'float' | 'bool' | 'str';
+  value: unknown;
+  description: string;
+  minimum?: number | null;
+  maximum?: number | null;
+  choices?: string[] | null;
+}
+
+export interface DebugSettingsResponse {
+  settings: DebugSetting[];
+  retrieval: DebugSetting[];
+  systemPrompt: string;
+  defaultSystemPrompt: string;
+}
+
+export interface DebugSession {
+  debugSessionId: string;
+  expiresAt: string;
+  overrides: {
+    settings?: Record<string, unknown>;
+    retrieval?: Record<string, unknown>;
+  };
+  systemPrompt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DebugSessionCreated extends DebugSession {
+  token: string;
+}
+
+export interface AdminUserSession {
+  createdAt: string;
+  expiresAt: string;
+  revokedAt?: string | null;
+}
+
+export interface AdminArtifact {
+  artifactId: string;
+  workspaceKey: string;
+  kind: string;
+  headRevisionId: string;
+  originalFilename?: string | null;
+  revisionCount: number;
+  createdAt: string;
+}
+
+export interface AdminCollection {
+  collectionId: string;
+  name: string;
+  sourceCount: number;
+  createdAt: string;
 }

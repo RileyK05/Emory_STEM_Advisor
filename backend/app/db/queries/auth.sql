@@ -15,10 +15,30 @@ INSERT INTO auth_sessions (
     %(display_name)s, %(email)s, %(expires_at)s
 );
 
+-- name: upsert_app_user
+INSERT INTO app_users (
+    user_id, issuer, subject, workspace_key, display_name, email, role, last_seen_at
+) VALUES (
+    %(user_id)s, %(issuer)s, %(subject)s, %(workspace_key)s,
+    %(display_name)s, %(email)s,
+    CASE WHEN %(bootstrap)s THEN 'admin' ELSE 'student' END, now()
+)
+ON CONFLICT (issuer, subject) DO UPDATE SET
+    display_name = EXCLUDED.display_name,
+    email = EXCLUDED.email,
+    workspace_key = EXCLUDED.workspace_key,
+    last_seen_at = now(),
+    updated_at = now()
+RETURNING user_id, role, status;
+
 -- name: get_auth_session
-SELECT issuer, subject, workspace_key, display_name, email, expires_at
-FROM auth_sessions
-WHERE session_hash = %(session_hash)s AND revoked_at IS NULL AND expires_at > %(now)s;
+SELECT s.issuer, s.subject, s.workspace_key, s.display_name, s.email,
+       s.expires_at, u.user_id, COALESCE(u.role, 'student') AS role,
+       COALESCE(u.status, 'active') AS status
+FROM auth_sessions s
+LEFT JOIN app_users u ON u.issuer = s.issuer AND u.subject = s.subject
+WHERE s.session_hash = %(session_hash)s
+  AND s.revoked_at IS NULL AND s.expires_at > %(now)s;
 
 -- name: revoke_auth_session
 UPDATE auth_sessions SET revoked_at = %(now)s

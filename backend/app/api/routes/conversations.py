@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api import deps
+from app.api.admission import AdmissionLimits
 from app.api.query_service import query_response
 from app.api.schemas import (
     ConversationRecord,
@@ -21,22 +22,32 @@ from app.api.schemas import (
 from app.artifacts.storage import ArtifactStore
 from app.atlas.records import normalize_code
 from app.auth.dependencies import get_workspace_key
+from app.connections.models import (
+    ConnectionUnavailable,
+    CredentialUnreadable,
+    MissingCredential,
+    required_data_scopes,
+)
+from app.connections.selection import resolve
+from app.conversations.compact import history_context_for_turn
 from app.conversations.store import (
     ConversationStore,
     fingerprint,
-    history_prompt,
     research_history_prompt,
     warm_citations,
 )
 from app.conversations.worker import PROGRESS_STAGES
 from app.db import queries
 from app.db.connection import PooledConnection
+from app.debug.dependencies import get_debug
+from app.debug.store import AppliedDebug
 from app.jobs.store import JobNotFound, JobStore
 from app.jobs.types import JobStatus
 
 router = APIRouter(prefix="/api/conversations")
 Conn = Annotated[object, Depends(deps.get_conn)]
 Workspace = Annotated[str, Depends(get_workspace_key)]
+Debug = Annotated[AppliedDebug | None, Depends(get_debug)]
 
 
 class CreateConversation(BaseModel):
@@ -192,6 +203,32 @@ def _research_scope(store, conversation_id, body):
     return prior, source_ids, body.query
 
 
+def _compaction_context(request, conn, settings, body, workspace):
+    """The provider allowed to summarize this workspace's history, or None.
+
+    Private workspaces require an evaluated connection, exactly like their
+    answers. Compaction must not send private history to the default provider
+    just because the answer will later be rejected for lacking a route.
+    """
+    if not settings.routing_enabled:
+        if workspace == "development":
+            return request.app.state.provider, settings, None
+        return None, settings, None
+    try:
+        selection = resolve(
+            settings, conn, body.query, data_scope="institutional_corpus",
+            required_data_scopes=required_data_scopes(workspace),
+            required_capabilities=frozenset(),
+            profiles=request.app.state.connection_profiles,
+            runtime=request.app.state.connection_runtime,
+        )
+    except (ConnectionUnavailable, CredentialUnreadable, MissingCredential):
+        return None, settings, None
+    if selection is None or getattr(selection, "provider", None) is None:
+        return None, settings, None
+    return selection.provider, selection.settings, selection
+
+
 def _load_references(conn, settings, workspace, body):
     """Load referenced artifact revisions under the conversation byte budget."""
     artifacts = ArtifactStore(conn, workspace_key=workspace, data_dir=settings.data_dir)
@@ -208,9 +245,17 @@ def _load_references(conn, settings, workspace, body):
     return references
 
 
-def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, store):
+def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, store,
+                             compaction_factory=None):
     research = settings.advising_research_enabled and body.mode == "advising"
-    rows = store.context(conversation_id, max_bytes=settings.conversation_context_max_bytes, archive=research)
+    if research:
+        rows = store.context(conversation_id,
+                             max_bytes=settings.conversation_context_max_bytes,
+                             archive=True)
+    else:
+        rows = store.context(conversation_id,
+                             max_bytes=settings.conversation_context_max_bytes,
+                             enforce=False)
     prior, source_ids, retrieval_query = (_research_scope(store, conversation_id, body)
                                          if research else _effective_scope(rows, body))
     collection_name = body.collectionId or prior.get("collectionId")
@@ -229,11 +274,21 @@ def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, s
 
     references = _load_references(conn, settings, workspace, body)
     artifact_context = json.dumps(references, ensure_ascii=False, separators=(",", ":"))
-    history_context = (research_history_prompt(rows, max_bytes=min(
-        6000, settings.conversation_context_max_bytes - len(artifact_context.encode("utf-8"))))
-        if research else history_prompt(rows))
-    if len((history_context + artifact_context).encode("utf-8")) > settings.conversation_context_max_bytes:
-        raise HTTPException(422, "conversation and artifact revisions exceed the context budget")
+    summary = None
+    if research:
+        history_context = research_history_prompt(rows, max_bytes=min(
+            6000, settings.conversation_context_max_bytes - len(artifact_context.encode("utf-8"))))
+        if len((history_context + artifact_context).encode("utf-8")) > settings.conversation_context_max_bytes:
+            raise HTTPException(422, "conversation and artifact revisions exceed the context budget")
+    else:
+        rows, history_context, summary = history_context_for_turn(
+            store, None, settings, conversation_id,
+            max_bytes=settings.conversation_context_max_bytes,
+            allow_compaction=True,
+            provider_factory=compaction_factory,
+            extra_bytes=(len(artifact_context.encode("utf-8"))
+                         + len("\nExact referenced artifact revisions:\n")),
+        )
     conn.commit()
     snapshot = {
         "request": body.model_dump(mode="json", exclude_unset=True),
@@ -246,8 +301,13 @@ def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, s
             "artifactReferences": references,
             "sourceSnapshot": source_snapshot,
         },
-        "context": {"historyContext": history_context,
-                    "warmCitations": _warm_citations(rows, source_ids)},
+        "context": {
+            "historyContext": history_context,
+            "warmCitations": _warm_citations(rows, source_ids),
+            **({"summaryId": str(summary["summary_id"]),
+                "summaryCoveredThrough": summary["covered_through"]}
+               if summary is not None else {}),
+        },
     }
     return snapshot
 
@@ -255,7 +315,7 @@ def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, s
 @router.post("/{conversation_id}/turns/stream", status_code=202,
              response_model=ConversationStreamStartResponse)
 def start_stream(conversation_id: UUID, body: ConversationQuery, request: Request,
-                 conn: Conn, workspace: Workspace):
+                 conn: Conn, workspace: Workspace, debug: Debug):
     if body.mode != "advising":
         raise HTTPException(422, "history mode is a saved transcript read and does not start a model job")
     store = ConversationStore(conn, workspace)
@@ -280,8 +340,22 @@ def start_stream(conversation_id: UUID, body: ConversationQuery, request: Reques
                     "jobId": str(prior["job_id"]), "state": "unknown"}
         return {"conversationId": str(conversation_id), "requestId": str(body.requestId),
                 "jobId": str(prior["job_id"]), "state": job["status"]}
-    snapshot = _prepare_stream_snapshot(conversation_id, body, conn, request.app.state.settings, workspace, store)
-    result = store.begin_stream(conversation_id, body.requestId, body.expectedSequence, snapshot)
+    settings = debug.settings if debug is not None else request.app.state.settings
+    admission = AdmissionLimits(settings.admission_max_pending_workspace,
+                                settings.admission_max_pending_global)
+    # Reject a full queue before a rare compaction provider call. The final
+    # check remains inside `begin_stream`'s transaction, so this is best-effort.
+    if admission.enabled:
+        with conn.transaction():
+            admission.check(conn, workspace)
+    snapshot = _prepare_stream_snapshot(
+        conversation_id, body, conn, settings, workspace, store,
+        compaction_factory=lambda: _compaction_context(
+            request, conn, settings, body, workspace))
+    if debug is not None:
+        snapshot["debug"] = debug.snapshot()
+    result = store.begin_stream(conversation_id, body.requestId, body.expectedSequence,
+                                snapshot, admission=admission)
     job_id = result.get("job_id")
     if job_id is None:
         return {"conversationId": str(conversation_id), "requestId": str(body.requestId),
@@ -300,13 +374,21 @@ def stream_events(conversation_id: UUID, request_id: UUID, conn: Conn, workspace
                   after_event_id: int = Query(default=0, ge=0, alias="afterEventId"),
                   limit: int = Query(default=100, ge=1, le=100)):
     store = ConversationStore(conn, workspace)
-    request_row = store.request_for_owner(conversation_id, request_id)
+    store.get(conversation_id)  # Authorize before reading request/job state.
+    # One statement keeps request and job state from the same snapshot. Reading
+    # them separately can report a terminal job beside a still-pending request
+    # when a worker commits between the two reads (READ COMMITTED).
+    request_row = conn.execute(queries.get("get_conversation_request_with_job"), {
+        "conversation_id": conversation_id, "request_id": request_id,
+    }).fetchone()
+    if request_row is None:
+        raise HTTPException(404, "conversation request not found")
     job_id = request_row["job_id"]
     if job_id is None:
-        return {"events": [], "nextEventId": after_event_id, "requestState": request_row["state"],
+        return {"events": [], "nextEventId": after_event_id,
+                "requestState": request_row["request_state"],
                 "jobState": "unknown", "done": True}
-    job = conn.execute(queries.get("get_job"), {"job_id": job_id}).fetchone()
-    if job is None or job["scope_key"] != workspace:
+    if request_row["job_scope_key"] != workspace:
         raise HTTPException(404, "conversation request not found")
     rows = conn.execute(queries.get("list_job_events"), {
         "job_id": job_id, "after_event_id": after_event_id, "limit": limit,
@@ -335,25 +417,34 @@ def stream_events(conversation_id: UUID, request_id: UUID, conn: Conn, workspace
                 continue
         events.append(item)
     conn.commit()
-    state = job["status"]
+    state = request_row["job_status"]
     return {"events": events, "nextEventId": next_event_id,
-            "requestState": request_row["state"], "jobState": state,
-            "done": request_row["state"] != "pending"
+            "requestState": request_row["request_state"], "jobState": state,
+            "done": request_row["request_state"] != "pending"
             or state in {JobStatus.SUCCEEDED.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value}}
 
 
 @router.post("/{conversation_id}/turns", response_model=ConversationTurnResponse,
              response_model_exclude_unset=True)
 def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
-         conn: Conn, workspace: Workspace):
+         conn: Conn, workspace: Workspace, debug: Debug):
     store = ConversationStore(conn, workspace)
     snapshot = {"request": body.model_dump(mode="json", exclude_unset=True), "query": body.query}
     replay = store.replay(conversation_id, body.requestId, snapshot)
     if replay is not None:
         return replay
-    settings = request.app.state.settings
+    settings = debug.settings if debug is not None else request.app.state.settings
+    config = debug.config if debug is not None else request.app.state.config
+    system_prompt = debug.system_prompt if debug is not None else None
     research = settings.advising_research_enabled and body.mode == "advising"
-    rows = store.context(conversation_id, max_bytes=settings.conversation_context_max_bytes, archive=research)
+    if research:
+        rows = store.context(conversation_id,
+                             max_bytes=settings.conversation_context_max_bytes,
+                             archive=True)
+    else:
+        rows = store.context(conversation_id,
+                             max_bytes=settings.conversation_context_max_bytes,
+                             enforce=body.mode != "advising")
     # The sequence check under the publication lock also fences context loaded
     # before another request's completion.
     prior, source_ids, retrieval_query = (_research_scope(store, conversation_id, body)
@@ -364,12 +455,31 @@ def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
     snapshot["effective"] = {"collectionId": collection,
                              "sourceIds": [str(item) for item in source_ids] if source_ids is not None else None,
                              "retrievalQuery": retrieval_query, "artifactReferences": references}
+    if debug is not None:
+        snapshot["debug"] = debug.snapshot()
     artifact_context = json.dumps(references, ensure_ascii=False, separators=(",", ":"))
-    history_context = (research_history_prompt(rows, max_bytes=min(
-        6000, settings.conversation_context_max_bytes - len(artifact_context.encode("utf-8"))))
-        if research else history_prompt(rows))
-    if len((history_context + artifact_context).encode("utf-8")) > settings.conversation_context_max_bytes:
-        raise HTTPException(422, "conversation and artifact revisions exceed the context budget")
+    artifact_bytes = len(artifact_context.encode("utf-8")) + len(
+        "\nExact referenced artifact revisions:\n")
+    summary = None
+    if research:
+        history_context = research_history_prompt(rows, max_bytes=min(
+            6000, settings.conversation_context_max_bytes - len(artifact_context.encode("utf-8"))))
+        if len((history_context + artifact_context).encode("utf-8")) > settings.conversation_context_max_bytes:
+            raise HTTPException(422, "conversation and artifact revisions exceed the context budget")
+    else:
+        rows, history_context, summary = history_context_for_turn(
+            store, None, settings, conversation_id,
+            max_bytes=settings.conversation_context_max_bytes,
+            allow_compaction=body.mode == "advising",
+            provider_factory=(lambda: _compaction_context(
+                request, conn, settings, body, workspace))
+            if body.mode == "advising" else None,
+            extra_bytes=artifact_bytes,
+        )
+        snapshot["context"] = {
+            "summaryId": str(summary["summary_id"]) if summary is not None else None,
+            "summaryCoveredThrough": summary["covered_through"] if summary is not None else None,
+        }
     replay = store.begin(conversation_id, body.requestId, body.expectedSequence, snapshot)
     if replay is not None:
         return replay
@@ -390,7 +500,7 @@ def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
         else:
             result = query_response(
                 QueryRequest(query=body.query, collectionId=collection, sourceIds=source_ids),
-                conn, settings, request.app.state.config, request.app.state.embedder,
+                conn, settings, config, request.app.state.embedder,
                 request.app.state.provider, workspace_key=workspace,
                 connection_profiles=request.app.state.connection_profiles,
                 connection_runtime=request.app.state.connection_runtime,
@@ -399,6 +509,7 @@ def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
                 warm_citations=_warm_citations(rows, source_ids),
                 check_cancelled=check_current,
                 conversation_id=conversation_id, conversation_request_id=body.requestId,
+                system_prompt=system_prompt,
             ).model_dump(mode="json")
     except HTTPException as exc:
         store.finish(conversation_id, body.requestId, {

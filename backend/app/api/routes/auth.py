@@ -34,7 +34,8 @@ def session(request: Request, response: Response):
     body = {"mode": service.mode, "authenticated": principal is not None}
     if principal:
         body.update({"workspaceKey": principal.workspace_key,
-                     "displayName": principal.display_name, "email": principal.email})
+                     "displayName": principal.display_name, "email": principal.email,
+                     "role": principal.role})
     _no_store(response)
     return body
 

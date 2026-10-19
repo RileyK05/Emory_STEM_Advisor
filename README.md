@@ -142,6 +142,21 @@ against a `pgvector` Postgres service, the schema-parity check, and the frontend
 request. The frontend integration job is experimental and allowed to fail until
 its Chromium and Postgres wiring on CI is settled.
 
+## Azure deployment scaffold
+
+[infra/README.md](infra/README.md) documents the two-phase Bicep deployment:
+production API/worker/migrate images, a Vite+nginx web image, Container Apps,
+PostgreSQL Flexible Server with the `vector` extension, Blob + Azure Files,
+Key Vault, monitoring, and a migrate job. `bash deploy/azure/deploy.sh` builds
+the images in ACR, sets the Key Vault secrets, deploys the apps and runs the
+migration.
+
+This is a base, not the school's final topology: it uses public ingress, a
+PostgreSQL Azure-services firewall rule, Azure Files for `DATA_DIR`, and the
+existing OIDC adapter. The custom internal sign-in, private networking, Blob
+adapter and retention policy remain in
+[docs/plans/azure-hosting-requirements.md](docs/plans/azure-hosting-requirements.md).
+
 ## Frontend checks
 
 From `frontend/`, run `npm ci`, then `npm test` and `npm run build`.

@@ -31,6 +31,14 @@ WHERE conversation_id = %(conversation_id)s AND workspace_key = %(workspace_key)
   AND state = 'pending'
 LIMIT 1;
 
+-- name: expire_stale_pending_summary
+UPDATE conversation_summaries
+SET state = 'failed', failure_code = 'stale_pending', updated_at = now()
+WHERE conversation_id = %(conversation_id)s AND workspace_key = %(workspace_key)s
+  AND state = 'pending'
+  AND created_at < now() - make_interval(secs => %(seconds)s)
+RETURNING summary_id;
+
 -- name: insert_conversation_summary
 INSERT INTO conversation_summaries (
     summary_id, conversation_id, workspace_key, expected_sequence,

@@ -16,6 +16,9 @@ VALUES (%(version)s, %(name)s, %(sha)s);
 -- name: lock_schema_migrations
 SELECT pg_advisory_xact_lock(1938306);
 
+-- name: lock_admission
+SELECT pg_advisory_xact_lock(1938307);
+
 -- name: normalize_migration_checksum
 UPDATE schema_migrations SET sha256 = %(sha)s
 WHERE version = %(version)s AND sha256 = %(old_sha)s;

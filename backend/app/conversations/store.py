@@ -15,15 +15,78 @@ def _json_size(value) -> int:
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
 
-def _turn_reference(item: dict) -> dict:
-    """What a checkpoint remembers of one turn: its status, scope, and exact cited evidence."""
-    is_user = item["role"] == "user"
+_SUMMARY_EXCERPT_LIMIT = 8
+_SUMMARY_EXCERPT_CHARS = 400
+_STALE_SUMMARY_SECONDS = 300
+
+
+def _excerpt(value) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    return text[:_SUMMARY_EXCERPT_CHARS] if text else None
+
+
+def _bounded_effective(effective) -> dict | None:
+    """Scope pointers only; never copy the source snapshot or full artifact specs."""
+    if not isinstance(effective, dict):
+        return None
+    source_ids = effective.get("sourceIds")
+    references = []
+    for artifact in (effective.get("artifactReferences") or [])[:20]:
+        if not isinstance(artifact, dict):
+            continue
+        spec = artifact.get("spec") if isinstance(artifact.get("spec"), dict) else {}
+        pointer = {
+            "artifactId": artifact.get("artifactId"),
+            "revisionId": artifact.get("revisionId"),
+            "spec": {key: spec[key] for key in ("title", "name", "kind")
+                     if spec.get(key) is not None},
+        }
+        references.append(pointer)
     return {
-        "sequence": item["sequence"], "role": item["role"], "status": item["status"],
-        "effective": item["evidence"].get("effective") if is_user else None,
-        "citations": [] if is_user else item["evidence"].get("citations", []),
-        "contextBlock": [] if is_user else item["evidence"].get("contextBlock", []),
+        "collectionId": effective.get("collectionId"),
+        "sourceIds": list(source_ids)[:100] if isinstance(source_ids, list) else None,
+        "artifactReferences": references,
     }
+
+
+def _summary_turn(item: dict) -> dict:
+    """One turn's compact checkpoint input and exact reference metadata.
+
+    Checkpoints keep exact identifiers and a bounded excerpt, not the full
+    retrieved passage bodies or the source snapshot. That keeps a summary input
+    proportional to the conversation text instead of to every passage or source
+    ever retrieved (EMO-017).
+    """
+    is_user = item["role"] == "user"
+    evidence = item["evidence"] or {}
+    turn = {
+        "sequence": item["sequence"], "role": item["role"],
+        "status": item["status"], "text": item["text"],
+    }
+    if is_user:
+        turn["effective"] = _bounded_effective(evidence.get("effective"))
+        return turn
+    turn["citations"] = [
+        {key: citation[key] for key in
+         ("chunkId", "sourceId", "sourceName", "locatorLabel")
+         if citation.get(key) is not None}
+        for citation in (evidence.get("citations") or [])
+        if isinstance(citation, dict)
+    ]
+    turn["contextBlock"] = []
+    for body in (evidence.get("contextBlock") or [])[:_SUMMARY_EXCERPT_LIMIT]:
+        if not isinstance(body, dict) or not body.get("chunkId"):
+            continue
+        entry = {key: body[key] for key in
+                 ("chunkId", "sourceId", "sourceName", "locatorLabel")
+                 if body.get(key) is not None}
+        excerpt = _excerpt(body.get("text"))
+        if excerpt:
+            entry["text"] = excerpt
+        turn["contextBlock"].append(entry)
+    return turn
 
 
 class ConversationStore:
@@ -70,7 +133,8 @@ class ConversationStore:
         self.conn.commit()
         return [public_summary(row) for row in rows]
 
-    def context(self, conversation_id, *, max_bytes: int, archive: bool = False):
+    def context(self, conversation_id, *, max_bytes: int, archive: bool = False,
+                enforce: bool = True):
         self.get(conversation_id)
         if archive:
             rows = self.conn.execute(queries.get("conversation_recent_context"), {
@@ -80,11 +144,36 @@ class ConversationStore:
         rows = self.conn.execute(queries.get("conversation_turns"), {
             "conversation_id": conversation_id, "after": 0, "limit": 1000}).fetchall()
         size = len(history_prompt(rows).encode("utf-8"))
-        if size > max_bytes or len(rows) >= 1000:
+        if enforce and (size > max_bytes or len(rows) >= 1000):
             self.conn.commit()
             raise HTTPException(422, "conversation exceeds the context budget; start a new conversation. Saved turns remain available.")
         self.conn.commit()
         return rows
+
+    def latest_summary(self, conversation_id):
+        row = self.conn.execute(queries.get("latest_conversation_summary"), {
+            "conversation_id": conversation_id, "workspace_key": self.workspace_key,
+        }).fetchone()
+        self.conn.commit()
+        return row
+
+    def turns_after(self, conversation_id, sequence: int, *, limit: int = 1000):
+        rows = self.conn.execute(queries.get("conversation_turns"), {
+            "conversation_id": conversation_id, "after": sequence, "limit": limit,
+        }).fetchall()
+        self.conn.commit()
+        return rows
+
+    def _expire_stale_pending_summary(self, conversation_id) -> None:
+        """A crashed compaction must not fence the conversation forever.
+
+        Runs inside the caller's transaction and is followed by a fresh pending
+        read, so a live (recent) checkpoint still blocks concurrent writers.
+        """
+        self.conn.execute(queries.get("expire_stale_pending_summary"), {
+            "conversation_id": conversation_id, "workspace_key": self.workspace_key,
+            "seconds": _STALE_SUMMARY_SECONDS,
+        })
 
     def replay(self, conversation_id, request_id, snapshot):
         self.get(conversation_id)  # Authorize before reading a request or fingerprint.
@@ -121,6 +210,7 @@ class ConversationStore:
         inside the caller's transaction.
         """
         row = self.get(conversation_id, lock=True)
+        self._expire_stale_pending_summary(conversation_id)
         pending_summary = self.conn.execute(queries.get("pending_conversation_summary"), {
             "conversation_id": conversation_id, "workspace_key": self.workspace_key,
         }).fetchone()
@@ -156,7 +246,8 @@ class ConversationStore:
             self._append_user_turn(conversation_id, request_id, expected_sequence, snapshot)
         return None
 
-    def begin_stream(self, conversation_id, request_id, expected_sequence, snapshot):
+    def begin_stream(self, conversation_id, request_id, expected_sequence, snapshot,
+                     admission=None):
         """Atomically bind the immutable request, pending turn, and one queued job."""
         self.conn.commit()
         with self.conn.transaction():
@@ -165,6 +256,8 @@ class ConversationStore:
                 self._check_same_inputs(prior, snapshot)
                 return prior
 
+            if admission is not None:
+                admission.check(self.conn, self.workspace_key)
             job_id = uuid4()
             now = datetime.now(UTC)
             idempotency_key = f"conversation:{conversation_id}:{request_id}"
@@ -258,8 +351,11 @@ class ConversationStore:
             "type": "abandoned", "reason": "Request abandoned. Any already-started provider call may still incur usage; its result cannot replace this turn.",
         }, state="abandoned")
 
-    def begin_summary(self, conversation_id, summary_id, expected_sequence, *, max_bytes):
+    def begin_summary(self, conversation_id, summary_id, expected_sequence, *, max_bytes,
+                      keep_turns: int = 4):
         """Freeze an exact contiguous checkpoint input before any provider I/O."""
+        if not 1 <= keep_turns <= 50:
+            raise ValueError("summary keep_turns must be between 1 and 50")
         request_fingerprint = fingerprint({"request": {"expectedSequence": expected_sequence}})
         self.conn.commit()
         with self.conn.transaction():
@@ -267,6 +363,7 @@ class ConversationStore:
             replay = self._summary_replay(conversation_id, summary_id, request_fingerprint)
             if replay is not None:
                 return {"replay": replay}
+            self._expire_stale_pending_summary(conversation_id)
             pending_summary = self.conn.execute(queries.get("pending_conversation_summary"), {
                 "conversation_id": conversation_id, "workspace_key": self.workspace_key,
             }).fetchone()
@@ -283,7 +380,8 @@ class ConversationStore:
                 range(1, base_sequence + 1)
             ):
                 raise HTTPException(409, "prior summary reference coverage is incomplete")
-            candidate = self._checkpoint_boundary(conversation_id, base_sequence, expected_sequence)
+            candidate = self._checkpoint_boundary(
+                conversation_id, base_sequence, expected_sequence, keep_turns=keep_turns)
             raw_turns = self._covered_turns(conversation_id, base_sequence, candidate)
             input_snapshot = {
                 "previousSummary": ({"summaryId": str(previous["summary_id"]),
@@ -292,7 +390,7 @@ class ConversationStore:
                 "turns": raw_turns, "expectedSequence": expected_sequence,
                 "coveredThrough": candidate,
             }
-            reference_metadata.extend(_turn_reference(item) for item in raw_turns)
+            reference_metadata.extend(raw_turns)
             if _json_size(input_snapshot) > max_bytes or _json_size(reference_metadata) > max_bytes:
                 raise HTTPException(422, "conversation summary input or exact reference metadata exceeds its budget")
             inserted = self.conn.execute(queries.get("insert_conversation_summary"), {
@@ -332,13 +430,14 @@ class ConversationStore:
             "conversation_id": conversation_id, "after": sequence - 1, "limit": 1,
         }).fetchone()
 
-    def _checkpoint_boundary(self, conversation_id, base_sequence: int, expected_sequence: int) -> int:
+    def _checkpoint_boundary(self, conversation_id, base_sequence: int, expected_sequence: int,
+                             *, keep_turns: int = 4) -> int:
         """The last sequence a summary may cover.
 
-        Keeps the latest four raw turns, then backs up to an assistant turn so a
-        summary only covers complete saved request pairs.
+        Keeps the configured number of raw recent turns, then backs up to an
+        assistant turn so a summary only covers complete saved request pairs.
         """
-        candidate = expected_sequence - 4
+        candidate = expected_sequence - keep_turns
         while candidate > base_sequence:
             turn = self._turn_at(conversation_id, candidate)
             if turn is not None and turn["sequence"] == candidate and turn["role"] == "assistant":
@@ -356,7 +455,7 @@ class ConversationStore:
         if ([item["sequence"] for item in covered] != list(range(base_sequence + 1, candidate + 1))
                 or not covered or covered[-1]["role"] != "assistant"):
             raise HTTPException(409, "conversation turn history changed while preparing the checkpoint")
-        return [public_turn(item) for item in covered]
+        return [_summary_turn(item) for item in covered]
 
     def finish_summary(self, conversation_id, summary_id, *, state, summary_text=None,
                        failure_code=None, profile_id=None, profile_revision=None):

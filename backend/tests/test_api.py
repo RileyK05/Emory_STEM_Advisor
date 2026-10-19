@@ -99,3 +99,34 @@ def test_upload_source(db, collection):
         "/api/sources", params={"collection": collection_name(db, collection)}
     ).json()
     assert any(s["name"] == "notes.txt" for s in listed)
+
+
+def test_metrics_are_loopback_only_and_report_pool_and_queue_state(db, collection):
+    from dataclasses import replace
+
+    from fastapi.testclient import TestClient
+
+    from app.api import create_app
+    from app.config import load_settings
+    from tests.fakes import FakeEmbedder
+
+    settings = replace(load_settings(), admin_api_enabled=True)
+    app = create_app(settings=settings, allow_test_client=True,
+                     embedder=FakeEmbedder(dim=8), provider=FakeProvider())
+    app.state.override_conn = db
+    client = TestClient(app, client=("127.0.0.1", 1234), base_url="http://127.0.0.1")
+    response = client.get("/metrics")
+    assert response.status_code == 200, response.text
+    assert "advisor_db_pool_max_connections" in response.text
+    assert 'advisor_jobs{status="queued"}' in response.text
+    assert "advisor_job_oldest_queued_seconds" in response.text
+
+    remote = TestClient(app, client=("192.0.2.8", 1234), base_url="http://127.0.0.1")
+    assert remote.get("/metrics").status_code == 403
+
+    disabled = create_app(settings=replace(settings, admin_api_enabled=False),
+                          allow_test_client=True, embedder=FakeEmbedder(dim=8),
+                          provider=FakeProvider())
+    disabled.state.override_conn = db
+    hidden = TestClient(disabled, client=("127.0.0.1", 1234), base_url="http://127.0.0.1")
+    assert hidden.get("/metrics").status_code == 404

@@ -1,0 +1,51 @@
+# Production API/worker/migrate image for the Emory STEM Advisor.
+#
+# One image, three commands:
+#   API:     python -m scripts.serve --host 0.0.0.0 --port 8000
+#   worker:  python -m scripts.worker --concurrency 4
+#   migrate: python -m scripts.migrate
+#
+# The default embedding model is preloaded so replicas do not race to Hugging
+# Face on first use. Set PRELOAD_EMBEDDING_MODEL to match EMBEDDING_MODEL_ID.
+
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_HOME=/opt/hf
+
+WORKDIR /workspace
+
+# CPU-only torch keeps the image portable and avoids pulling CUDA libraries.
+RUN python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4"
+
+COPY backend/pyproject.toml /workspace/backend/
+COPY backend/app /workspace/backend/app
+COPY backend/scripts /workspace/backend/scripts
+COPY backend/configs /workspace/backend/configs
+
+WORKDIR /workspace/backend
+RUN python -m pip install -e ".[cloud]"
+
+# Set --build-arg PRELOAD_EMBEDDING_MODEL= (empty) when build egress to Hugging
+# Face is blocked; the first request then downloads into HF_HOME.
+ARG PRELOAD_EMBEDDING_MODEL=ibm-granite/granite-embedding-125m-english
+RUN if [ -n "${PRELOAD_EMBEDDING_MODEL}" ]; then \
+        python -c "from huggingface_hub import snapshot_download; snapshot_download('${PRELOAD_EMBEDDING_MODEL}')"; \
+    fi
+
+RUN mkdir -p /workspace/data /opt/hf \
+    && chown -R 10001:10001 /workspace /opt/hf
+
+# Azure Files (SMB) is mounted root-owned, so the base runs as root. Build with
+# --build-arg APP_UID=10001 once the Blob adapter replaces the local DATA_DIR
+# path; UID 10001 already owns /workspace/data.
+ARG APP_UID=0
+USER ${APP_UID}
+
+EXPOSE 8000
+
+CMD ["python", "-m", "scripts.serve", "--host", "0.0.0.0", "--port", "8000"]

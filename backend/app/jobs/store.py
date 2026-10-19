@@ -92,6 +92,7 @@ class JobStore:
         idempotency_key: str,
         payload: Mapping[str, Any],
         max_attempts: int = 3,
+        admission=None,
     ) -> Job:
         if not kind or len(kind) > 100:
             raise ValueError("kind must contain 1 to 100 characters")
@@ -113,6 +114,16 @@ class JobStore:
             "available_at": now,
         }
         with self._transaction() as conn:
+            if admission is not None:
+                # An idempotent replay is not new work and must not be rejected
+                # by a full queue. The count and insert share this transaction.
+                existing = conn.execute(
+                    queries.get("get_job_by_idempotency"),
+                    {"scope_key": scope_key, "idempotency_key": idempotency_key},
+                ).fetchone()
+                if existing is not None:
+                    return Job.from_row(existing)
+                admission.check(conn, scope_key)
             row = conn.execute(queries.get("insert_job"), args).fetchone()
             created = row is not None
             if row is None:

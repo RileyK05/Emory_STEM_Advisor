@@ -31,6 +31,16 @@ export function TopBar({ session, onLogout, onMenu }: Props) {
       </div>
       <div className="topbar-actions">
         {identity && <span className="identity">{identity}</span>}
+        {session?.role === 'admin' && (
+          <>
+            <a className="topbar-link" href="/admin.html">
+              Admin
+            </a>
+            <a className="topbar-link" href="/debug.html">
+              Debug
+            </a>
+          </>
+        )}
         {onLogout && (
           <button type="button" className="topbar-button" onClick={onLogout}>
             Sign out

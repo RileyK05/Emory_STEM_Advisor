@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from uuid import UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -11,3 +12,6 @@ class Principal:
     display_name: str | None = None
     email: str | None = None
     mode: str = "oidc"
+    role: str = "student"
+    user_id: UUID | None = None
+    status: str = "active"

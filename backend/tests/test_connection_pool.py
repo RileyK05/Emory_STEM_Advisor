@@ -198,6 +198,26 @@ def test_run_routes_do_not_hold_bootstrap_connection_while_job_store_borrows(dsn
     assert stats["pool_available"] == stats["pool_size"]
 
 
+def test_run_creation_honors_workspace_admission_cap(dsn, db, collection):
+    from tests.fakes import FakeProvider
+
+    client = _pooled_client(dsn, provider=FakeProvider(),
+                            admission_max_pending_workspace=1)
+    first = client.post("/api/runs", json={
+        "kind": "document", "inputs": {}, "idempotencyKey": "admission-run-1",
+    })
+    assert first.status_code == 200, first.text
+    replay = client.post("/api/runs", json={
+        "kind": "document", "inputs": {}, "idempotencyKey": "admission-run-1",
+    })
+    assert replay.status_code == 200  # a replay is not new work
+    second = client.post("/api/runs", json={
+        "kind": "document", "inputs": {}, "idempotencyKey": "admission-run-2",
+    })
+    assert second.status_code == 429
+    assert second.headers["retry-after"] == "5"
+
+
 def test_conversation_execution_lease_does_not_block_job_control_pool(dsn):
     from app.jobs.store import JobStore
     from app.jobs.worker import JobContext
@@ -276,6 +296,39 @@ class _OneToolProvider:
                 finish_reason="tool_calls", usage=Usage(20, 5, source="provider"))
         return GenerationResult(text="The result is 2 [1].", finish_reason="stop",
                                 usage=Usage(30, 8, source="provider"))
+
+
+class _BorrowingProvider:
+    """Borrows from the same one-slot pool while the answer is generating."""
+
+    def __init__(self, settings, text="An answer citing [1]."):
+        self.connect = connector(settings)
+        self.text = text
+
+    def generate(self, request):
+        conn = self.connect()  # PoolTimeout if the request still holds the slot.
+        try:
+            assert conn.execute("SELECT 1 AS one").fetchone()["one"] == 1
+        finally:
+            conn.close()
+        return GenerationResult(text=self.text, finish_reason="stop",
+                                usage=Usage(10, 5, source="provider"))
+
+
+def test_generation_releases_the_request_borrow_before_provider_io(
+        dsn, db, collection, tmp_path):
+    # F1: a pool slot held across the provider call caps answer concurrency at
+    # DB_POOL_MAX_SIZE per process and produces 503s under load.
+    ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha has value 2.\n")
+    db.commit()
+    settings = replace(load_settings(), database_url=dsn, db_pool_max_size=1,
+                       db_pool_timeout_seconds=1.0)
+    client = _pooled_client(dsn, provider=_BorrowingProvider(settings))
+    response = client.post("/api/query", json={
+        "query": "alpha", "collectionId": collection_name(db, collection),
+    })
+    assert response.status_code == 200, response.text
+    assert response.json()["answer"] == "An answer citing [1]."
 
 
 def test_tool_query_does_not_self_starve_a_one_slot_pool(dsn, db, collection, tmp_path):

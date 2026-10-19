@@ -12,6 +12,8 @@ from fastapi import HTTPException
 from app.api.schemas import QueryRequest
 from app.conversations.store import ConversationStore
 from app.db import queries
+from app.db.connection import release_borrow
+from app.debug.registry import OverrideError, validate_retrieval, validate_settings
 from app.jobs.store import JobCancelled, SafeJobError
 from app.jobs.types import Job
 from app.jobs.worker import JobContext
@@ -70,6 +72,9 @@ class _TurnGuard:
                     or source["index_revision"] != revision):
                 raise HTTPException(409, "selected source revision changed; refresh before generating")
         conn.commit()
+        # A provisional flush calls the guard during provider streaming; returning
+        # the borrow here keeps the execution pool free between checks.
+        release_borrow(conn)
 
 
 class _ProvisionalStream:
@@ -158,6 +163,13 @@ class ConversationTurnExecutor:
                 raise JobCancelled(str(job.job_id))
             snapshot = request_row["input_snapshot"]
             effective = snapshot.get("effective", {})
+            debug = snapshot.get("debug") or {}
+            try:
+                settings = validate_settings(self.settings, debug.get("settings") or {})
+                config = validate_retrieval(self.config, debug.get("retrieval") or {})
+            except OverrideError as exc:
+                raise SafeJobError("invalid_debug_overrides", str(exc)) from None
+            system_prompt = debug.get("systemPrompt")
             collection_id = UUID(effective["collectionUuid"])
             source_snapshot = {str(key): int(value) for key, value in
                                effective.get("sourceSnapshot", {}).items()}
@@ -183,7 +195,7 @@ class ConversationTurnExecutor:
             from app.api.query_service import query_response
 
             response = query_response(
-                query_request, conn, self.settings, self.config, self.embedder, self.provider,
+                query_request, conn, settings, config, self.embedder, self.provider,
                 check_cancelled=guard, on_progress=lambda event: _report_stage(context, event),
                 on_provisional_text=stream.text, on_provisional_reset=stream.reset,
                 on_profile_selection=selected_profile, on_operation_created=operation_ids.append,
@@ -194,6 +206,7 @@ class ConversationTurnExecutor:
                 history_context=_history_context(snapshot, effective),
                 warm_citations=snapshot.get("context", {}).get("warmCitations") or [],
                 conversation_id=conversation_id, conversation_request_id=request_id,
+                system_prompt=system_prompt,
             )
             stream.flush()
             guard()

@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from app.auth.models import Principal
 from app.db import queries
@@ -106,6 +107,8 @@ class AuthService:
         oidc: OIDCConfig | None = None,
         provider: OIDCProvider | None = None,
         membership_policy: Callable[[Mapping[str, object]], Membership | None] | None = None,
+        admin_bootstrap_emails: tuple[str, ...] = (),
+        admin_bootstrap_subjects: tuple[str, ...] = (),
         allow_test_client: bool = False,
         clock: Callable[[], datetime] = _now,
     ) -> None:
@@ -116,6 +119,10 @@ class AuthService:
         self.oidc = oidc
         self.provider = provider
         self.membership_policy = membership_policy
+        self.admin_bootstrap_emails = frozenset(
+            value.strip().lower() for value in admin_bootstrap_emails if value.strip())
+        self.admin_bootstrap_subjects = frozenset(
+            value.strip() for value in admin_bootstrap_subjects if value.strip())
         self.allow_test_client = allow_test_client
         self.clock = clock
         self.server_key = oidc.server_key if oidc else server_key
@@ -225,14 +232,28 @@ class AuthService:
         # The provider adapter has already verified signature and OIDC claims.
         token = secrets.token_urlsafe(32)
         expires = now + timedelta(seconds=self.oidc.session_ttl_seconds)
+        display_name = _safe_claim(claims.get("name"), 200)
+        email = _safe_claim(claims.get("email"), 320)
+        bootstrap = bool(
+            subject in self.admin_bootstrap_subjects
+            or (email and claims.get("email_verified") is True
+                and email.lower() in self.admin_bootstrap_emails)
+        )
         conn = self._connection()
         try:
             with conn.transaction():
+                user = conn.execute(queries.get("upsert_app_user"), {
+                    "user_id": uuid4(), "issuer": issuer, "subject": subject,
+                    "workspace_key": workspace_key, "display_name": display_name,
+                    "email": email, "bootstrap": bootstrap,
+                }).fetchone()
+                if user["status"] != "active":
+                    raise AuthRejected("this account is disabled")
                 conn.execute(queries.get("insert_auth_session"), {
                     "session_hash": _digest(self.server_key, token), "issuer": issuer,
                     "subject": subject, "workspace_key": workspace_key,
-                    "display_name": _safe_claim(claims.get("name"), 200),
-                    "email": _safe_claim(claims.get("email"), 320), "expires_at": expires,
+                    "display_name": display_name,
+                    "email": email, "expires_at": expires,
                 })
         finally:
             conn.close()
@@ -255,13 +276,15 @@ class AuthService:
     def resolve(self, token: str | None, *, client_host: str | None) -> Principal | None:
         if self.mode == "development":
             if client_host == "testclient" and self.allow_test_client:
-                return Principal("development", None, "development", "Local developer", None, "development")
+                return Principal("development", None, "development", "Local developer",
+                                 None, "development", role="admin")
             try:
                 if not client_host or not ipaddress.ip_address(client_host).is_loopback:
                     return None
             except ValueError:
                 return None
-            return Principal("development", None, "development", "Local developer", None, "development")
+            return Principal("development", None, "development", "Local developer",
+                             None, "development", role="admin")
         if not token or len(token) > 256:
             return None
         conn = self._connection()
@@ -271,10 +294,11 @@ class AuthService:
             }).fetchone()
         finally:
             conn.close()
-        if row is None:
+        if row is None or row["status"] != "active":
             return None
         return Principal(row["workspace_key"], row["issuer"], row["subject"],
-                         row["display_name"], row["email"], "oidc")
+                         row["display_name"], row["email"], "oidc",
+                         role=row["role"], user_id=row["user_id"], status=row["status"])
 
     def logout(self, token: str | None) -> None:
         if self.mode != "oidc" or not token or len(token) > 256:

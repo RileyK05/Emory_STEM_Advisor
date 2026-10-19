@@ -48,20 +48,68 @@ class PooledConnection:
     Everything else is the underlying connection.
     """
 
-    __slots__ = ("_conn", "_pool")
+    __slots__ = ("_closed", "_conn", "_pool", "_released")
 
     def __init__(self, pool: ConnectionPool, conn: psycopg.Connection):
         self._pool = pool
         self._conn = conn
+        self._released = False
+        self._closed = False
 
     def __getattr__(self, name: str):
         conn = self._conn
         if conn is None:
-            raise psycopg.OperationalError("the connection is closed")
+            if self._released and not self._closed:
+                self.reacquire()  # a released borrow reacquires on next database use
+                conn = self._conn
+            else:
+                raise psycopg.OperationalError("the connection is closed")
         return getattr(conn, name)
+
+    def release(self) -> None:
+        """Return the server connection to the pool; the next database use reacquires.
+
+        Long provider calls use this so a pool slot is not held while waiting on
+        the network. Transaction state is discarded on return, exactly as `close`.
+        """
+        conn, self._conn = self._conn, None
+        self._released = True
+        if conn is None:
+            return
+        _borrow_diagnostics["release"] += 1
+        try:
+            # Closing a plain connection discards uncommitted work; do the same
+            # explicitly so the pool does not log every read-only request.
+            if conn.info.transaction_status != psycopg.pq.TransactionStatus.IDLE:
+                conn.rollback()
+        except psycopg.Error:
+            pass  # a broken connection is discarded by the pool on return
+        self._pool.putconn(conn)
+
+    def reacquire(self) -> None:
+        if self._closed:
+            raise psycopg.OperationalError("the connection is closed")
+        if self._conn is not None:
+            return
+        _borrow_diagnostics["reacquire"] += 1
+        conn = self._pool.getconn()
+        try:
+            if conn.adapters.types.get("vector") is None:
+                try:
+                    register_vector(conn)
+                except psycopg.ProgrammingError:
+                    pass
+                conn.rollback()
+        except BaseException:
+            self._pool.putconn(conn)
+            raise
+        self._conn = conn
+        self._released = False
 
     def close(self) -> None:
         conn, self._conn = self._conn, None
+        self._released = False
+        self._closed = True
         if conn is None:
             return
         try:
@@ -87,6 +135,19 @@ class PooledConnection:
             self.close()
 
 
+def release_borrow(conn) -> bool:
+    """Return a pooled borrow before slow I/O; plain connections are left alone.
+
+    The handle reacquires lazily on its next database use, so callers do not have
+    to thread a replacement connection through accounting and publication.
+    """
+    release = getattr(conn, "release", None)
+    if release is None:
+        return False
+    release()
+    return True
+
+
 def register_vector_adapter(conn: "psycopg.Connection | PooledConnection") -> None:
     """Register pgvector on a plain or borrowed connection.
 
@@ -98,6 +159,12 @@ def register_vector_adapter(conn: "psycopg.Connection | PooledConnection") -> No
 
 _pools: dict[tuple[str, int, float, str, int, int], ConnectionPool] = {}
 _pools_lock = threading.Lock()
+_borrow_diagnostics = {"release": 0, "reacquire": 0}
+
+
+def borrow_diagnostics() -> dict[str, int]:
+    """Process-local release/reacquire counts for load diagnostics."""
+    return dict(_borrow_diagnostics)
 
 
 def _server_options(statement_timeout_ms: int, idle_timeout_ms: int) -> str | None:

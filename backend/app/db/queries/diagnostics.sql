@@ -12,6 +12,13 @@ WHERE s.collection_id = %(collection_id)s AND s.status = 'indexed' AND s.is_curr
   AND (s.workspace_key IS NULL OR s.workspace_key = %(workspace_key)s)
 ORDER BY ch.source_id, ch.chunk_index, ch.chunk_id;
 
+-- name: diagnostic_connection_states
+SELECT coalesce(state, 'unknown') AS state, count(*) AS connections
+FROM pg_stat_activity
+WHERE datname = current_database()
+GROUP BY state
+ORDER BY state;
+
 -- name: count_chunks_for_collection
 SELECT count(*) AS chunks
 FROM chunks c

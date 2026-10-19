@@ -1,0 +1,67 @@
+name: Deploy Azure
+
+# Manual only. Configure an Azure federated credential for this repository and
+# set the repository/environment variables and secrets listed below.
+#
+# Variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
+#   LLM_PROVIDER, LLM_MODEL_ID, LLM_BASE_URL, AUTH_MODE, OIDC_ISSUER,
+#   OIDC_CLIENT_ID
+# Secrets:   POSTGRES_ADMIN_PASSWORD, AUTH_SERVER_KEY, PROFILE_ENCRYPTION_KEY,
+#   LLM_API_KEY, OIDC_CLIENT_SECRET
+#
+# The deploying identity needs Contributor on the resource group and Key Vault
+# Secrets Officer on the vault it creates (or a pre-created vault).
+
+on:
+  workflow_dispatch:
+    inputs:
+      resource_group:
+        description: Target resource group
+        required: true
+      environment_name:
+        description: Environment suffix (dev, staging, prod)
+        required: true
+        default: dev
+      location:
+        description: Azure region
+        required: true
+        default: eastus
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: azure-${{ inputs.resource_group }}-${{ inputs.environment_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: azure
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy
+        env:
+          RESOURCE_GROUP: ${{ inputs.resource_group }}
+          ENVIRONMENT_NAME: ${{ inputs.environment_name }}
+          LOCATION: ${{ inputs.location }}
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          AUTH_SERVER_KEY: ${{ secrets.AUTH_SERVER_KEY }}
+          PROFILE_ENCRYPTION_KEY: ${{ secrets.PROFILE_ENCRYPTION_KEY }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          LLM_MODEL_ID: ${{ vars.LLM_MODEL_ID }}
+          LLM_BASE_URL: ${{ vars.LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          AUTH_MODE: ${{ vars.AUTH_MODE }}
+          OIDC_ISSUER: ${{ vars.OIDC_ISSUER }}
+          OIDC_CLIENT_ID: ${{ vars.OIDC_CLIENT_ID }}
+          OIDC_CLIENT_SECRET: ${{ secrets.OIDC_CLIENT_SECRET }}
+        run: bash deploy/azure/deploy.sh

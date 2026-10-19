@@ -20,6 +20,26 @@ FOR UPDATE;
 SELECT * FROM conversation_requests
 WHERE conversation_id = %(conversation_id)s AND request_id = %(request_id)s;
 
+-- name: count_admission_pending
+SELECT
+  (SELECT count(*) FROM jobs
+   WHERE scope_key = %(workspace_key)s
+     AND status IN ('queued', 'running')) AS workspace_pending,
+  (SELECT count(*) FROM jobs
+   WHERE status IN ('queued', 'running')) AS global_pending;
+
+-- name: metrics_pending_conversation_requests
+SELECT count(*) AS requests
+FROM conversation_requests
+WHERE state = 'pending';
+
+-- name: get_conversation_request_with_job
+SELECT r.request_id, r.state AS request_state, r.job_id,
+       j.status AS job_status, j.scope_key AS job_scope_key
+FROM conversation_requests r
+LEFT JOIN jobs j ON j.job_id = r.job_id
+WHERE r.conversation_id = %(conversation_id)s AND r.request_id = %(request_id)s;
+
 -- name: create_conversation_request
 INSERT INTO conversation_requests (conversation_id, request_id, fingerprint, state, input_snapshot)
 VALUES (%(conversation_id)s, %(request_id)s, %(fingerprint)s, 'pending', %(input_snapshot)s);

@@ -13,7 +13,7 @@ from app.api.serialize import answer_response
 from app.connections.models import required_data_scopes
 from app.connections.selection import StaleProfileSelection
 from app.db import queries
-from app.db.connection import connector, resolved_database_url
+from app.db.connection import connector, release_borrow, resolved_database_url
 from app.generation.controller import GenerationCancelled, ToolConversationError
 from app.generation.evidence import persist_response
 from app.generation.operation import GenerationOperation
@@ -94,7 +94,8 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
             on_progress=on_progress, question=body.query, history_context=history_context,
             selection_identity={"profile": str(selection.profile_id), "revision": selection.profile_revision}
             if selection else {"provider": settings.llm_provider, "model": settings.llm_model_id},
-            on_attempt=lambda prepared, result, error: audit.record(result, error, prepared))
+            on_attempt=lambda prepared, result, error: audit.record(result, error, prepared),
+            before_provider_call=lambda: release_borrow(conn))
         rendered = render_final(decision, store.evidence(run.run_id), system_prompt=system,
                                 user_prompt=user, usage=usage, model_id=model)
         outcome = replace(outcome, chunks=rendered.chunks)

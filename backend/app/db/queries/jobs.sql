@@ -14,6 +14,17 @@ SELECT * FROM jobs WHERE scope_key = %(scope_key)s AND idempotency_key = %(idemp
 -- name: get_job
 SELECT * FROM jobs WHERE job_id = %(job_id)s;
 
+-- name: metrics_job_counts
+SELECT status, count(*) AS jobs
+FROM jobs
+WHERE status IN ('queued', 'running')
+GROUP BY status;
+
+-- name: metrics_oldest_queued_seconds
+SELECT COALESCE(EXTRACT(EPOCH FROM (now() - min(available_at))), 0) AS seconds
+FROM jobs
+WHERE status = 'queued';
+
 -- name: claim_next_job
 WITH candidate AS (
     SELECT job_id

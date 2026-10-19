@@ -12,14 +12,14 @@ from app.operations.budget import (
 
 
 class GenerationOperation:
-    def __init__(self, conn, settings, operation_id, workspace_key):
+    def __init__(self, conn, settings, operation_id, workspace_key, *, limits=None):
         self.conn = conn
         self.operation_id = operation_id
         self.workspace_key = workspace_key
         self.controller = OperationBudgetController()
         self.reservation = None
         self.last_request = None
-        self.controller.ensure(conn, operation_id, workspace_key, OperationLimits(
+        self.controller.ensure(conn, operation_id, workspace_key, limits or OperationLimits(
             active_budget_seconds=settings.operation_timeout_seconds,
             max_calls=settings.operation_max_calls,
             total_token_budget=settings.operation_token_budget,

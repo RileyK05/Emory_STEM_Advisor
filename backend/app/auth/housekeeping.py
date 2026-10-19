@@ -20,5 +20,7 @@ def purge_expired_auth(conn, *, now: datetime | None = None,
     row = conn.execute(queries.get("purge_auth_records"), {
         "now": current, "revoked_before": current - revoked_retention,
     }).fetchone()
+    # Debug sessions are bearer secrets; expired/revoked rows are storage only.
+    conn.execute(queries.get("debug_purge_expired"))
     conn.commit()
     return {"transactions": int(row["transactions"]), "sessions": int(row["sessions"])}

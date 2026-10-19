@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="frame-src 'self'; object-src 'none'; base-uri 'self'" />
+    <title>Emory STEM Advisor · Admin</title>
+    <script>
+      (function () {
+        var theme = localStorage.getItem('advisor-theme');
+        if (theme !== 'light' && theme !== 'dark') {
+          theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.dataset.theme = theme;
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/admin/main.tsx"></script>
+  </body>
+</html>

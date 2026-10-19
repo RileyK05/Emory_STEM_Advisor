@@ -201,6 +201,13 @@ connection before `JobStore.cancel`, so a single-slot pool cannot self-wait.
 Tool execution ledgers use their own bounded `tool_execution` pool, never the
 pool held by the request or worker execution. `DB_POOL_MAX_SIZE` is a limit per
 role per process, and no path nests a borrow of the pool it already holds.
+The pooled runtime configures `DB_STATEMENT_TIMEOUT_MS` and
+`DB_IDLE_TRANSACTION_TIMEOUT_MS`. A commit ends a transaction but does not return
+the borrow, so paths that wait on a provider call explicitly release the borrow
+and reacquire lazily for accounting, fences and publication: synchronous query
+generation, the conversation turn guard, tool calls and research calls. A slot is
+therefore not held while waiting on the network. Do not release a borrow while an
+open transaction must survive; all release sites commit first.
 
 - **D1 Store:** Postgres 16+ with `pgvector`, raw SQL through `psycopg` 3. No
   ORM. Every statement is a named block in `backend/app/db/queries/*.sql`.
@@ -363,8 +370,11 @@ One row per chunk per model: `(chunk_id, model, dim, embedding vector)`, with
 `CHECK (vector_dims(embedding) = dim)`. Vectors are L2-normalized and checked
 (dimension, unit norm within 1e-3) before they are written. A chunk with no
 row for the current model is dormant, not an error. Re-embedding under a new
-model adds rows beside the old ones. No ANN index yet; exact scan is fine at
-this size.
+model adds rows beside the old ones. No ANN index yet. The current exact-search
+implementation is not evidence of capacity at the planned private-corpus size.
+The [capacity target](#capacity-and-student-rollout-target) requires measured
+scoped latency and recall before choosing an exact/ANN strategy; different models
+and dimensions must remain isolated.
 
 ### courses / prereq_mentions / prereq_nodes
 
@@ -1580,16 +1590,59 @@ Login uses PKCE, nonce, server-stored single-use state, and a short-lived
 browser-bound Secure/HttpOnly/SameSite=Lax state cookie. Signed tokens are checked
 for algorithm, issuer, audience/authorized party, nonce, and finite time claims.
 Discovery, token, and JWKS responses are bounded before parsing and cannot
-redirect. Opaque server-side sessions expire and are revoked on logout.
+redirect. Opaque server-side sessions expire and are revoked on logout. `app_users` is the
+durable identity record keyed by `(issuer, subject)`: it carries the institutional
+role (`student|admin`) and `active|disabled` status. A first verified login may be
+promoted by `ADMIN_BOOTSTRAP_EMAILS` or `ADMIN_BOOTSTRAP_SUBJECTS`; that list is
+first-insert only, so later role changes are made in the Admin surface and are not
+overwritten by a stale environment list. A disabled user's existing sessions
+resolve to no principal on the next request. Development mode is a local admin.
 Cookie-authenticated mutations require the configured Origin and Host. API
 responses are private/no-store; forwarded headers never establish identity.
 
+The Admin surface is a separate bundle and API boundary
+(`/api/admin/*`). It requires an admin role; `ADMIN_PANEL_ENABLED=false` disables
+it. It lists and pages users/workspaces, changes role/status, inspects sessions,
+revokes sessions, lists conversations/jobs/sources/artifacts metadata, and
+exposes an audit log. A transcript read is a separate, audited content action,
+not part of the metadata list; deleting a conversation also deletes its turns,
+checkpoints, requests, and turn jobs and is audited. A queued job can be
+cancelled and a running job can receive a cancel request, both audited.
+Collections support create/rename/delete, but only empty collections (no
+sources or artifact runs) may be deleted; the configured default collection is
+protected from rename and delete. Source deletion and artifact revision deletion
+stay in their owning ingest/artifact workflows because they own file and
+revision cleanup. The last active admin cannot be demoted or disabled, and
+an admin cannot demote or disable themselves.
+
+The Debug surface is a second separate bundle (`/api/debug/*`, `/debug`). An
+admin creates an expiring `debug_sessions` row; the bearer token is returned once
+and stored only as a digest. The token scopes validated, allowlisted overrides to
+that admin's debug requests; it is carried in `X-Debug-Session`. Secrets,
+database/auth configuration, routing credentials, and provider keys are never
+overridable. The override set includes the answer system prompt, context window,
+compaction controls, operation/admission limits, and a bounded retrieval/fusion
+subset. A conversation turn stores the validated override set in its immutable
+input snapshot, so the worker reproduces the same effective settings. Debug
+overrides never apply to Main users and never cross a workspace. The Main bundle
+does not send the header.
+
 | Method | Path | Contract |
 | --- | --- | --- |
-| GET | `/api/session` | `mode`, `authenticated`, and verified `workspaceKey`, `displayName`, `email` when signed in |
+| GET | `/api/session` | `mode`, `authenticated`, and verified `workspaceKey`, `displayName`, `email`, `role` when signed in |
 | GET | `/api/auth/login` | Fixed IdP redirect; no client-selected return URL |
 | GET | `/api/auth/callback` | Consume browser-bound state, set session, return to `/` |
 | POST | `/api/auth/logout` | Same-origin session revocation and cookie clearing |
+| GET | `/api/admin/overview` | Admin-only institutional counts |
+| GET/PATCH | `/api/admin/users`, `/api/admin/users/{id}` | Admin-only user search/detail; role/status changes with audit |
+| GET | `/api/admin/users/{id}/sessions` | Admin-only session metadata (no token hashes) |
+| POST | `/api/admin/users/{id}/revoke-sessions` | Admin-only session revocation with audit |
+| GET/DELETE | `/api/admin/conversations`, `.../{id}/transcript` | Metadata list; audited transcript read; audited conversation delete |
+| GET/POST | `/api/admin/jobs`, `/api/admin/jobs/{id}/cancel` | Admin-only job inspection and audited cancellation |
+| GET | `/api/admin/sources`, `/api/admin/artifacts`, `/api/admin/audit` | Admin-only operational inspection |
+| GET/POST/PATCH/DELETE | `/api/admin/collections`, `/api/admin/collections/{id}` | Empty-collection CRUD with audit |
+| GET | `/api/debug/settings` | Admin-only allowlisted registry and defaults |
+| POST/GET/PATCH/DELETE | `/api/debug/sessions`, `/api/debug/session` | Admin-only scoped override session (bearer token) |
 | POST | `/api/runs` | `kind`, bounded `inputs`, `idempotencyKey`; scoped durable job |
 | GET | `/api/runs/limits` | Authenticated call/token limits; no generation or run-store lookup |
 | GET | `/api/runs/{id}` | Run state and exact published artifact revisions |
@@ -1916,7 +1969,8 @@ explicit null resets to all authorized sources. History reads do not change the
 advising topic. A pronoun follow-up deterministically includes the previous
 advising question in retrieval; this conservative heuristic still needs real
 follow-up quality evaluation. On the legacy answer path every retained turn is
-included once in the bounded model context, fenced as untrusted history. Historical citation numbers and prior
+represented once in the bounded model context: raw until a checkpoint, then
+through its summary plus the retained recent turns, fenced as untrusted history. Historical citation numbers and prior
 answers never become current institutional evidence. Passage bodies for citations
 the conversation already used are reattached to the next turn's numbered context
 (newest first, at most eight passages and 12 KB of text, and only sources still
@@ -1925,13 +1979,23 @@ transcript, so uncited retrieved passages still do not enlarge it. A passage
 already returned by the new search is not duplicated. Old citation numbers are
 not reused; the model cites the new numbers.
 
-There is currently no automatic summary. On the legacy path, context or referenced revisions larger
-than `CONVERSATION_CONTEXT_MAX_BYTES` (default 12000) fail before a new turn/model
-call, retain all saved history, and explain the limit. A successful-summary
-coverage boundary remains required before the legacy path can continue
-without this limit. Opt-in research uses the explicit recent-history selection,
-paged transcript/evidence reads and published notebook described above instead.
-It does not claim that a selected view covers every archived turn. Normal answers expose `claims` as
+Automatic compaction runs on the legacy advising path. When the rendered
+history (a prior summary plus recent turns) reaches
+`LLM_CONTEXT_WINDOW_TOKENS * CONVERSATION_COMPACTION_THRESHOLD` (default 50%),
+the stream/sync path freezes a `conversation_summaries` checkpoint, summarizes
+the covered turns, and replaces them with a bounded handoff. The handoff keeps
+`CONVERSATION_COMPACTION_KEEP_TURNS` raw turns and a deterministic reference
+index of exact source names, locators, chunk ids, source ids, artifact ids and
+revision ids; the model narrative is untrusted memory and never current
+evidence. `CONVERSATION_CONTEXT_MAX_BYTES` defaults to the model window times
+`CONVERSATION_TOKEN_ESTIMATE_BYTES` and remains the hard cap; when compaction is
+disabled or fails, an oversized context still fails 422 without dropping saved
+turns. A pending checkpoint older than five minutes is failed as `stale_pending`
+so a crashed summarizer cannot fence the conversation. The threshold, kept-turn
+count, context window, output cap and token estimate are all configuration, not
+hardcoded. Opt-in research uses the explicit recent-history selection, paged
+transcript/evidence reads and published notebook described above instead. It
+does not claim that a selected view covers every archived turn. Normal answers expose `claims` as
 `{text, citationChunkIds, reviewStatus:'unreviewed'}`; these are paragraph review
 units, not proven facts or atomic claim decomposition.
 Review-unit extraction retains every nonempty paragraph, including uncited units
@@ -2176,6 +2240,48 @@ supply evidence, not additional instructions. There is no separate build plan.
   plus separate sandbox host for deployment. Deliver configuration, migrations,
   health checks, monitoring, backups and a proven restore, rollback instructions,
   and the school-auth handoff before students use the product.
+
+### Capacity and student rollout target
+
+This is a planned release contract for approximately 6,000 students, not a claim
+of demonstrated capacity. The [scaling handoff](plans/scale-6000.md) defines the
+workload assumptions, implementation sequence and numerical acceptance gates.
+Its baseline is an in-process synthetic measurement. Worker concurrency and
+pooled timeouts exist, but production concurrency, retrieval, storage and recovery
+still require the following evidence:
+
+- Freeze the launch feature mix and per-class latency targets. Simple answers,
+  planning/tools, research, uploads and artifact/Office work have different
+  whole-turn service times, provider calls and resource costs. Size slots from
+  arrival rate × service time plus headroom, and prove provider quota/spend for
+  that mix. A feature without demonstrated capacity stays outside the launch claim.
+- Demonstrate sustained scheduled arrivals at 10 turns/s and 20 turns/s headroom,
+  bounded queue wait, burst/overload recovery and a soak through real HTTP/proxy,
+  independent Linux processes, authenticated sessions and production-like storage.
+  Include browser polling and other reads concurrently; a finite 80-turn burst
+  or a closed-loop concurrency test alone cannot establish the target.
+- Put atomic workspace/global admission and spend reservations, service-class
+  fairness, and queue/pool/provider/resource telemetry before concurrency expansion.
+  Bound batch fan-out and uploads as well as turns. Request replay is idempotent;
+  unknown provider outcomes remain charged/reserved as required and are not replayed.
+- Budget connections as the sum of process counts × all active role pool maxima,
+  plus unpooled application connections, at maximum replicas and rollout surge.
+  Keep application use below 70% of the configured DB limit and reserve operations
+  access. PgBouncer compatibility and its backend budget require separate proof.
+- Preserve workspace, source revision and explicit selection fences in every
+  retrieval strategy. Benchmark shared/private/skewed scopes at the target corpus
+  size, compare ANN recall against exact scoped results, and retain the frozen
+  advising eval gate. Index use alone is not acceptance; model/dimension storage
+  remains per row unless an explicit future design change replaces that contract.
+- Prove cross-replica original/artifact access, graceful drain, worker/DB/provider
+  failure recovery and at-most-once publication. A restore must recover DB rows,
+  referenced file versions and external secrets and exercise authenticated app
+  flows within declared RPO/RTO; `/ready` alone is insufficient. Existing logical
+  backups require maintenance and do not establish online cross-store consistency.
+- Define retention and named operational/cost owners; test alert delivery and
+  deploy rollback. Expand through bounded student cohorts only after the gates
+  pass, with explicit stop criteria and measurements at each cohort. These checks
+  supplement the functional, semantic and isolation release evidence below.
 
 ### Delivery order and release evidence
 

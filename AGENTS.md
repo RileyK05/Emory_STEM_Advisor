@@ -25,7 +25,7 @@ modes; there is no separate build plan.
     runner, and the named-query loader. Fresh installs apply `db/baseline/032_schema.sql`.
     `db/legacy_migrations/001`–`032` is the immutable upgrade archive for existing
     databases/backups. Future numbered changes start at `db/migrations/033_*.sql`;
-    the current head is `040_source_applicability.sql`. Never edit an applied file or
+    the current head is `041_admin_and_debug.sql`. Never edit an applied file or
     the baseline. Every
     SQL statement is a `-- name:` block in `db/queries/*.sql`; no inline SQL in
     app code.
@@ -77,6 +77,11 @@ modes; there is no separate build plan.
     authentication dependency. The job worker purges expired login rows and
     long-revoked sessions hourly (`auth/housekeeping.py`). `connections/` — encrypted provider connection
     profiles, evaluated routing selection, and the profile runtime.
+  - `admin/` — institutional user/role store, audited admin reads and destructive
+    actions (conversation delete, job cancel, empty-collection CRUD), and the
+    admin API's data layer. `debug/` — the allowlisted runtime override registry,
+    scoped admin debug sessions, and request-scoped application of those
+    overrides. Neither exposes secrets, auth, database, or routing credentials.
   - `jobs/` — persistent job store and worker runtime, the dependent artifact
     run plans, and provider (batch) tracking. `operations/` — persisted
     token/call/time budgets shared across a logical generation operation.
@@ -130,6 +135,12 @@ modes; there is no separate build plan.
 - `frontend/src/api/` — `types.ts` mirrors the architecture doc; `client.ts`
   is the single factory the app uses. `VITE_API_MODE` selects `mock` (default)
   or `http`; `HttpClient` implements the workspace-scoped HTTP contract.
+- `frontend/src/admin/` and `frontend/src/debug/` — separate Vite entry bundles
+  for the Admin and Debug surfaces; they share `SessionGate`, `Shell`, and the
+  API client with Main but are not shipped in its entry. `src/app/SessionGate.tsx`
+  is the shared authentication gate. The Admin bundle manages users/roles and
+  audited inspection; the Debug bundle owns an expiring scoped override session
+  and its test chat.
 - `frontend/src/components/` — one chat with artifacts made from it. `shell/`
   is the layout (top bar, sidebar, dialogs, the mascot theme switch: Swoop =
   light Emory blue/gold, Dooley = dark black/white). `chat/` has a single
@@ -145,6 +156,11 @@ modes; there is no separate build plan.
   (`data/atlas/*.jsonl`), eval set (`data/eval/retrieval.jsonl`).
 - `sandbox/` and `compose.yaml` — worker/sandbox images and the local compose
   stack (see `sandbox/WORKER.md`).
+- `infra/` and `deploy/` — the Azure base: Bicep for Container Apps, PostgreSQL
+  Flexible Server + pgvector, storage, Key Vault and monitoring; production
+  API/worker/migrate and nginx images; and the two-phase
+  `deploy/azure/deploy.sh` (see `infra/README.md`). Public ingress, Azure Files
+  for `DATA_DIR`, and the existing OIDC adapter are deliberate base limitations.
 - `docs/` — `architecture.md` (the one design contract), `plans/` (requested
   implementation handoffs), and `audit/` (existing review findings).
 

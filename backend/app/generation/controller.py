@@ -76,7 +76,8 @@ class ToolConversationController:
             on_provisional_reset: Callable[[], None] | None = None,
             final_repair: Callable[[GenerationResult], str | None] | None = None,
             required_tool_names: frozenset[str] = frozenset(),
-            on_attempt: Callable[[GenerationRequest, GenerationResult | None, Exception | None], None] | None = None
+            on_attempt: Callable[[GenerationRequest, GenerationResult | None, Exception | None], None] | None = None,
+            before_provider_call: Callable[[], None] | None = None,
             ) -> GenerationResult:
         messages: list[Message] = list(request.messages)
         request_with_tools = replace(request, tools=registry.definitions)
@@ -115,7 +116,8 @@ class ToolConversationController:
             provider_count += 1
             result = _attempt(provider, prepared, operation, on_attempt=on_attempt,
                               on_provisional_text=on_provisional_text,
-                              on_provisional_reset=on_provisional_reset)
+                              on_provisional_reset=on_provisional_reset,
+                              before_provider_call=before_provider_call)
             usages.append(result.usage)
             if repaired and result.tool_calls:
                 raise ToolConversationError("answer rewrite requested an unexecuted tool")
@@ -224,10 +226,12 @@ def _generate(provider, prepared: GenerationRequest, on_provisional_text) -> Gen
 
 
 def _attempt(provider, prepared: GenerationRequest, operation, *, on_attempt, on_provisional_text,
-             on_provisional_reset) -> GenerationResult:
+             on_provisional_reset, before_provider_call=None) -> GenerationResult:
     """Call the provider and always account and audit the attempt before surfacing any failure."""
     result = error = None
     try:
+        if before_provider_call is not None:
+            before_provider_call()
         result = _generate(provider, prepared, on_provisional_text)
     except Exception as exc:  # noqa: BLE001
         error = exc

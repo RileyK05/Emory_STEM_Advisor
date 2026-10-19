@@ -171,7 +171,8 @@ def _conversation_progress(session):
 
 class ResearchController:
     def run(self, session, provider, operation, *, ledger, check_cancelled,
-            on_progress, on_attempt, question, history_context=None, selection_identity=None):
+            on_progress, on_attempt, question, history_context=None, selection_identity=None,
+            before_provider_call=None):
         settings = session.settings
         registry = session.registry()
         executor = ToolConversationController(max_tool_calls=settings.research_max_tool_calls,
@@ -240,7 +241,8 @@ class ResearchController:
                 "prompt_digest": json_digest({"system": prepared.messages[0].content, "user": user}),
                 "finish_required": finishing})
             result = _attempt(provider, prepared, operation, on_attempt=on_attempt,
-                              on_provisional_text=None, on_provisional_reset=None)
+                              on_provisional_text=None, on_provisional_reset=None,
+                              before_provider_call=before_provider_call)
             usages.append(result.usage)
             check_cancelled()
             if result.refusal or (result.finish_reason or "").lower() in {

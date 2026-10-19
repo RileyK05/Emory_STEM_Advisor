@@ -51,3 +51,11 @@ def get_principal(request: Request) -> Principal:
 
 def get_workspace_key(principal: Annotated[Principal, Depends(get_principal)]) -> str:
     return principal.workspace_key
+
+
+def get_admin_principal(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> Principal:
+    if principal.role != "admin" or principal.status != "active":
+        raise HTTPException(status_code=403, detail="institutional administrator access required")
+    return principal

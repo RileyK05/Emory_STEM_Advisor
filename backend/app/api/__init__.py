@@ -63,6 +63,7 @@ def _include_routers(app: FastAPI) -> None:
     from fastapi import Depends
 
     from app.api import deps
+    from app.api.routes.admin import router as admin_router
     from app.api.routes.artifacts import router as artifact_router
     from app.api.routes.auth import router as auth_router
     from app.api.routes.batches import router as batch_router
@@ -70,17 +71,23 @@ def _include_routers(app: FastAPI) -> None:
     from app.api.routes.conversation_summaries import router as summary_router
     from app.api.routes.conversations import router as conversation_router
     from app.api.routes.corpus import router
+    from app.api.routes.debug import router as debug_router
     from app.api.routes.decisions import router as decision_router
     from app.api.routes.gaps import router as gap_router
     from app.api.routes.health import router as health_router
+    from app.api.routes.metrics import router as metrics_router
     from app.api.routes.runs import router as run_router
     from app.auth.dependencies import get_principal
 
     # Public: no identity required.
     app.include_router(health_router)
     app.include_router(auth_router)
-    # Local administration guards itself (loopback-only; see routes.connections._admin).
+    # Local administration guards itself (loopback-only; see api.admin).
     app.include_router(connection_router)
+    app.include_router(metrics_router)
+    # Institutional admin and debug surfaces enforce their own admin role.
+    app.include_router(admin_router)
+    app.include_router(debug_router)
     # Everything else requires an authenticated principal.
     for authenticated_router in (router, artifact_router, conversation_router, summary_router,
                                  gap_router, batch_router):
@@ -144,6 +151,19 @@ def create_app(
     state.auth_service = auth_service or build_auth_service(
         state.settings, _auth_connection_factory(app), allow_test_client=allow_test_client)
     state.office_runner = _office_runner(state.settings)
+
+    @app.middleware("http")
+    async def configure_threadpool(request, call_next):
+        # AnyIO's default is 40 per process. A sync dependency waiting for a
+        # pooled connection can starve the handler that would release it when
+        # concurrent requests exceed that limit, so size it from settings.
+        # The limiter belongs to the running event loop, so set it every request
+        # rather than once per app (tests and load drivers create new loops).
+        from anyio import to_thread
+
+        to_thread.current_default_thread_limiter().total_tokens = (
+            state.settings.http_threadpool_tokens)
+        return await call_next(request)
 
     @app.middleware("http")
     async def private_response_headers(request, call_next):

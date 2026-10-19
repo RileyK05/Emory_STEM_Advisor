@@ -57,6 +57,10 @@ def build_auth_service(settings, connect, *, allow_test_client=False):
         transaction_ttl_seconds=settings.auth_transaction_ttl_seconds,
     )
     oidc.validate()
-    return AuthService(connect, mode="oidc", oidc=oidc,
-                       provider=AuthlibOIDCProvider(oidc),
-                       membership_policy=membership_policy(settings))
+    return AuthService(
+        connect, mode="oidc", oidc=oidc,
+        provider=AuthlibOIDCProvider(oidc),
+        membership_policy=membership_policy(settings),
+        admin_bootstrap_emails=settings.admin_bootstrap_emails,
+        admin_bootstrap_subjects=settings.admin_bootstrap_subjects,
+    )

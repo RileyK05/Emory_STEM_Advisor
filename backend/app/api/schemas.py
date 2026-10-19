@@ -386,3 +386,181 @@ class AuthSession(_WireModel):
     workspaceKey: str | None = None
     displayName: str | None = None
     email: str | None = None
+    role: Literal["student", "admin"] | None = None
+
+
+class AdminOverview(_WireModel):
+    users: int
+    admins: int
+    disabledUsers: int
+    activeSessions: int
+    conversations: int
+    turns: int
+    summaries: int
+    queuedJobs: int
+    runningJobs: int
+    failedJobs: int
+    sources: int
+    artifacts: int
+    traces: int
+
+
+class AdminUser(_WireModel):
+    userId: UUID
+    issuer: str
+    subject: str
+    workspaceKey: str
+    displayName: str | None = None
+    email: str | None = None
+    role: Literal["student", "admin"]
+    status: Literal["active", "disabled"]
+    conversationCount: int
+    activeSessions: int
+    createdAt: str
+    updatedAt: str
+    lastSeenAt: str | None = None
+
+
+class AdminUserUpdate(BaseModel):
+    role: Literal["student", "admin"]
+    status: Literal["active", "disabled"]
+
+
+class AdminAuditEntry(_WireModel):
+    auditId: UUID
+    actorUserId: UUID | None = None
+    actorWorkspace: str
+    action: str
+    targetType: str
+    targetId: str | None = None
+    detail: dict[str, Any]
+    createdAt: str
+    actorEmail: str | None = None
+    actorDisplayName: str | None = None
+
+
+class AdminConversation(_WireModel):
+    conversationId: UUID
+    workspaceKey: str
+    title: str
+    lastSequence: int
+    pendingRequestId: UUID | None = None
+    turnCount: int
+    summaryCount: int
+    createdAt: str
+    updatedAt: str
+
+
+class AdminConversationTurn(_WireModel):
+    sequence: int
+    requestId: str
+    role: Literal["user", "assistant"]
+    text: str
+    status: str
+    evidence: dict[str, Any]
+    createdAt: str
+
+
+class AdminTranscript(_WireModel):
+    conversation: AdminConversation
+    turns: list[AdminConversationTurn]
+
+
+class AdminJob(_WireModel):
+    jobId: UUID
+    kind: str
+    scopeKey: str
+    status: str
+    attemptCount: int
+    maxAttempts: int
+    cancelRequested: bool
+    error: dict[str, Any] | None = None
+    createdAt: str
+    updatedAt: str
+    finishedAt: str | None = None
+
+
+class AdminSource(_WireModel):
+    sourceId: UUID
+    collectionId: UUID
+    filename: str
+    contentType: str
+    status: str
+    workspaceKey: str | None = None
+    indexRevision: int
+    isCurrent: bool
+    createdAt: str
+    updatedAt: str
+
+
+class DebugSetting(_WireModel):
+    name: str
+    label: str
+    group: str
+    type: Literal["int", "float", "bool", "str"]
+    value: Any
+    description: str
+    minimum: float | None = None
+    maximum: float | None = None
+    choices: list[str] | None = None
+
+
+class DebugSettingsResponse(_WireModel):
+    settings: list[DebugSetting]
+    retrieval: list[DebugSetting]
+    systemPrompt: str
+    defaultSystemPrompt: str
+
+
+class DebugSessionCreate(BaseModel):
+    overrides: dict[str, Any] = Field(default_factory=dict)
+    systemPrompt: str | None = Field(default=None, max_length=20000)
+
+
+class DebugSessionUpdate(BaseModel):
+    overrides: dict[str, Any] | None = None
+    systemPrompt: str | None = Field(default=None, max_length=20000)
+
+
+class DebugSession(_WireModel):
+    debugSessionId: UUID
+    expiresAt: str
+    overrides: dict[str, Any]
+    systemPrompt: str | None = None
+    createdAt: str
+    updatedAt: str
+
+
+class DebugSessionCreated(DebugSession):
+    token: str
+
+
+class AdminRevokedSessions(_WireModel):
+    revoked: int
+
+
+class AdminUserSession(_WireModel):
+    createdAt: str
+    expiresAt: str
+    revokedAt: str | None = None
+
+
+class AdminArtifact(_WireModel):
+    artifactId: UUID
+    workspaceKey: str
+    kind: str
+    headRevisionId: UUID
+    originalFilename: str | None = None
+    revisionCount: int
+    createdAt: str
+
+
+class AdminCollection(_WireModel):
+    collectionId: UUID
+    name: str
+    sourceCount: int
+    createdAt: str
+
+
+class AdminCollectionWrite(BaseModel):
+    name: str = Field(min_length=1, max_length=200)

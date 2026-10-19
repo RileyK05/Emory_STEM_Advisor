@@ -5,6 +5,15 @@ import react from '@vitejs/plugin-react';
 // backend share an origin (no CORS). Set VITE_API_BASE_URL to bypass the proxy.
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        admin: 'admin.html',
+        debug: 'debug.html',
+      },
+    },
+  },
   server: {
     proxy: {
       // Preserve the browser's Host so backend same-origin checks match Origin.

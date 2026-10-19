@@ -40,6 +40,14 @@ import type {
 /** Base URL of the backend. Defaults to the Vite dev proxy path. */
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
+// Set only by the Debug bundle. The Main bundle never sets it, so ordinary
+// users never send an override header even though they share this module.
+let debugSessionToken: string | null = null;
+
+export function setDebugSessionToken(token: string | null): void {
+  debugSessionToken = token;
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -93,7 +101,7 @@ async function fetchOrThrow(
     throw new Error(unreachableMessage);
   }
   if (!response.ok) {
-    if (response.status === 401 && !path.startsWith('/api/auth/'))
+    if (response.status === 401 && !debugSessionToken && !path.startsWith('/api/auth/'))
       window.dispatchEvent(new Event('advisor-session-invalid'));
     // A 5xx with an empty body is the dev proxy failing to reach a stopped API,
     // not an application error. Report it as unreachable rather than a
@@ -108,7 +116,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetchOrThrow(
     path,
     {
-      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(debugSessionToken ? { 'X-Debug-Session': debugSessionToken } : {}),
+        ...(init?.headers ?? {}),
+      },
       credentials: 'same-origin',
       ...init,
     },

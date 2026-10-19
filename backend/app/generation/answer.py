@@ -173,7 +173,7 @@ def _user_prompt(chunks: list[CitedChunk], query: str, history_context: str | No
 
 
 def _call_provider(provider, request: GenerationRequest, messages: list[Message], user_prompt: str,
-                   on_provisional_text) -> GenerationResult:
+                   on_provisional_text, system_prompt: str = SYSTEM_PROMPT) -> GenerationResult:
     stream = getattr(provider, "stream", None) if on_provisional_text is not None else None
     if callable(stream):
         return consume_stream(stream(request), on_provisional_text)
@@ -185,7 +185,7 @@ def _call_provider(provider, request: GenerationRequest, messages: list[Message]
     return GenerationResult(
         text=text,
         usage=Usage(
-            prompt_tokens=len(SYSTEM_PROMPT.split()) + len(user_prompt.split()),
+            prompt_tokens=len(system_prompt.split()) + len(user_prompt.split()),
             completion_tokens=len(text.split()), source="estimated",
         ),
     )
@@ -207,13 +207,16 @@ def answer_from_context(
     include_resource_ids: bool = False,
     repair_citations: bool = False,
     on_provisional_reset: Callable[[], None] | None = None,
+    before_provider_call: Callable[[], None] | None = None,
+    system_prompt: str | None = None,
 ) -> GeneratedAnswer:
     if sampling_policy not in {"greedy", "model_default"}:
         raise ValueError("unsupported sampling policy")
+    prompt = SYSTEM_PROMPT if system_prompt is None else system_prompt
     user_prompt = _user_prompt(chunks, query, history_context,
                                include_resource_ids=include_resource_ids)
     messages: list[Message] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": user_prompt},
     ]
     request = GenerationRequest(messages, max_output_tokens=max_new_tokens,
@@ -222,8 +225,10 @@ def answer_from_context(
                                 reasoning_effort=reasoning_effort)
     if prepare_request is not None:
         request = prepare_request(request)  # Reservation must commit before provider I/O.
+    if before_provider_call is not None:
+        before_provider_call()  # Release durable resources reserved for this call.
     try:
-        result = _call_provider(provider, request, messages, user_prompt, on_provisional_text)
+        result = _call_provider(provider, request, messages, user_prompt, on_provisional_text, prompt)
     except Exception as exc:
         if on_attempt:
             on_attempt(None, exc)
@@ -241,8 +246,10 @@ def answer_from_context(
         request = replace(request, messages=messages)
         if prepare_request is not None:
             request = prepare_request(request)
+        if before_provider_call is not None:
+            before_provider_call()
         try:
-            result = _call_provider(provider, request, messages, user_prompt, on_provisional_text)
+            result = _call_provider(provider, request, messages, user_prompt, on_provisional_text, prompt)
         except Exception as exc:
             if on_attempt:
                 on_attempt(None, exc)
@@ -255,7 +262,7 @@ def answer_from_context(
         result = replace(result, usage=_aggregate_usage([initial_usage, result.usage]))
     text = strip_resource_markers(result.text).strip()
     answer = GeneratedAnswer(
-        text=text, citations=(), system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt,
+        text=text, citations=(), system_prompt=prompt, user_prompt=user_prompt,
         prompt_tokens=result.usage.prompt_tokens,
         completion_tokens=result.usage.completion_tokens, warnings=(),
         usage_source=result.usage.source, model_id=result.model,
@@ -269,7 +276,7 @@ def answer_from_context(
         raise GenerationRejected("answer has no valid supporting citations", answer,
                                  recoverable_integrity=True)
     return GeneratedAnswer(
-        text=text, citations=citations, system_prompt=SYSTEM_PROMPT, user_prompt=user_prompt,
+        text=text, citations=citations, system_prompt=prompt, user_prompt=user_prompt,
         prompt_tokens=answer.prompt_tokens, completion_tokens=answer.completion_tokens,
         warnings=(), usage_source=answer.usage_source, model_id=answer.model_id,
     )
