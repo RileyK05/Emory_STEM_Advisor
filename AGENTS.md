@@ -125,6 +125,8 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.reconcile_atlas --publish     # publish Atlas-primary records; retains labeled catalog fallbacks
 ../.venv/Scripts/python -m scripts.ingest_offerings --captures DIR --career NAME --collection NAME [--publish]   # term offerings
 ../.venv/Scripts/python -m scripts.build_simgraph --collection NAME [--nudges FILE]
+../.venv/Scripts/python -m scripts.requirement_hold --help          # curator hold on a conflicting course rule
+../.venv/Scripts/python -m scripts.record_profile_evaluation --help # bind an eval result to a connection profile
 ../.venv/Scripts/python -m scripts.prepare_advising_documents           # reviewed uploads -> data/staging/
 ../.venv/Scripts/python -m scripts.eval_retrieval [--cases FILE]
 ../.venv/Scripts/python -m scripts.serve                 # HTTP API on :8000
