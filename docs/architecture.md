@@ -2285,8 +2285,10 @@ not proven facts or atomic claims. Review-unit extraction retains every nonempty
 paragraph, including uncited units with an empty citation list; malformed
 references cannot silently remove text from review coverage.
 
-Explicit claim review (`generation/claim_review.py`) is an opt-in seam that
-query handling does not run. It extends paragraph units with versioned exact
+Explicit claim review (`generation/claim_review.py`, `POST /api/claim-reviews`)
+is opt-in: query handling never runs it. The route takes an answer's `traceId`
+and resolves the saved response and its operation server-side; without an
+evaluated structured-output profile it answers 503 and records nothing. It extends paragraph units with versioned exact
 answer spans and exact evidence spans from immutable response snapshots. The
 server validates offsets and verbatim text against the saved answer and
 authorized chunks; unknown sources, invented quotations, or incomplete
@@ -2381,7 +2383,8 @@ configurable.
 | GET | `/api/admin/alerts` | Alert probe readings |
 | GET/POST | `/api/admin/sources/{id}/review`, `.../impact`, `.../proposals`, `.../proposals/{pid}/approve`, `.../proposals/{pid}/reject`, `.../lifecycle`, `.../evidence` | Source review lifecycle and revision evidence |
 | GET/POST | `/api/admin/programs/{id}/inspection`, `.../rules/draft`, `.../rules/{releaseId}/approve`, `.../publish`, `.../reject`, `.../rules/diff` | Program rule release review |
-| POST | `/api/admin/catalog-refresh`, `.../{batchId}/cancel`, `.../{batchId}/publish` | Staged catalog refresh batches |
+| GET/POST | `/api/admin/catalog-refresh?collectionId=`, `/api/admin/catalog-refresh`, `.../{batchId}/cancel`, `.../{batchId}/publish` | Published edition and staging batch; stage, cancel, publish |
+| POST/GET | `/api/claim-reviews`, `.../{reviewId}`, `.../{reviewId}/abandon` | Opt-in model assessment of a saved answer's claims |
 | GET/POST | `/api/admin/courses`, `.../courses/{code}`, `/api/admin/course-changes`, `.../conflicts`, `.../{id}/preview`, `.../{id}/publish`, `.../{id}/reject` | Course maintenance changes |
 
 ## Governance and operations
@@ -2425,9 +2428,13 @@ events once under a lease. A resolved gap whose source appears in that outbox is
 ineligible as soon as the event exists, before consumption finishes. An
 identical program reimport keeps saved releases, reviews, and audits.
 
-A catalog refresh batch stages the next edition without becoming current.
-Cancelling it leaves the published edition, its source, and the current topic
-build usable. An incompatible manifest is not published and does not rebuild or
+A catalog refresh batch stages the next edition without becoming current. The
+staged edition pins the collection's current indexed institutional sources and
+current topic build; the first refresh publishes revision 1 against no prior
+edition. Edition revisions only increase (a cancelled edition keeps its number),
+and at most one batch stages per collection. Publication requires the published
+revision the batch was staged against. Cancelling leaves the published edition,
+its source, and the current topic build usable. An incompatible manifest is not published and does not rebuild or
 retire the topic graph. Corpus regeneration stays a separate verified import.
 
 ### Feedback, experiments and prompt versions
@@ -2456,6 +2463,10 @@ the query and scope pointers and drops secret-bearing fields.
 Prompt text is an immutable version identity; different text cannot reuse a
 version id. Promotion stays blocked until a human marks the version approved and
 a current eval fixture is present. No model call approves or judges the release.
+The newest promoted version named `grounded-answer` replaces the built-in
+grounded-answer system prompt (a debug-session prompt still wins); each response
+row records the prompt that produced it as `registry-<digest>`,
+`debug-override`, or the built-in prompt version.
 
 ### Usage, cost and quotas
 
@@ -2497,8 +2508,9 @@ response reveals the download token once; later list and detail responses omit
 it. Download requires the owner session and that token, and it expires. The
 manifest digest is the checksum of the stored bundle.
 
-Deletion fences the workspace and removes local artifact originals before
-deleting owned rows. A failed delete stays resumable and does not write those
+Deletion fences the workspace and removes local artifact originals and private
+upload bytes before deleting owned rows, including the workspace's uploaded
+sources and their chunks (the inventory counts them). A failed delete stays resumable and does not write those
 files back. A tombstone blocks later private record, conversation, feedback and
 artifact writes, new jobs, and worker execution/publication. Short store writes
 serialize with fence creation; job cancellation follows the committed fence to
