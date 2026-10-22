@@ -13,6 +13,11 @@ from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef, ParsedRequi
 from app.db import queries
 
 
+def course_uuid(collection_id: UUID, code: str) -> UUID:
+    """Content-addressed course identity (D3): every writer must derive it here."""
+    return uuid5(collection_id, f"course:{code}")
+
+
 def node_id(course_id: UUID, kind: str, path: str) -> UUID:
     return uuid5(course_id, f"{kind}:{path}")
 

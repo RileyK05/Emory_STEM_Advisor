@@ -5,23 +5,19 @@ produces edges, an admin edit never acquires Atlas authority, and a stale
 revision is rejected instead of merged. No model participates.
 """
 
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
-from app.atlas.course_writer import replace_course_requisites
+from app.atlas.course_writer import course_uuid, replace_course_requisites
 from app.atlas.records import normalize_code
 from app.atlas.requisites import PARSER_VERSION, parse_requisites
 from app.db import queries
 
 _CHANGE_KINDS = {"create", "update", "retire", "restore"}
 _ADMIN_CONTROLLED = ("admin_correction", "admin_created")
-
-
-def _course_id(collection_id: UUID, code: str) -> UUID:
-    return uuid5(collection_id, f"course:{code}")
 
 
 def _limit(value: int, maximum: int = 200) -> int:
@@ -262,7 +258,7 @@ class CourseMaintenanceService:
                     "change_id": change_id,
                     "collection_id": collection_id,
                     "course_id": state["course_id"] if state is not None
-                    else _course_id(collection_id, code),
+                    else course_uuid(collection_id, code),
                     "code": code,
                     "change_kind": kind,
                     "status": "draft",
@@ -495,7 +491,7 @@ class CourseMaintenanceService:
             ).fetchone()
             if source is None:
                 raise HTTPException(422, "sourceId is not an indexed current source")
-            course_id = _course_id(collection_id, code)
+            course_id = course_uuid(collection_id, code)
             locator_id = conn.execute(
                 queries.get("insert_admin_course_locator"),
                 {"locator_id": uuid4(), "source_id": source_id, "label": code},

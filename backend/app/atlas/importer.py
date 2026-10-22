@@ -6,12 +6,12 @@ from collections.abc import Callable
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID, uuid5
+from uuid import UUID
 
 from psycopg import Connection
 
 from app.admin.course_changes import record_baseline_conflict
-from app.atlas.course_writer import replace_course_requisites
+from app.atlas.course_writer import course_uuid, replace_course_requisites
 from app.atlas.records import AtlasCourse, canonical_code_map, load_atlas_lines
 from app.atlas.requisites import (
     PARSER_VERSION,
@@ -44,10 +44,6 @@ def _primary_atlas_provenance(term: str) -> SourceProvenance:
         attribution=(f"Atlas course records are primary where an explicitly cited eligible "
                      f"{term} offering exists; other records retain their catalog fallback."),
     )
-
-
-def _course_id(collection_id: UUID, code: str) -> UUID:
-    return uuid5(collection_id, f"course:{code}")
 
 
 _ADMIN_CONTROLLED = ("admin_correction", "admin_created")
@@ -98,7 +94,7 @@ def _write_course(conn, collection_id, source_id, locator_id, course, canonical_
         return False
     lifecycle = getattr(course, "lifecycle", "current")
     authority = course.authority or "catalog"
-    course_id = _course_id(collection_id, course.code)
+    course_id = course_uuid(collection_id, course.code)
     raw = requisite_text(course.requisites, course.description)
     parsed = parse_requisites(raw, course_code=course.code)
     conn.execute(queries.get("insert_course"), {
@@ -169,7 +165,7 @@ def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Pat
                 })
         for code in changed:
             conn.execute(queries.get("resolve_mention_targets"), {
-                "course_id": _course_id(collection_id, code), "collection_id": collection_id,
+                "course_id": course_uuid(collection_id, code), "collection_id": collection_id,
             })
         if changed:
             # Durable jobs must not reuse a snapshot of the old requisite facts.
@@ -288,7 +284,7 @@ def import_atlas(
             tx_conn.execute(
                 queries.get("resolve_mention_targets"),
                 {
-                    "course_id": _course_id(collection_id, course.code),
+                    "course_id": course_uuid(collection_id, course.code),
                     "collection_id": collection_id,
                 },
             )
