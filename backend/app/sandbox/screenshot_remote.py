@@ -44,24 +44,6 @@ class RemoteHtmlScreenshotRunner:
         self.max_input_bytes = max_input_bytes
         self.max_output_bytes = max_output_bytes
 
-    def _verify_worker(self) -> None:
-        try:
-            health = json.loads(self.client._request("GET", "/v1/health", "health", b"", 5))
-        except Exception as exc:
-            raise IsolationUnavailable(
-                "Authenticated screenshot sandbox worker is unavailable."
-            ) from exc
-        image_ids = health.get("image_ids") if isinstance(health, dict) else None
-        if (
-            not isinstance(health, dict)
-            or health.get("status") != "ready"
-            or health.get("runtime") != "runsc"
-            or health.get("separate_host_attested") is not True
-            or not isinstance(image_ids, dict)
-            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_ids.get(self.browser_image, "")))
-        ):
-            raise IsolationUnavailable("Isolated screenshot browser image is not ready on the worker.")
-
     def render(
         self,
         html: str,
@@ -83,7 +65,11 @@ class RemoteHtmlScreenshotRunner:
             raise ValueError("invalid screenshot request ID")
         if cancel_event is not None and cancel_event.is_set():
             raise SandboxCancelled("Screenshot rendering was cancelled.")
-        self._verify_worker()
+        self.client.require_image(
+            self.browser_image,
+            unavailable="Authenticated screenshot sandbox worker is unavailable.",
+            not_ready="Isolated screenshot browser image is not ready on the worker.",
+        )
         if cancel_event is not None and cancel_event.is_set():
             raise SandboxCancelled("Screenshot rendering was cancelled.")
         encoded = html.encode("utf-8")
@@ -97,35 +83,11 @@ class RemoteHtmlScreenshotRunner:
         }, separators=(",", ":")).encode()
         if len(payload) > min(self.max_input_bytes * 4 // 3 + 4096, self.config.max_request_bytes):
             raise ValueError("screenshot request exceeds configured transport limit")
-        stopped = threading.Event()
-
-        def cancel_on_request():
-            while not stopped.wait(0.05):
-                if cancel_event is not None and cancel_event.is_set():
-                    try:
-                        self.client.cancel(request_id)
-                    finally:
-                        stopped.set()
-                    return
-
-        watcher = threading.Thread(target=cancel_on_request, daemon=True) if cancel_event else None
-        if watcher:
-            watcher.start()
-        try:
-            raw = self.client._request(
-                "POST", "/v1/html/screenshot", request_id, payload,
-                min(self.config.request_timeout_seconds, timeout_seconds + 30),
-            )
-        except IsolationUnavailable as exc:
-            if cancel_event is not None and cancel_event.is_set():
-                raise SandboxCancelled("Screenshot rendering was cancelled.") from exc
-            raise
-        finally:
-            stopped.set()
-            if watcher:
-                watcher.join(timeout=0.2)
-        if cancel_event is not None and cancel_event.is_set():
-            raise SandboxCancelled("Screenshot rendering was cancelled.")
+        raw = self.client.post_cancellable(
+            "/v1/html/screenshot", request_id, payload,
+            timeout=min(self.config.request_timeout_seconds, timeout_seconds + 30),
+            cancel_event=cancel_event, cancelled="Screenshot rendering was cancelled.",
+        )
         try:
             response = json.loads(raw)
             output = base64.b64decode(response["output_base64"], validate=True)
