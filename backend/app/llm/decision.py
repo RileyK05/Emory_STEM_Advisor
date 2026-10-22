@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from app.llm.base import GenerationRequest, InvalidRequestError, Provider, Usage
+from app.llm.base import InvalidRequestError, Usage
 
 DecisionKind = Literal["predicate", "choice", "score"]
 
@@ -66,85 +65,6 @@ class DecisionResult:
 
 class DecisionProvider(Protocol):
     def decide(self, request: DecisionRequest) -> DecisionResult: ...
-
-
-class StructuredDecisionFallback:
-    """Fallback backed by a normal provider's constrained JSON generation."""
-
-    def __init__(self, provider: Provider, *, sampling_policy: str = "greedy",
-                 reasoning_effort: str | None = None):
-        if sampling_policy not in {"greedy", "model_default"}:
-            raise ValueError("sampling_policy must be greedy or model_default")
-        if sampling_policy == "greedy" and reasoning_effort not in {None, "none"}:
-            raise ValueError("reasoning effort requires explicit model_default sampling policy")
-        self.provider = provider
-        self.sampling_policy = sampling_policy
-        self.reasoning_effort = reasoning_effort
-
-    def decide(self, request: DecisionRequest) -> DecisionResult:
-        if request.kind == "choice":
-            options = list(request.choices)
-            if all(isinstance(value, bool) for value in options):
-                choice_schema = {"type": "boolean", "enum": options}
-            elif all(isinstance(value, str) for value in options):
-                choice_schema = {"type": "string", "enum": options}
-            else:
-                choice_schema = {"anyOf": [
-                    {"type": "boolean", "enum": [value]} if isinstance(value, bool)
-                    else {"type": "string", "enum": [value]} for value in options]}
-            schema = {"type": "object", "properties": {
-                "choice": choice_schema,
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1}},
-                "required": ["choice", "confidence"], "additionalProperties": False}
-        elif request.kind == "score":
-            schema = {"type": "object", "properties": {
-                "score": {"type": "number", "minimum": 0, "maximum": len(request.levels) - 1},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1}},
-                "required": ["score", "confidence"], "additionalProperties": False}
-        else:
-            schema = {"type": "object", "properties": {
-                "predicate": {"type": "boolean"},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1}},
-                "required": ["predicate", "confidence"], "additionalProperties": False}
-        generation_request = GenerationRequest(
-            messages=[{"role": "system", "content": "Return only the requested classification."},
-                      {"role": "user", "content": f"Task: {request.task}\nInput: {request.input}\nPredicate: {request.predicate or ''}"}],
-            response_schema=schema, max_output_tokens=128,
-            timeout_seconds=request.timeout_seconds,
-            temperature=0.0 if self.sampling_policy == "greedy" else None,
-            reasoning_effort=self.reasoning_effort)
-        result = self.provider.generate(generation_request)
-        if result.finish_reason == "refusal":
-            return DecisionResult(refused=True, usage=result.usage)
-        if result.finish_reason in {"length", "max_tokens", "content_filter", "tool_calls", "error"}:
-            raise DecisionOutputError("decision provider returned an incomplete response",
-                                      provider="fallback", usage=result.usage)
-        try:
-            parsed = json.loads(result.text)
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise DecisionOutputError("decision provider returned invalid structured output",
-                                      provider="fallback", usage=result.usage) from exc
-        if not isinstance(parsed, Mapping):
-            raise DecisionOutputError("decision provider returned invalid structured output",
-                                      provider="fallback", usage=result.usage)
-        if request.kind == "choice":
-            if parsed.get("choice") not in request.choices:
-                raise DecisionOutputError("decision provider returned an unsupported choice",
-                                          provider="fallback", usage=result.usage)
-            return DecisionResult(choice=parsed["choice"], confidence=_confidence(parsed, result.usage), usage=result.usage)
-        if request.kind == "score":
-            score = parsed.get("score")
-            if (isinstance(score, bool) or not isinstance(score, (int, float))
-                    or not math.isfinite(score) or not 0 <= score <= len(request.levels) - 1):
-                raise DecisionOutputError("decision provider returned an invalid score",
-                                          provider="fallback", usage=result.usage)
-            return DecisionResult(score=float(score), confidence=_confidence(parsed, result.usage), usage=result.usage)
-        if not isinstance(parsed.get("predicate"), bool):
-            raise DecisionOutputError("decision provider returned no boolean predicate",
-                                      provider="fallback", usage=result.usage)
-        confidence = _confidence(parsed, result.usage)
-        return DecisionResult(predicate=parsed["predicate"], probability=None,
-                              confidence=confidence, usage=result.usage)
 
 
 def _confidence(data: Mapping[str, Any], usage: Usage | None) -> float:

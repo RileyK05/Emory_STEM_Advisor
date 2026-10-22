@@ -1,6 +1,5 @@
 import logging
 from enum import StrEnum
-from typing import Literal
 from uuid import uuid4
 
 import psycopg
@@ -12,9 +11,6 @@ from app.db import queries
 
 logger = logging.getLogger(__name__)
 
-Role = Literal["student", "advisor", "admin", "auditor"]
-GrantType = Literal["advisor_access", "support_access"]
-ResourceType = Literal["conversation", "plan", "all_records"]
 
 
 class Capability(StrEnum):

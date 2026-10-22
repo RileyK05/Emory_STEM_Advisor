@@ -163,13 +163,6 @@ class ConversationStore:
         self.conn.commit()
         return row
 
-    def turns_after(self, conversation_id, sequence: int, *, limit: int = 1000):
-        rows = self.conn.execute(queries.get("conversation_turns"), {
-            "conversation_id": conversation_id, "after": sequence, "limit": limit,
-        }).fetchall()
-        self.conn.commit()
-        return rows
-
     def _expire_stale_pending_summary(self, conversation_id) -> None:
         """A crashed compaction must not fence the conversation forever.
 
@@ -526,21 +519,6 @@ class ConversationStore:
             if row is None:
                 raise HTTPException(409, "conversation summary is no longer pending")
         return public_summary(row)
-
-    def abandon_summary(self, conversation_id, summary_id):
-        """Explicitly fence an interrupted checkpoint without provider replay."""
-        self.get(conversation_id)
-        row = self.conn.execute(queries.get("lock_conversation_summary"), {
-            "summary_id": summary_id, "conversation_id": conversation_id,
-            "workspace_key": self.workspace_key,
-        }).fetchone()
-        self.conn.commit()
-        if row is None:
-            raise HTTPException(404, "conversation summary not found")
-        if row["state"] != "pending":
-            return public_summary(row)
-        return self.finish_summary(conversation_id, summary_id, state="failed",
-                                   failure_code="explicitly_abandoned")
 
 
     def reset_memory(self, conversation_id: UUID) -> dict:

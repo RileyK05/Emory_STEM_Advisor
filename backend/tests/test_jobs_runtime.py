@@ -2,11 +2,11 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
-from app.jobs.runtime import ArtifactPersistence, RunExecutor, StagedArtifact, StagedRunResult
+from app.jobs.runtime import RunExecutor, StagedArtifact, StagedRunResult
 from app.jobs.store import JobCancelled, JobStore, LeaseLost, SafeJobError
 from app.jobs.types import Job, JobStatus
 
@@ -88,30 +88,6 @@ def test_run_executor_rejects_unknown_kind_before_handler():
     with pytest.raises(SafeJobError):
         RunExecutor({"document": lambda *args: called.append(True)})(bad, Context())
     assert called == []
-
-
-def test_artifact_persistence_uses_typed_immutable_store(migrated_dsn, db, tmp_path):
-    from app.db.connection import connect
-
-    persistence = ArtifactPersistence(
-        lambda: connect(migrated_dsn), data_dir=tmp_path, workspace_key="worker-local"
-    )
-    spec = {
-        "kind": "document",
-        "title": "Generated guide",
-        "blocks": [{"id": "p1", "type": "paragraph", "text": "Grounded text"}],
-    }
-    created = persistence.create(spec)
-    assert created["kind"] == "document" and created["spec"]["blocks"][0]["text"] == "Grounded text"
-    changed = {
-        **spec,
-        "blocks": [{"id": "p1", "type": "paragraph", "text": "Revised grounded text"}],
-    }
-    revision = persistence.revise(
-        UUID(created["artifactId"]), UUID(created["revisionId"]), changed, draft_id="run-revision-1"
-    )
-    assert revision["parentRevisionId"] == created["revisionId"]
-    assert revision["spec"]["blocks"][0]["text"] == "Revised grounded text"
 
 
 def _staged(text="Published"):

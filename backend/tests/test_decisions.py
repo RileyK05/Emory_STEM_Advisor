@@ -276,26 +276,6 @@ def test_native_invalid_probability_error_keeps_provider_usage():
     assert exc.value.usage == Usage(9, 2, source="provider")
 
 
-def test_structured_fallback_does_not_turn_confidence_into_probability():
-    from app.llm.base import GenerationResult
-    from app.llm.decision import DecisionRequest, StructuredDecisionFallback
-
-    class Provider:
-        request = None
-
-        def generate(self, request):
-            self.request = request
-            return GenerationResult(text='{"predicate":true,"confidence":0.8}',
-                                    finish_reason="stop", usage=Usage(8, 4, source="provider"))
-
-    provider = Provider()
-    result = StructuredDecisionFallback(provider).decide(DecisionRequest(
-        task="classify", input="x", predicate="is eligible?"))
-    assert result.predicate is True and result.confidence == 0.8
-    assert result.probability is None
-    assert provider.request.temperature == 0
-
-
 def test_http_decision_request_is_workspace_scoped_idempotent_and_bounded(db):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient

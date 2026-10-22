@@ -14,7 +14,6 @@ from app.artifacts.storage import ArtifactStore, validate_spec
 from app.jobs.store import SafeJobError
 from app.jobs.types import Job
 from app.jobs.worker import JobContext
-from app.util.workspace import is_valid_workspace_key
 
 _VALID_KINDS = frozenset({"document", "workbook", "html"})
 
@@ -233,46 +232,3 @@ def _check_operation_budget(conn: Connection, operation_id: UUID, workspace_key:
         )
 
 
-class ArtifactPersistence:
-    """Typed standalone create/revise access through the immutable ArtifactStore."""
-
-    def __init__(self, connect: Callable[[], Connection], *, data_dir: Path, workspace_key: str):
-        if not is_valid_workspace_key(workspace_key):
-            raise ValueError("workspace_key must contain 1 to 200 characters")
-        self._connect = connect
-        self.data_dir = data_dir
-        self.workspace_key = workspace_key
-
-    def create(self, spec_data: Mapping[str, Any]) -> dict[str, Any]:
-        return self._persist(spec_data, "create")
-
-    def revise(
-        self,
-        artifact_id: UUID,
-        expected_revision_id: UUID,
-        spec_data: Mapping[str, Any],
-        *,
-        draft_id: str | None = None,
-    ) -> dict[str, Any]:
-        return self._persist(spec_data, "revise", artifact_id=artifact_id,
-                             expected_revision_id=expected_revision_id, draft_id=draft_id)
-
-    def _persist(self, spec_data: Mapping[str, Any], operation: str, *, artifact_id=None,
-                 expected_revision_id=None, draft_id=None) -> dict[str, Any]:
-        if not isinstance(spec_data, Mapping):
-            raise TypeError("artifact spec must be an object")
-        spec = validate_spec(str(spec_data.get("kind", "")), dict(spec_data))
-        conn = self._connect()
-        try:
-            store = ArtifactStore(
-                conn, workspace_key=self.workspace_key, data_dir=self.data_dir
-            )
-            if operation == "revise":
-                record = store.revise(artifact_id, expected_revision_id, spec, draft_id=draft_id)
-            else:
-                record = store.create(spec)
-            from app.artifacts.storage import public_record
-
-            return public_record(record)
-        finally:
-            conn.close()
