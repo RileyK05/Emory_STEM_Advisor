@@ -13,7 +13,6 @@ from app.api import deps
 from app.api.schemas import ArtifactBatchRecord, ArtifactBatchSummary
 from app.auth.dependencies import get_workspace_key
 from app.connections.models import ConnectionUnavailable, CredentialUnreadable, MissingCredential
-from app.db.connection import connector
 from app.jobs.native_artifact_batches import (
     ArtifactBatchInput,
     cancel_and_account,
@@ -44,19 +43,7 @@ def _connect_factory(request: Request):
     configured = getattr(request.app.state, "batch_connect_factory", None)
     if configured is not None:
         return configured
-    database_url = request.app.state.settings.database_url
-    if not database_url:
-        raise HTTPException(503, detail="Batch storage is unavailable.")
-    def fresh_connection():
-        conn = connector(request.app.state.settings)()
-        try:
-            deps.ensure_database_ready(request.app.state, conn)
-            return conn
-        except Exception:
-            conn.close()
-            raise
-
-    return fresh_connection
+    return lambda: deps.open_ready_connection(request.app.state)
 
 
 def _public(snapshot):

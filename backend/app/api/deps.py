@@ -45,6 +45,22 @@ def get_provider_dep(request: Request) -> Provider | None:
     return request.app.state.provider
 
 
+def open_ready_connection(app_state):
+    """A pooled connection with the schema bootstrapped; 503 when none can be had."""
+    if not app_state.settings.database_url:
+        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    try:
+        conn = connector(app_state.settings)()
+    except PoolTimeout:
+        raise HTTPException(status_code=503, detail="database is busy; retry shortly") from None
+    try:
+        ensure_database_ready(app_state, conn)
+    except BaseException:
+        conn.close()
+        raise
+    return conn
+
+
 def get_conn(request: Request) -> Iterator:
     """A request-scoped connection.
 
@@ -55,15 +71,8 @@ def get_conn(request: Request) -> Iterator:
     if override is not None:
         yield override
         return
-    dsn = request.app.state.settings.database_url
-    if not dsn:
-        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
+    conn = open_ready_connection(request.app.state)
     try:
-        conn = connector(request.app.state.settings)()
-    except PoolTimeout:
-        raise HTTPException(status_code=503, detail="database is busy; retry shortly") from None
-    try:
-        ensure_database_ready(request.app.state, conn)
         yield conn
     finally:
         conn.close()
@@ -79,17 +88,7 @@ def ensure_database_ready_dependency(request: Request) -> None:
     if override is not None:
         ensure_database_ready(request.app.state, override)
         return
-    dsn = request.app.state.settings.database_url
-    if not dsn:
-        raise HTTPException(status_code=503, detail="DATABASE_URL is not configured")
-    try:
-        conn = connector(request.app.state.settings)()
-    except PoolTimeout:
-        raise HTTPException(status_code=503, detail="database is busy; retry shortly") from None
-    try:
-        ensure_database_ready(request.app.state, conn)
-    finally:
-        conn.close()
+    open_ready_connection(request.app.state).close()
 
 
 def ensure_database_ready(app_state, conn) -> None:
