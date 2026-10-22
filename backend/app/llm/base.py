@@ -250,10 +250,6 @@ class Provider(Protocol):
 
     def stream(self, request: GenerationRequest) -> Iterator[StreamEvent]: ...
 
-    def chat(self, messages: list[Message], *, max_new_tokens: int | None = None) -> str:
-        """Compatibility method for the original text-only provider contract."""
-        ...
-
 
 def consume_stream(events, on_text) -> GenerationResult:
     """Drain a provider stream: forward text deltas, return the completed result.

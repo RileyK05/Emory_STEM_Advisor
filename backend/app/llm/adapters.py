@@ -294,9 +294,6 @@ class _SDKProvider:
     def __init__(self, client, model: str):
         self.client, self.model = client, model
 
-    def chat(self, messages, *, max_new_tokens=None):
-        return self.generate(GenerationRequest(messages, max_output_tokens=max_new_tokens)).text
-
 
 class OpenAIProvider(_SDKProvider):
     def generate(self, request: GenerationRequest) -> GenerationResult:

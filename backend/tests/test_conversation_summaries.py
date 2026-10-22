@@ -162,17 +162,17 @@ def _append_referenced_pair(store, conversation_id, sequence, *, answer):
 def test_auto_compaction_replaces_old_turns_with_exact_pointer_memory(db, collection, monkeypatch,
                                                                     stop_compaction):
     provider = FakeProvider("Compacted memory narrative.")
-    chat = provider.chat
+    generate = provider.generate
 
     def maybe_stop(*args, **kwargs):
-        result = chat(*args, **kwargs)
+        result = generate(*args, **kwargs)
         if stop_compaction:
             from app.flags.service import FeatureFlagService
 
             FeatureFlagService.set_kill_switch(db, "conversation_compaction", True, "test stop")
         return result
 
-    monkeypatch.setattr(provider, "chat", maybe_stop)
+    monkeypatch.setattr(provider, "generate", maybe_stop)
     client = api_client(db, collection, provider=provider)
     client.app.state.settings = replace(
         client.app.state.settings,

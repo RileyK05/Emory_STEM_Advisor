@@ -56,10 +56,14 @@ class FakeProvider:
         self.last_messages: list[dict[str, str]] = []
         self.calls = 0
 
-    def chat(self, messages, *, max_new_tokens: int | None = None) -> str:
+    def generate(self, request) -> GenerationResult:
         self.calls += 1
-        self.last_messages = [dict(m) for m in messages]
-        return self.text
+        self.last_messages = [dict(m) for m in request.messages]
+        words = sum(len(str(m.get("content", "")).split()) for m in self.last_messages)
+        return GenerationResult(
+            text=self.text, finish_reason="stop",
+            usage=Usage(words, len(self.text.split()), source="estimated"),
+        )
 
 
 class ScriptedProvider:
@@ -96,10 +100,6 @@ class ScriptedProvider:
     def generate(self, request):
         self.requests.append(request)
         return self.result
-
-    def chat(self, messages, *, max_new_tokens: int | None = None) -> str:
-        self.requests.append(messages)
-        return self.result.text
 
 
 class FakeClock:

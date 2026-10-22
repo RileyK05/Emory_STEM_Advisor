@@ -20,7 +20,7 @@ from app.conversations.store import ConversationStore, history_prompt, history_t
 from app.db.connection import release_borrow
 from app.generation.evidence import record_attempt
 from app.generation.operation import GenerationOperation
-from app.llm.base import GenerationRequest, GenerationResult, Usage
+from app.llm.base import GenerationRequest
 from app.operations.budget import OperationLimits
 
 _MAX_SUMMARY_CHARS = 20_000
@@ -184,7 +184,7 @@ def compact_conversation(store: ConversationStore, provider, settings: Settings,
     result = error = None
     started = time.perf_counter()
     try:
-        result = _generate(provider, prepared, messages)
+        result = provider.generate(prepared)
     except Exception as exc:  # noqa: BLE001 - provider errors become a failed checkpoint
         error = exc
 
@@ -229,23 +229,6 @@ def compact_conversation(store: ConversationStore, provider, settings: Settings,
         _fail_summary(store, conversation_id, summary_id, "summary_too_large")
         return None
     return saved if saved.get("state") == "completed" else None
-
-
-def _generate(provider, request: GenerationRequest, messages):
-    generate = getattr(provider, "generate", None)
-    if callable(generate):
-        return generate(request)
-    # Compatibility with chat-only test doubles; usage is explicitly estimated.
-    text = provider.chat(messages, max_new_tokens=request.max_output_tokens)
-    return GenerationResult(
-        text=text,
-        finish_reason="stop",
-        usage=Usage(
-            prompt_tokens=max(1, len(json.dumps(messages).encode("utf-8")) // 4),
-            completion_tokens=max(1, len(text.encode("utf-8")) // 4),
-            source="estimated",
-        ),
-    )
 
 
 def _fail_summary(store: ConversationStore, conversation_id, summary_id, code: str) -> None:

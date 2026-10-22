@@ -18,7 +18,6 @@ from app.llm.base import (
     GenerationResult,
     Message,
     Provider,
-    Usage,
     consume_stream,
 )
 from app.retrieval.types import CitedChunk
@@ -208,24 +207,11 @@ def _user_prompt(chunks: list[CitedChunk], query: str, history_context: str | No
     )
 
 
-def _call_provider(provider, request: GenerationRequest, messages: list[Message], user_prompt: str,
-                   on_provisional_text, system_prompt: str = SYSTEM_PROMPT) -> GenerationResult:
+def _call_provider(provider, request: GenerationRequest, on_provisional_text) -> GenerationResult:
     stream = getattr(provider, "stream", None) if on_provisional_text is not None else None
     if callable(stream):
         return consume_stream(stream(request), on_provisional_text)
-    generate = getattr(provider, "generate", None)
-    if generate is not None:
-        return generate(request)
-    # Compatibility for existing test doubles/legacy plugins; label estimates.
-    text = provider.chat(messages, max_new_tokens=request.max_output_tokens)
-    return GenerationResult(
-        text=text,
-        finish_reason="stop",  # a successful legacy chat call has no terminal field
-        usage=Usage(
-            prompt_tokens=len(system_prompt.split()) + len(user_prompt.split()),
-            completion_tokens=len(text.split()), source="estimated",
-        ),
-    )
+    return provider.generate(request)
 
 
 def answer_from_context(
@@ -266,7 +252,7 @@ def answer_from_context(
     if before_provider_call is not None:
         before_provider_call()  # Release durable resources reserved for this call.
     try:
-        result = _call_provider(provider, request, messages, user_prompt, on_provisional_text, prompt)
+        result = _call_provider(provider, request, on_provisional_text)
     except Exception as exc:
         if on_attempt:
             on_attempt(None, exc)
@@ -287,7 +273,7 @@ def answer_from_context(
         if before_provider_call is not None:
             before_provider_call()
         try:
-            result = _call_provider(provider, request, messages, user_prompt, on_provisional_text, prompt)
+            result = _call_provider(provider, request, on_provisional_text)
         except Exception as exc:
             if on_attempt:
                 on_attempt(None, exc)
