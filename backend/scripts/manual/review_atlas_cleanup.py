@@ -3,7 +3,7 @@
 This is an offline evidence report. It does not write to the database, fetch pages,
 or infer course equivalencies. Run from backend with ``python -m
 scripts.manual.review_atlas_cleanup``; pass ``--write`` to update the marked block
-in ``data/personal-check.md`` (gitignored).
+in ``personal-check.md`` at the repository root.
 """
 
 from __future__ import annotations
@@ -463,7 +463,7 @@ def main() -> None:
                       else repo_root / "data/atlas/emory_college.jsonl")
     parser.add_argument("--master", type=Path, default=default_master)
     parser.add_argument("--captures", type=Path, default=repo_root / "data/atlas/spring-2027-capture")
-    parser.add_argument("--report", type=Path, default=repo_root / "data" / "personal-check.md")
+    parser.add_argument("--report", type=Path, default=repo_root / "personal-check.md")
     parser.add_argument("--write", action="store_true", help="atomically replace only this script's marked section")
     parser.add_argument("--details", action="store_true",
                         help="include per-course master findings and per-capture review rows")
