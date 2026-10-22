@@ -35,6 +35,16 @@ def pytest_collection_modifyitems(items):
             item.add_marker(pytest.mark.db)
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """A skipped database test is a failure, not a pass."""
+    outcome = yield
+    report = outcome.get_result()
+    if report.skipped and item.get_closest_marker("db") is not None:
+        report.outcome = "failed"
+        report.longrepr = "database tests may not be skipped"
+
+
 @pytest.fixture(autouse=True)
 def _offline_http_transports(monkeypatch):
     """HTTP must use injected mock transports; real Postgres is a separate seam."""

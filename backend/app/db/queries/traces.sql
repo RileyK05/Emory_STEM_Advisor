@@ -1,10 +1,10 @@
 -- name: insert_trace
 INSERT INTO retrieval_traces (
-    trace_id, collection_id, query, normalized_query, config_version,
+    trace_id, collection_id, workspace_key, query, normalized_query, config_version,
     embed_model, refused
 )
 VALUES (
-    %(trace_id)s, %(collection_id)s, %(query)s, %(normalized_query)s,
+    %(trace_id)s, %(collection_id)s, %(workspace_key)s, %(query)s, %(normalized_query)s,
     %(config_version)s, %(embed_model)s, %(refused)s
 );
 

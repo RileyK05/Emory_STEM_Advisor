@@ -26,7 +26,7 @@ WHERE COALESCE(ch.locator_id, loc.locator_id) IS NOT NULL;
 
 -- name: list_advising_courses_for_scope
 WITH scope AS (
-    SELECT DISTINCT src.source_id, cited.locator_id
+    SELECT DISTINCT src.source_id, src.file_hash, cited.locator_id
     FROM unnest(%(source_ids)s::uuid[], %(locator_ids)s::uuid[])
          AS cited(source_id, locator_id)
     JOIN sources src ON src.source_id = cited.source_id
@@ -37,7 +37,15 @@ WITH scope AS (
 )
 SELECT co.course_id, co.code, co.title, co.source_id, co.locator_id,
        loc.label AS locator_label,
-       co.requisites_raw, co.parse_status, co.subject,
+       co.requisites_raw, co.parse_status, co.subject, co.lifecycle,
+       hold.hold_id AS requirement_hold_id,
+       hold.conflict_reason AS requirement_hold_reason,
+       hold.master_file_hash AS requirement_hold_master_file_hash,
+       hold.evidence_capture_sha256 AS requirement_hold_capture_sha256,
+       hold.evidence_capture_path AS requirement_hold_capture_path,
+       hold.evidence_source_id AS requirement_hold_source_id,
+       hold.evidence_index_revision AS requirement_hold_index_revision,
+       hold.evidence_capture_set_hash AS requirement_hold_capture_set_hash,
        EXISTS (
            SELECT 1 FROM chunks evidence
            WHERE evidence.source_id = co.source_id AND evidence.locator_id = co.locator_id
@@ -46,6 +54,11 @@ SELECT co.course_id, co.code, co.title, co.source_id, co.locator_id,
 FROM scope sc
 JOIN courses co ON co.source_id = sc.source_id AND co.locator_id = sc.locator_id
 JOIN locators loc ON loc.locator_id = co.locator_id AND loc.source_id = co.source_id
+LEFT JOIN atlas_requirement_holds hold
+       ON hold.source_id = co.source_id
+      AND hold.course_code = co.code
+      AND hold.master_file_hash = sc.file_hash
+      AND hold.status = 'active'
 WHERE co.collection_id = %(collection_id)s
 ORDER BY co.code, co.source_id, loc.label;
 
@@ -125,3 +138,59 @@ SELECT course_id, code, leaf_cluster_id AS cluster_id, total_size,
 FROM lineage
 GROUP BY course_id, code, leaf_cluster_id, total_size
 ORDER BY code;
+
+-- name: get_requirement_hold_master
+SELECT source_id, collection_id, content_type, file_hash, status, is_current
+FROM sources
+WHERE source_id = %(source_id)s
+FOR UPDATE;
+
+-- name: held_atlas_context_chunks
+-- Source reads and historical citations stay available for review. Automatic
+-- generation must not receive a curator-held master rule through another seam.
+SELECT DISTINCT ch.chunk_id
+FROM chunks ch
+JOIN sources src ON src.source_id = ch.source_id
+JOIN courses co ON co.source_id = ch.source_id AND co.locator_id = ch.locator_id
+JOIN atlas_requirement_holds hold
+  ON hold.source_id = src.source_id AND hold.course_code = co.code
+ AND hold.master_file_hash = src.file_hash AND hold.status = 'active'
+WHERE ch.chunk_id = ANY(%(chunk_ids)s::uuid[])
+  AND src.collection_id = %(collection_id)s
+  AND src.status = 'indexed' AND src.is_current;
+
+-- name: get_requirement_hold_course
+SELECT course_id
+FROM courses
+WHERE source_id = %(source_id)s AND code = %(course_code)s
+FOR KEY SHARE;
+
+-- name: insert_atlas_requirement_hold
+INSERT INTO atlas_requirement_holds (
+    hold_id, source_id, course_code, master_file_hash, conflict_reason,
+    evidence_capture_sha256, evidence_capture_path, evidence_source_id,
+    evidence_index_revision, evidence_capture_set_hash, created_by
+) VALUES (
+    %(hold_id)s, %(source_id)s, %(course_code)s, %(master_file_hash)s, %(conflict_reason)s,
+    %(evidence_capture_sha256)s, %(evidence_capture_path)s, %(evidence_source_id)s,
+    %(evidence_index_revision)s, %(evidence_capture_set_hash)s, %(created_by)s
+)
+ON CONFLICT (source_id, course_code, master_file_hash) WHERE status = 'active' DO NOTHING
+RETURNING *;
+
+-- name: get_active_atlas_requirement_hold
+SELECT *
+FROM atlas_requirement_holds
+WHERE source_id = %(source_id)s AND course_code = %(course_code)s
+  AND master_file_hash = %(master_file_hash)s AND status = 'active';
+
+-- name: release_atlas_requirement_hold
+UPDATE atlas_requirement_holds
+SET status = 'released', released_by = %(released_by)s,
+    released_at = now(), release_note = %(release_note)s
+WHERE hold_id = %(hold_id)s
+  AND source_id = %(source_id)s
+  AND course_code = %(course_code)s
+  AND master_file_hash = %(master_file_hash)s
+  AND status = 'active'
+RETURNING *;

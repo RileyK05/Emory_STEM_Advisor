@@ -123,14 +123,15 @@ INSERT INTO model_calls (
     prompt_tokens, completion_tokens, usage_source, latency_ms, error_type,
     operation_id, sampling_policy, reasoning_effort, requested_output_tokens,
     requested_timeout_seconds, requested_temperature, profile_id, profile_revision,
-    claim_review_id
+    claim_review_id, cached_prompt_tokens, schedule_id, estimated_cost, cost_status
 ) VALUES (
     %(model_call_id)s, %(trace_id)s, %(provider)s, %(model_id)s, %(status)s,
     %(finish_reason)s, %(request_id)s, %(prompt_tokens)s, %(completion_tokens)s,
     %(usage_source)s, %(latency_ms)s, %(error_type)s, %(operation_id)s,
     %(sampling_policy)s, %(reasoning_effort)s, %(requested_output_tokens)s,
     %(requested_timeout_seconds)s, %(requested_temperature)s, %(profile_id)s,
-    %(profile_revision)s, %(claim_review_id)s
+    %(profile_revision)s, %(claim_review_id)s, %(cached_prompt_tokens)s,
+    %(schedule_id)s, %(estimated_cost)s, coalesce(%(cost_status)s, 'unknown')
 );
 
 -- name: count_claim_review_audits

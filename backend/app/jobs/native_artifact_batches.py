@@ -117,6 +117,12 @@ def create_artifact_batch(body: ArtifactBatchInput, *, settings, config: Retriev
     replay = service.idempotent_replay(body.batchId, workspace_key, request_fingerprint)
     if replay is not None:
         return replay
+    from app.quotas.service import QuotaService
+
+    with connect() as quota_conn:
+        QuotaService.check_and_consume(
+            quota_conn, workspace_key=workspace_key, check_concurrency=True
+        )
     if not settings.routing_enabled:
         raise ConnectionUnavailable("native artifact batches require evaluated profile routing")
     planned_items = []

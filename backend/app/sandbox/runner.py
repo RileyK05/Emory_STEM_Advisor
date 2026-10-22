@@ -255,7 +255,10 @@ class DockerCliRuntime:
         if not isinstance(runtimes, dict) or "runsc" not in runtimes:
             raise IsolationUnavailable("gVisor runsc is not registered with the sandbox daemon.")
         resolved = {}
-        for image in (config.python_image, config.javascript_image, config.office_image):
+        images = [config.python_image, config.javascript_image, config.office_image]
+        if config.browser_image:
+            images.append(config.browser_image)
+        for image in images:
             image_id = call(["image", "inspect", "--format", "{{.Id}}", image])
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
                 raise IsolationUnavailable(

@@ -46,7 +46,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "4"
+RESEARCH_TOOLS_VERSION = "7"
 
 
 class SearchInput(ToolInputModel):
@@ -69,7 +69,8 @@ class ReadInput(ToolInputModel):
 
 class CoursesInput(ToolInputModel):
     course_codes: list[CourseCode] = Field(default_factory=list, max_length=4)
-    handles: list[str] = Field(default_factory=list, max_length=4)
+    handles: list[str] = Field(default_factory=list, max_length=4,
+        description="Only course handles from this run. For earlier-memory handles, use advisor_recall with handles only; exact course codes can be passed in course_codes without handles.")
 
 
 class CompareInput(ToolInputModel):
@@ -83,8 +84,9 @@ class PreparationInput(ToolInputModel):
 
 class RecallInput(ToolInputModel):
     query: str = Field(default="", max_length=300,
-        description="New search when cursor is absent; a cursor preserves its original query.")
-    handles: list[str] = Field(default_factory=list, max_length=4)
+        description="Search mode only: omit handles. New search when cursor is absent; a cursor preserves its original query.")
+    handles: list[str] = Field(default_factory=list, max_length=4,
+        description="Reopen memory handles only: supply handles alone and omit query and cursor. Do not pass memory handles to course or source readers.")
     cursor: str | None = Field(default=None, max_length=128,
         description="Continue a prior recall search using its original query, even if query is reworded.")
 
@@ -254,6 +256,7 @@ class ResearchSession:
         self.program_cursors = {}
         self.actions = []
         self.checks: dict[str, dict] = {}
+        self.unavailable_preparation_check_ids: set[str] = set()
         self.entity_evidence: dict[str, set[str]] = {}
         self.active: list[str] = []
         self.supplied: set[str] = set()
@@ -287,7 +290,15 @@ class ResearchSession:
         if value.handles:
             if value.cursor or value.query:
                 return ResearchResult(status="conflict", limitations=[
-                    "Reopen handles separately from searching or paging the archive."])
+                    ("Handle mode accepts memory handles only; omit query and cursor. "
+                     "Use query without handles to search, or cursor without handles to page.")])
+            for handle in value.handles:
+                found = self.handles.get(handle)
+                if found is not None and found[0] != "memory":
+                    tool = "advisor_read_courses" if found[0] == "course" else (
+                        "advisor_read_program" if found[0] == "program" else "advisor_read_document")
+                    return ResearchResult(status="conflict", limitations=[
+                        f"This is a {found[0]} handle, not a memory handle; use {tool} with it."])
             identities = [self.resolve(h, "memory") for h in value.handles]
             sources = {source for source, _chunk in identities}
             with self.conn.transaction():
@@ -534,8 +545,20 @@ class ResearchSession:
             limitations=["Unread requirement items remain."] if cursor else [])
 
     def courses(self, value, _scope):
-        codes = list(dict.fromkeys([*value.course_codes,
-                                  *(self.resolve(h, "course") for h in value.handles)]))
+        handle_codes = []
+        for handle in value.handles:
+            found = self.handles.get(handle)
+            if found is not None and found[0] != "course":
+                if found[0] == "memory":
+                    instruction = ("This is a memory handle. Use advisor_recall with handles only "
+                                   "(omit query and cursor) to reopen it, or pass exact course codes "
+                                   "in course_codes without handles.")
+                else:
+                    tool = "advisor_read_program" if found[0] == "program" else "advisor_read_document"
+                    instruction = f"This is a {found[0]} handle; use {tool} with it."
+                return ResearchResult(status="conflict", limitations=[instruction])
+            handle_codes.append(self.resolve(handle, "course"))
+        codes = list(dict.fromkeys([*value.course_codes, *handle_codes]))
         if not 1 <= len(codes) <= 4:
             return ResearchResult(status="conflict", limitations=["Read one to four course codes."])
         reads = read_courses(self.conn, self.scope, codes)
@@ -635,17 +658,27 @@ class ResearchSession:
                    c["parse_status"] if c["requirements_evidence_complete"] else "unparsed",
                    c["prerequisites"], c["corequisites"], c["requisites_raw"])
                    for c in context["courses"]}
-        plan = plan_sequence(courses, list(dict.fromkeys([*value.selected_codes, *sorted(visited)])),
-                             value.completed_codes)
+        # Discovery follows all prerequisite references so the answer can cite
+        # their alternatives. Discovery does not mean the student selected each
+        # alternative; only their explicit selections belong in the plan.
+        plan = plan_sequence(courses, value.selected_codes, value.completed_codes)
+        requirement_blockers = {
+            course["code"]: course["blocker_reason"] for course in context["courses"]
+        }
+        blockers = []
+        for blocker in plan.blockers:
+            reason = blocker.reason
+            if reason == "requirements_unparsed" and blocker.code in requirement_blockers:
+                reason = requirement_blockers[blocker.code] or reason
+            blockers.append({"code": blocker.code, "reason": reason,
+                             "alternatives": list(blocker.alternatives)})
         check_id = "p_" + json_digest(value.model_dump())[:24]
         result = {"check_id": check_id, "selected_codes": value.selected_codes,
                   "completed_codes": value.completed_codes, "stages": list(plan.stages),
-                  "blockers": [asdict(b) for b in plan.blockers], "complete": plan.complete and not pending,
-                  "conclusion": "unresolved" if pending or not plan.complete else "dependency_order",
+                  "blockers": blockers, "complete": plan.complete,
+                  "conclusion": "dependency_order" if plan.complete else "blocked",
                   "evidence_ids": ids, "unexplored_codes": pending,
                   "enrollment_eligibility_verified": False, "scope": "prerequisite_order_only"}
-        if plan.blockers and not pending:
-            result["conclusion"] = "blocked"
         self.checks[check_id] = result
         self.store.record_action(self.run.run_id, action_kind="preparation_check", details=result)
         return ResearchResult(status="ok" if result["complete"] else "incomplete", data=result)
@@ -681,8 +714,10 @@ class ResearchSession:
         return ResearchResult(data={"state_revision": self.state.revision})
 
     def finish(self, value, _scope):
+        finishable_checks = {check_id: check for check_id, check in self.checks.items()
+                             if check_id not in self.unavailable_preparation_check_ids}
         validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
-                       self.supplied, self.checks, self.entity_evidence)
+                       self.supplied, finishable_checks, self.entity_evidence)
         self.decision = value.decision
         return ResearchResult(data={"accepted": True})
 
@@ -706,7 +741,7 @@ class ResearchSession:
             ("search", "Discover leads; use kind=document for admissions, guidance, checklists or handbooks. Source metadata and snippets are not evidence until read.", SearchInput, self.search, ()),
             ("list_programs", "Browse exact majors and minors in scope.", BrowseInput, self.browse, ()),
             ("read_program", "Read up to eight raw requirements and acquire exact evidence; follow cursor.", ReadInput, self.program, ("handle",)),
-            ("read_courses", "Read one to four exact course records, descriptions and restrictions.", CoursesInput, self.courses, ("handles",)),
+            ("read_courses", "Read one to four exact course records, descriptions and restrictions. Handles must be course handles; for old-memory handles, use advisor_recall with handles only, or pass exact course codes without handles.", CoursesInput, self.courses, ("handles",)),
             ("read_document", "Read source or section evidence; follow cursor for remaining chunks.", ReadInput, self.document, ("handle",)),
             ("compare_mentions", "Compare already read programs; overlap is mentions, never credit savings.", CompareInput, self.compare, ("handles",)),
             ("check_preparation", "Run deterministic dependency checks on asserted completed courses, never eligibility.", PreparationInput, self.preparation, ()),
@@ -715,7 +750,7 @@ class ResearchSession:
         ]
         if self.workspace is not None:
             entries[0:0] = [
-                ("recall", "Search or page this conversation's earlier cited/read passages; with handles, reopen up to four as current exact evidence. References alone are not evidence.", RecallInput, self.recall, ("handles",)),
+            ("recall", "Search/page earlier passages with query or cursor and no handles; reopen up to four memory handles with handles only, omitting query and cursor, as current exact evidence. References alone are not evidence.", RecallInput, self.recall, ("handles",)),
                 ("read_conversation", "Search or page earlier published turns as untrusted conversation context, including long turns. Never source evidence.", ConversationInput, self.conversation, ()),
             ]
         return ResearchRegistry([ToolSpec("advisor_" + name, description, model, ResearchResult,

@@ -8,13 +8,23 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from app.artifacts.models import HtmlArtifactSpec
 from app.artifacts.storage import SPEC_TYPES, ArtifactStore
+from app.artifacts.visual_review import (
+    ScreenshotUnavailable,
+    apply_visual_review,
+    build_visual_review_request,
+    parse_visual_review,
+    render_screenshot,
+)
 from app.connections.models import required_data_scopes
 from app.connections.selection import resolve
 from app.db import queries
 from app.db.collections import resolve_collection
+from app.flags.service import FeatureFlagService
 from app.generation.artifact_candidate import validate_candidate
 from app.generation.controller import ToolConversationController, ToolConversationError
 from app.generation.evidence import record_attempt
@@ -39,11 +49,17 @@ class ArtifactGenerationInput(BaseModel):
     artifactId: UUID | None = None
     expectedRevisionId: UUID | None = None
     outputPlan: DependentOutputPlan | None = None
+    conversationId: UUID | None = None
+    throughSequence: int | None = Field(default=None, ge=0, strict=True)
 
     @model_validator(mode="after")
     def revision_target(self):
         if (self.artifactId is None) != (self.expectedRevisionId is None):
             raise ValueError("artifact and expected revision must be provided together")
+        if self.throughSequence is not None and self.conversationId is None:
+            raise ValueError("a summary boundary requires a conversation")
+        if self.conversationId is not None and self.outputPlan is not None:
+            raise ValueError("a conversation summary cannot include a generated output plan")
         return self
 
 
@@ -160,6 +176,15 @@ class ArtifactHandler:
             raise SafeJobError("invalid_run", "Artifact input failed validation.") from exc
         kind = job.payload["kind"]
         context.check_cancelled()
+        conn = self.connect()
+        try:
+            FeatureFlagService.execution_settings(conn, self.settings, job.scope_key)
+            conn.commit()
+        except HTTPException as exc:
+            raise SafeJobError("access_changed", "Workspace access changed; work was stopped.",
+                               retryable=False) from exc
+        finally:
+            conn.close()
         if inputs.outputPlan is not None:
             from app.generation.planned_artifacts import execute_dependent_artifact
 
@@ -167,6 +192,37 @@ class ArtifactHandler:
                 job, context, inputs, kind=kind, settings=self.settings, config=self.config,
                 embedder=self.embedder, provider=self.provider, connect=self.connect,
             )
+        if inputs.conversationId is not None:
+            if kind != "document" or inputs.throughSequence is None:
+                raise SafeJobError("invalid_summary", "A summary requires a document and saved turn boundary.")
+            conn = self.connect()
+            try:
+                from app.artifacts.advising_summary import build_advising_summary_spec
+
+                try:
+                    FeatureFlagService.require_enabled(
+                        conn, "advising_summary_export", workspace_key=job.scope_key,
+                        settings=self.settings)
+                except HTTPException as exc:
+                    raise SafeJobError("feature_disabled", "Summary export is unavailable.",
+                                       retryable=False) from exc
+                spec = build_advising_summary_spec(
+                    conn,
+                    inputs.conversationId,
+                    job.scope_key,
+                    through_sequence=inputs.throughSequence,
+                    title=inputs.prompt if inputs.prompt else None,
+                )
+                conn.commit()
+                context.check_cancelled()
+                return StagedRunResult((StagedArtifact(
+                    kind="document", spec=spec.model_dump(mode="json"),
+                    operation="revise" if inputs.artifactId else "create",
+                    artifact_id=inputs.artifactId, expected_revision_id=inputs.expectedRevisionId,
+                    draft_id=str(job.job_id) if inputs.artifactId else None,
+                ),))
+            finally:
+                conn.close()
         conn = self.connect()
         try:
             return self._generate(conn, job, context, kind, inputs)
@@ -206,10 +262,17 @@ class ArtifactHandler:
         result = run(conn, job, context, kind, inputs, chunks, prior, outcome, provider, active,
                      selection, operation, request)
         context.check_cancelled()  # Usage is accounted even when cancellation wins.
+        self._policy_guard(conn, job, context, active)
         if selection:
             selection.assert_current(conn)
             conn.commit()
         spec = self._validated_spec(kind, inputs, chunks, result, outcome, active)
+        if (kind == "html" and isinstance(spec, HtmlArtifactSpec)
+                and self.settings.visual_artifact_review_enabled):
+            spec = self._visual_review(
+                conn, job, context, inputs, spec, chunks, prior, outcome,
+                provider, active, selection, operation,
+            )
         context.progress({"stage": "validated"})
         context.check_cancelled()
         staged = StagedArtifact(
@@ -225,7 +288,7 @@ class ArtifactHandler:
 
     def _select_connection(self, conn, job, inputs):
         """(provider, settings, selection): the routed connection, or the configured default."""
-        settings = self.settings
+        settings = FeatureFlagService.execution_settings(conn, self.settings, job.scope_key)
         if job.scope_key != "development" and not settings.routing_enabled:
             raise SafeJobError("private_routing_required",
                                "Private generation requires an evaluated, authorized connection.")
@@ -245,6 +308,56 @@ class ArtifactHandler:
         if provider is None:
             raise SafeJobError("provider_unavailable", "The selected model connection is unavailable.")
         return provider, active, selection
+
+    def _policy_guard(self, conn, job, context, active):
+        context.check_cancelled()
+        current = FeatureFlagService.execution_settings(conn, active, job.scope_key,
+                                                        ceilings=self.settings)
+        if active.tools_enabled and not current.tools_enabled:
+            raise SafeJobError("feature_disabled", "Tool access changed; output was withheld.",
+                               retryable=False)
+        conn.commit()
+        from app.db.connection import release_borrow
+
+        release_borrow(conn)
+
+    def _visual_review(self, conn, job, context, inputs, spec, chunks, prior, outcome,
+                       provider, active, selection, operation):
+        """One screenshot-backed critique, with an optional validated revision."""
+        if selection is None or "vision" not in selection.profile.capabilities:
+            return spec
+        context.progress({"stage": "visual_review"})
+        try:
+            image = render_screenshot(spec, active)
+        except ScreenshotUnavailable:
+            return spec.model_copy(update={"provenance": {
+                **spec.provenance, "visual_review": "unavailable",
+            }})
+        request = build_visual_review_request(spec, image, active)
+        try:
+            result = self._run_plain(
+                conn, job, context, "html", inputs, chunks, prior, outcome,
+                provider, active, selection, operation, request,
+            )
+            review = parse_visual_review(result, image)
+        except Exception:  # noqa: BLE001 - visual review is advisory, never publication authority
+            return spec.model_copy(update={"provenance": {
+                **spec.provenance, "visual_review": "unavailable",
+            }})
+        if review.revised_html:
+            try:
+                return apply_visual_review(spec, review)
+            except (ValueError, ValidationError):
+                return spec.model_copy(update={"provenance": {
+                    **spec.provenance, "visual_review": "invalid_revision",
+                }})
+        status = "issues" if review.issues else "passed"
+        return spec.model_copy(update={"provenance": {
+            **spec.provenance,
+            "visual_review": status,
+            "visual_issue_count": len(review.issues),
+            "screenshot_sha256": review.screenshot_sha256,
+        }})
 
     def _run_with_tools(self, conn, job, context, kind, inputs, chunks, prior, outcome, provider,
                         active, selection, operation, request):
@@ -270,7 +383,7 @@ class ArtifactHandler:
             ledger=ToolExecutionLedger(self.connect, max_tool_calls=active.tool_max_calls),
             operation_id=operation.operation_id, workspace_key=job.scope_key,
             scope_fingerprint=fingerprint, terminal_tool_names=frozenset({STAGE_TOOL}),
-            cancellation=context.check_cancelled,
+            cancellation=lambda: self._policy_guard(conn, job, context, active),
             on_progress=lambda event, payload: context.progress({"stage": event, **payload}),
             on_attempt=audit,
         )

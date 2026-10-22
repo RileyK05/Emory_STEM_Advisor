@@ -27,6 +27,34 @@ from app.jobs.store import JobStore, LeaseLost
 from app.jobs.worker import run_once
 
 
+def _drain_source_invalidations(connect, worker_id: str) -> None:
+    """Consume leased source-invalidation rows without stopping the job loop."""
+    conn = connect()
+    try:
+        from app.admin.invalidation import consume_source_invalidations
+
+        consume_source_invalidations(conn, worker_id)
+        conn.commit()
+    except Exception as exc:  # noqa: BLE001 - invalidation must not stop job claims
+        print(f"invalidation consumer failed: {type(exc).__name__}", file=sys.stderr)
+    finally:
+        conn.close()
+
+
+def _prune_quotas_if_due(conn, next_prune: float) -> float:
+    if time.monotonic() < next_prune:
+        return next_prune
+    try:
+        from app.privacy.service import PrivacyService
+        from app.quotas.service import QuotaService
+
+        QuotaService.prune_expired(conn)
+        PrivacyService.prune_expired_exports(conn)
+    except Exception as exc:  # noqa: BLE001 - maintenance must not stop claims
+        print(f"quota/privacy prune failed: {type(exc).__name__}", file=sys.stderr)
+    return time.monotonic() + 3600
+
+
 def _load_handlers(factory_path: str, settings) -> Mapping[str, Any]:
     module_name, separator, attribute = factory_path.partition(":")
     if (
@@ -120,6 +148,7 @@ def main() -> None:
         store = JobStore(connector(settings))
 
         if args.once:
+            _drain_source_invalidations(connector(settings), args.worker_id)
             run_once(store, args.worker_id, executor, lease_seconds=args.lease_seconds)
             return
 
@@ -150,10 +179,20 @@ def main() -> None:
         for thread in threads:
             thread.start()
         next_purge = 0.0
+        next_quota_prune = 0.0
         try:
             while True:
                 next_purge = _purge_auth_if_due(connector(settings), next_purge)
-                store.recover_expired(limit=100)
+                _drain_source_invalidations(connector(settings), args.worker_id)
+                quota_conn = connector(settings)
+                try:
+                    next_quota_prune = _prune_quotas_if_due(quota_conn, next_quota_prune)
+                finally:
+                    quota_conn.close()
+                try:
+                    store.recover_expired(limit=100)
+                except Exception as exc:  # noqa: BLE001 - maintenance must not stop claims
+                    print(f"lease recovery failed: {type(exc).__name__}", file=sys.stderr)
                 stop.wait(5.0)
         except KeyboardInterrupt:
             stop.set()

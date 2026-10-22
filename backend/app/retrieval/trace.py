@@ -25,6 +25,7 @@ def write_trace(
     seams: list[SeamResult],
     contributions: list[FusedChunk],
     trace_id: UUID | None = None,
+    workspace_key: str | None = None,
 ) -> UUID:
     trace_id = trace_id or uuid4()
     with conn.transaction():
@@ -33,6 +34,7 @@ def write_trace(
             {
                 "trace_id": trace_id,
                 "collection_id": collection_id,
+                "workspace_key": workspace_key,
                 "query": query,
                 "normalized_query": normalize_query(query),
                 "config_version": config_version,

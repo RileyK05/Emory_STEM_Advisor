@@ -25,7 +25,8 @@ MAX_WORKBOOK_CELLS = 100_000
 _FORMULA_BLOCKLIST = re.compile(
     # The bare pipe covers legacy DDE formulas (`=cmd|'/c calc'!A1`), which the
     # external-reference bracket rule alone does not catch.
-    r"\b(?:WEBSERVICE|RTD|CALL|REGISTER|EXEC|HYPERLINK)\s*\(|\[[^]]+\]|\|", re.IGNORECASE
+    r"\b(?:WEBSERVICE|FILTERXML|RTD|CALL|REGISTER|EXEC|HYPERLINK)\s*\(|\[[^]]+\]|\|",
+    re.IGNORECASE,
 )
 
 

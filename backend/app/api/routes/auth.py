@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.api.schemas import AuthSession
+from app.auth.dependencies import _boundary
 from app.auth.service import COOKIE_NAME, LOGIN_COOKIE_NAME, AuthRejected
 
 router = APIRouter()
@@ -27,6 +28,7 @@ def _no_store(response: Response) -> Response:
 @router.get("/api/session", response_model=AuthSession, response_model_exclude_unset=True)
 def session(request: Request, response: Response):
     service = _service(request)
+    _boundary(request, service)
     principal = service.resolve(
         request.cookies.get(COOKIE_NAME),
         client_host=request.client.host if request.client else None,

@@ -11,6 +11,7 @@ import type {
   SourceDoc,
   CollectionDoc,
   Recommendation,
+  RetiredCourse,
   AuthSession,
   NativeArtifactSummary,
   NativeDecisionRequest,
@@ -166,6 +167,10 @@ export class MockClient implements AdvisorClient {
     return [];
   }
 
+  async retiredCourses(_query: string): Promise<RetiredCourse[]> {
+    return [];
+  }
+
   async listSources(): Promise<SourceDoc[]> {
     return MOCK_SOURCES;
   }
@@ -196,6 +201,15 @@ export class MockClient implements AdvisorClient {
     return this.conversationUnavailable();
   }
   async listConversationSummaries() {
+    return this.conversationUnavailable();
+  }
+  async inspectConversationMemory() {
+    return this.conversationUnavailable();
+  }
+  async resetConversationMemory() {
+    return this.conversationUnavailable();
+  }
+  async exportSummary() {
     return this.conversationUnavailable();
   }
   private decisionUnavailable(): never {
@@ -311,11 +325,77 @@ export class MockClient implements AdvisorClient {
   async getSession(): Promise<AuthSession> {
     return { mode: 'development', authenticated: true, workspaceKey: 'mock-local', displayName: 'Local development' };
   }
+  async getEffectiveFlags() {
+    return { flags: { memory_inspector: false, advising_summary_export: false } };
+  }
   async logout(): Promise<void> {
     /* The mock has no authenticated identity or cookie. */
   }
   async listArtifacts(): Promise<NativeArtifactSummary[]> {
     return [];
+  }
+  async getAcademicRecord() {
+    return this.recordUnavailable();
+  }
+  async upsertAcademicAttempt() {
+    return this.recordUnavailable();
+  }
+  async previewAcademicImport() {
+    return this.recordUnavailable();
+  }
+  async updateAcademicImport() {
+    return this.recordUnavailable();
+  }
+  async commitAcademicImport() {
+    return this.recordUnavailable();
+  }
+  async getAcademicRecordRevision() {
+    return this.recordUnavailable();
+  }
+  async listAuditablePrograms() {
+    return this.auditUnavailable();
+  }
+  async listProgramAudits() {
+    return this.auditUnavailable();
+  }
+  async runProgramAudit() {
+    return this.auditUnavailable();
+  }
+  async getProgramAudit() {
+    return this.auditUnavailable();
+  }
+  async exportProgramAudit() {
+    return this.auditUnavailable();
+  }
+  async listProgramComparisons() {
+    return this.auditUnavailable();
+  }
+  async createProgramComparison() {
+    return this.auditUnavailable();
+  }
+  async getProgramComparison() {
+    return this.auditUnavailable();
+  }
+  async submitResponseFeedback() {
+    return this.auditUnavailable();
+  }
+  async listPrivacyExports() {
+    return this.privacyUnavailable();
+  }
+  async createPrivacyExport() {
+    return this.privacyUnavailable();
+  }
+  async downloadPrivacyExport() {
+    return this.privacyUnavailable();
+  }
+  private privacyUnavailable(): never {
+    throw new Error('Privacy export requires the HTTP backend.');
+  }
+  private recordUnavailable(): never {
+    throw new Error('Academic records require the HTTP backend.');
+  }
+  private auditUnavailable(): never {
+    throw new Error('Program audits require the HTTP backend.');
   }
   beginLogin(): void {
     /* The mock deliberately stays in local development mode. */

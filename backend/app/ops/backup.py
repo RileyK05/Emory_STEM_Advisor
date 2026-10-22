@@ -141,6 +141,31 @@ def _referenced_files(conn, data_dir: Path) -> list[dict]:
         else:
             items[rel] = {"path": path, "sha256": expected, "source_ids": []}
         items[rel].setdefault("source_ids", []).append(str(row["source_id"]))
+    optional_tables = conn.execute(queries.get("backup_optional_file_tables")).fetchone()
+    if optional_tables["offerings"]:
+        for row in conn.execute(queries.get("backup_atlas_capture_files")).fetchall():
+            path = _resolved_file(data_dir, row["raw_path"], raw_root)
+            expected = row["capture_hash"]
+            rel = path.relative_to(data_dir.resolve()).as_posix()
+            if rel in items and items[rel]["sha256"] != expected:
+                raise BackupError("shared raw-file references have inconsistent hashes")
+            items.setdefault(rel, {"path": path, "sha256": expected})
+            items[rel].setdefault("capture_file_refs", []).append({
+                "source_id": str(row["source_id"]),
+                "capture_set_hash": row["capture_set_hash"],
+                "capture_hash": row["capture_hash"],
+            })
+    if optional_tables["requirement_holds"]:
+        for row in conn.execute(queries.get("backup_requirement_hold_capture_files")).fetchall():
+            path = _resolved_file(data_dir, row["raw_path"], raw_root)
+            expected = row["capture_hash"]
+            rel = path.relative_to(data_dir.resolve()).as_posix()
+            if rel in items and items[rel]["sha256"] != expected:
+                raise BackupError("shared raw-file references have inconsistent hashes")
+            items.setdefault(rel, {"path": path, "sha256": expected})
+            items[rel].setdefault("hold_capture_refs", []).append({
+                "hold_id": str(row["hold_id"]), "capture_hash": row["capture_hash"],
+            })
     originals_root = data_dir / "artifacts" / "originals"
     for row in conn.execute(queries.get("backup_artifact_files")).fetchall():
         path = _resolved_file(data_dir, row["original_path"], originals_root)
@@ -218,6 +243,8 @@ def create_backup(
                     "size": item["path"].stat().st_size,
                     "source_ids": item.get("source_ids", []),
                     "artifact_ids": item.get("artifact_ids", []),
+                    "capture_file_refs": item.get("capture_file_refs", []),
+                    "hold_capture_refs": item.get("hold_capture_refs", []),
                 }
                 for item in files
             ],
@@ -366,6 +393,19 @@ def restore_backup(conn, *, dsn: str, archive_path: Path, data_dir: Path) -> dic
                     for artifact_id in item.get("artifact_ids", []):
                         conn.execute(queries.get("backup_restore_artifact_path"), {
                             "artifact_id": UUID(artifact_id), "original_path": str(final_path),
+                        })
+                    for ref in item.get("capture_file_refs", []):
+                        conn.execute(queries.get("backup_restore_atlas_capture_path"), {
+                            "source_id": UUID(ref["source_id"]),
+                            "capture_set_hash": ref["capture_set_hash"],
+                            "capture_hash": ref["capture_hash"],
+                            "raw_path": str(final_path),
+                        })
+                    for ref in item.get("hold_capture_refs", []):
+                        conn.execute(queries.get("backup_restore_requirement_hold_capture_path"), {
+                            "hold_id": UUID(ref["hold_id"]),
+                            "capture_hash": ref["capture_hash"],
+                            "raw_path": str(final_path),
                         })
                 for top in ("raw", "artifacts"):
                     staged = staged_data / top

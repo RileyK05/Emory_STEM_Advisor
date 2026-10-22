@@ -84,7 +84,10 @@ def get(
 
 
 def _read_json(path: Path):
-    return json.loads(path.read_text(encoding="utf-8"))
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise FetchError(f"cached JSON is not an object: {path}")
+    return value
 
 
 def _write_json(path: Path, data) -> None:
@@ -97,6 +100,7 @@ def scrape(
     raw_dir: Path,
     subjects: set[str] | None = None,
     limit: int | None = None,
+    refresh_cache: bool = False,
     delay: float,
     sleep: Callable[[float], None] = time.sleep,
 ) -> tuple[list[dict], list[dict]]:
@@ -104,14 +108,20 @@ def scrape(
     failures: list[dict] = []
 
     sitemap_path = raw_dir / "sitemap.xml"
-    if not sitemap_path.exists():
-        if client is None:
-            raise FetchError("sitemap not in cache; run once without --offline")
+    if client is not None:
         sitemap_path.parent.mkdir(parents=True, exist_ok=True)
-        sitemap_path.write_text(get(client, f"{CATALOG}/sitemap.xml", sleep=sleep).text,
-                                encoding="utf-8")
+        sitemap_text = get(client, f"{CATALOG}/sitemap.xml", sleep=sleep).text
+        course_ids = sitemap_paths(sitemap_text, "courses")
+        if not course_ids:
+            raise FetchError("live sitemap has no course URLs; cached sitemap was preserved")
+        write_text_atomic(sitemap_path, sitemap_text)
         sleep(delay)
-    course_ids = sitemap_paths(sitemap_path.read_text(encoding="utf-8"), "courses")
+    elif not sitemap_path.exists():
+        raise FetchError("sitemap not in cache; run once without --offline")
+    else:
+        course_ids = sitemap_paths(sitemap_path.read_text(encoding="utf-8"), "courses")
+    if not course_ids:
+        raise FetchError(f"sitemap has no course URLs: {sitemap_path}")
     if limit is not None:
         course_ids = course_ids[:limit]
 
@@ -119,7 +129,7 @@ def scrape(
     for index, course_id in enumerate(course_ids, 1):
         path = raw_dir / "courses" / f"{course_id}.json"
         try:
-            if path.exists():
+            if path.exists() and not refresh_cache:
                 course = _read_json(path)
             elif client is None:
                 raise FetchError("not in cache")
@@ -144,7 +154,9 @@ def scrape(
             print(f"  {index}/{len(course_ids)} course pages")
 
     groups_path = raw_dir / "requirement_groups.json"
-    groups: dict[str, dict] = _read_json(groups_path) if groups_path.exists() else {}
+    groups: dict[str, dict] = (
+        _read_json(groups_path) if groups_path.exists() and not refresh_cache else {}
+    )
     wanted = sorted({str(c["requirementGroup"]) for c in courses if c.get("requirementGroup")})
     missing = [g for g in wanted if g not in groups]
     if missing and client is not None:
@@ -194,8 +206,19 @@ def main() -> None:
                         help="seconds between live requests")
     parser.add_argument("--offline", action="store_true",
                         help="no network: build the JSONL from the raw cache only")
+    parser.add_argument("--refresh-cache", action="store_true",
+                        help="re-fetch cached course pages and requisite groups")
     parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
+
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be at least 1")
+    if args.delay < 0:
+        parser.error("--delay must be non-negative")
+    if args.offline and args.refresh_cache:
+        parser.error("--refresh-cache requires network access; remove --offline")
+    if (args.subjects or args.limit is not None) and args.out is None:
+        parser.error("--subjects and --limit require --out so a subset cannot replace the full atlas")
 
     atlas_dir = load_settings().data_dir / "atlas"
     out = args.out or atlas_dir / "emory_college.jsonl"
@@ -206,20 +229,25 @@ def main() -> None:
     try:
         records, failures = scrape(
             client, raw_dir=atlas_dir / "raw" / "catalog", subjects=subjects,
-            limit=args.limit, delay=args.delay,
+            limit=args.limit, refresh_cache=args.refresh_cache, delay=args.delay,
         )
     finally:
         if client is not None:
             client.close()
 
+    if failures or not records:
+        if failures:
+            failure_text = "".join(json.dumps(failure) + "\n" for failure in failures)
+            write_text_atomic(failures_path, failure_text)
+        reason = "scrape had failures" if failures else "scrape produced no course records"
+        parser.error(f"{reason}; left existing output untouched: {out}")
+
     write_jsonl(records, out)
-    with failures_path.open("w", encoding="utf-8", newline="\n") as handle:
-        for failure in failures:
-            handle.write(json.dumps(failure) + "\n")
     print(f"wrote {len(records)} courses to {out}")
-    if failures:
-        print(f"{len(failures)} failures logged to {failures_path}")
-    print(f"next: python -m scripts.import_atlas --collection default {out}")
+    if args.out is None:
+        print(f"next: python -m scripts.import_atlas --collection default {out}")
+    else:
+        print("subset/custom output written; review it before importing")
 
 
 if __name__ == "__main__":

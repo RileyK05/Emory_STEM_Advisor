@@ -14,6 +14,8 @@ Priority: **P1** substantial user-visible failure; **P2** narrower failure; **P3
 
 **Next action:** Detect the program/department boundary from catalog structure. Preserve the appendix under appropriate department identities; regenerate the affected source and program metadata using origin-aware replacement. Do not delete historical evidence or infer prerequisite facts.
 
+**Closure:** The splitter stops the last program at a following department section and keeps that appendix as department text. Regression: `test_catalog_pdf_stops_the_last_program_at_a_department_section`. The cached catalog and the user dev corpus were not regenerated.
+
 ### DA-02 — P1: cross-listed descriptions consume the embedding quota
 
 **Trigger / impact:** Course chunks with the same description but different code/title headers remain distinct. They can fill the four embedding-only slots while a more specific match is discarded. In the earlier live question about Jewish law and institutions in 100–500 CE, REL 340 was present in storage and ranked sixth semantically, but the final context retained three broad survey aliases and dropped it. JS 340, another exact match, ranked fifteenth.
@@ -21,6 +23,8 @@ Priority: **P1** substantial user-visible failure; **P2** narrower failure; **P3
 **Evidence:** [fusion.py:150](../../backend/app/retrieval/fusion.py#L150) deduplicates complete stripped text, including course headers. [fusion.py:159](../../backend/app/retrieval/fusion.py#L159) then caps embedding-only candidates whenever any surviving keyword/prerequisite candidate exists. The configured quota is four in [retrieval.toml](../../backend/configs/retrieval.toml). An offline reproduction retained three duplicate bodies with distinct headers and excluded candidate six.
 
 **Next action:** Evaluate description-aware diversity while retaining actual course/citation identities and explicit aliases. Compare the frozen broad question sample before changing quotas or ranking; raising one quota to rescue one question is not sufficient evidence.
+
+**Closure:** Official cross-listed aliases collapse by canonical key before the embedding quota, and the strongest chunk identity is kept. Regression: `test_cross_listed_aliases_do_not_consume_context_slots`. The earlier live REL 340 sample was not re-run.
 
 ### DA-03 — P2: lexical boilerplate can win despite weak topical relevance
 
@@ -32,6 +36,8 @@ Priority: **P1** substantial user-visible failure; **P2** narrower failure; **P3
 
 **Next action:** Correct source pollution first, then compare lexical scoring and mixed-context policies on the same varied cases. Measure topical coverage and irrelevant slots; do not just expand a stop-word list for each failed prompt.
 
+**Closure:** The keyword seam folds lexical rank into [0, 1) and ranks a longer topical token in [1, 2), so repeated shorter words do not sort above it. "work", "first", and "fit" stay searchable. Fusion leaves a keyword set whose best raw score is below 0.05 on that absolute scale, so the relevance floor can drop it, and one exact term stays citable. Regressions: `test_weak_lexical_matches_are_not_promoted_to_the_top`, `test_repeated_generic_words_do_not_outrank_a_longer_topic`, and `test_soft_source_selection_never_expands_exact_source_scope`. A varied live-corpus comparison was not re-run.
+
 ### DA-04 — P1: valid citation markers do not enforce supported claims
 
 **Trigger / impact:** A completed answer with an in-range citation can assert facts absent from that passage. The earlier Italian answer called ITAL 301W a “writing-intensive version,” although none of its supplied passages established that suffix meaning. Other answers padded shortlists with program-only titles without consistently disclosing missing descriptions.
@@ -41,6 +47,8 @@ Priority: **P1** substantial user-visible failure; **P2** narrower failure; **P3
 **Reproduction:** With context “CS 100: Introduction to programming,” the fake completed output “CS 100 guarantees a six-figure job. [1]” was accepted by `answer_from_context`. The synthetic guarantee illustrates validator limits; it was not a real-provider answer.
 
 **Next action:** Add semantic acceptance examples and enforce tractable course identity/coverage facts where possible. Evaluate any optional assessment separately; another model's approval is not deterministic proof of support. Keep citation integrity validation.
+
+**Closure:** A cited paragraph cannot name a course code that is absent from that passage, including an extended suffix such as ITAL 301W when the passage says ITAL 301. Regression: `test_course_code_must_appear_in_the_cited_passage`. A model does not judge free-text entailment. A claim that names a code present in the passage, such as a career guarantee for CS 100, is still accepted.
 
 ### DA-05 — P1: a SQL exception poisons the shared connection instead of isolating one seam
 
@@ -52,6 +60,8 @@ Priority: **P1** substantial user-visible failure; **P2** narrower failure; **P3
 
 **Next action:** Isolate SQL-bearing seams with appropriate transaction/savepoint ownership. Do not blindly roll back the caller's unrelated work. Add a real Postgres regression proving retrieval/trace behavior after one statement failure.
 
+**Closure:** A SQL error in one retrieval seam is isolated, and later retrieval and trace statements still run. Regression: `test_sql_statement_error_in_one_seam_is_isolated`.
+
 ### DA-06 — P1: catalog replacement can destroy a still-current topic build
 
 **Trigger / impact:** Replace an atlas with one that removes a course used as a cluster medoid. Course deletion cascades into that cluster and its descendants. If it is the root medoid, every cluster disappears. The build remains marked current, and surviving courses return no recommendations. With stable codes but changed descriptions, the old centroid/membership snapshot can also remain current until an explicit rebuild; source freshness is not bound to build freshness.
@@ -61,6 +71,8 @@ Priority: **P1** substantial user-visible failure; **P2** narrower failure; **P3
 **Reproduction:** Existing planted-vector helpers imported 14 fake courses and built six clusters. Reimporting 13 courses without root medoid CS 170 left zero clusters, a still-current build, and zero recommendations. Disposable DB only. The changed-description variant is established by data flow, not separately reproduced.
 
 **Next action:** Bind topic builds to their input snapshot and retire/rebuild them coherently on catalog replacement. Preserve immutable historical build identity without live-course deletion silently destroying it. Any schema repair must be a new migration; do not edit the applied baseline or archive. Parser-only requisite refresh should preserve an unchanged topic build.
+
+**Closure:** Catalog replacement retires the previous topic build and keeps its history. Regression: `test_changed_catalog_retires_the_topic_build_and_keeps_history`.
 
 ### DA-07 — P3: a later ambiguous chunk index discards earlier complete evidence
 
@@ -72,6 +84,8 @@ Priority: **P1** substantial user-visible failure; **P2** narrower failure; **P3
 
 **Next action:** Validate the completed run independently before resetting it, while retaining rejection of ambiguous stitched evidence. Add a focused pure regression if this helper is changed.
 
+**Closure:** A completed requisite evidence run is recognized before a later ambiguous index is considered. Regression: `test_completed_requisite_run_survives_a_later_ambiguous_index`.
+
 ## Design question, not a confirmed defect
 
 ### DA-08 — Department centroid gating can hide a strong small topic
@@ -79,6 +93,8 @@ Priority: **P1** substantial user-visible failure; **P2** narrower failure; **P3
 [walk.py:56](../../backend/app/simgraph/walk.py#L56) selects departments by their aggregate centroid and top-margin/floor thresholds, then searches all descendants only inside selected departments. The descendant search correctly removes intermediate-topic centroid barriers, but a diverse department can still hide a strong small topic if its department centroid misses that first gate.
 
 This is a deliberate configured search policy, not proof of a bug. Decide whether goal discovery should also admit departments via a sufficiently strong topic match. A stored-vector, broad-interest comparison is needed before changing it. No extra graph rebuild or live goal benchmark was performed in this audit.
+
+**Disposition:** Not a defect. Department centroid gating stays configured search policy. No behavior change.
 
 ## Things that look odd but are correct
 

@@ -274,6 +274,23 @@ def load_advising_context(
             status = stored_status if valid else "unparsed"
         if not valid or not requirements_complete:
             trees = {}
+        hold_id = row.get("requirement_hold_id")
+        requirement_hold = None if hold_id is None else {
+            "hold_id": hold_id,
+            "reason": row["requirement_hold_reason"],
+            "master_file_hash": row["requirement_hold_master_file_hash"],
+            "evidence_capture_sha256": row["requirement_hold_capture_sha256"],
+            "evidence_capture_path": row["requirement_hold_capture_path"],
+            "evidence_source_id": row["requirement_hold_source_id"],
+            "evidence_index_revision": row["requirement_hold_index_revision"],
+            "evidence_capture_set_hash": row["requirement_hold_capture_set_hash"],
+        }
+        if requirement_hold is not None:
+            # Keep the cited master wording reviewable, but do not expose its
+            # parser tree as a verified requirement while source evidence conflicts.
+            status = "ambiguous"
+            requirements_complete = False
+            trees = {}
         citations = tuple(sorted(citations_by_locator[(row["source_id"], row["locator_id"])]))
         courses.append({
             "course_id": course_id,
@@ -286,10 +303,15 @@ def load_advising_context(
             "corequisites": trees.get("corequisite"),
             "parse_status": status,
             "stored_parse_status": stored_status,
+            "lifecycle": row["lifecycle"],
             "trees_valid": valid and requirements_complete,
             "requirements_evidence_complete": requirements_complete,
-            "blocker_reason": None if requirements_complete else "requirements_evidence_missing",
-            "requisites_raw": raw if requirements_complete else None,
+            "blocker_reason": (
+                "source_conflict" if requirement_hold is not None else
+                None if requirements_complete else "requirements_evidence_missing"
+            ),
+            "requisites_raw": raw if requirements_complete or requirement_hold is not None else None,
+            "requirement_hold": requirement_hold,
         })
 
     topic_rows = conn.execute(

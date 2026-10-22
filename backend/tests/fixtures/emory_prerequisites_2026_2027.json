@@ -196,7 +196,7 @@
       "code": "CHEM 340",
       "requisites": "(CHEM 204 or CHEM_OX 204) and (CHEM 204L or CHEM_OX 204L) and (BIOL 141 or BIOL_OX 141) or equivalent transfer credit as prerequisites. Students who took BIOL 301, or have transfer credit equivalent to BIOL 301, cannot take this course.",
       "url": "https://college.catalog.emory.edu/courses/0112911",
-      "expected_status": "unparsed"
+      "expected_status": "parsed"
     },
     {
       "code": "ENVS 250",

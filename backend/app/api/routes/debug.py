@@ -6,6 +6,8 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
 from app.api import deps
 from app.api.schemas import (
+    DebugExperimentCreateRequest,
+    DebugExperimentResponse,
     DebugSession,
     DebugSessionCreate,
     DebugSessionCreated,
@@ -14,6 +16,7 @@ from app.api.schemas import (
 )
 from app.auth.dependencies import get_admin_principal
 from app.auth.models import Principal
+from app.conversations.experiments import ExperimentService
 from app.debug.registry import (
     DEFAULT_SYSTEM_PROMPT,
     OverrideError,
@@ -129,3 +132,18 @@ def update_session(body: DebugSessionUpdate, request: Request, conn: Conn,
 def delete_session(conn: Conn, principal: Admin, value: Debug):
     DebugStore(conn, principal).revoke(value.session_id)
     return Response(status_code=204)
+
+
+@router.post("/experiments", response_model=DebugExperimentResponse, response_model_exclude_unset=True)
+def start_experiment(body: DebugExperimentCreateRequest, conn: Conn, principal: Admin):
+    row = ExperimentService.start(
+        conn, principal, body.conversationId, body.requestId, body.snapshot,
+    )
+    conn.commit()
+    return DebugExperimentResponse(
+        experimentId=row["experiment_id"],
+        sourceConversationId=row["source_conversation_id"],
+        sourceRequestId=row["source_request_id"],
+        state=row["state"],
+        createdAt=row["created_at"].isoformat(),
+    )

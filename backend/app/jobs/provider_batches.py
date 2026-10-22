@@ -36,10 +36,12 @@ from app.llm.batch import (
 )
 from app.operations.budget import (
     OperationBudgetController,
+    OperationBudgetError,
     OperationLimits,
     UsageReservation,
     estimate_prompt_reservation,
 )
+from app.pricing import PricingService
 from app.util.digest import canonical_json_bytes
 from app.util.workspace import is_valid_workspace_key
 
@@ -428,6 +430,14 @@ class ProviderBatchService:
             if parent["state"] in TERMINAL_BATCH_STATES:
                 self._collect_terminal(batch_id, workspace_key, provider, parent)
             return self.get(batch_id, workspace_key)
+        if (parent["state"] == "submitting"
+                and parent["submission_lease_until"] is not None
+                and parent["submission_lease_until"] > datetime.now(UTC)):
+            # The provider may already have accepted the batch. Do not clear the
+            # submission token until the in-flight submitter resolves it.
+            raise ProviderBatchInProgress(
+                "batch submission is still in progress; retry cancellation shortly"
+            )
         if not parent["provider_batch_id"]:
             self._mark_unknown(batch_id, workspace_key, "cannot_cancel_without_provider_handle")
             return self.get(batch_id, workspace_key)
@@ -730,8 +740,14 @@ class ProviderBatchService:
                     timeout_seconds=status.per_call_timeout_seconds,
                     deadline_at=status.deadline_at, remaining_tokens=status.remaining_tokens,
                 )
-                self._budgets.account_usage(conn, reservation, usage=usage,
-                    outcome="completed" if success else "cancelled" if cancelled else "failed")
+                try:
+                    self._budgets.account_usage(
+                        conn, reservation, usage=usage,
+                        outcome="completed" if success else "cancelled" if cancelled else "failed",
+                    )
+                except OperationBudgetError as exc:
+                    if exc.code != "attempt_already_accounted":
+                        raise
                 call = conn.execute(queries.get("get_provider_batch_operation_call"), {
                     "operation_id": operation_id,
                 }).fetchone()
@@ -832,10 +848,22 @@ def _insert_batch_model_call(conn, parent, item, stored, usage, *, error_code, s
     if not isinstance(policy, Mapping):
         policy = {}
     result = _result_from_record(stored) if stored is not None else None
+    model_id = result.model if result and result.model else parent["model_id"]
+    schedule_id, cost, cost_status = PricingService.compute_call_cost(
+        conn,
+        provider=parent["provider"],
+        model_id=model_id,
+        created_at=parent["pricing_at"] or parent["created_at"],
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        cached_prompt_tokens=usage.cached_prompt_tokens,
+        usage_source=usage.source if parent["pricing_at"] else "unknown",
+        billing_mode="batch",
+    )
     conn.execute(queries.get("insert_model_call"), {
         "model_call_id": uuid4(), "trace_id": UUID(str(metadata["trace_id"])),
         "provider": parent["provider"],
-        "model_id": result.model if result and result.model else parent["model_id"],
+        "model_id": model_id,
         "status": "completed" if state == "completed" else "failed",
         "finish_reason": result.finish_reason if result else None,
         "request_id": result.request_id if result else None,
@@ -854,6 +882,9 @@ def _insert_batch_model_call(conn, parent, item, stored, usage, *, error_code, s
         "profile_id": parent["profile_id"],
         "profile_revision": parent["profile_revision"],
         "cached_prompt_tokens": usage.cached_prompt_tokens,
+        "schedule_id": schedule_id,
+        "estimated_cost": cost,
+        "cost_status": cost_status,
     })
 
 

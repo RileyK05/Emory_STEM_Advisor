@@ -1,0 +1,7 @@
+FROM mcr.microsoft.com/playwright/python:v1.50.0-jammy
+RUN useradd --system --uid 65532 --home-dir /nonexistent --shell /usr/sbin/nologin browser
+COPY sandbox/html-screenshot.py /usr/local/bin/html-screenshot
+RUN chmod 0555 /usr/local/bin/html-screenshot
+ENV HOME=/tmp PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+USER 65532:65532
+WORKDIR /output

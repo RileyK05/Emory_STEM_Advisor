@@ -60,9 +60,10 @@ class FusionConfig:
     cited_set_size: int
     # Fused chunks scoring below this are dropped before citation; if none
     # remain the query is a refusal. Prevents unrelated material from reaching
-    # the model (a prior-system failure mode). Keyword min-max means the best
-    # keyword chunk is always 1.0, so an unrelated keyword-only query still
-    # yields one candidate at the top of its range.
+    # the model (a prior-system failure mode). A keyword set whose best raw
+    # score is still below 0.05 stays on that absolute scale, so this floor can
+    # drop a weak lexical match instead of keeping it at 1.0. One keyword hit
+    # and any stronger lexical set still normalize before the floor.
     min_score: float
     # Collapse cited chunks with identical text into one citation, keeping the
     # highest-scoring instance.

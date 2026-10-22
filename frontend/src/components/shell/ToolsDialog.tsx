@@ -5,9 +5,23 @@ import { errorMessage } from '../../lib/errors';
 import { ArtifactBatchManager } from '../batch/ArtifactBatchManager';
 import { ConnectionSettings } from '../connection/ConnectionSettings';
 import { GapReviewPanel } from '../gap/GapReviewPanel';
+import { ProgramAuditPanel } from '../audits/ProgramAuditPanel';
+import { ProgramComparisonPanel } from '../audits/ProgramComparisonPanel';
+import { FeedbackPanel } from '../feedback/FeedbackPanel';
+import { PrivacyPanel } from '../privacy/PrivacyPanel';
+import { AcademicRecordPanel } from '../records/AcademicRecordPanel';
 import { Dialog } from './Dialog';
 
-type ToolTab = 'gaps' | 'batches' | 'connections' | 'developer';
+type ToolTab =
+  | 'record'
+  | 'audit'
+  | 'comparison'
+  | 'feedback'
+  | 'privacy'
+  | 'gaps'
+  | 'batches'
+  | 'connections'
+  | 'developer';
 
 interface Props {
   open: boolean;
@@ -38,6 +52,11 @@ function DeveloperTab() {
 export function ToolsDialog({ open, onClose, connectionsAvailable, onOpenRevision }: Props) {
   const demo = isDemoMode();
   const tabs: { key: ToolTab; label: string }[] = [
+    ...(demo ? [] : [{ key: 'record' as const, label: 'Academic record' }]),
+    ...(demo ? [] : [{ key: 'audit' as const, label: 'Program audit' }]),
+    ...(demo ? [] : [{ key: 'comparison' as const, label: 'Program comparison' }]),
+    ...(demo ? [] : [{ key: 'feedback' as const, label: 'Response feedback' }]),
+    ...(demo ? [] : [{ key: 'privacy' as const, label: 'Privacy' }]),
     ...(demo ? [] : [{ key: 'gaps' as const, label: 'Unanswered questions' }]),
     ...(demo ? [] : [{ key: 'batches' as const, label: 'Bulk drafts' }]),
     ...(connectionsAvailable ? [{ key: 'connections' as const, label: 'Model connections' }] : []),
@@ -70,6 +89,11 @@ export function ToolsDialog({ open, onClose, connectionsAvailable, onOpenRevisio
         ))}
       </div>
       <div role="tabpanel" className="tool-panel">
+        {active === 'record' && <AcademicRecordPanel />}
+        {active === 'audit' && <ProgramAuditPanel />}
+        {active === 'comparison' && <ProgramComparisonPanel />}
+        {active === 'feedback' && <FeedbackPanel />}
+        {active === 'privacy' && <PrivacyPanel />}
         {active === 'gaps' && <GapReviewPanel />}
         {active === 'batches' && (
           <ArtifactBatchManager

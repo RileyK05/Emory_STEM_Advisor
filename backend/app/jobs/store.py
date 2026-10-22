@@ -14,6 +14,7 @@ from psycopg.types.json import Jsonb
 from app.db import queries
 from app.db.connection import connection_transaction
 from app.jobs.types import Job, JobEvent, JobStatus
+from app.privacy.fence import require_live_workspace
 
 MAX_PAYLOAD_BYTES = 64 * 1024
 MAX_RESULT_BYTES = 256 * 1024
@@ -61,11 +62,12 @@ class JobCancelled(JobError):
 class SafeJobError(JobError):
     """An application-defined failure safe to show in job status/events."""
 
-    def __init__(self, code: str, safe_message: str):
+    def __init__(self, code: str, safe_message: str, *, retryable: bool = True):
         if not code or len(code) > 80 or not safe_message or len(safe_message) > 500:
             raise ValueError("safe job error code/message has invalid length")
         self.code = code
         self.safe_message = safe_message
+        self.retryable = retryable
         super().__init__(safe_message)
 
 
@@ -114,6 +116,19 @@ class JobStore:
             "available_at": now,
         }
         with self._transaction() as conn:
+            require_live_workspace(conn, scope_key, lock=True)
+            if kind == "artifact.run":
+                existing = conn.execute(
+                    queries.get("get_job_by_idempotency"),
+                    {"scope_key": scope_key, "idempotency_key": idempotency_key},
+                ).fetchone()
+                if existing is not None:
+                    return Job.from_row(existing)
+                from app.quotas.service import QuotaService
+
+                QuotaService.check_and_consume(
+                    conn, workspace_key=scope_key, check_concurrency=True, commit=False
+                )
             if admission is not None:
                 # An idempotent replay is not new work and must not be rejected
                 # by a full queue. The count and insert share this transaction.
@@ -318,10 +333,10 @@ class JobStore:
         self._append_event(conn, job_id, "cancelled", {"status": "cancelled"}, now)
         return Job.from_row(row)
 
-    def _finish_failure(self, job: Job, lease_token: UUID, error: Any) -> Job:
+    def _finish_failure(self, job: Job, lease_token: UUID, error: Any, *, retryable: bool = True) -> Job:
         safe_error = _bounded_json(error, MAX_ERROR_BYTES, "error")
         now = _timestamp(self._clock())
-        retry = job.attempt_count < job.max_attempts
+        retry = retryable and job.attempt_count < job.max_attempts
         retry_at = now + timedelta(seconds=retry_delay(job.attempt_count))
         with self._transaction() as conn:
             row = conn.execute(

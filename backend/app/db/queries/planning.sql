@@ -18,6 +18,7 @@ SELECT co.code, co.subject, co.title
 FROM courses co
 JOIN sources s ON s.source_id = co.source_id
 WHERE co.collection_id = %(collection_id)s
+  AND co.lifecycle = 'current'
   AND s.collection_id = %(collection_id)s
   AND s.status = 'indexed'
   AND s.is_current

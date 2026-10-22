@@ -19,6 +19,9 @@ interface Props {
   onToggleArtifacts?: () => void;
   onManageSources: () => void;
   onExplore: () => void;
+  onExportSummary?: () => void;
+  exportingSummary?: boolean;
+  onOpenMemory?: () => void;
 }
 
 export function ChatView(props: Props) {
@@ -40,16 +43,42 @@ export function ChatView(props: Props) {
     <main className="chat" aria-label="Chat">
       <header className="chat-header">
         <h2 className="chat-title">{chat.title ?? 'New chat'}</h2>
-        {props.onToggleArtifacts && (props.artifactCount > 0 || props.artifactsOpen) && (
-          <button
-            type="button"
-            className="ghost-button"
-            aria-pressed={props.artifactsOpen}
-            onClick={props.onToggleArtifacts}
-          >
-            <FolderIcon size={16} /> Artifacts{props.artifactCount ? ` (${props.artifactCount})` : ''}
-          </button>
-        )}
+        <div className="chat-header-actions">
+          {props.onExportSummary &&
+            chat.saved &&
+            chat.activeId &&
+            chat.entries.some((e) => e.role === 'assistant' && e.kind === 'answer') && (
+              <button
+                type="button"
+                className="ghost-button"
+                onClick={props.onExportSummary}
+                disabled={props.exportingSummary}
+                aria-label="Export advising summary document"
+              >
+                {props.exportingSummary ? 'Creating summary...' : 'Export Summary'}
+              </button>
+            )}
+          {props.onOpenMemory && chat.saved && chat.activeId && (
+            <button
+              type="button"
+              className="ghost-button"
+              onClick={props.onOpenMemory}
+              aria-label="Inspect conversation memory and context"
+            >
+              Memory
+            </button>
+          )}
+          {props.onToggleArtifacts && (props.artifactCount > 0 || props.artifactsOpen) && (
+            <button
+              type="button"
+              className="ghost-button"
+              aria-pressed={props.artifactsOpen}
+              onClick={props.onToggleArtifacts}
+            >
+              <FolderIcon size={16} /> Artifacts{props.artifactCount ? ` (${props.artifactCount})` : ''}
+            </button>
+          )}
+        </div>
       </header>
       <div className="chat-scroll">
         <div className="chat-column" aria-busy={chat.loadingConversation}>

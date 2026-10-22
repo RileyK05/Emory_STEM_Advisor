@@ -258,6 +258,32 @@ def test_expired_lease_fences_old_publisher_and_reclaimed_job_publishes_once(
         conn.close()
 
 
+def test_revoked_support_grant_withholds_in_flight_artifact_publication(tmp_path):
+    class Empty:
+        def fetchone(self):
+            return None
+
+    class Conn:
+        def __init__(self):
+            self.grant_checked = False
+
+        def execute(self, query, params):
+            if "resource_grants" not in query:
+                return Empty()
+            self.grant_checked = True
+            assert params["grant_id"]
+            return Empty()
+
+    staged = StagedRunResult((StagedArtifact(
+        kind="document", spec={"kind": "document", "title": "Draft", "blocks": []},
+    ),))
+    payload = {"kind": "document", "inputs": {"supportGrantId": str(uuid4())}}
+    connection = Conn()
+    with pytest.raises(SafeJobError, match="withheld"):
+        _executor(tmp_path).publish_success(connection, job(payload=payload), staged)
+    assert connection.grant_checked
+
+
 def test_staged_profile_selection_is_fenced_before_artifact_publication(tmp_path):
     profile_id = uuid4()
     staged = StagedRunResult((StagedArtifact(
@@ -274,8 +300,10 @@ def test_staged_profile_selection_is_fenced_before_artifact_publication(tmp_path
         def execute(self, query, params):
             if "FROM artifact_run_plans AS p" in query:
                 return EmptyResult()
-            assert params["profile_id"] == profile_id
-            return Result()
+            if "connection_profiles" in query:
+                assert params["profile_id"] == profile_id
+                return Result()
+            return EmptyResult()
     with pytest.raises(SafeJobError, match="changed during generation"):
         _executor(tmp_path).publish_success(Conn(), job(), staged)
 

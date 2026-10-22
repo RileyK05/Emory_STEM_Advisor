@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from collections.abc import Mapping
 from dataclasses import replace
@@ -126,8 +127,17 @@ def _responses_input(messages):
             continue
         if role not in {"system", "developer", "user", "assistant"}:
             raise InvalidRequestError("unsupported message role", provider="openai")
-        if item.get("content"):
-            output.append({"role": role, "content": item["content"]})
+        content = item.get("content")
+        if isinstance(content, list):
+            output.append({"role": role, "content": [
+                {"type": "input_text", "text": part.get("text", "")}
+                if part.get("type") == "text" else
+                {"type": "input_image",
+                 "image_url": f"data:{part['mime_type']};base64,{part['data']}"}
+                for part in content
+            ]})
+        elif content:
+            output.append({"role": role, "content": content})
         for call in calls:
             output.append({"type": "function_call", "call_id": call["id"],
                            "name": call["name"],
@@ -154,8 +164,18 @@ def _anthropic_messages(messages):
         if role not in {"assistant", "user"}:
             raise InvalidRequestError("unsupported message role", provider="anthropic")
         content = []
-        if item.get("content"):
-            content.append({"type": "text", "text": item["content"]})
+        raw_content = item.get("content")
+        if isinstance(raw_content, list):
+            for part in raw_content:
+                if part.get("type") == "text":
+                    content.append({"type": "text", "text": part.get("text", "")})
+                elif part.get("type") == "image":
+                    content.append({"type": "image", "source": {
+                        "type": "base64", "media_type": part["mime_type"],
+                        "data": part["data"],
+                    }})
+        elif raw_content:
+            content.append({"type": "text", "text": raw_content})
         if role == "assistant":
             content.extend({"type": "tool_use", "id": call["id"], "name": call["name"],
                             "input": call["arguments"]} for call in item.get("tool_calls", ()))
@@ -181,8 +201,18 @@ def _google_contents(messages):
         else:
             if role not in {"assistant", "user"}:
                 raise InvalidRequestError("unsupported message role", provider="google")
-            if item.get("content"):
-                parts.append({"text": item["content"]})
+            raw_content = item.get("content")
+            if isinstance(raw_content, list):
+                for part in raw_content:
+                    if part.get("type") == "text":
+                        parts.append({"text": part.get("text", "")})
+                    elif part.get("type") == "image":
+                        parts.append({"inline_data": {
+                            "mime_type": part["mime_type"],
+                            "data": base64.b64decode(part["data"], validate=True),
+                        }})
+            elif raw_content:
+                parts.append({"text": raw_content})
             if role == "assistant":
                 parts.extend({"function_call": {"id": c["id"], "name": c["name"],
                                                   "args": c["arguments"]}}
@@ -199,7 +229,19 @@ def _chat_messages(messages):
             converted.append({"role": "tool", "tool_call_id": item["tool_call_id"],
                               "content": item.get("content", "")})
             continue
-        message = {"role": role, "content": item.get("content") or None}
+        raw_content = item.get("content")
+        if isinstance(raw_content, list):
+            content = []
+            for part in raw_content:
+                if part.get("type") == "text":
+                    content.append({"type": "text", "text": part.get("text", "")})
+                elif part.get("type") == "image":
+                    content.append({"type": "image_url", "image_url": {
+                        "url": f"data:{part['mime_type']};base64,{part['data']}",
+                    }})
+            message = {"role": role, "content": content}
+        else:
+            message = {"role": role, "content": raw_content or None}
         if item.get("tool_calls"):
             message["tool_calls"] = [{"id": call["id"], "type": "function",
                 "function": {"name": call["name"], "arguments": json.dumps(
@@ -310,6 +352,16 @@ class OpenAIProvider(_SDKProvider):
                     yield StreamEvent("text_delta", text=delta)
                 elif _get(event, "type") == "response.completed":
                     final = _get(event, "response")
+                elif _get(event, "type") in {"response.incomplete", "response.failed"}:
+                    raise RuntimeError(
+                        f"provider stream ended without completion: {_get(event, 'type')}"
+                    )
+            if final is None:
+                raise RuntimeError("provider stream ended without a terminal response")
+            if _get(final, "status", "unknown") != "completed":
+                raise RuntimeError(
+                    f"provider stream terminated with status {_get(final, 'status', 'unknown')}"
+                )
             usage = _get(final, "usage")
             yield StreamEvent("completed", result=GenerationResult(
                 "".join(parts), finish_reason=_get(final, "status", "unknown"),
@@ -363,6 +415,8 @@ class AnthropicProvider(_SDKProvider):
                    "messages": messages, "stream": True}
         if system:
             payload["system"] = system
+        if request.temperature is not None:
+            payload["temperature"] = request.temperature
         try:
             parts = []
             prompt_tokens = completion_tokens = None
@@ -445,6 +499,8 @@ class GoogleProvider(_SDKProvider):
             config["system_instruction"] = system
         if request.max_output_tokens is not None:
             config["max_output_tokens"] = request.max_output_tokens
+        if request.temperature is not None:
+            config["temperature"] = request.temperature
         if request.timeout_seconds is not None:
             config["http_options"] = types.HttpOptions(
                 timeout=max(1, round(request.timeout_seconds * 1000)),

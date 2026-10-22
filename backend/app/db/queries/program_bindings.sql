@@ -18,7 +18,13 @@
 
 -- name: bind_program_source
 UPDATE programs
-SET source_id = %(source_id)s,
+SET current_rule_release_id = CASE
+        WHEN source_id IS NOT DISTINCT FROM %(source_id)s::uuid
+         AND source_index_revision IS NOT DISTINCT FROM %(source_index_revision)s::integer
+         AND source_sha256 IS NOT DISTINCT FROM %(source_sha256)s::text
+         AND parsed_content_digest IS NOT DISTINCT FROM %(parsed_content_digest)s::text
+        THEN current_rule_release_id ELSE NULL END,
+    source_id = %(source_id)s,
     source_index_revision = %(source_index_revision)s,
     source_sha256 = %(source_sha256)s,
     origin_key = %(origin_key)s,
@@ -40,7 +46,7 @@ SELECT program_id, title, kind,
        source_id, source_index_revision, source_sha256, origin_key,
        parsed_content_digest, binding_status, bound_at
 FROM programs
-WHERE collection_id = %(collection_id)s
+WHERE collection_id = %(collection_id)s AND is_active
 ORDER BY kind, title;
 
 -- Ordered supporting chunks for one parsed requirement item. chunk_id and
@@ -129,4 +135,5 @@ SELECT program_id, title, kind, degree, hours, courses_required, department, cat
        source_id, source_index_revision, parsed_content_digest, binding_status
 FROM programs
 WHERE program_id = %(program_id)s
+  AND is_active
 FOR SHARE;

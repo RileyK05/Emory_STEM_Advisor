@@ -20,6 +20,7 @@ from app.llm.adapters import (
 from app.llm.base import (
     GenerationRequest,
     InvalidRequestError,
+    ProviderError,
     ProviderTimeoutError,
     ToolDefinition,
     Usage,
@@ -120,6 +121,26 @@ def test_openai_actual_sdk_stream_reads_final_usage():
         [{"role":"user","content":"hi"}])))
     assert events[0].text == "hello"
     assert events[-1].result.usage == Usage(4, 1, 5, "provider")
+    sdk.close()
+
+
+def test_openai_stream_refuses_an_incomplete_terminal_response():
+    sse = (
+        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":"
+        "{\"id\":\"resp_stream\",\"object\":\"response\",\"created_at\":1,"
+        "\"status\":\"in_progress\",\"model\":\"model-x\",\"output\":[]}}\n\n"
+        "event: response.incomplete\ndata: {\"type\":\"response.incomplete\","
+        "\"response\":{\"id\":\"resp_stream\",\"status\":\"incomplete\","
+        "\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"
+    )
+    sdk = OpenAI(api_key="sk-test", base_url="https://mock/v1",
+                 http_client=httpx2.Client(transport=httpx2.MockTransport(
+                     lambda req: httpx2.Response(200, content=sse,
+                                                 headers={"content-type": "text/event-stream"},
+                                                 request=req))))
+    with pytest.raises(ProviderError):
+        list(OpenAIProvider(sdk, "model-x").stream(GenerationRequest(
+            [{"role": "user", "content": "hi"}])))
     sdk.close()
 
 
@@ -297,11 +318,19 @@ def test_anthropic_actual_sdk_stream_maps_usage_and_stop_reason():
         {"type":"message_stop"},
     ]
     sse = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+    sent = []
+
+    def handler(req):
+        sent.append(json.loads(req.content))
+        return httpx.Response(
+            200, content=sse.encode(),
+            headers={"content-type": "text/event-stream"}, request=req)
+
     sdk = Anthropic(api_key="sk-ant-test", base_url="https://mock",
-        http_client=httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(
-            200, content=sse.encode(), headers={"content-type":"text/event-stream"}, request=req))))
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)))
     output = list(AnthropicProvider(sdk, "claude-test").stream(GenerationRequest(
-        [{"role":"user","content":"hi"}])))
+        [{"role":"user","content":"hi"}], temperature=0)))
+    assert sent[0]["temperature"] == 0
     assert output[0].text == "hello"
     assert output[-1].result.usage == Usage(3, 2, 5, "provider")
     assert output[-1].result.finish_reason == "end_turn"
@@ -315,11 +344,19 @@ def test_google_actual_sdk_stream_maps_usage_and_finish_reason():
             "candidatesTokenCount":1,"totalTokenCount":3}},
     ]
     sse = "".join("data: " + json.dumps(event) + "\n\n" for event in events)
-    http = httpx.Client(transport=httpx.MockTransport(lambda req: httpx.Response(
-        200, content=sse.encode(), headers={"content-type":"text/event-stream"}, request=req)))
+    sent = []
+
+    def handler(req):
+        sent.append(json.loads(req.content))
+        return httpx.Response(
+            200, content=sse.encode(),
+            headers={"content-type": "text/event-stream"}, request=req)
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
     sdk = genai.Client(api_key="google-test", http_options=types.HttpOptions(httpx_client=http))
     output = list(GoogleProvider(sdk, "gemini-test").stream(GenerationRequest(
-        [{"role":"user","content":"hi"}])))
+        [{"role":"user","content":"hi"}], temperature=0)))
+    assert sent[0]["generationConfig"]["temperature"] == 0
     assert output[0].text == "hello"
     assert output[-1].result.usage == Usage(2, 1, 3, "provider")
     assert output[-1].result.finish_reason == "stop"

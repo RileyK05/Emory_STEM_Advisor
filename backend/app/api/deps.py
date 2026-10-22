@@ -21,6 +21,14 @@ def get_settings(request: Request) -> Settings:
     return request.app.state.settings
 
 
+def execution_settings(request: Request, conn, workspace: str, settings=None) -> Settings:
+    from app.flags.service import FeatureFlagService
+
+    return FeatureFlagService.execution_settings(
+        conn, settings or request.app.state.settings, workspace,
+        ceilings=request.app.state.settings)
+
+
 def get_config(request: Request) -> RetrievalConfig:
     return request.app.state.config
 

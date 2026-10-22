@@ -6,17 +6,20 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
-from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef, Req
+from app.atlas.requisites import (
+    AllOf,
+    AnyOf,
+    Condition,
+    CourseRef,
+    Req,
+    split_requisite_segments,
+)
 
 _MAX_COURSES = 100
 _MAX_SELECTED = 50
 _MAX_COMPLETED = 100
 _MAX_REQ_NODES = 2_000
 _MAX_REQ_DEPTH = 64
-_RAW_LABEL_RE = re.compile(
-    r"\b(recommended\s+preparation|recommended|co-?requisites?|prerequisites?)\s*:",
-    re.IGNORECASE,
-)
 _GRADE_RE = re.compile(
     r"\b(?:grade\s+of\s+[A-D][+-]?|[A-D][+-]?\s+or\s+(?:better|higher))\b",
     re.IGNORECASE,
@@ -31,6 +34,7 @@ class CourseRequirement:
     prerequisites: Req | None = None
     corequisites: Req | None = None
     requisites_raw: str | None = None
+    lifecycle: str = "current"
 
 
 @dataclass(frozen=True)
@@ -93,24 +97,11 @@ def _required_raw_segments(raw: str | None) -> tuple[tuple[str, str], ...]:
     """Extract requisite text while excluding explicitly recommended material."""
     if not raw or not raw.strip():
         return ()
-    text = re.sub(r"^This course requires\s+", "", raw.strip(), flags=re.IGNORECASE)
-    labels = list(_RAW_LABEL_RE.finditer(text))
-    if not labels:
-        return (("prerequisite", text),)
-    segments: list[tuple[str, str]] = []
-    prefix = text[: labels[0].start()].strip()
-    if prefix:
-        segments.append(("prerequisite", prefix))
-    for index, label in enumerate(labels):
-        kind_label = label.group(1).lower()
-        if "recommended" in kind_label:
-            continue
-        kind = "corequisite" if "co" in kind_label else "prerequisite"
-        end = labels[index + 1].start() if index + 1 < len(labels) else len(text)
-        content = text[label.end() : end].strip()
-        if content:
-            segments.append((kind, content))
-    return tuple(segments)
+    return tuple(
+        (kind, text)
+        for kind, text in split_requisite_segments(raw)
+        if kind in {"prerequisite", "corequisite"}
+    )
 
 
 def _course_refs(req: Req) -> tuple[str, ...]:
@@ -132,8 +123,11 @@ def _evaluate(
             return _Evaluation(True)
         if req.code not in selected:
             return _Evaluation(False, blockers=(SequenceBlocker(owner, "missing_prerequisite", (req.code,)),))
-        if req.code not in courses:
+        target = courses.get(req.code)
+        if target is None:
             return _Evaluation(False, blockers=(SequenceBlocker(req.code, "unknown_course"),))
+        if target.lifecycle != "current":
+            return _Evaluation(False, blockers=(SequenceBlocker(req.code, "retired_prerequisite"),))
         return _Evaluation(True, frozenset((req.code,)))
     if isinstance(req, Condition):
         return _Evaluation(False, blockers=(SequenceBlocker(owner, "unresolved_condition", (req.text,)),))
@@ -225,6 +219,10 @@ def plan_sequence(
     blocked: set[str] = set(selected - courses.keys())
     for code in sorted(known_selected):
         course = courses[code]
+        if getattr(course, "lifecycle", "current") != "current":
+            blockers.add(SequenceBlocker(code, "course_retired"))
+            blocked.add(code)
+            continue
         if course.code != code:
             blockers.add(SequenceBlocker(code, "course_code_mismatch"))
             blocked.add(code)

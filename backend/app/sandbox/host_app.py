@@ -16,6 +16,7 @@ _config = SandboxConfig(
     python_image=os.environ.get("SANDBOX_PYTHON_IMAGE", "emory-sandbox-python:3.12-v1"),
     javascript_image=os.environ.get("SANDBOX_JAVASCRIPT_IMAGE", "emory-sandbox-javascript:22-v1"),
     office_image=os.environ.get("SANDBOX_OFFICE_IMAGE", "emory-sandbox-office:7.4.7-v1"),
+    browser_image=os.environ.get("SANDBOX_SCREENSHOT_IMAGE", ""),
     runtime="runsc",
     production=True,
     separate_sandbox_host=os.environ.get("SANDBOX_SEPARATE_HOST_ATTESTED", "false").lower() == "true",

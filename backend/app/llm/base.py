@@ -38,6 +38,24 @@ class TextMessage:
 
 
 @dataclass(frozen=True)
+class ImageMessage:
+    """A user turn carrying one screenshot for a vision-capable model."""
+
+    role: Literal["user"] = "user"
+    content: str = ""
+    mime_type: str = "image/png"
+    data: str = ""  # base64, never a URL or filesystem path
+
+    def __post_init__(self) -> None:
+        if self.role != "user":
+            raise ValueError("image messages must use the user role")
+        if self.mime_type not in {"image/png", "image/jpeg", "image/webp"}:
+            raise ValueError("image message mime type is unsupported")
+        if not self.data or len(self.data) > 12_000_000:
+            raise ValueError("image message data is empty or too large")
+
+
+@dataclass(frozen=True)
 class AssistantToolMessage:
     """Assistant message that requests one or more provider-neutral tools."""
 
@@ -54,13 +72,23 @@ class ToolResultMessage:
     content: str
 
 
-Message = TextMessage | AssistantToolMessage | ToolResultMessage | dict[str, Any]
+Message = TextMessage | ImageMessage | AssistantToolMessage | ToolResultMessage | dict[str, Any]
 
 
 def normalize_message(message: Message) -> dict[str, Any]:
     """Return an SDK-neutral mapping with typed tool envelopes serialized."""
     if isinstance(message, TextMessage):
         return {"role": message.role, "content": message.content}
+    if isinstance(message, ImageMessage):
+        content = []
+        if message.content:
+            content.append({"type": "text", "text": message.content})
+        content.append({
+            "type": "image",
+            "mime_type": message.mime_type,
+            "data": message.data,
+        })
+        return {"role": message.role, "content": content}
     if isinstance(message, AssistantToolMessage):
         return {"role": "assistant", "content": message.content,
                 "tool_calls": [{"id": c.id, "name": c.name,

@@ -110,7 +110,7 @@ def test_auth_http_routes_use_fixed_callback_and_secure_cookie(db, migrated_dsn)
     app = FastAPI()
     app.state.auth_service = service
     app.include_router(router)
-    client = TestClient(app, base_url="https://testserver")
+    client = TestClient(app, base_url="https://advisor.example.test")
     login = client.get("/api/auth/login", follow_redirects=False)
     assert login.status_code == 303
     assert login.headers["cache-control"] == "no-store"
@@ -119,10 +119,10 @@ def test_auth_http_routes_use_fixed_callback_and_secure_cookie(db, migrated_dsn)
     assert "x-forwarded-host" not in login.headers
     assert "__Host-emory_login_state=" in login.headers["set-cookie"]
 
-    attacker = TestClient(app, base_url="https://testserver")
+    attacker = TestClient(app, base_url="https://advisor.example.test")
     attacker_login = attacker.get("/api/auth/login", follow_redirects=False)
     attacker_state = parse_qs(urlsplit(attacker_login.headers["location"]).query)["state"][0]
-    victim = TestClient(app, base_url="https://testserver")
+    victim = TestClient(app, base_url="https://advisor.example.test")
     forged = victim.get("/api/auth/callback", params={"state": attacker_state, "code": "valid-code"})
     assert forged.status_code == 400
     assert '__Host-emory_login_state="";' in forged.headers["set-cookie"]

@@ -1,9 +1,11 @@
 """Shared grounded query workflow for HTTP and durable workers."""
 
+import logging
 import re
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -46,6 +48,53 @@ def _noop(*args):
 
 _DEFAULT_RETRY_DELAY_SECONDS = 1.0
 _MAX_RETRY_DELAY_SECONDS = 30.0
+logger = logging.getLogger(__name__)
+
+
+def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) -> None:
+    """Record measured usage after a call without retroactively denying the answer.
+
+    The next request is denied by the bucket check; the current answer is already
+    produced and is not thrown away because a post-call settlement crossed a cap.
+    """
+    from app.pricing.service import PricingService
+    from app.quotas.service import QuotaService
+
+    prompt = answer.prompt_tokens or 0
+    completion = answer.completion_tokens or 0
+    total = prompt + completion
+    try:
+        if total > 0:
+            QuotaService.settle_generation(
+                conn,
+                workspace_key=workspace_key,
+                request_id=trace_id,
+                bucket_type="tokens",
+                delta_count=total,
+                enforce=False,
+            )
+        _, cost, _ = PricingService.compute_call_cost(
+            conn,
+            provider=settings.llm_provider,
+            model_id=answer.model_id or settings.llm_model_id or settings.hf_model_id,
+            created_at=datetime.now(UTC),
+            prompt_tokens=answer.prompt_tokens,
+            completion_tokens=answer.completion_tokens,
+            cached_prompt_tokens=None,
+            usage_source=answer.usage_source,
+        )
+        if cost is not None:
+            QuotaService.settle_generation(
+                conn,
+                workspace_key=workspace_key,
+                request_id=trace_id,
+                bucket_type="cost_usd",
+                delta_count=0,
+                delta_amount=float(cost),
+                enforce=False,
+            )
+    except Exception:
+        logger.exception("post-call quota settlement failed for %s", workspace_key)
 
 
 def _answer_with_provider_retry(generate_answer, *, remaining_calls: int,
@@ -164,7 +213,7 @@ def _fail_selection(conn, outcome, failure: _SelectionFailed):
 
 
 def _plan_query(conn, settings, provider, selection, operation, config, question, *,
-                collection_id, source_ids, workspace_key):
+                collection_id, source_ids, workspace_key, check_cancelled):
     """A validated search plan, or (None, reason) for the unplanned fallback.
 
     The planning call is reserved and accounted in the query's operation like any
@@ -181,6 +230,7 @@ def _plan_query(conn, settings, provider, selection, operation, config, question
     release_borrow(conn)
     if directory.empty:
         return None, "no catalog entries in scope"
+    check_cancelled()
     try:
         request = operation.prepare(planning_request(
             directory, question, config.planning, timeout_seconds=settings.llm_timeout_seconds,
@@ -319,6 +369,21 @@ def query_response(
     conversation_request_id: UUID | None = None,
     system_prompt: str | None = None,
 ) -> AnswerResponse | RefusalResponse:
+    from app.flags.service import EXECUTION_FLAGS, FeatureFlagService
+
+    settings = FeatureFlagService.execution_settings(conn, settings, workspace_key)
+    admitted_settings = settings
+    original_guard = check_cancelled
+
+    def check_cancelled():
+        original_guard()
+        current = FeatureFlagService.execution_settings(conn, admitted_settings, workspace_key)
+        if any(getattr(admitted_settings, attr) and not getattr(current, attr)
+               for attr in EXECUTION_FLAGS.values()):
+            raise HTTPException(409, "feature access changed; refresh before starting new work")
+        conn.commit()
+        release_borrow(conn)
+
     check_cancelled()
     on_progress({"stage": "retrieving"})
     collection_id, _ = deps.resolve_collection(conn, settings, body.collectionId)
@@ -370,7 +435,8 @@ def query_response(
                 plan, plan_warning = _plan_query(
                     conn, plan_settings, plan_provider, selection, operation, config,
                     retrieval_query or body.query, collection_id=collection_id,
-                    source_ids=effective_source_ids, workspace_key=workspace_key)
+                    source_ids=effective_source_ids, workspace_key=workspace_key,
+                    check_cancelled=check_cancelled)
                 check_cancelled()
                 on_progress({"stage": "retrieving"})
 
@@ -440,6 +506,10 @@ def query_response(
         audit.record(result, error, operation.last_request)
         operation.account(result, error)
 
+    def prepare(request):
+        check_cancelled()
+        return operation.prepare(request)
+
     def generate_answer():
         return answer_from_context(
             outcome.chunks, body.query, provider=answer_provider,
@@ -450,7 +520,7 @@ def query_response(
             reasoning_effort=settings.llm_reasoning_effort,
             history_context=history_context,
             include_resource_ids=settings.tools_enabled,
-            prepare_request=None if settings.tools_enabled else operation.prepare,
+            prepare_request=None if settings.tools_enabled else prepare,
             on_attempt=None if settings.tools_enabled else account,
             on_provisional_text=(on_provisional_text if not settings.tools_enabled else None),
             repair_citations=settings.answer_citation_repair_enabled and not settings.tools_enabled,
@@ -498,6 +568,7 @@ def query_response(
     except GenerationRejected as exc:
         persist_response(conn, outcome, status="refusal", reason=str(exc))
         _observe_gap(conn, workspace_key, collection_id, body, outcome, "generation_withheld")
+        _settle_usage(conn, workspace_key, outcome.trace.trace_id, exc.answer, settings)
         trace = answer_response(
             outcome, exc.answer, settings=settings, trace_id=outcome.trace.trace_id,
             latency_ms=latency_ms(),
@@ -522,8 +593,22 @@ def query_response(
     on_progress({"stage": "validated"})
     check_cancelled()
     _publish_answer(conn, outcome, operation, attempt_selections, answer)
+    _settle_usage(conn, workspace_key, outcome.trace.trace_id, answer, settings)
     _observe_gap(conn, workspace_key, collection_id, body, outcome, "retrieval_success")
+    cited_source_ids = sorted({
+        UUID(str(item.source_id)) for item in answer.citations if item.source_id
+    })
+    applicability = None
+    if cited_source_ids:
+        from app.advising.applicability import evaluate_sources_applicability
+
+        applicability = evaluate_sources_applicability(
+            conn,
+            cited_source_ids,
+            declared_cohort=getattr(body, "studentCohort", None),
+            query=body.query,
+        )
     return answer_response(
         outcome, answer, settings=settings, trace_id=outcome.trace.trace_id,
-        latency_ms=latency_ms(),
+        latency_ms=latency_ms(), applicability=applicability,
     )

@@ -119,6 +119,23 @@ class RunExecutor:
                 "invalid_run_result", "Run did not produce a validated artifact draft."
             )
         workspace_key = self._workspace_key_resolver(job)
+        from fastapi import HTTPException
+
+        from app.auth.capabilities import require_workspace_execution
+
+        try:
+            require_workspace_execution(conn, workspace_key, lock=True)
+            from app.auth.grants import assert_job_support_grant
+
+            assert_job_support_grant(conn, job)
+            if job.payload.get("inputs", {}).get("conversationId"):
+                from app.flags.service import FeatureFlagService
+
+                FeatureFlagService.require_enabled(
+                    conn, "advising_summary_export", workspace_key=workspace_key, settings=None, lock=True)
+        except HTTPException as exc:
+            raise SafeJobError("access_changed", "Workspace or feature access changed; output was withheld.",
+                               retryable=False) from exc
         store = ArtifactStore(conn, workspace_key=workspace_key, data_dir=self._data_dir)
         from app.db import queries
         from app.jobs.artifact_plans import ArtifactPlanError, ArtifactRunPlanStore

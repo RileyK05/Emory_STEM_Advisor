@@ -59,12 +59,14 @@ class SourceProvenance:
     document_roles: tuple[str, ...] = ()
     applicability: dict[str, tuple[str, ...]] = field(default_factory=dict)
     applicability_status: Literal["reviewed_default", "historical", "unknown"] = "unknown"
+    lifecycle_status: Literal["staged", "active", "deprecated", "archived"] = "active"
 
     def row(self, source_id, content_hash: str) -> dict:
         return {"source_id": source_id, "content_hash": content_hash, **vars(self),
                 "document_roles": Jsonb(sorted(set(self.document_roles))),
                 "applicability": Jsonb({key: sorted(set(values))
-                                        for key, values in self.applicability.items()})}
+                                        for key, values in self.applicability.items()}),
+                "lifecycle_status": self.lifecycle_status}
 
 
 def _strings(value, field: str, *, limit: int) -> tuple[str, ...]:
@@ -155,3 +157,80 @@ def provenance_from_manifest(entry: dict) -> SourceProvenance | None:
     if len(canonical_json_bytes(metadata)) > _MAX_METADATA_BYTES:
         raise ProvenanceError(f"provenance metadata exceeds {_MAX_METADATA_BYTES} UTF-8 bytes")
     return provenance
+
+
+def validate_curator_proposal(raw: dict) -> dict:
+    """Validate a curator/admin source review proposal using verified importer rules."""
+    if not isinstance(raw, dict):
+        raise ProvenanceError("proposal must be an object")
+
+    def _get(snake: str, camel: str, default=None):
+        if snake in raw and raw[snake] is not None:
+            return raw[snake]
+        if camel in raw and raw[camel] is not None:
+            return raw[camel]
+        return default
+
+    category = _get("source_category", "sourceCategory")
+    if not isinstance(category, str) or category not in (TRUSTED_CATEGORIES | {"user_supplied", "unclassified"}):
+        raise ProvenanceError(
+            f"source_category must be one of {sorted(TRUSTED_CATEGORIES | {'user_supplied', 'unclassified'})}"
+        )
+
+    url = _get("source_url", "sourceUrl")
+    if url is not None and (not isinstance(url, str) or not _URL.match(url)):
+        raise ProvenanceError("source_url must be an http(s) URL")
+
+    camel_text = {
+        "occupation_id": "occupationId",
+        "issuing_unit": "issuingUnit",
+    }
+    text = {}
+    for field_name, limit in _TEXT_FIELDS.items():
+        camel_name = camel_text.get(field_name, field_name)
+        val = _get(field_name, camel_name)
+        if val is not None and (not isinstance(val, str) or not val.strip() or len(val) > limit):
+            raise ProvenanceError(f"{field_name} must be a non-empty string of at most {limit} chars")
+        text[field_name] = val.strip() if val is not None else None
+
+    status = _get("applicability_status", "applicabilityStatus", "unknown")
+    if status not in _APPLICABILITY_STATUSES:
+        raise ProvenanceError(f"applicability_status must be one of {_APPLICABILITY_STATUSES}")
+
+    lifecycle_status = _get("lifecycle_status", "lifecycleStatus", "active")
+    if lifecycle_status not in ("staged", "active", "deprecated", "archived"):
+        raise ProvenanceError("lifecycle_status must be one of ('staged', 'active', 'deprecated', 'archived')")
+
+    roles = _strings(_get("document_roles", "documentRoles", []), "document_roles", limit=100)
+    applicability = _applicability(_get("applicability", "applicability", {}))
+    published_at = _date(_get("published_at", "publishedAt"), "published_at")
+    acquired_at = _date(_get("acquired_at", "acquiredAt"), "acquired_at")
+
+    replacement_intent = _get("replacement_intent", "replacementIntent")
+    if replacement_intent is not None and not isinstance(replacement_intent, str):
+        raise ProvenanceError("replacement_intent must be a string")
+    review_notes = _get("review_notes", "reviewNotes")
+    if review_notes is not None and not isinstance(review_notes, str):
+        raise ProvenanceError("review_notes must be a string")
+
+    return {
+        "source_category": category,
+        "classification_origin": "verified_curator",
+        "publisher": text.get("publisher"),
+        "source_url": url,
+        "edition": text.get("edition"),
+        "geography": text.get("geography"),
+        "occupation_id": text.get("occupation_id"),
+        "published_at": published_at,
+        "acquired_at": acquired_at,
+        "attribution": text.get("attribution"),
+        "title": text.get("title"),
+        "institution": text.get("institution"),
+        "issuing_unit": text.get("issuing_unit"),
+        "document_roles": roles,
+        "applicability": applicability,
+        "applicability_status": status,
+        "lifecycle_status": lifecycle_status,
+        "replacement_intent": replacement_intent,
+        "review_notes": review_notes,
+    }

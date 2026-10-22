@@ -42,7 +42,7 @@ def main() -> None:
         )
 
     print(json.dumps(asdict(summary), indent=2))
-    runs = REPO_ROOT / "runs" / "retrieval"
+    runs = Path(settings.data_dir) / "runs" / "retrieval"
     runs.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     payload = {"config_version": config.version, "summary": asdict(summary)}

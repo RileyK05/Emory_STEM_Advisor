@@ -8,6 +8,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.auth.dependencies import get_workspace_key
+from app.auth.models import Principal
+from app.conversations.experiments import ExperimentService
 from app.conversations.store import (
     ConversationStore,
     history_prompt,
@@ -81,7 +83,7 @@ def test_followup_uses_complete_history_and_inherits_explicit_empty_scope(db, co
 
 @pytest.mark.parametrize(("answer", "expected"), [
     ("CS 350 requires CS 253 and CS 255 [1]. CS 253 requires CS_OX 171 [2].",
-     "prereqs for CS 350?\nCourses discussed: CS 350, CS 253, CS 255\nFollow-up: what do those require?"),
+     "prereqs for CS 350?\nCourses discussed: CS 350, CS 253, CS 255, CS_OX 171\nFollow-up: what do those require?"),
     ("No courses here [1].", "prereqs for CS 350?\nFollow-up: what do those require?"),
 ])
 def test_followup_retrieval_carries_the_courses_the_last_answer_named(answer, expected):
@@ -224,9 +226,19 @@ def test_history_carries_citation_labels_not_retrieved_passage_bodies(db, collec
     archived = store.context(conversation, max_bytes=1024, archive=True)
     selected = research_history_prompt(archived, max_bytes=1024)
     assert len(selected.encode("utf-8")) <= 1024
-    assert json.loads(selected)["omitted_turns"] == 2
-    assert json.loads(selected)["turns"] == []
+    assert json.loads(selected)["omitted_turns"] == 1
+    assert [turn["text"] for turn in json.loads(selected)["turns"]] == ["data engineering?"]
     assert archived[-1]["text"] == rows[-1]["text"]
+    # A newer long reply cannot hide a student correction. Keep exact messages,
+    # including the superseded report, so the model can reconcile chronology.
+    correction = {"sequence": 3, "role": "user", "text": "CS 253 is now completed.",
+                  "evidence": {}}
+    replies = {"sequence": 4, "role": "assistant", "text": "No CS 253. " * 400,
+               "evidence": {}}
+    selected = json.loads(research_history_prompt([*archived, correction, replies], max_bytes=1024))
+    assert [turn["sequence"] for turn in selected["turns"]] == [1, 3]
+    assert selected["turns"][-1]["text"] == correction["text"]
+    assert selected["omitted_turns"] == 2
 
 
 def test_warm_citations_keep_cited_bodies_newest_first():
@@ -426,6 +438,30 @@ def test_stream_request_with_sync_identity_never_creates_another_job(db, collect
     assert events.json()["jobState"] == "unknown" and events.json()["done"] is True
 
 
+def test_conversation_failure_hook_settles_the_pending_request(db, migrated_dsn):
+    from app.conversations.worker import ConversationTurnExecutor
+    from app.db.connection import connect
+    from app.jobs.store import JobStore
+
+    store = ConversationStore(db, "development")
+    conversation_id = UUID(store.create("Failure hook")["conversationId"])
+    request_id = uuid4()
+    accepted = store.begin_stream(
+        conversation_id, request_id, 0,
+        {"request": {"query": "will fail"}, "query": "will fail", "effective": {}},
+    )
+    job = JobStore(lambda: connect(migrated_dsn)).get(accepted["job_id"])
+    ConversationTurnExecutor.on_failure(db, job, RuntimeError("provider failed"))
+
+    transcript = store.get(conversation_id)
+    assert transcript["pending_request_id"] is None
+    request = db.execute(
+        "SELECT state FROM conversation_requests WHERE conversation_id=%s AND request_id=%s",
+        (conversation_id, request_id),
+    ).fetchone()
+    assert request["state"] == "failed"
+
+
 def test_same_revision_deindex_withholds_stream_answer(db, migrated_dsn, collection, tmp_path):
     from app.conversations.worker import ConversationTurnExecutor, ConversationTurnResult
 
@@ -557,3 +593,90 @@ def test_final_publication_fences_keep_measured_usage_and_withhold_assistant(
     assert request_row["state"] == "pending"
     turns = conversation_store.turns(conversation_id)["turns"]
     assert len(turns) == 1 and turns[0]["role"] == "user"
+
+
+def test_experiment_identity_is_distinct_from_conversation_replay(db, collection):
+    actor = Principal(
+        workspace_key="development", issuer=None, subject="development",
+        display_name="Development", role="admin", mode="development",
+    )
+    student = Principal(
+        workspace_key="development", issuer=None, subject="student", role="student",
+    )
+    other = Principal(
+        workspace_key="other-student", issuer=None, subject="other", role="admin",
+    )
+    store = ConversationStore(db, "development")
+    conversation = store.create("Synthetic experiment")
+    conversation_id = UUID(conversation["conversationId"])
+    request_id = uuid4()
+    snapshot = {
+        "query": "what is CS 170?",
+        "collectionId": str(collection),
+        "apiKey": "secret-token",
+    }
+    assert store.begin(conversation_id, request_id, 0, snapshot) is None
+    store.finish(conversation_id, request_id, {"type": "answer", "answer": "See the catalog."})
+    turns_before = db.execute(
+        "SELECT count(*) AS n FROM conversation_turns WHERE conversation_id = %s",
+        (conversation_id,),
+    ).fetchone()["n"]
+    replayed = store.replay(conversation_id, request_id, snapshot)
+    assert replayed["answer"] == "See the catalog."
+    assert db.execute("SELECT count(*) AS n FROM debug_experiments").fetchone()["n"] == 0
+
+    with pytest.raises(HTTPException) as student_denied:
+        ExperimentService.start(db, student, conversation_id, request_id, snapshot)
+    assert student_denied.value.status_code == 403
+    with pytest.raises(HTTPException) as other_denied:
+        ExperimentService.start(db, other, conversation_id, request_id, snapshot)
+    assert other_denied.value.status_code == 404
+
+    experiment = ExperimentService.start(db, actor, conversation_id, request_id, snapshot)
+    assert experiment["experiment_id"] != conversation_id
+    assert experiment["state"] == "recorded"
+    stored = db.execute(
+        "SELECT snapshot FROM debug_experiments WHERE experiment_id = %s",
+        (experiment["experiment_id"],),
+    ).fetchone()["snapshot"]
+    assert "apiKey" not in stored
+    assert "secret-token" not in json.dumps(stored)
+    assert db.execute(
+        "SELECT count(*) AS n FROM conversation_turns WHERE conversation_id = %s",
+        (conversation_id,),
+    ).fetchone()["n"] == turns_before
+
+    client = api_client(db, collection)
+    recorded = client.post("/api/debug/experiments", json={
+        "conversationId": str(conversation_id),
+        "requestId": str(request_id),
+        "snapshot": snapshot,
+    })
+    assert recorded.status_code == 200, recorded.text
+    body = recorded.json()
+    assert body["experimentId"] != body["sourceConversationId"]
+    assert body["state"] == "recorded"
+    assert db.execute(
+        "SELECT count(*) AS n FROM conversation_turns WHERE conversation_id = %s",
+        (conversation_id,),
+    ).fetchone()["n"] == turns_before
+
+    bare_id = uuid4()
+    bare = {"query": "   ", "collectionId": str(collection)}
+    assert store.begin(conversation_id, bare_id, 2, bare) is None
+    store.finish(conversation_id, bare_id, {"type": "answer", "answer": "Saved."})
+    experiments = db.execute("SELECT count(*) AS n FROM debug_experiments").fetchone()["n"]
+    with pytest.raises(HTTPException) as missing:
+        ExperimentService.start(db, actor, conversation_id, bare_id, bare)
+    assert missing.value.status_code == 409
+    assert "not replayable" in missing.value.detail
+
+    pending_id = uuid4()
+    assert store.begin(conversation_id, pending_id, 4, {"query": "later"}) is None
+    with pytest.raises(HTTPException) as pending:
+        ExperimentService.start(db, actor, conversation_id, pending_id, {"query": "later"})
+    assert pending.value.status_code == 409
+    assert "not replayed" in pending.value.detail
+    with pytest.raises(HTTPException):
+        store.replay(conversation_id, pending_id, {"query": "later"})
+    assert db.execute("SELECT count(*) AS n FROM debug_experiments").fetchone()["n"] == experiments

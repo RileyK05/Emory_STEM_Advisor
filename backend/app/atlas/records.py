@@ -3,12 +3,28 @@
 import json
 import re
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
-# Subjects run 2-7 letters (CS, MATH, DATASCI, ANCMED); numbers take up to two
-# suffix letters (CS 371W, AAS 490RW).
-_CODE_RE = re.compile(r"^\s*([A-Za-z]{2,7}(?:_OX)?)\s*(\d{3})([A-Za-z]{0,2})\s*$")
+# Atlas includes short ARCH numbers, four-digit health-science numbers,
+# digit-bearing subjects, and longer section/program suffixes. Preserve the
+# displayed identity instead of truncating it to the College catalog shape.
+_CODE_RE = re.compile(
+    r"^\s*([A-Za-z][A-Za-z0-9]{0,5}[A-Za-z](?:_OX)?)\s*"
+    r"(\d{2,4})([A-Za-z][A-Za-z0-9]{0,7})?\s*$"
+)
+_REFERENCE_RE = re.compile(
+    r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9]{0,5}?[A-Za-z](?:_OX)?)\s*"
+    r"(\d{2,4}(?:[A-Za-z][A-Za-z0-9]{0,7})?)(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
+_PROSE_LABELS = frozenset({
+    "ALL", "AND", "ANY", "OR", "THE", "NOT", "ONLY", "OF", "ONE", "TWO", "SOME",
+    "EACH", "IN", "AT", "ON", "FOR", "IS", "SPRING", "SUMMER", "FALL", "AUTUMN",
+    "WINTER", "YEAR", "AY", "TERM", "SECTION", "CLASS", "PAGE", "CHAPTER", "TABLE",
+    "FIGURE", "CREDIT", "CREDITS", "LEVEL",
+})
 
 
 class AtlasCourse(BaseModel):
@@ -22,6 +38,16 @@ class AtlasCourse(BaseModel):
     # Official cross-listed codes from the catalog's explicit relation. Names and
     # descriptions never establish an identity; only this field does.
     crosslisted: list[str] = []
+    # None preserves the legacy catalog representation. A reconciled snapshot
+    # explicitly labels both live Atlas records and retained catalog fallbacks.
+    authority: Literal["atlas", "catalog"] | None = None
+    # A retired record is a known historical identity, not a current offering.
+    # It stays resolvable for evidence but is excluded from current catalog reads.
+    lifecycle: Literal["current", "retired"] = "current"
+    term: str | None = None
+    careers: list[str] = []
+    evidence: list[dict] = []
+    registration_notes: list[str] = []
 
 
 def normalize_code(value: str) -> str | None:
@@ -30,7 +56,19 @@ def normalize_code(value: str) -> str | None:
     if match is None:
         return None
     subject, digits, letter = match.groups()
-    return f"{subject.upper()} {digits}{letter.upper()}"
+    return f"{subject.upper()} {digits}{(letter or '').upper()}"
+
+
+def course_codes_in(text: str) -> list[str]:
+    """Find literal course identities in prose, preserving order and campus."""
+    codes: list[str] = []
+    for subject, tail in _REFERENCE_RE.findall(text):
+        if subject.upper() in _PROSE_LABELS:
+            continue
+        code = normalize_code(f"{subject} {tail}")
+        if code is not None and code not in codes:
+            codes.append(code)
+    return codes
 
 
 def _normalize_crosslisted(code: str, raw: list) -> list[str]:
@@ -111,9 +149,21 @@ def render_courses(courses: list[AtlasCourse]) -> tuple[str, list[tuple[str, str
     locators: list[tuple[str, str, int, int]] = []
     offset = 0
     for course in ordered:
-        block = f"{course.code}: {course.title}\n\n{course.description}"
+        block = f"{course.code}: {course.title}"
+        if course.authority == "atlas":
+            scope = "; ".join(filter(None, [course.term, ", ".join(course.careers)]))
+            block += f"\n\nRequirement authority: Emory Course Atlas ({scope})."
+            block += "\nSource: https://atlas.emory.edu/"
+            if course.code.split(" ", 1)[0].endswith("_OX"):
+                block += "\nCampus: Oxford. The exact campus course code is retained."
+        elif course.authority == "catalog":
+            block += ("\n\nCatalog fallback: current Course Atlas requirements have not "
+                      "been verified for this record.")
+        block += f"\n\n{course.description}"
         if course.requisites:
             block += f"\n\nRequisites: {course.requisites}"
+        for note in course.registration_notes:
+            block += f"\n\nAtlas registration context: {note}"
         if parts:
             offset += len("\n\n")
         start = offset

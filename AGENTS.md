@@ -25,7 +25,7 @@ modes; there is no separate build plan.
     runner, and the named-query loader. Fresh installs apply `db/baseline/032_schema.sql`.
     `db/legacy_migrations/001`–`032` is the immutable upgrade archive for existing
     databases/backups. Future numbered changes start at `db/migrations/033_*.sql`;
-    the current head is `041_admin_and_debug.sql`. Never edit an applied file or
+    the migration directory head is `072_course_lifecycle.sql`. Never edit an applied file or
     the baseline. Every
     SQL statement is a `-- name:` block in `db/queries/*.sql`; no inline SQL in
     app code.
@@ -36,12 +36,15 @@ modes; there is no separate build plan.
     importer, and `catalog.py` (Coursedog catalog page -> atlas record).
   - `advising/` — read-only, citation-scoped atlas/topic snapshots, the pure
     deterministic prerequisite/corequisite sequence planner, mention comparison
-    (`comparison.py`), the scoped catalog reader (`catalog.py`), and the research
-    advisor's persisted data layer (`research_repository.py` pins an immutable
-    source/program manifest; `research_store.py` records runs, steps, evidence and
-    decisions; `research_types.py` holds the bounded types). Missing evidence,
-    alternatives and conditions produce blockers. Never infer graph facts with
-    a model; dependency stages are not verified semester or graduation plans.
+    (`comparison.py`), the scoped catalog reader (`catalog.py`), source/applicability
+    notices (`applicability.py`), the deterministic program-rule audit engine and
+    service (`audit_engine.py`, `audit_service.py`), and program comparison
+    (`comparison_service.py`). The research advisor's persisted data layer
+    (`research_repository.py` pins an immutable source/program manifest;
+    `research_store.py` records runs, steps, evidence and decisions;
+    `research_types.py` holds the bounded types). Missing evidence, alternatives
+    and conditions produce blockers. Never infer graph facts with a model; an
+    audit is a named program/cohort result, not a whole-degree or semester claim.
   - `programs/` — program requirements: the official catalog PDF split per
     program (`catalog_pdf.py`), department pages converted to Markdown
     (`pages.py`, ingested as ordinary documents), the deterministic parser
@@ -49,7 +52,9 @@ modes; there is no separate build plan.
     codes and explicit "choose N" counts into `programs` / `program_items` /
     `program_course_mentions` (migration 031), and the exact-identity binder
     (`binding.py`, `importer.py`) that ties each program to the source revision it
-    was parsed from. Never feeds the prerequisite graph; no model.
+    was parsed from. `rules.py` and `review_service.py` hold the reviewed
+    executable rule releases and approval workflow. Never feeds the prerequisite
+    graph; no model.
   - `retrieval/` — config loader, seams (`keyword`, `embed`, `prereq`),
     fusion, trace, `retrieve()`, eval runner, and the scoped catalog
     `directory` that opt-in query planning (`generation/query_plan.py`,
@@ -74,21 +79,39 @@ modes; there is no separate build plan.
     caller of the provider and embedder factories outside scripts); `create_app`
     stores the result on `app.state`.
   - `auth/` — server-side sessions and OIDC login; `get_principal` is the one
-    authentication dependency. The job worker purges expired login rows and
-    long-revoked sessions hourly (`auth/housekeeping.py`). `connections/` — encrypted provider connection
+    authentication dependency, with the student/advisor/admin/auditor capability
+    matrix and scoped support grants (`capabilities.py`, `grants.py`). The job
+    worker purges expired login rows and long-revoked sessions hourly
+    (`auth/housekeeping.py`). `connections/` — encrypted provider connection
     profiles, evaluated routing selection, and the profile runtime.
   - `admin/` — institutional user/role store, audited admin reads and destructive
-    actions (conversation delete, job cancel, empty-collection CRUD), and the
-    admin API's data layer. `debug/` — the allowlisted runtime override registry,
-    scoped admin debug sessions, and request-scoped application of those
-    overrides. Neither exposes secrets, auth, database, or routing credentials.
+    actions (conversation delete, job cancel, empty-collection CRUD), source
+    review/lifecycle, catalog-refresh batches, prompt versions, the invalidation
+    consumer, and the admin API's data layer. `debug/` — the allowlisted runtime
+    override registry, scoped admin debug sessions, and request-scoped
+    application of those overrides. Neither exposes secrets, auth, database, or
+    routing credentials.
   - `jobs/` — persistent job store and worker runtime, the dependent artifact
     run plans, and provider (batch) tracking. `operations/` — persisted
     token/call/time budgets shared across a logical generation operation.
-  - `conversations/` — private persisted conversations and the streaming turn
-    worker. `gaps/` — human-reviewed retrieval gaps.
+  - `conversations/` — private persisted conversations, the streaming turn
+    worker, and debug experiment records (`experiments.py`). `gaps/` —
+    human-reviewed retrieval gaps and feedback triage (`feedback.py`).
+  - `records/` — revisioned academic records, deterministic CSV import, and
+    staff verification. Student-provided or imported facts stay unverified until
+    an authorized institutional action. `privacy/` — owner-scoped exports,
+    expiring downloads, deletion, and retention handling. `quotas/` — per-student
+    query/token/spend reservations and settlements.
+  - `flags/` — cohort/workspace feature policy with environment ceilings.
+    `pricing/` — dated model price schedules and cost/cache accounting.
+    `observability/` — loopback metrics and alert evaluation.
+    `storage/` — local/dual storage seam and object metadata; a remote Blob
+    provider is still a deployment gate.
   - `artifacts/` — native document/workbook/HTML specs, immutable revisions,
-    import/export (Markdown, DOCX, XLSX). `tools/` — allowlisted typed model
+    import/export (Markdown, DOCX, XLSX), and opt-in HTML visual review
+    (`visual_review.py`: request a bounded screenshot from the dedicated
+    browser sandbox, send it to a vision-capable profile, apply one validated
+    correction). `tools/` — allowlisted typed model
     tools and their execution ledger. `sandbox/` — disposable isolated
     execution (Docker/gVisor runner, remote worker, Office conversion).
   - `ops/` — readiness probe and `backup.py` (checksummed database plus
@@ -138,9 +161,11 @@ modes; there is no separate build plan.
 - `frontend/src/admin/` and `frontend/src/debug/` — separate Vite entry bundles
   for the Admin and Debug surfaces; they share `SessionGate`, `Shell`, and the
   API client with Main but are not shipped in its entry. `src/app/SessionGate.tsx`
-  is the shared authentication gate. The Admin bundle manages users/roles and
-  audited inspection; the Debug bundle owns an expiring scoped override session
-  and its test chat.
+  is the shared authentication gate. The Admin bundle manages users/roles,
+  audited inspection, support grants, source/program review, catalog-refresh
+  batches, flags/cohorts, feedback triage, prompt promotion, experiments,
+  privacy, and telemetry; the Debug bundle owns an expiring scoped override
+  session and its test chat.
 - `frontend/src/components/` — one chat with artifacts made from it. `shell/`
   is the layout (top bar, sidebar, dialogs, the mascot theme switch: Swoop =
   light Emory blue/gold, Dooley = dark black/white). `chat/` has a single
@@ -149,8 +174,9 @@ modes; there is no separate build plan.
   nothing saved). `artifact/` is the side panel, editor canvas, and generation
   dialogs; which chat an artifact belongs to is kept in browser storage plus the
   artifacts a message referenced. `source/` is the sources and explore dialogs;
-  `batch`, `gap`, and `connection` render inside the Tools dialog. Pure helpers
-  in `artifact/*.ts` are unit-tested directly.
+  `batch`, `gap`, and `connection` render inside the Tools dialog; `records/`,
+  `audits/`, `feedback/`, and `privacy/` hold the student workflows added with
+  the completion plan. Pure helpers in `artifact/*.ts` are unit-tested directly.
   `frontend/tests/fixtures/` holds the offline real-API browser test server.
 - `data/` — gitignored: raw uploads, the dev database, atlas files
   (`data/atlas/*.jsonl`), eval set (`data/eval/retrieval.jsonl`).
@@ -172,6 +198,8 @@ not at ingest, not as a fallback when parsing fails, not as a suggestion. A
 prerequisite the parser can't handle is a parser fix or a manual fix, never a
 model call. `tests/test_no_llm_in_prereq.py` fails if `app/atlas/` or the
 prerequisite seam imports a model or provider.
+
+Course requirement authority: the public Course Atlas (`atlas.emory.edu`) takes precedence over the catalog when they disagree (user decision, 2026-10-21). Use exact captured Atlas registration restrictions, not model intuition, to update the graph. Oxford is a separate campus listed in the same Atlas; import its displayed course identities alongside Atlanta records and preserve campus/suffix codes. An absent College master row is a coverage gap, not evidence that an Oxford course is invalid. `scripts.reconcile_atlas` prepares and explicitly publishes an Atlas-primary master from verified saved offering snapshots, with clearly labeled catalog fallbacks only where Atlas evidence is absent. Never run a plain catalog import over an Atlas-primary master.
 
 The similarity graph's nudges file is also hand-written data. Don't generate
 it with a model.
@@ -205,6 +233,8 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.ingest --collection NAME --origin-manifest ../data/programs/ingest-manifest.json ../data/programs/catalog/* ../data/programs/departments/*
 ../.venv/Scripts/python -m scripts.import_programs --collection NAME   # after ingest: parsed requirements -> DB, bound to exact sources
 ../.venv/Scripts/python -m scripts.import_atlas --collection NAME FILE
+../.venv/Scripts/python -m scripts.reconcile_atlas               # prepare Atlas-primary JSONL from verified saved captures
+../.venv/Scripts/python -m scripts.reconcile_atlas --publish     # publish Atlas-primary records; retains labeled catalog fallbacks
 ../.venv/Scripts/python -m scripts.build_simgraph --collection NAME [--nudges FILE]
 ../.venv/Scripts/python -m scripts.prepare_advising_documents           # reviewed uploads -> data/staging/
 ../.venv/Scripts/python -m scripts.eval_retrieval [--cases FILE]
@@ -295,7 +325,7 @@ The suite is small on purpose. Before adding a test:
   re-tested through the browser; browser tests prove what only a browser can
   (rendering, focus, isolation, drafts surviving errors).
 
-## Emory data sources (checked 2026-10-08)
+## Emory data sources (updated 2026-10-21)
 
 - Courses: `college.catalog.emory.edu` (Coursedog; robots.txt allows all). Course
   pages embed the record; requisite text comes from the public
@@ -303,8 +333,9 @@ The suite is small on purpose. Before adding a test:
   endpoint the page itself calls. The catalog sits behind an AWS WAF that
   answers fast crawls with a CAPTCHA; the scraper stops on it and resumes from
   cache. Never solve or route around the challenge. Coursedog's search/course
-  APIs require auth; don't use them. The live Course Atlas (`atlas.emory.edu`)
-  is gated; don't use it.
+  APIs require auth; don't use them. Public Course Atlas search/detail pages
+  (`atlas.emory.edu`) are available and are primary for course requirements.
+  Click through the public UI and preserve raw captures; do not use hidden APIs.
 - Program requirements: not on the catalog website, but in the catalog's
   generated PDF (catalog of record), found via
   `.../pdf-reports/catalogs/<catalogId>`. Department pages in

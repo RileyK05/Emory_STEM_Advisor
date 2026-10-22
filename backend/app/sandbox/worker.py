@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.sandbox.office import MAX_OFFICE_INPUT_BYTES, OfficeRunner
 from app.sandbox.runner import SandboxRunner
+from app.sandbox.screenshot import MAX_HTML_INPUT_BYTES, HtmlScreenshotRunner
 from app.sandbox.types import (
     IsolationUnavailable,
     SandboxCancelled,
@@ -46,6 +47,16 @@ class OfficeExecuteBody(BaseModel):
     input_base64: str = Field(min_length=1, max_length=22_369_624)
     input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     timeout_seconds: int = Field(default=60, ge=1, le=300)
+
+
+class HtmlScreenshotBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    html_base64: str = Field(min_length=1, max_length=5_592_408)
+    html_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    width: int = Field(ge=320, le=3840)
+    height: int = Field(ge=240, le=2160)
+    timeout_seconds: int = Field(default=30, ge=1, le=120)
 
 
 class ExecuteBody(BaseModel):
@@ -182,9 +193,29 @@ def _office_response(result, body: OfficeExecuteBody) -> dict:
     }
 
 
+def _screenshot_response(result, body: HtmlScreenshotBody) -> dict:
+    if (
+        not result.content
+        or len(result.content) > 8 * 1024 * 1024
+        or not hmac.compare_digest(result.input_sha256, body.html_sha256)
+        or not hmac.compare_digest(hashlib.sha256(result.content).hexdigest(), result.output_sha256)
+        or not result.content.startswith(b"\x89PNG\r\n\x1a\n")
+    ):
+        raise HTTPException(503, "Screenshot output failed validation")
+    return {
+        "html_sha256": result.input_sha256,
+        "width": body.width,
+        "height": body.height,
+        "output_sha256": result.output_sha256,
+        "output_base64": base64.b64encode(result.content).decode("ascii"),
+        "runtime_seconds": result.runtime_seconds,
+    }
+
+
 def create_worker_app(
     config: SandboxConfig, bearer_secret: str, runner: SandboxRunner | None = None,
     office_runner: OfficeRunner | None = None,
+    screenshot_runner: HtmlScreenshotRunner | None = None,
 ) -> FastAPI:
     if len(bearer_secret) < 32 or "\r" in bearer_secret or "\n" in bearer_secret:
         raise ValueError("worker bearer secret must contain at least 32 characters")
@@ -192,6 +223,7 @@ def create_worker_app(
     app = FastAPI(title="Sandbox Worker", docs_url=None, redoc_url=None, openapi_url=None)
     executor = runner or SandboxRunner(config)
     office = office_runner or OfficeRunner(config)
+    screenshot = screenshot_runner or HtmlScreenshotRunner(config)
     requests = _RequestRegistry()
 
     def auth(value: str | None):
@@ -263,6 +295,34 @@ def create_worker_app(
         finally:
             requests.finish(body.request_id)
         return _office_response(result, body)
+
+    @app.post("/v1/html/screenshot")
+    async def execute_screenshot(
+        request: Request, authorization: str | None = Header(default=None)
+    ):
+        auth(authorization)
+        raw = await _bounded_json(request, (MAX_HTML_INPUT_BYTES * 4 // 3) + 4096)
+        try:
+            body = HtmlScreenshotBody.model_validate_json(raw)
+            content = base64.b64decode(body.html_base64, validate=True)
+            if not hmac.compare_digest(hashlib.sha256(content).hexdigest(), body.html_sha256):
+                raise ValueError
+        except Exception as exc:
+            raise HTTPException(422, "invalid screenshot request") from exc
+        if not content or len(content) > MAX_HTML_INPUT_BYTES:
+            raise HTTPException(413, "screenshot input too large")
+        event = requests.start(body.request_id)
+        try:
+            result = await asyncio.to_thread(
+                screenshot.run, content.decode("utf-8"),
+                width=body.width, height=body.height,
+                timeout_seconds=body.timeout_seconds, cancel_event=event,
+            )
+        except Exception as exc:
+            raise _execution_error(exc, "screenshot rendering") from exc
+        finally:
+            requests.finish(body.request_id)
+        return _screenshot_response(result, body)
 
     @app.delete("/v1/jobs/{request_id}")
     async def cancel(request_id: str, authorization: str | None = Header(default=None)):

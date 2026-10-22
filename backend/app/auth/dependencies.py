@@ -46,6 +46,8 @@ def get_principal(request: Request) -> Principal:
     )
     if principal is None:
         raise HTTPException(status_code=401, detail="authentication required")
+    if principal.status != "active":
+        raise HTTPException(status_code=403, detail="user account is disabled")
     return principal
 
 
@@ -53,9 +55,28 @@ def get_workspace_key(principal: Annotated[Principal, Depends(get_principal)]) -
     return principal.workspace_key
 
 
+def get_workspace_principal(
+    request: Request, principal: Annotated[Principal, Depends(get_principal)],
+) -> Principal:
+    from app.auth.capabilities import Capability, require_capability
+
+    capability = (Capability.READ_OWN_WORKSPACE if request.method in {"GET", "HEAD", "OPTIONS"}
+                  else Capability.WRITE_OWN_WORKSPACE)
+    require_capability(principal, capability)
+    return principal
+
+
 def get_admin_principal(
     principal: Annotated[Principal, Depends(get_principal)],
 ) -> Principal:
     if principal.role != "admin" or principal.status != "active":
         raise HTTPException(status_code=403, detail="institutional administrator access required")
+    return principal
+
+
+def get_auditor_or_admin_principal(
+    principal: Annotated[Principal, Depends(get_principal)],
+) -> Principal:
+    if principal.role not in {"admin", "auditor"} or principal.status != "active":
+        raise HTTPException(status_code=403, detail="institutional auditor or administrator access required")
     return principal

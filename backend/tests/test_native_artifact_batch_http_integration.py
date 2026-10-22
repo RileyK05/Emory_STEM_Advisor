@@ -1,6 +1,7 @@
 """Real HTTP and PostgreSQL coverage for native artifact batch consumers."""
 import json
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -15,6 +16,7 @@ from app.jobs.provider_batches import ProviderBatchConflict, ProviderBatchServic
 from app.llm.base import GenerationRequest, GenerationResult, Usage
 from app.llm.batch import BatchItem, BatchItemResult, BatchProgress, BatchSubmission
 from app.operations.budget import OperationLimits
+from app.pricing import PricingService
 from tests.fakes import FakeEmbedder
 
 
@@ -125,11 +127,26 @@ def test_http_submit_status_poll_and_artifact_flow_with_idempotent_replay(
     adapter = FakeBatchAdapter()
     app, profile = _app(db, migrated_dsn, tmp_path, adapter, collection)
     client = TestClient(app)
+    for mode, rate in (("standard", 90), ("batch", 1)):
+        PricingService.create_schedule(
+            db, provider="openai", model_id=adapter.model, billing_mode=mode,
+            input_rate_per_million=rate, cached_read_rate_per_million=rate,
+            output_rate_per_million=rate * 2,
+            effective_from=datetime.now(UTC) - timedelta(days=1), provenance="test tariff")
     payload = _body()
     submitted = client.post("/api/artifact-batches", json=payload)
     assert submitted.status_code == 200, submitted.text
     batch_id = submitted.json()["batchId"]
     assert adapter.submissions == 1
+    pricing_at = db.execute("SELECT pricing_at FROM provider_batches WHERE batch_id=%s",
+                            (batch_id,)).fetchone()["pricing_at"]
+    db.commit()
+    # A rate revision after submission must not change this already admitted batch.
+    PricingService.create_schedule(
+        db, provider="openai", model_id=adapter.model, billing_mode="batch",
+        input_rate_per_million=100, cached_read_rate_per_million=100,
+        output_rate_per_million=200, effective_from=pricing_at + timedelta(microseconds=1),
+        provenance="later tariff")
 
     status = client.get(f"/api/artifact-batches/{batch_id}")
     assert status.status_code == 200
@@ -157,6 +174,10 @@ def test_http_submit_status_poll_and_artifact_flow_with_idempotent_replay(
     assert adapter.submissions == 1
     assert app.state.connection_runtime.batch_builds == 1
     assert app.state.connection_runtime.existing_builds == existing_builds
+    usage = PricingService.telemetry_summary(db, model_id=adapter.model)
+    assert usage["totalCalls"] == 1
+    assert usage["totalCost"] == 0.00002
+    assert usage["measuredCost"] == 0.00002
 
     # Authentication is enforced and workspace IDs do not reveal another workspace's batch.
     unauthenticated = TestClient(app, client=("192.0.2.8", 1234), base_url="http://127.0.0.1")

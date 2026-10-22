@@ -10,6 +10,7 @@ so a later turn can reopen evidence instead of trusting a paraphrase.
 from __future__ import annotations
 
 import json
+import time
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -17,6 +18,7 @@ from fastapi import HTTPException
 from app.config import Settings
 from app.conversations.store import ConversationStore, history_prompt, history_turn
 from app.db.connection import release_borrow
+from app.generation.evidence import record_attempt
 from app.generation.operation import GenerationOperation
 from app.llm.base import GenerationRequest, GenerationResult, Usage
 from app.operations.budget import OperationLimits
@@ -97,6 +99,9 @@ def history_context_for_turn(store: ConversationStore, provider, settings: Setti
     effective scope and warm citations, so summarized turns still contribute
     exact cited passages to the next prompt.
     """
+    from app.flags.service import FeatureFlagService
+
+    settings = FeatureFlagService.execution_settings(store.conn, settings, store.workspace_key)
     all_rows = store.context(conversation_id, max_bytes=max_bytes, enforce=False)
     summary = store.latest_summary(conversation_id)
     covered = summary["covered_through"] if summary else 0
@@ -177,18 +182,29 @@ def compact_conversation(store: ConversationStore, provider, settings: Settings,
     # The summarizer is network I/O like any other provider call.
     release_borrow(store.conn)
     result = error = None
+    started = time.perf_counter()
     try:
         result = _generate(provider, prepared, messages)
     except Exception as exc:  # noqa: BLE001 - provider errors become a failed checkpoint
         error = exc
 
     try:
+        record_attempt(store.conn, None, settings, result, error,
+                       int((time.perf_counter() - started) * 1000),
+                       operation_id=summary_id, request=prepared, selection=selection)
         operation.account(result, error)
     except Exception:  # noqa: BLE001 - accounting failure also fences the checkpoint
         _fail_summary(store, conversation_id, summary_id, "accounting_failed")
         return None
     if error is not None:
         _fail_summary(store, conversation_id, summary_id, "provider_failed")
+        return None
+
+    from app.flags.service import FeatureFlagService
+
+    if not FeatureFlagService.execution_settings(
+            store.conn, settings, store.workspace_key).conversation_compaction_enabled:
+        _fail_summary(store, conversation_id, summary_id, "feature_disabled")
         return None
 
     text = (result.text or "").strip() if result is not None else ""
@@ -208,6 +224,9 @@ def compact_conversation(store: ConversationStore, provider, settings: Settings,
             profile_revision=getattr(selection, "profile_revision", None),
         )
     except HTTPException:
+        # A byte/character budget failure must not leave a pending summary
+        # fencing every later turn until the stale timeout expires.
+        _fail_summary(store, conversation_id, summary_id, "summary_too_large")
         return None
     return saved if saved.get("state") == "completed" else None
 
@@ -352,15 +371,25 @@ def build_reference_index(references, settings: Settings) -> str:
     return "\n".join(kept)
 
 
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """Cut at a UTF-8 code-point boundary, never in the middle of a character."""
+    if max_bytes <= 0:
+        return ""
+    payload = text.encode("utf-8")
+    if len(payload) <= max_bytes:
+        return text
+    payload = payload[:max_bytes]
+    while payload and (payload[-1] & 0xC0) == 0x80:
+        payload = payload[:-1]
+    return payload.decode("utf-8", errors="ignore")
+
+
 def _with_reference_index(text: str, covered_through: int, reference_index: str,
                           settings: Settings) -> str:
     header = f"# Compacted conversation memory (turns 1-{covered_through})\n\n"
     suffix = "\n\n" + reference_index
     max_bytes, _ = _summary_limits(settings)
-    max_chars = min(_MAX_SUMMARY_CHARS, max_bytes)
-    budget = min(
-        max_chars - len(header) - len(suffix),
-        max_bytes - len(header.encode("utf-8")) - len(suffix.encode("utf-8")),
-    )
-    narrative = text[:max(0, budget)].rstrip()
+    fixed_bytes = len(header.encode("utf-8")) + len(suffix.encode("utf-8"))
+    available = max_bytes - fixed_bytes
+    narrative = _truncate_utf8(text[:_MAX_SUMMARY_CHARS], available).rstrip()
     return header + narrative + suffix

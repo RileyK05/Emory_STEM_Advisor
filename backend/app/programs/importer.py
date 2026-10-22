@@ -31,6 +31,11 @@ def load_programs(path: Path) -> list[dict]:
             raise ValueError(f"duplicate program title: {record['title']!r}")
         seen.add(record["title"])
         records.append(record)
+    if not records:
+        # The retirement predicate is `NOT (program_id = ANY('{}'))`, which is
+        # true for every row. An empty or truncated download must fail before
+        # it can retire the collection's programs and reviewed rule releases.
+        raise ValueError("program import requires at least one record")
     return records
 
 
@@ -40,7 +45,7 @@ def parsed_content_digest(record: dict) -> str:
 
 
 def import_programs(conn: Connection, *, collection_id: UUID, path: Path) -> dict[str, int]:
-    """Replace the collection's programs with the file's, bound to their sources.
+    """Publish the current projections, preserving retired programs and saved releases.
 
     Bindings are computed read-only first; the replacement (rows, bindings, and
     supporting evidence) then publishes in one transaction, so readers never see
@@ -50,8 +55,11 @@ def import_programs(conn: Connection, *, collection_id: UUID, path: Path) -> dic
     bindings = [bind(conn, collection_id, record) for record in records]
     conn.commit()  # Release the read snapshot before the write transaction.
     with conn.transaction():
-        conn.execute(queries.get("delete_programs_for_collection"),
-                     {"collection_id": collection_id})
+        conn.execute(queries.get("lock_program_collection"), {"collection_id": collection_id})
+        conn.execute(queries.get("retire_missing_programs"), {
+            "collection_id": collection_id,
+            "program_ids": [program_id(collection_id, r["title"]) for r in records],
+        })
         for record, binding in zip(records, bindings, strict=True):
             pid = program_id(collection_id, record["title"])
             conn.execute(queries.get("insert_program"), {
@@ -60,6 +68,8 @@ def import_programs(conn: Connection, *, collection_id: UUID, path: Path) -> dic
                     "title", "kind", "degree", "hours", "courses_required", "department",
                     "catalog", "source_url", "first_page", "last_page", "parser_version")},
             })
+            conn.execute(queries.get("clear_program_projection"), {"program_id": pid})
+            conn.execute(queries.get("clear_program_field_evidence"), {"program_id": pid})
             for item in record["items"]:
                 conn.execute(queries.get("insert_program_item"), {
                     "program_id": pid, "position": item["position"],
@@ -71,6 +81,10 @@ def import_programs(conn: Connection, *, collection_id: UUID, path: Path) -> dic
                     })
             _write_binding(conn, pid, record, binding)
         resolve_program_mentions(conn, collection_id)
+        conn.execute(queries.get("archive_incompatible_program_releases"),
+                     {"collection_id": collection_id})
+        conn.execute(queries.get("clear_inactive_program_release_pointers"),
+                     {"collection_id": collection_id})
     # transaction() is only a savepoint if the caller already had a transaction
     # open (e.g. after a lookup query), so commit explicitly.
     conn.commit()
@@ -86,7 +100,12 @@ def import_programs(conn: Connection, *, collection_id: UUID, path: Path) -> dic
 def _write_binding(conn: Connection, pid: UUID, record: dict, binding: Binding) -> None:
     source = binding.source
     if source is None:
-        return  # Inserted rows default to 'unbound'; nothing is guessed.
+        conn.execute(queries.get("bind_program_source"), {
+            "program_id": pid, "source_id": None, "source_index_revision": None,
+            "source_sha256": None, "origin_key": None,
+            "parsed_content_digest": parsed_content_digest(record), "binding_status": "unbound",
+        })
+        return
     if conn.execute(queries.get("lock_program_source"), {
             "source_id": source.source_id, "index_revision": source.index_revision,
             "file_hash": source.file_hash}).fetchone() is None:

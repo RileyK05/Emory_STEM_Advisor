@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from app.api import deps
 from app.api.deps import request_job_store
 from app.api.schemas import ArtifactRun, ArtifactRunEvent, ArtifactRunLimits
 from app.auth.dependencies import get_workspace_key
@@ -21,7 +22,7 @@ WorkspaceDep = Annotated[str, Depends(get_workspace_key)]
 _MAX_INPUT_BYTES = 64 * 1024
 _PROGRESS_STAGES = frozenset({
     "planning", "retrieving", "routing", "generating", "repairing", "assembling",
-    "validating", "validated", "rendering",
+    "validating", "validated", "visual_review", "rendering",
     "recalculating", "publishing", "tool_started", "tool_completed", "tool_reused", "tool_replayed",
 })
 
@@ -162,9 +163,35 @@ def _event_state(event: JobEvent, current: Job) -> JobStatus:
 
 @router.post("", response_model=ArtifactRun, response_model_exclude_unset=True)
 def create_run(body: CreateRunRequest, request: Request, workspace: WorkspaceDep) -> dict[str, Any]:
+    from contextlib import contextmanager
+
     from app.generation.artifacts import ArtifactGenerationInput
 
     inputs_payload = body.inputs
+    if "conversationId" in body.inputs:
+        from app.conversations.store import ConversationStore
+        from app.flags.service import FeatureFlagService
+
+        try:
+            summary_input = ArtifactGenerationInput.model_validate(body.inputs)
+        except ValidationError as exc:
+            raise HTTPException(422, "Summary run inputs are invalid.") from exc
+        if body.kind != "document" or summary_input.conversationId is None:
+            raise HTTPException(422, "A summary run must create a document from a saved conversation.")
+        # Return this short borrow before JobStore admission acquires its own.
+        with contextmanager(deps.get_conn)(request) as conn:
+            FeatureFlagService.require_enabled(
+                conn, "advising_summary_export", workspace_key=workspace,
+                settings=request.app.state.settings)
+            conversation = ConversationStore(conn, workspace).get(summary_input.conversationId)
+            boundary = summary_input.throughSequence
+            if boundary is None:
+                boundary = conversation["last_sequence"]
+            if boundary > conversation["last_sequence"]:
+                raise HTTPException(422, "summary boundary exceeds the saved conversation")
+            inputs_payload = summary_input.model_copy(update={"throughSequence": boundary}).model_dump(
+                mode="json", exclude_none=True)
+            conn.commit()
     if "outputPlan" in body.inputs:
         try:
             inputs = ArtifactGenerationInput.model_validate(body.inputs)

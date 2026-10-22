@@ -65,19 +65,27 @@ def _include_routers(app: FastAPI) -> None:
     from app.api import deps
     from app.api.routes.admin import router as admin_router
     from app.api.routes.artifacts import router as artifact_router
+    from app.api.routes.audits import router as audits_router
     from app.api.routes.auth import router as auth_router
     from app.api.routes.batches import router as batch_router
+    from app.api.routes.comparisons import router as comparisons_router
     from app.api.routes.connections import router as connection_router
     from app.api.routes.conversation_summaries import router as summary_router
     from app.api.routes.conversations import router as conversation_router
     from app.api.routes.corpus import router
     from app.api.routes.debug import router as debug_router
     from app.api.routes.decisions import router as decision_router
+    from app.api.routes.feedback import router as feedback_router
+    from app.api.routes.flags import router as flags_router
     from app.api.routes.gaps import router as gap_router
     from app.api.routes.health import router as health_router
     from app.api.routes.metrics import router as metrics_router
+    from app.api.routes.privacy import router as privacy_router
+    from app.api.routes.prompts import router as prompt_router
+    from app.api.routes.quotas import router as quota_router
+    from app.api.routes.records import router as records_router
     from app.api.routes.runs import router as run_router
-    from app.auth.dependencies import get_principal
+    from app.auth.dependencies import get_workspace_principal
 
     # Public: no identity required.
     app.include_router(health_router)
@@ -87,18 +95,22 @@ def _include_routers(app: FastAPI) -> None:
     app.include_router(metrics_router)
     # Institutional admin and debug surfaces enforce their own admin role.
     app.include_router(admin_router)
+    app.include_router(prompt_router)
     app.include_router(debug_router)
+    app.include_router(flags_router)
+    app.include_router(quota_router)
     # Everything else requires an authenticated principal.
     for authenticated_router in (router, artifact_router, conversation_router, summary_router,
-                                 gap_router, batch_router):
-        app.include_router(authenticated_router, dependencies=[Depends(get_principal)])
+                                 gap_router, batch_router, privacy_router, records_router,
+                                 audits_router, comparisons_router, feedback_router):
+        app.include_router(authenticated_router, dependencies=[Depends(get_workspace_principal)])
     # Run handlers own their short transactions through JobStore. Bootstrap
     # with a short borrow and return it before the handler starts.
     app.include_router(run_router, dependencies=[
-        Depends(get_principal), Depends(deps.ensure_database_ready_dependency),
+        Depends(get_workspace_principal), Depends(deps.ensure_database_ready_dependency),
     ])
     app.include_router(decision_router,
-                       dependencies=[Depends(get_principal), Depends(deps.get_conn)])
+                       dependencies=[Depends(get_workspace_principal), Depends(deps.get_conn)])
 
 
 def _install_error_handlers(app: FastAPI) -> None:

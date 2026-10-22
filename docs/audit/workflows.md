@@ -2,13 +2,13 @@
 
 Reviewed against `AGENTS.md` and `docs/architecture.md` on 2026-10-10. This is a read-only, focused sample of `backend/app/{artifacts,jobs,tools,sandbox,conversations,operations,gaps}`, selected matching API routes and named SQL, and representative backend tests; it is not a complete review of every file in those directories. I did not run tests or exercise a live database, provider, model, HTTP endpoint, or sandbox. The worktree already contained extensive unrelated modifications before this file was added; no implementation files were changed.
 
-The architecture explicitly labels release evidence still outstanding, including production isolation/Office evidence and live batch-provider behavior. I treat those as acceptance limits, not as defects in code. No confirmed wrong behavior was established in this pass. One source-snapshot design question remains.
+The architecture explicitly labels release evidence still outstanding, including production isolation/Office evidence and live batch-provider behavior. I treat those as acceptance limits, not as defects in code. No confirmed wrong behavior was established in this pass. The source-snapshot question is answered below as a point-in-time attestation.
 
 ## Design question
 
 ### WF-01 — Define gap-resolution source snapshot semantics
 
-**Status:** Design question; no bug established.
+**Status:** Design question at audit time; no bug was established. Closed as a point-in-time attestation; see Closure.
 
 **Question:** Does the resolution contract require every chosen source to remain indexed/current through the resolution commit, or only to satisfy those conditions when the resolution proof query runs? `GapStore.resolve` validates inside the same transaction but does not lock source rows. Under concurrent reindex or origin supersession, state may change between the proof SELECT and commit. The architecture says resolution checks accessible, indexed sources with locators/chunks; it does not explicitly promise they stay current after resolution. This is therefore a snapshot-semantics question, not a confirmed defect.
 
@@ -17,6 +17,8 @@ The architecture explicitly labels release evidence still outstanding, including
 **Coverage / reproduction:** Existing tests cover authorization, indexed source requirement, source scope, private scope, and revision checks sequentially ([test_gaps.py:176](../../backend/tests/test_gaps.py#L176), [test_gaps.py:197](../../backend/tests/test_gaps.py#L197)); I found no concurrent resolution-vs-reindex test. If the intended contract requires commit-time validity, reproduce with two DB connections by pausing after the proof SELECT, reindexing or superseding the source, and then resuming resolution. Otherwise, document that resolution captures a point-in-time human attestation.
 
 **Recommendation:** Clarify the point-in-time semantics in `docs/architecture.md`. If commit-time validity is required, lock the proved source rows in deterministic UUID order through commit and add the two-connection regression test.
+
+**Closure:** Resolution is a point-in-time human attestation. A later source change is handled by the invalidation outbox, and source rows are not locked through commit. Regression: `test_invalidation_consumption_is_idempotent_and_keeps_history`.
 
 ## Intentional correct behavior (surprisingly careful safeguards)
 
@@ -94,7 +96,7 @@ The architecture explicitly labels release evidence still outstanding, including
 
 ## Scope and limits
 
-This was a focused sample, not a line-by-line audit of every module in the named areas. Files directly inspected included `jobs/store.py`, `jobs/worker.py`, `jobs/runtime.py`, `jobs/artifact_plans.py`, `jobs/provider_batches.py`, `jobs/native_artifact_batches.py`; `artifacts/storage.py`, `service.py`, `safety.py`, `xlsx.py`, `active_html.py`, `inert_html.py`; `tools/registry.py`, `tools/executions.py`; `sandbox/types.py`, `runner.py`, `office.py`, `remote.py`; `conversations/store.py`, `worker.py`; `operations/budget.py`; `gaps/store.py`; selected API routes and matching named SQL; and representative backend tests. I did not exhaustively inspect every module in those directories, auth/OIDC internals, provider adapter correctness, frontend behavior, the general retrieval/generation answer pipeline, or deployment configuration beyond the sandbox isolation gates. No DB race probe or full suite was run. WF-01 is a contract-clarification question, not a confirmed defect.
+This was a focused sample, not a line-by-line audit of every module in the named areas. Files directly inspected included `jobs/store.py`, `jobs/worker.py`, `jobs/runtime.py`, `jobs/artifact_plans.py`, `jobs/provider_batches.py`, `jobs/native_artifact_batches.py`; `artifacts/storage.py`, `service.py`, `safety.py`, `xlsx.py`, `active_html.py`, `inert_html.py`; `tools/registry.py`, `tools/executions.py`; `sandbox/types.py`, `runner.py`, `office.py`, `remote.py`; `conversations/store.py`, `worker.py`; `operations/budget.py`; `gaps/store.py`; selected API routes and matching named SQL; and representative backend tests. I did not exhaustively inspect every module in those directories, auth/OIDC internals, provider adapter correctness, frontend behavior, the general retrieval/generation answer pipeline, or deployment configuration beyond the sandbox isolation gates. No DB race probe or full suite was run during this audit. WF-01 was a contract-clarification question, not a confirmed defect. The closure above answers it as a point-in-time attestation plus the invalidation outbox.
 
 
 

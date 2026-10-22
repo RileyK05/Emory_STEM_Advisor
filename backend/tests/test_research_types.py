@@ -309,7 +309,45 @@ def test_finish_input_accepts_json_encoded_and_double_wrapped_decision():
     assert direct.decision.blocks[0].text == "ECON 315 counts [1]."
 
 
-def test_finish_request_retains_declared_candidate_program_evidence():
+@pytest.mark.parametrize("transport", ["direct", "wrapped", "encoded", "fenced", "bare_fenced"])
+def test_terminal_json_uses_the_finish_validation_path(transport):
+    from app.generation.research_controller import _finish_text_call
+    from app.generation.research_tools import FinishInput
+
+    decision = {"outcome": "insufficient_evidence", "completeness": "partial", "blocks": [
+        {"kind": "limitation", "text": "The required evidence is unavailable."}]}
+    payload = json.dumps(decision)
+    if transport == "wrapped":
+        payload = json.dumps({"decision": decision})
+    elif transport == "encoded":
+        payload = json.dumps({"decision": payload})
+    elif transport == "fenced":
+        payload = "```json\n" + payload + "\n```"
+    elif transport == "bare_fenced":
+        payload = "```\n" + payload + "\n```"
+    call = _finish_text_call(payload)
+    assert call.name == "advisor_finish"
+    assert FinishInput.model_validate(call.arguments).decision.model_dump(mode="json")["blocks"][0]["text"] == decision["blocks"][0]["text"]
+
+
+@pytest.mark.parametrize("payload", [
+    'Here is the answer: {"decision": {}}',
+    '{"decision": {}} trailing text',
+    '{"decision": {}} {"decision": {}}',
+    '{"decision": {}, "decision": {}}',
+    '{"decision": {"outcome": NaN}}',
+    '{"name": "advisor_search", "arguments": {}}',
+    '[{"decision": {}}]',
+    '{"decision": {}, "unresolved_questions": []}',
+])
+def test_terminal_json_rejects_ambiguous_or_nonterminal_text(payload):
+    from app.generation.research_controller import _finish_text_call
+
+    assert _finish_text_call(payload) is None
+
+
+@pytest.mark.parametrize("support", ["program", "course", "preparation", "oversized_preparation"])
+def test_finish_request_retains_declared_candidate_program_evidence(support):
     """A compared candidate's program evidence must survive prompt compaction.
 
     Otherwise the model cannot cite it (omitted IDs may never be cited) and the
@@ -332,14 +370,43 @@ def test_finish_request_retains_declared_candidate_program_evidence():
         candidates=(Candidate(id="bio", description="Biology", status="investigating",
                               program_handles=("h_a",)),))
     session = SimpleNamespace(
-        settings=replace(load_settings(), research_max_prompt_bytes=12000),
+        settings=replace(load_settings(), research_max_prompt_bytes=(
+            16000 if support == "preparation" else 9000 if support == "oversized_preparation" else 12000)),
         store=SimpleNamespace(evidence=lambda _run: records), run=SimpleNamespace(run_id=uuid4()),
         active=[r.evidence_id for r in records], state=state, entity_evidence={"h_a": {"e20"}},
         scope=SimpleNamespace(sources={}, programs={}),
         handles={}, checks={}, actions=[], program_reads={}, supplied=set(), remaining_limits={})
+    if support == "program":
+        session.active = [r.evidence_id for r in records[:-1]]
+    if support == "course":
+        session.state = ResearchState(revision=0, decision_question="Which course?",
+            candidates=(Candidate(id="bio", course_codes=("BIOL 101",), description="Biology",
+                                  status="investigating"),))
+        session.entity_evidence = {"BIOL 101": {"e20"}}
+        session.active = [r.evidence_id for r in records[:-1]]
+    elif support != "program":
+        session.state = None
+        session.checks = {"p_test": {"check_id": "p_test", "selected_codes": ["BIOL 101"],
+            "completed_codes": [], "stages": [["BIOL 101"]], "blockers": [], "complete": True,
+            "conclusion": "dependency_order", "evidence_ids": ["e19", "e20"],
+            "unexplored_codes": [], "enrollment_eligibility_verified": False,
+            "scope": "prerequisite_order_only"}}
+        # A model notebook update may have deactivated the check's evidence.
+        session.active = [r.evidence_id for r in records[:-2]]
+    history = json.dumps({"kind": "selected_conversation_history", "total_turns": 1,
+        "omitted_turns": 0, "turns": [{"sequence": 1, "text": "Older discussion. " * 200}]})
     _request, user = ResearchController().request(
-        session, SimpleNamespace(definitions=()), "Which option?", None, [], "", True)
-    # e20 is the only program evidence and last in active order; it must still be supplied.
+        session, SimpleNamespace(definitions=()), "Which option?", history, [], "", True)
+    if support == "oversized_preparation":
+        context = json.loads(user)
+        assert context["executed_preparation_checks"] == []
+        assert context["unavailable_preparation_check_ids"] == ["p_test"]
+        assert "readiness claims" in context["instruction"]
+        return
+    # Required evidence must survive even when later reads fill the context.
     assert "e20" in session.supplied
     assert "e20" in user
     assert len(session.supplied) < 20  # the bound really did omit other evidence
+    if support == "preparation":
+        assert {"e19", "e20"} <= session.supplied
+        assert json.loads(user)["executed_preparation_checks"][0]["check_id"] == "p_test"

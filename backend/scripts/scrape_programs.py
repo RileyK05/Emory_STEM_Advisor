@@ -170,7 +170,13 @@ def write_programs_jsonl(programs: list[CatalogSection], *, catalog: str, url: s
 
 def write_catalog(pdf: bytes, *, url: str, catalog_id: str, out_dir: Path,
                   retrieved: str) -> list[Path]:
-    pages = [page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf)).pages]
+    from app.ingest.extract import repair_pdf_kerning
+    from app.ingest.normalize import normalize_text
+
+    pages = [
+        repair_pdf_kerning(normalize_text(page.extract_text() or ""))
+        for page in PdfReader(io.BytesIO(pdf)).pages
+    ]
     year = _YEAR_RE.search(pages[0] if pages else "")
     catalog = "Emory College of Arts and Sciences Catalog" + (f" {year.group(1)}" if year else "")
     policies, programs, departments = split_catalog(pages)

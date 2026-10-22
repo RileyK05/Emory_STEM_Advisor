@@ -100,8 +100,11 @@ def query(
     debug: Annotated[AppliedDebug | None, Depends(get_debug)],
 ) -> AnswerResponse | RefusalResponse:
     from app.api.query_service import query_response
+    from app.quotas.service import QuotaService
 
-    effective_settings = debug.settings if debug is not None else settings
+    QuotaService.check_and_consume(conn, workspace_key=workspace)
+    effective_settings = deps.execution_settings(
+        request, conn, workspace, debug.settings if debug is not None else settings)
     effective_config = debug.config if debug is not None else config
     return query_response(body, conn, effective_settings, effective_config, embedder, provider,
                           workspace_key=workspace,
@@ -244,6 +247,25 @@ def recommendations(
             ],
         )
         for item in results
+    ]
+
+
+@router.get("/api/retired-courses", response_model=list[CourseDoc])
+def retired_courses(
+    conn: Conn,
+    settings: SettingsDep,
+    query: str = "",
+    collection: str | None = None,
+) -> list[CourseDoc]:
+    collection_id, _ = deps.resolve_collection(conn, settings, collection)
+    pattern = f"%{query.strip()}%" if query.strip() else None
+    rows = conn.execute(queries.get("list_retired_courses"), {
+        "collection_id": collection_id, "pattern": pattern,
+    }).fetchall()
+    return [
+        CourseDoc(courseId=str(row["course_id"]), code=row["code"],
+                  title=row["title"], lifecycle="retired")
+        for row in rows
     ]
 
 

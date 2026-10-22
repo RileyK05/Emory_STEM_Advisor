@@ -17,10 +17,12 @@ from app.api.schemas import (
     ConversationStreamStartResponse,
     ConversationSummary,
     ConversationTurnResponse,
+    ExportSummaryRequest,
+    NativeArtifactRecord,
     QueryRequest,
 )
 from app.artifacts.storage import ArtifactStore
-from app.atlas.records import normalize_code
+from app.atlas.records import course_codes_in
 from app.auth.dependencies import get_workspace_key
 from app.connections.models import (
     ConnectionUnavailable,
@@ -87,6 +89,40 @@ def get(conversation_id: UUID, conn: Conn, workspace: Workspace,
     return ConversationStore(conn, workspace).turns(conversation_id, after=after, limit=limit)
 
 
+@router.post(
+    "/{conversation_id}/export-summary",
+    response_model=NativeArtifactRecord,
+    response_model_exclude_unset=True,
+)
+def export_summary(
+    conversation_id: UUID,
+    body: ExportSummaryRequest,
+    conn: Conn,
+    workspace: Workspace,
+    request: Request,
+    debug: Debug = None,
+) -> dict:
+    from app.artifacts.advising_summary import create_advising_summary_artifact
+    from app.artifacts.storage import public_record
+
+    settings = debug.settings if debug is not None else request.app.state.settings
+    from app.flags.service import FeatureFlagService
+
+    FeatureFlagService.require_enabled(
+        conn, "advising_summary_export", workspace_key=workspace, settings=request.app.state.settings)
+    refs = [r.model_dump() for r in body.artifactReferences] if body.artifactReferences else None
+    record = create_advising_summary_artifact(
+        conn,
+        settings,
+        workspace,
+        conversation_id,
+        through_sequence=body.throughSequence,
+        title=body.title,
+        referenced_artifacts=refs,
+    )
+    return public_record(record)
+
+
 def _job_store(request: Request) -> JobStore:
     return deps.request_job_store(request, state_attr="conversation_job_store",
                                  unavailable_detail="Job storage is unavailable.")
@@ -114,18 +150,12 @@ def abandon(conversation_id: UUID, request_id: UUID, request: Request, conn: Con
     return result
 
 
-_ANSWER_CODE_RE = re.compile(r"\b([A-Z]{2,7}) ?(\d{3}[A-Z]{0,2})\b")
 _MAX_FOLLOW_UP_CODES = 8
 
 
 def _answer_course_codes(text: str) -> list[str]:
-    """Course codes a prior answer named, in order (cross-campus `_OX` aliases skipped)."""
-    codes: list[str] = []
-    for subject, number in _ANSWER_CODE_RE.findall(text or ""):
-        code = normalize_code(f"{subject} {number}")
-        if code is not None and code not in codes:
-            codes.append(code)
-    return codes[:_MAX_FOLLOW_UP_CODES]
+    """Course codes a prior answer named, including exact Oxford identities."""
+    return course_codes_in(text or "")[:_MAX_FOLLOW_UP_CODES]
 
 
 # A bare follow-up does not name its own topic, so its retrieval query folds in
@@ -141,7 +171,6 @@ _TOPIC_NOUN_RE = re.compile(
     r"prerequisites|prereq|prereqs|curriculum|sequence|gpa|credit|credits|semester|honors)\b",
     re.IGNORECASE)
 # Case-insensitive on purpose: a typed follow-up may use lower-case codes.
-_FOLLOW_UP_CODE_RE = re.compile(r"\b([A-Za-z]{2,7}) ?(\d{3}[A-Za-z]{0,2})\b")
 
 
 def _looks_like_bare_follow_up(query: str) -> bool:
@@ -150,7 +179,7 @@ def _looks_like_bare_follow_up(query: str) -> bool:
         return False
     if _FOLLOW_UP_START_RE.match(stripped) or _ANAPHORA_RE.search(stripped):
         return True
-    if _FOLLOW_UP_CODE_RE.search(stripped) or _TOPIC_NOUN_RE.search(stripped):
+    if course_codes_in(stripped) or _TOPIC_NOUN_RE.search(stripped):
         return False
     return len(stripped.split()) <= 5
 
@@ -340,11 +369,14 @@ def start_stream(conversation_id: UUID, body: ConversationQuery, request: Reques
                     "jobId": str(prior["job_id"]), "state": "unknown"}
         return {"conversationId": str(conversation_id), "requestId": str(body.requestId),
                 "jobId": str(prior["job_id"]), "state": job["status"]}
-    settings = debug.settings if debug is not None else request.app.state.settings
+    settings = deps.execution_settings(
+        request, conn, workspace, debug.settings if debug is not None else None)
     admission = AdmissionLimits(settings.admission_max_pending_workspace,
                                 settings.admission_max_pending_global)
     # Reject a full queue before a rare compaction provider call. The final
     # check remains inside `begin_stream`'s transaction, so this is best-effort.
+    # Quota settlement also stays in that transaction: a missing source, a
+    # context refusal, or a stale sequence must not consume the daily bucket.
     if admission.enabled:
         with conn.transaction():
             admission.check(conn, workspace)
@@ -433,7 +465,8 @@ def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
     replay = store.replay(conversation_id, body.requestId, snapshot)
     if replay is not None:
         return replay
-    settings = debug.settings if debug is not None else request.app.state.settings
+    settings = deps.execution_settings(
+        request, conn, workspace, debug.settings if debug is not None else None)
     config = debug.config if debug is not None else request.app.state.config
     system_prompt = debug.system_prompt if debug is not None else None
     research = settings.advising_research_enabled and body.mode == "advising"

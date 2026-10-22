@@ -51,6 +51,10 @@ WHERE user_id = %(user_id)s
 RETURNING user_id, issuer, subject, workspace_key, display_name, email, role, status,
           created_at, updated_at, last_seen_at;
 
+-- name: admin_lock_user_table
+-- Serialize the last-active-admin invariant across concurrent updates.
+LOCK TABLE app_users IN SHARE ROW EXCLUSIVE MODE;
+
 -- name: admin_count_active_admins
 SELECT count(*) AS admins FROM app_users
 WHERE role = 'admin' AND status = 'active';
@@ -76,6 +80,43 @@ FROM admin_audit a
 LEFT JOIN app_users u ON u.user_id = a.actor_user_id
 ORDER BY a.created_at DESC
 LIMIT %(limit)s;
+
+-- name: admin_list_audit_filtered
+SELECT a.audit_id, a.actor_user_id, a.actor_workspace, a.action, a.target_type,
+       a.target_id, a.detail, a.created_at, u.email AS actor_email,
+       u.display_name AS actor_display_name
+FROM admin_audit a
+LEFT JOIN app_users u ON u.user_id = a.actor_user_id
+WHERE (%(action)s = '' OR a.action = %(action)s)
+  AND (%(target_type)s = '' OR a.target_type = %(target_type)s)
+  AND (%(target_id)s = '' OR a.target_id = %(target_id)s)
+  AND (%(actor)s = ''
+       OR a.actor_workspace = %(actor)s
+       OR (%(actor_user_id)s::uuid IS NOT NULL AND a.actor_user_id = %(actor_user_id)s::uuid)
+       OR lower(coalesce(u.email, '')) LIKE %(actor_like)s
+       OR lower(coalesce(u.display_name, '')) LIKE %(actor_like)s)
+  AND (%(since)s::timestamptz IS NULL OR a.created_at >= %(since)s::timestamptz)
+  AND (%(until)s::timestamptz IS NULL OR a.created_at <= %(until)s::timestamptz)
+  AND (%(cursor_created_at)s::timestamptz IS NULL
+       OR (a.created_at, a.audit_id) < (%(cursor_created_at)s::timestamptz, %(cursor_audit_id)s::uuid))
+ORDER BY a.created_at DESC, a.audit_id DESC
+LIMIT %(limit)s;
+
+-- name: admin_count_audit_filtered
+SELECT count(*) AS total
+FROM admin_audit a
+LEFT JOIN app_users u ON u.user_id = a.actor_user_id
+WHERE (%(action)s = '' OR a.action = %(action)s)
+  AND (%(target_type)s = '' OR a.target_type = %(target_type)s)
+  AND (%(target_id)s = '' OR a.target_id = %(target_id)s)
+  AND (%(actor)s = ''
+       OR a.actor_workspace = %(actor)s
+       OR (%(actor_user_id)s::uuid IS NOT NULL AND a.actor_user_id = %(actor_user_id)s::uuid)
+       OR lower(coalesce(u.email, '')) LIKE %(actor_like)s
+       OR lower(coalesce(u.display_name, '')) LIKE %(actor_like)s)
+  AND (%(since)s::timestamptz IS NULL OR a.created_at >= %(since)s::timestamptz)
+  AND (%(until)s::timestamptz IS NULL OR a.created_at <= %(until)s::timestamptz);
+
 
 -- name: admin_list_conversations
 SELECT c.conversation_id, c.workspace_key, c.title, c.last_sequence,

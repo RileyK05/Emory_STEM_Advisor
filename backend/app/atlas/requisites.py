@@ -10,15 +10,31 @@ import re
 from dataclasses import dataclass
 
 from app.atlas.records import normalize_code
+from app.programs.requirements import (
+    _NOT_SUBJECTS,
+    SUBJECT_ALIASES,
+    _is_level_descriptor,
+)
 
-PARSER_VERSION = "5"
+PARSER_VERSION = "9"
 
 # A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
-# uppercase, so ordinary words and "111or" are not read as codes. The catalog's
-# mixed-case suffix (202zL) is allowed, matching the program parser.
-_DIGITS = r"\d{3}(?:[A-Z]{1,2}|[a-z][A-Z]?)?"
-_SUBJECT = r"(?:[A-Z]{6,7}|[A-Za-z]{2,5})(?:_OX)?"
-_CODE_RE = re.compile(rf"({_SUBJECT})\s?({_DIGITS})\b|\b({_DIGITS})\b")
+# uppercase, so ordinary words and "111or" are not read as codes. Spelled-out
+# subjects ("Physics 151") and the catalog's spaced Oxford form ("ENVS OX 230")
+# are resolved through the program parser's shared aliases. A subject that is
+# not recognized is never emitted as a code.
+_DIGITS = r"\d{2,4}(?:[A-Z][A-Z0-9]{0,7}|[a-z][A-Z]?)?"
+_SPELLING_ALIASES = "|".join(
+    re.escape(alias)
+    for alias in sorted(
+        (alias for alias in SUBJECT_ALIASES if re.fullmatch(r"[A-Z][a-z]+", alias)),
+        key=len,
+        reverse=True,
+    )
+)
+_SUBJECT = (rf"(?:[A-Z][A-Z0-9]{{0,5}}[A-Z]|(?:{_SPELLING_ALIASES}))"
+            r"(?:_OX|\s+OX(?=\s?\d))?")
+_CODE_RE = re.compile(rf"\b({_SUBJECT})\s?({_DIGITS})\b|\b({_DIGITS})\b")
 _GRADE_RE = re.compile(
     r"with\s+(?:a\s+)?(?:minimum\s+)?grade\s+of\s+[A-D][+-]?\s+or\s+(?:better|higher)",
     re.IGNORECASE,
@@ -43,7 +59,37 @@ _AND_OR = re.compile(r"(and|or)\b", re.IGNORECASE)
 # Between a code and a bare number, only these separators are allowed for the
 # subject to carry forward: whitespace, commas, slashes, and/or. So
 # "MATH 111, 112, or 115" carries MATH across ", " and ", or ".
-_CARRY_SEP = re.compile(r"\s*(?:(?:,|/|and|or)\s*)*")
+_CARRY_SEP = re.compile(r"\s*(?:(?:,|/|and|or)\s*)*", re.IGNORECASE)
+_INLINE_LABEL_RE = re.compile(
+    r"\s+as\s+(?:an?\s+)?"
+    r"(recommended\s+preparation|recommended|prerequisite\s+or\s+co[ -]?requisite|"
+    r"co[ -]?requisites?|pre[ -]?requisites?)\b",
+    re.IGNORECASE,
+)
+_EXCLUSION_RE = re.compile(
+    r"(?:^|(?<=[.!?])\s*)[^.!?]*\bcannot\s+(?:enroll|take)\b[^.!?]*[.!?]?",
+    re.IGNORECASE,
+)
+_PROHIBITS_RE = re.compile(r"\bPROHIBITS\s*:.*", re.IGNORECASE | re.DOTALL)
+_USED_FOR_RE = re.compile(r"\bUsed\s+for\s*:.*", re.IGNORECASE | re.DOTALL)
+
+
+_ALIAS_LOWER = {key.lower(): value for key, value in SUBJECT_ALIASES.items()}
+
+
+def _resolve_subject(word: str) -> str | None:
+    """Resolve a catalog subject or alias; unknown words are never codes."""
+    word = re.sub(r"\s+OX$", "_OX", word.strip())
+    if word.upper() in _NOT_SUBJECTS:
+        return None
+    if word in SUBJECT_ALIASES:
+        return SUBJECT_ALIASES[word]
+    alias = _ALIAS_LOWER.get(word.lower())
+    if alias is not None:
+        return alias
+    if re.fullmatch(r"[A-Z][A-Z0-9]{0,5}[A-Z](?:_OX)?", word):
+        return word
+    return None
 
 
 @dataclass(frozen=True)
@@ -110,8 +156,65 @@ def _strip_grades(text: str) -> str:
     return _GRADE_RE.sub("", _GRADE_RE2.sub("", text))
 
 
+def _trim_separators(text: str) -> str:
+    return re.sub(r"^(?:and|or|[,;])\s+", "", text.strip(), flags=re.IGNORECASE).strip(" ,.;")
+
+
+def _split_inline(kind: str, content: str) -> list[tuple[str, str]]:
+    matches = list(_INLINE_LABEL_RE.finditer(content))
+    if not matches:
+        return [(kind, content)]
+    output: list[tuple[str, str]] = []
+    start = 0
+    for match in matches:
+        chunk = _trim_separators(content[start:match.start()])
+        if chunk:
+            output.append((_kind_for_label(match.group(1)), chunk))
+        start = match.end()
+    tail = _trim_separators(content[start:])
+    if tail:
+        output.append((kind, tail))
+    return output
+
+
+def split_requisite_segments(text: str) -> tuple[tuple[str, str], ...]:
+    """Split a requisites blob into (kind, text) segments.
+
+    Handles both colon labels and the catalog's trailing ``as a corequisite``
+    form. Prohibitions, enrollment exclusions, and ``Used for:`` block trailers
+    are not requirements and are removed before scanning.
+    """
+    stripped = re.sub(r"^This course requires\s+", "", text.strip(), flags=re.IGNORECASE)
+    stripped = _RUN_TOGETHER_RE.sub(r"\1 \2 ", stripped)
+    stripped = _TRANSFER_AS_LABEL_RE.sub(r"\1", stripped)
+    stripped = _COMBINED_LABEL_RE.sub("co-requisite: ", stripped)
+    stripped = _PROHIBITS_RE.sub("", stripped)
+    stripped = _EXCLUSION_RE.sub("", stripped)
+    stripped = _USED_FOR_RE.sub("", stripped)
+    labels = list(_LABEL_RE.finditer(stripped))
+    segments: list[tuple[str, str]] = []
+    if not labels:
+        segments.extend(_split_inline("prerequisite", stripped))
+    else:
+        prefix = _trim_separators(stripped[:labels[0].start()])
+        if prefix:
+            segments.extend(_split_inline("prerequisite", prefix))
+        for index, label in enumerate(labels):
+            kind = _kind_for_label(label.group(1))
+            end = labels[index + 1].start() if index + 1 < len(labels) else len(stripped)
+            content = _trim_separators(stripped[label.end():end])
+            if content:
+                segments.extend(_split_inline(kind, content))
+    return tuple((kind, content) for kind, content in segments if content)
+
+
 # "BIOL 151or", "PHYS 461or": a missing space glues a code to the conjunction.
-_RUN_TOGETHER_RE = re.compile(r"(\d{3}[A-Za-z]?)(and|or)\b", re.IGNORECASE)
+_RUN_TOGETHER_RE = re.compile(r"(\d{3}[A-Za-z]?)(and|or)(?=\d|\b)", re.IGNORECASE)
+_TRANSFER_AS_LABEL_RE = re.compile(
+    r"(equivalent\s+transfer\s+credit)\s+as\s+(?:an?\s+)?"
+    r"prerequisites?(?:\s+or\s+co[ -]?requisites?)?\b",
+    re.IGNORECASE,
+)
 # "Prerequisite or co-requisite" is one combined label; corequisite is the
 # weaker (concurrent) interpretation.
 _COMBINED_LABEL_RE = re.compile(
@@ -121,7 +224,9 @@ _COMBINED_LABEL_RE = re.compile(
 # Only a clause that ends the segment qualifies, so a following restriction
 # sentence (CHEM 340) is never dropped.
 _TRANSFER_TAIL_RE = re.compile(
-    r"\s*(?:,|;|or|and)?\s*equivalent\s+transfer\s+credit\b[^.]*\.?\s*\Z",
+    r"\s*(?:[,;]\s*)?(?P<connector>or|and)?\s*equivalent\s+transfer\s+credit"
+    r"(?:\s+as\s+(?:a\s+)?prerequisites?"
+    r"(?:\s+or\s+co[ -]?requisites?)?)?\s*\.?\s*\Z",
     re.IGNORECASE)
 
 
@@ -173,7 +278,15 @@ def _scan(segment: str) -> list[tuple[str, str]]:
         match = _CODE_RE.match(segment, i)
         if match:
             if match.group(1):
-                subject, tail = match.group(1), match.group(2)
+                resolved = _resolve_subject(match.group(1))
+                if resolved is None:
+                    # Do not let a following bare number inherit an earlier
+                    # subject across an unrecognized word ("... and lab 201").
+                    last_subject = None
+                    tokens.append(("leftover", match.group(0)))
+                    i = match.end()
+                    continue
+                subject, tail = resolved, match.group(2)
             else:
                 if last_subject is None:
                     tokens.append(("leftover", match.group(0)))
@@ -185,6 +298,9 @@ def _scan(segment: str) -> list[tuple[str, str]]:
                     i = match.end()
                     continue
                 subject, tail = last_subject, match.group(3)
+            if _is_level_descriptor(segment, match.end()):
+                i = match.end()
+                continue
             code = normalize_code(f"{subject} {tail}")
             if code is None:
                 tokens.append(("leftover", match.group(0)))
@@ -293,30 +409,32 @@ def _parse_with_transfer_tail(segment: str) -> Req | None:
         tree = _Parser(tokens).parse()
     except _Ambiguous:
         return None
-    return AllOf((tree, Condition("equivalent transfer credit")))
+    return _attach_transfer_condition(tree, tail.group("connector"))
 
 
-def parse_requisites(text: str | None) -> ParsedRequisites:
+def _attach_transfer_condition(tree: Req, connector: str | None) -> Req:
+    condition = Condition("equivalent transfer credit")
+    if connector and connector.lower() == "or":
+        return AnyOf((tree, condition))
+    if connector and connector.lower() == "and":
+        return AllOf((tree, condition))
+    # Unmarked legacy tails retain the parser's prior conservative behavior.
+    if isinstance(tree, CourseRef):
+        return AnyOf((tree, condition))
+    if isinstance(tree, AnyOf):
+        return AnyOf((*tree.items, condition))
+    return AllOf((tree, condition))
+
+
+def parse_requisites(
+    text: str | None, *, course_code: str | None = None
+) -> ParsedRequisites:
     if text is None or not text.strip():
         return ParsedRequisites("none", (), {}, ())
 
-    stripped = text.strip()
-    # This catalog wrapper introduces the field; it has no prerequisite meaning.
-    stripped = re.sub(r"^This course requires\s+", "", stripped, flags=re.IGNORECASE)
-    # Repair run-together codes and normalize the combined label (EMO-028).
-    stripped = _RUN_TOGETHER_RE.sub(r"\1 \2", stripped)
-    stripped = _COMBINED_LABEL_RE.sub("co-requisite: ", stripped)
-    labels = list(_LABEL_RE.finditer(stripped))
-    segments: list[tuple[str, str]] = []
-    if not labels:
-        segments.append(("prerequisite", stripped))
-    else:
-        if labels[0].start() > 0:
-            segments.append(("prerequisite", stripped[: labels[0].start()]))
-        for i, label in enumerate(labels):
-            kind = _kind_for_label(label.group(1))
-            end = labels[i + 1].start() if i + 1 < len(labels) else len(stripped)
-            segments.append((kind, stripped[label.end():end]))
+    segments = split_requisite_segments(text)
+    if not segments:
+        return ParsedRequisites("none", (), {}, ())
 
     mentions: list[Mention] = []
     seen: set[tuple[str, str]] = set()
@@ -324,12 +442,25 @@ def parse_requisites(text: str | None) -> ParsedRequisites:
     leftover: list[str] = []
     ambiguous = False
     unparsed = False
+    self_code = normalize_code(course_code) if course_code else None
 
     for kind, raw in segments:
         segment = _strip_grades(raw).strip().strip(".").strip()
         if not segment:
             continue
+        transfer_tail = _TRANSFER_TAIL_RE.search(segment)
+        if transfer_tail is not None:
+            segment = segment[:transfer_tail.start()].strip()
+            if not segment:
+                continue
         tokens = _scan(segment)
+        if self_code is not None and any(
+            ttype == "code" and value == self_code for ttype, value in tokens
+        ):
+            # A course is never its own prerequisite. If the source still says
+            # so after prohibition/trailer stripping, fail closed.
+            ambiguous = True
+            continue
         for ttype, value in tokens:
             if ttype == "code":
                 key = (kind, value)
@@ -351,6 +482,8 @@ def parse_requisites(text: str | None) -> ParsedRequisites:
         if kind in trees:
             ambiguous = True
             continue
+        if transfer_tail is not None:
+            tree = _attach_transfer_condition(tree, transfer_tail.group("connector"))
         trees[kind] = tree
 
     if unparsed:

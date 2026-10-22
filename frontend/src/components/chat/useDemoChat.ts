@@ -60,6 +60,7 @@ export function useDemoChat(): ChatController {
             citations: res.citations,
             context: res.trace.contextBlock,
             research: res.research,
+            applicability: res.applicability,
             trace: res.trace,
           });
       })
@@ -84,7 +85,10 @@ export function useDemoChat(): ChatController {
     draft,
     setDraft,
     busy: sending,
-    send: () => send(),
+    send: (_attachments, onAccepted) => {
+      send();
+      onAccepted?.();
+    },
     changeScope: setScope,
     open: () => undefined,
     startNew: () => {

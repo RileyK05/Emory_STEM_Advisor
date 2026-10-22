@@ -19,10 +19,12 @@ WHERE conversation_id = %(conversation_id)s AND workspace_key = %(workspace_key)
 ORDER BY created_at, summary_id;
 
 -- name: latest_conversation_summary
-SELECT * FROM conversation_summaries
-WHERE conversation_id = %(conversation_id)s AND workspace_key = %(workspace_key)s
-  AND state = 'completed'
-ORDER BY covered_through DESC, created_at DESC, summary_id
+SELECT s.* FROM conversation_summaries s
+JOIN conversations c ON c.conversation_id = s.conversation_id
+WHERE s.conversation_id = %(conversation_id)s AND s.workspace_key = %(workspace_key)s
+  AND s.state = 'completed'
+  AND s.covered_through > c.context_boundary_sequence
+ORDER BY s.covered_through DESC, s.created_at DESC, s.summary_id
 LIMIT 1;
 
 -- name: pending_conversation_summary
@@ -43,11 +45,11 @@ RETURNING summary_id;
 INSERT INTO conversation_summaries (
     summary_id, conversation_id, workspace_key, expected_sequence,
     candidate_covered_through, request_fingerprint, input_fingerprint,
-    input_snapshot, reference_metadata, state, operation_id
+    input_snapshot, reference_metadata, state, operation_id, context_epoch
 ) VALUES (
     %(summary_id)s, %(conversation_id)s, %(workspace_key)s, %(expected_sequence)s,
     %(candidate_covered_through)s, %(request_fingerprint)s, %(input_fingerprint)s,
-    %(input_snapshot)s, %(reference_metadata)s, 'pending', %(operation_id)s
+    %(input_snapshot)s, %(reference_metadata)s, 'pending', %(operation_id)s, %(context_epoch)s
 )
 RETURNING *;
 

@@ -2,12 +2,14 @@
 import json
 from dataclasses import replace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api import create_app
 from app.api.query_service import query_response
 from app.api.schemas import QueryRequest
 from app.config import load_settings
+from app.flags.service import FeatureFlagService
 from app.llm.base import GenerationResult, StreamEvent, ToolCall, Usage
 from tests.fakes import FakeEmbedder
 from tests.helpers import collection_name, ingest_text, lenient_config
@@ -32,7 +34,9 @@ class _QueryProvider:
         return next(self.responses)
 
 
-def test_query_calculator_then_final_answer_accounts_and_persists_each_call(db, collection, tmp_path):
+@pytest.mark.parametrize("stop_tools", [False, True])
+def test_query_calculator_then_final_answer_accounts_and_persists_each_call(db, collection, tmp_path,
+                                                                          monkeypatch, stop_tools):
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha has value 0.3.\n")
     provider = _QueryProvider([
         GenerationResult(tool_calls=(ToolCall("query-calc", "advisor_calculate",
@@ -41,9 +45,24 @@ def test_query_calculator_then_final_answer_accounts_and_persists_each_call(db, 
         GenerationResult(text="The value is 0.3 [1].", finish_reason="stop",
             usage=Usage(120, 15, source="provider")),
     ])
+    generate = provider.generate
+
+    def maybe_stop(request):
+        result = generate(request)
+        if stop_tools:
+            FeatureFlagService.set_kill_switch(db, "tools", True, "test stop during call")
+        return result
+
+    monkeypatch.setattr(provider, "generate", maybe_stop)
     response = api_client(db, provider).post("/api/query", json={
         "query": "alpha", "collectionId": collection_name(db, collection),
     })
+    if stop_tools:
+        assert response.status_code == 409, response.text
+        row = db.execute("SELECT sum(prompt_tokens) AS tokens, count(*) AS calls FROM model_calls").fetchone()
+        assert (row["tokens"], row["calls"]) == (100, 1)
+        assert db.execute("SELECT count(*) AS calls FROM tool_executions").fetchone()["calls"] == 0
+        return
     assert response.status_code == 200
     assert response.json()["answer"] == "The value is 0.3 [1]."
     assert len(provider.calls) == 2

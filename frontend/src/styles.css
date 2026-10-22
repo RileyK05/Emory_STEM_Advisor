@@ -3467,3 +3467,116 @@ button.artifact-card:not(:disabled):hover {
 .admin-table tbody tr:hover {
   background: var(--bg-soft);
 }
+
+
+/* Item 7: Source applicability and freshness banner */
+.callout-warning {
+  background: var(--warn-soft, rgba(234, 179, 8, 0.15));
+  border-color: transparent;
+}
+
+.applicability-banner {
+  margin-bottom: 12px;
+}
+
+.applicability-headline-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.applicability-level-tag {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+}
+
+.cohort-tag {
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--primary-soft, rgba(59, 130, 246, 0.15));
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.applicability-conflicts {
+  margin: 6px 0 0 16px;
+  padding: 0;
+  font-size: 13.5px;
+  color: var(--danger);
+}
+
+.applicability-toggle {
+  font-size: 12.5px;
+  padding: 4px 8px;
+  margin-top: 6px;
+  cursor: pointer;
+}
+
+.applicability-sources-list {
+  list-style: none;
+  margin: 8px 0 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.applicability-source-item {
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.source-item-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.source-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.badge-status {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.badge-success {
+  background: var(--ok-soft, rgba(34, 197, 94, 0.15));
+  color: var(--ok);
+}
+
+.badge-warning {
+  background: var(--warn-soft, rgba(234, 179, 8, 0.15));
+  color: var(--warn, #ca8a04);
+}
+
+.badge-danger {
+  background: var(--danger-soft, rgba(239, 68, 68, 0.15));
+  color: var(--danger);
+}
+
+.badge-info {
+  background: var(--highlight-soft);
+  color: var(--text);
+}
+
+.badge-muted {
+  background: var(--surface-2);
+  color: var(--muted);
+}

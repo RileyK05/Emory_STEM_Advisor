@@ -170,6 +170,7 @@ class CourseRead:
     requisites_raw: str | None
     parse_status: str
     chunks: tuple[ChunkRead, ...]
+    lifecycle: str = "current"
 
 
 @dataclass(frozen=True)
@@ -461,7 +462,8 @@ def read_courses(conn, scope: ResearchScope, codes) -> list[CourseRead]:
             _chunk(row, scope.sources[row["source_id"]].index_revision))
     return [CourseRead(row["code"], row["title"], row["canonical_code"],
                        row["requisites_raw"], row["parse_status"],
-                       tuple(by_locator.get(row["locator_id"], ())))
+                       tuple(by_locator.get(row["locator_id"], ())),
+                       row["lifecycle"])
             for row in rows]
 
 

@@ -1,5 +1,7 @@
 """Extraction tests. Locators must tile the text exactly."""
 
+import json
+
 import pytest
 
 from app.ingest import extract as extract_module
@@ -28,6 +30,24 @@ def test_plain_line_range_locators_and_tiling():
     result = extract(text.encode(), "text/plain", lines_per_locator=40)
     assert [loc.locator_type for loc in result.locators] == ["line_range"] * 3
     assert [loc.label for loc in result.locators] == ["lines 1-40", "lines 41-80", "lines 81-90"]
+    _assert_tiling(result.text, result.locators)
+
+
+@pytest.mark.parametrize(("code", "authority", "expected"), [
+    ("CS_OX170", "atlas", "Campus: Oxford"),
+    ("PAE8100", "atlas", "Requirement authority: Emory Course Atlas"),
+    ("TATT605BSHES", "catalog", "Catalog fallback"),
+    ("VM999D1", None, "Course description"),
+])
+def test_atlas_authority_and_exact_identity_survive_extraction(code, authority, expected):
+    record = {"code": code, "title": "Course title", "description": "Course description",
+              "authority": authority, "term": "Spring 2027", "careers": ["Oxford College"],
+              "registration_notes": ["Instructor\x00 consent required"]}
+    result = extract(json.dumps(record).encode(), "application/x-course-atlas+jsonl")
+    assert expected in result.text
+    assert "Instructor consent required" in result.text
+    assert "\x00" not in result.text
+    assert result.locators[0].label.replace(" ", "") == code
     _assert_tiling(result.text, result.locators)
 
 
@@ -139,8 +159,11 @@ def test_pdf_split_course_numbers_are_rejoined():
 
     assert _repair_pdf_kerning("Math 1 11 and PHIL 1 15") == "Math 111 and PHIL 115"
     assert _repair_pdf_kerning("Psychology 1 10") == "Psychology 110"
-    # Ordinary lowercase prose is not joined.
+    # Ordinary prose and unknown title-case labels are not joined.
     assert _repair_pdf_kerning("page 1 11") == "page 1 11"
+    assert _repair_pdf_kerning("Section 2 14 of the policy") == "Section 2 14 of the policy"
+    assert _repair_pdf_kerning("Table 3 12") == "Table 3 12"
+    assert _repair_pdf_kerning("May 3 24 deadline") == "May 3 24 deadline"
 
 
 def test_pdf_page_offsets_keep_each_page_slice_distinct():

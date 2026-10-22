@@ -37,7 +37,10 @@ SUBJECT_ALIASES = {
     "BIO": "BIOL", "BIOLOGY": "BIOL", "ANTH": "ANT", "Bio": "BIOL",
 }
 # Capitalized words that precede numbers but are never subjects ("ALL 300-level").
-_NOT_SUBJECTS = {"ALL", "AND", "ANY", "OR", "THE", "NOT", "ONLY", "PLUS", "LEVEL", "CU"}
+_NOT_SUBJECTS = {
+    "ALL", "AND", "ANY", "OR", "THE", "NOT", "ONLY", "PLUS", "LEVEL", "CU",
+    "TWO", "ONE", "OF", "SOME", "EACH", "UPPER", "GRADUATE",
+}
 # Suffixes: "371W", "490RW", and the catalog's lowercase "112z" / "202zL".
 _NUMBER = r"\d{3}(?:[A-Z]{1,2}|[a-z][A-Z]?)?"
 # Lines at least this long were cut by the PDF's page width (see parse_program).

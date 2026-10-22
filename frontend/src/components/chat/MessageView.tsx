@@ -3,6 +3,7 @@ import type { NativeArtifactKind } from '../../api/types';
 import { useApp } from '../../state/AppContext';
 import { CheckIcon, CopyIcon, KIND_LABEL, KindIcon, StopIcon } from '../icons';
 import { AnswerText } from './AnswerText';
+import { ApplicabilityBanner } from './ApplicabilityBanner';
 import { DebugPanel } from './DebugPanel';
 import { SourceList } from './SourceList';
 import { streamStageLabel } from './model';
@@ -77,6 +78,7 @@ function AssistantMessage({ entry, onMake }: AssistantProps) {
       )}
       {entry.kind === 'answer' && (
         <>
+          {entry.applicability && <ApplicabilityBanner notice={entry.applicability} />}
           {entry.research?.completeness === 'partial' && (
             <div className="callout" role="note">
               <strong>Some questions remain open.</strong>

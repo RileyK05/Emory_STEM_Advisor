@@ -5,9 +5,18 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.cache/
+.tox/
+.nox/
+.hypothesis/
 .coverage
+.coverage.*
+coverage.xml
+coverage/
 htmlcov/
 *.egg-info/
+/backend/build/
+.ipynb_checkpoints/
 
 # Test scratch dirs (pytest --basetemp and manual runs)
 .pytest-tmp*/
@@ -19,6 +28,7 @@ dist/
 *.tsbuildinfo
 test-results/
 playwright-report/
+.vite/
 
 # Env: real secrets never get committed. Templates and non-secret Vite mode
 # files the test scripts load are kept.
@@ -31,6 +41,12 @@ playwright-report/
 # sets, model caches. Regenerate with the scrape/import scripts (see AGENTS.md).
 data/
 uploads/
+runs/
+
+# Local manual-audit material: results, ledgers, summaries, reviews and raw
+# recordings. Keep it on disk, outside version control. Test source/fixtures
+# in backend/tests/ and frontend/tests/ remain versionable.
+/docs/audit/tests/
 
 # Logs
 *.log
@@ -48,3 +64,6 @@ uploads/
 .DS_Store
 Thumbs.db
 desktop.ini
+*.swp
+*.swo
+*~

@@ -79,11 +79,21 @@ WHERE gap_id = %(gap_id)s AND workspace_key = %(workspace_key)s
 RETURNING *;
 
 -- name: list_gaps_for_workspace
-SELECT * FROM retrieval_gaps
-WHERE workspace_key = %(workspace_key)s
-  AND (%(collection_id)s::uuid IS NULL OR collection_id = %(collection_id)s)
-ORDER BY CASE WHEN state = 'open' THEN 0 ELSE 1 END,
-         first_seen_at ASC, gap_id ASC
+SELECT g.*,
+       CASE
+           WHEN g.state = 'resolved' AND EXISTS (
+               SELECT 1 FROM source_invalidation_outbox o
+               WHERE o.source_id = ANY(g.resolution_source_ids)
+                 AND g.resolved_at IS NOT NULL
+                 AND o.created_at >= g.resolved_at
+           ) THEN 'ineligible'
+           ELSE 'current'
+       END AS evidence_state
+FROM retrieval_gaps g
+WHERE g.workspace_key = %(workspace_key)s
+  AND (%(collection_id)s::uuid IS NULL OR g.collection_id = %(collection_id)s)
+ORDER BY CASE WHEN g.state = 'open' THEN 0 ELSE 1 END,
+         g.first_seen_at ASC, g.gap_id ASC
 LIMIT 100;
 
 -- name: gap_metrics_for_workspace

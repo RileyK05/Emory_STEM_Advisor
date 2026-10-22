@@ -55,9 +55,9 @@ def _limits(_item):
 def test_batch_model_call_is_audited_once_with_usage(collection, db, migrated_dsn):
     trace_id = uuid4()
     db.execute(queries.get("insert_trace"), {
-        "trace_id": trace_id, "collection_id": collection, "query": "make worksheet",
-        "normalized_query": "make worksheet", "config_version": 1,
-        "embed_model": None, "refused": False,
+        "trace_id": trace_id, "collection_id": collection, "workspace_key": None,
+        "query": "make worksheet", "normalized_query": "make worksheet",
+        "config_version": 1, "embed_model": None, "refused": False,
     })
     db.commit()
     provider = BatchProvider()
@@ -130,9 +130,9 @@ def test_profile_rotation_withholds_output_but_keeps_measured_accounting(db, mig
 def test_validated_artifact_is_created_once_under_batch_fence(collection, db, migrated_dsn, tmp_path):
     trace_id = uuid4()
     db.execute(queries.get("insert_trace"), {
-        "trace_id": trace_id, "collection_id": collection, "query": "make worksheet",
-        "normalized_query": "make worksheet", "config_version": 1,
-        "embed_model": None, "refused": False,
+        "trace_id": trace_id, "collection_id": collection, "workspace_key": None,
+        "query": "make worksheet", "normalized_query": "make worksheet",
+        "config_version": 1, "embed_model": None, "refused": False,
     })
     db.commit()
     spec = {"kind": "document", "title": "Guide",

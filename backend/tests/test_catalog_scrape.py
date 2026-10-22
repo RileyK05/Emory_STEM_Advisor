@@ -16,6 +16,7 @@ from app.atlas.catalog import (
     sitemap_paths,
     write_jsonl,
 )
+from app.atlas.live import DetailRecord, IndexRecord, read_capture
 from app.atlas.records import load_atlas
 from app.atlas.requisites import AnyOf, Condition, CourseRef, parse_requisites
 from app.ingest.advising_documents import prepare_documents
@@ -24,6 +25,117 @@ from scripts import scrape_catalog, scrape_programs
 from tests.fixtures.pdf import make_pdf
 
 CONFIGS = Path(__file__).resolve().parent.parent / "configs"
+
+
+def test_live_detail_capture_preserves_raw_identity_boundaries_and_restrictions():
+    capture = {
+        "kind": "detail", "source_url": "https://atlas.emory.edu/", "term": "Spring 2027",
+        "career": "Emory College", "observed_at": "2026-10-20T00:00:00Z",
+        "html": '''<div class="dtl-course-code">CS 171</div>
+          <div class="dtl-section">Section 1, Class Nbr 2961</div>
+          <div class="detail-title">Introduction to Computer Science II</div>
+          <div class="detail-hours_html"><b>Credit Hours:</b> 3</div>
+          <div class="section section--description"><div class="section__content">Description.</div></div>
+          <div class="section section--registration_restrictions"><div class="section__content"><p>This course requires CS 170 OR CS_OX 170  or equivalent transfer credit as a prerequisite.</p><p>Permission of instructor is also required.</p></div></div>
+          <a class="course-section" data-key="crn:2961" data-group="code:CS 171" data-matched="crn:2961,3017" data-srcdb="5271"><div class="course-section-camp">Campus: ATL@ATLANTA</div></a>
+          <a class="course-section" data-key="crn:3017" data-group="code:CS 171" data-matched="crn:2961,3017" data-srcdb="5271"></a>''',
+    }
+    record = read_capture(capture)
+    assert isinstance(record, DetailRecord)
+    assert (record.code, record.title, record.credits, record.class_number) == (
+        "CS 171", "Introduction to Computer Science II", "3", "2961"
+    )
+    assert record.restrictions == (
+        "This course requires CS 170 OR CS_OX 170 or equivalent transfer credit as a prerequisite. "
+        "Permission of instructor is also required."
+    )
+    assert [section.crn for section in record.sections] == ["2961", "3017"]
+    assert record.sections[0].campus == "ATL@ATLANTA"
+    assert len(record.evidence_hash) == 64
+
+
+def test_live_detail_capture_keeps_exact_unusual_code_and_missing_restrictions_distinct():
+    capture = {
+        "kind": "detail", "source_url": "https://atlas.emory.edu/", "term": "Spring 2027",
+        "career": "Emory College", "observed_at": "2026-10-20T00:00:00Z", "extra": {},
+        "html": """<div class="dtl-course-code">RES999PUBH</div>
+          <div class="dtl-section">Class Nbr 77</div><div class="detail-title">A &amp; B \u2014 \u03a9</div>
+          <div class="detail-hours_html">Credit Hours: 1</div>
+          <div class="section section--description"><div class="section__content">First sentence.\nFull exclusions &amp; details.</div></div>
+          <div class="section section--classnotes"><div class="section__content">All nursing pre-reqs require department permission.</div></div>
+          <div class="detail-consent">Department approval required.</div>
+          <a class="course-section" data-key="crn:77" data-group="code:RES999PUBH"
+             data-matched="crn:77" data-srcdb="5271"><div class="course-section-camp">Campus: ATL</div></a>"""
+    }
+    record = read_capture(capture)
+    assert isinstance(record, DetailRecord)
+    assert record.code == "RES999PUBH"
+    assert record.title == "A & B \u2014 \u03a9"
+    assert record.description == "First sentence. Full exclusions & details."
+    assert record.restrictions is None
+    assert record.sections[0].crn == "77"
+    assert record.notes == "All nursing pre-reqs require department permission."
+    assert ("consent", "Department approval required.") in record.notices
+
+
+def test_live_group_detail_without_class_number_preserves_all_sections_and_flags_review():
+    capture = {
+        "kind": "detail", "source_url": "https://atlas.emory.edu/", "term": "Spring 2027",
+        "career": "Graduate Nursing", "observed_at": "2026-10-20T00:00:00Z",
+        "html": '''<div class="dtl-course-code">NRSG201</div>
+          <div class="detail-title">Nursing Research</div>
+          <div class="detail-inst_method_code">Instruction Method: Varies by section</div>
+          <div class="section section--classnotes"><div class="section__content">Prerequisites vary by section; department permission may be required.</div></div>
+          <a class="course-section" data-key="crn:3004" data-group="code:NRSG201"
+             data-matched="crn:3004,2385" data-srcdb="5271"><div class="course-section-section">Section #: 1</div></a>
+          <a class="course-section" data-key="crn:2385" data-group="code:NRSG201"
+             data-matched="crn:3004,2385" data-srcdb="5271"><div class="course-section-section">Section #: 2</div></a>''',
+    }
+    record = read_capture(capture)
+    assert isinstance(record, DetailRecord)
+    assert record.class_number is None and record.is_grouped
+    assert record.section_variation_review
+    assert [section.crn for section in record.sections] == ["3004", "2385"]
+    assert record.notes == "Prerequisites vary by section; department permission may be required."
+
+
+def _index_capture(rows: str, count: int = 2):
+    return {
+        "kind": "index", "source_url": "https://atlas.emory.edu/", "term": "Spring 2027",
+        "career": "Emory College", "observed_at": "2026-10-20T00:00:00Z", "extra": None,
+        "html": f'''<div class="panel__info-bar-text">Found <strong>{count}</strong> courses</div>
+          <div class="result-criteria"><strong>Search Criteria</strong>
+          <ul class="result-criteria__list"><li class="result-criteria__item">Term: Spring 2027</li>
+          <li class="result-criteria__item">Career: Emory College</li></ul></div>{rows}''',
+    }
+
+
+def test_live_index_capture_keeps_multiple_variant_groups():
+    rows = '''<a class="result__link" data-group="code:M2M 101" data-key=""
+      data-matched="crn:1,2" data-srcdb="5271"><span class="result__code">M2M 101</span>
+      <span class="result__title">Topics in African American Studies: Black Nihilism &amp; One</span></a>
+      <a class="result__link" data-group="code:M2M_OX 101" data-key="crn:2"
+      data-matched="crn:2" data-srcdb="5271"><span class="result__code">M2M_OX 101</span>
+      <span class="result__title">Title Two</span></a>'''
+    record = read_capture(_index_capture(rows))
+    assert isinstance(record, IndexRecord)
+    assert [row.group for row in record.rows] == ["code:M2M 101", "code:M2M_OX 101"]
+    assert record.rows[0].title == "Topics in African American Studies: Black Nihilism & One"
+
+
+def test_live_index_capture_rejects_duplicate_class_crns():
+    row = '''<a class="result__link" data-group="code:MATH 111" data-key="crn:1"
+      data-matched="crn:1" data-srcdb="5271"><span class="result__code">MATH 111</span>
+      <span class="result__title">Calculus</span></a>'''
+    with pytest.raises(ValueError, match="duplicate class CRNs"):
+        read_capture(_index_capture(row + row))
+
+
+def test_live_index_capture_rejects_criteria_mismatch():
+    capture = _index_capture("")
+    capture["html"] = capture["html"].replace("Spring 2027", "Fall 2027")
+    with pytest.raises(ValueError, match="term disagrees"):
+        read_capture(capture)
 
 
 def _nuxt_page(payload_table: list) -> str:
@@ -153,6 +265,79 @@ def test_get_honors_retry_after_and_stops_on_refusal():
         transport=httpx.MockTransport(lambda request: httpx.Response(401)))
     with pytest.raises(scrape_catalog.FetchError, match="401"):
         scrape_catalog.get(refused, "https://x/", sleep=waits.append)
+
+
+def test_catalog_scrape_refresh_cache_reloads_course_and_requirement_data(tmp_path):
+    raw = tmp_path / "raw"
+    course_cache = raw / "courses" / "0047402.json"
+    course_cache.parent.mkdir(parents=True)
+    course_cache.write_text(json.dumps({"subjectCode": "OLD", "code": "OLD 1"}))
+    (raw / "requirement_groups.json").write_text(json.dumps({"001671": {"descriptionLong": "old"}}))
+    (raw / "sitemap.xml").write_text(
+        "<urlset><url><loc>https://x/courses/0047402</loc></url></urlset>"
+    )
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.url.path)
+        if request.url.path == "/sitemap.xml":
+            return httpx.Response(200, text=(
+                "<urlset><url><loc>https://x/courses/0047402</loc></url></urlset>"
+            ))
+        if request.url.path == "/courses/0047402":
+            return httpx.Response(200, text=CS370_PAGE)
+        if "requirementGroups" in request.url.path:
+            return httpx.Response(200, json={"data": GROUPS})
+        return httpx.Response(404)
+
+    client = scrape_catalog.make_client(transport=httpx.MockTransport(handler))
+    records, failures = scrape_catalog.scrape(
+        client, raw_dir=raw, delay=0, refresh_cache=True, sleep=lambda _: None
+    )
+    assert not failures
+    assert [record["code"] for record in records] == ["CS 370"]
+    assert "/sitemap.xml" in requests
+    assert "/courses/0047402" in requests
+    assert any("requirementGroups" in path for path in requests)
+
+
+def test_cached_catalog_json_must_be_an_object(tmp_path):
+    cached = tmp_path / "cache.json"
+    cached.write_text("[]", encoding="utf-8")
+    with pytest.raises(scrape_catalog.FetchError, match="not an object"):
+        scrape_catalog._read_json(cached)
+
+
+@pytest.mark.parametrize("scenario", ["failed", "empty", "subject", "limit", "complete", "trial"])
+def test_catalog_publication_preserves_complete_snapshot(tmp_path, monkeypatch, capsys, scenario):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    atlas = tmp_path / "atlas" / "emory_college.jsonl"
+    atlas.parent.mkdir()
+    original = json.dumps({"code": "MATH 111", "title": "Calculus I"}) + "\n"
+    atlas.write_text(original, encoding="utf-8")
+    records = [{"code": "CS 370", "title": "Computer Science Practicum"}]
+    failures = [{"stage": "course", "id": "missing", "error": "not in cache"}]
+    monkeypatch.setattr(scrape_catalog, "scrape", lambda *args, **kwargs: (
+        [] if scenario == "empty" else records, failures if scenario == "failed" else []))
+    options = {
+        "subject": ["--subjects", "CS"], "limit": ["--limit", "1"],
+        "trial": ["--limit", "1", "--out", str(tmp_path / "trial.jsonl")],
+    }.get(scenario, [])
+    monkeypatch.setattr(sys, "argv", ["scrape_catalog", "--offline", *options])
+    if scenario in {"complete", "trial"}:
+        scrape_catalog.main()
+    else:
+        with pytest.raises(SystemExit) as exc:
+            scrape_catalog.main()
+        assert exc.value.code == 2
+    if scenario == "complete":
+        assert [c.code for c in load_atlas(atlas)] == ["CS 370"]
+    else:
+        assert atlas.read_text(encoding="utf-8") == original
+    if scenario == "trial":
+        assert [c.code for c in load_atlas(tmp_path / "trial.jsonl")] == ["CS 370"]
+    if scenario != "complete":
+        assert "next: python -m scripts.import_atlas" not in capsys.readouterr().out
 
 
 DEPT_PAGE = """

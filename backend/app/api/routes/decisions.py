@@ -49,6 +49,9 @@ def _http_error(exc):
 @router.post("", response_model=NativeDecision)
 def submit(body: DecisionBody, request: Request, conn: Annotated[object, Depends(deps.get_conn)],
            principal: PrincipalDep):
+    from app.quotas.service import QuotaService
+
+    QuotaService.check_and_consume(conn, workspace_key=principal.workspace_key)
     try:
         return _service(request).submit(
             conn, principal.workspace_key,

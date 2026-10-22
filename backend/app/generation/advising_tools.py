@@ -17,7 +17,7 @@ from app.tools.registry import (
     ToolSpec,
 )
 
-ADVISING_TOOLS_VERSION = "1"
+ADVISING_TOOLS_VERSION = "2"
 
 
 def _course_code(value: str) -> str:
@@ -53,7 +53,19 @@ class RequirementNode(ToolOutputModel):
 class CourseEvidence(ToolOutputModel):
     code: str
     title: str
+    lifecycle: Literal["current", "retired"] = "current"
     citation_numbers: list[int]
+
+
+class RequirementHoldEvidence(ToolOutputModel):
+    hold_id: str
+    reason: str
+    master_file_hash: str
+    evidence_capture_sha256: str
+    evidence_capture_path: str
+    evidence_source_id: str | None = None
+    evidence_index_revision: int | None = None
+    evidence_capture_set_hash: str | None = None
 
 
 class RequirementsEvidence(CourseEvidence):
@@ -63,6 +75,7 @@ class RequirementsEvidence(CourseEvidence):
     corequisites: RequirementNode | None
     requisites_raw: str | None
     blocker_reason: str | None
+    requirement_hold: RequirementHoldEvidence | None = None
 
 
 class Blocker(ToolOutputModel):
@@ -116,6 +129,7 @@ def _tree(req: Req | None, depth: int = 1) -> RequirementNode | None:
 
 def _evidence(course: dict) -> CourseEvidence:
     return CourseEvidence(code=course["code"], title=course["title"],
+                          lifecycle=course.get("lifecycle", "current"),
                           citation_numbers=list(course["citation_numbers"]))
 
 
@@ -126,6 +140,18 @@ def _requirements(course: dict) -> RequirementsEvidence:
         prerequisites=_tree(course["prerequisites"]),
         corequisites=_tree(course["corequisites"]), requisites_raw=course["requisites_raw"],
         blocker_reason=course["blocker_reason"],
+        requirement_hold=(
+            RequirementHoldEvidence(
+                **{
+                    **course["requirement_hold"],
+                    "hold_id": str(course["requirement_hold"]["hold_id"]),
+                    "evidence_source_id": (
+                        str(course["requirement_hold"]["evidence_source_id"])
+                        if course["requirement_hold"]["evidence_source_id"] is not None else None
+                    ),
+                }
+            ) if course.get("requirement_hold") is not None else None
+        ),
     )
 
 
@@ -190,6 +216,7 @@ def advising_specs(context: dict | None, chunks: list[CitedChunk]) -> tuple[Tool
                 code=code, title=course["title"], parse_status=course["parse_status"],
                 prerequisites=course["prerequisites"], corequisites=course["corequisites"],
                 requisites_raw=course["requisites_raw"],
+                lifecycle=course.get("lifecycle", "current"),
             ) for code, course in courses.items()
         }
         plan = plan_sequence(records, value.selected_codes, value.completed_codes)

@@ -4,8 +4,12 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import pytest
+
+from app.atlas.authority import prepare_authoritative_courses
 from app.atlas.importer import unresolved_courses
-from app.atlas.records import AtlasCourse, normalize_code
+from app.atlas.offerings import OfferingRecord, ValidatedOfferings
+from app.atlas.records import AtlasCourse, canonical_code_map, normalize_code
 from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef, parse_requisites
 
 FIXTURE = Path(__file__).parent / "fixtures" / "emory_prerequisites_2026_2027.json"
@@ -74,8 +78,13 @@ def test_transfer_credit_tail_is_a_modifier_but_true_mixed_operators_stay_ambigu
     assert parse_requisites(by_code["MATH 345"]["requisites"]).status == "ambiguous"
     # The run-together conjunction is repaired, but the and/or mix remains.
     assert parse_requisites(by_code["BIOL 142"]["requisites"]).status == "ambiguous"
-    # A restriction after the transfer clause is never dropped.
-    assert parse_requisites(by_code["CHEM 340"]["requisites"]).status == "unparsed"
+    # The explicit cannot-take exclusion remains in the source text but must
+    # not invent BIOL 301 as a prerequisite or suppress the legitimate rule.
+    chemistry = parse_requisites(by_code["CHEM 340"]["requisites"])
+    assert chemistry.status == "parsed"
+    assert {mention.code for mention in chemistry.mentions} == {
+        "CHEM 204", "CHEM_OX 204", "CHEM 204L", "CHEM_OX 204L", "BIOL 141", "BIOL_OX 141",
+    }
 
 
 def test_catalog_cross_campus_codes_bare_alternates_and_square_brackets_have_explicit_trees():
@@ -97,3 +106,69 @@ def test_catalog_cross_campus_codes_bare_alternates_and_square_brackets_have_exp
         )),
         AnyOf((CourseRef("QTM 100"), CourseRef("QTM_OX 100"))),
     ))
+
+
+def test_live_offerings_override_catalog_and_preserve_exact_provenance_without_aliases():
+    row = OfferingRecord(
+        result_cursor=0, raw_course_code="MATH 221", title="Atlas Calculus",
+        class_number="12345", group_identity="g1", is_grouped=False,
+        matched_identity="MATH 221", srcdb="db", credits="4", description="Atlas desc",
+        restrictions="MATH 111", notes="Permission required", notices=(("consent", "Instructor"),),
+        raw_metadata={"sections": [{"instructor": "A", "meeting": "MWF"}]},
+        evidence_hash="evidence-1", review_status="eligible", observed_at="2026-01-01T00:00:00Z",
+        capture_envelope_hash="envelope-1",
+    )
+    snapshot = ValidatedOfferings(
+        term="2026FA", career="Undergraduate", announced_count=1, search_criteria="all",
+        index_evidence_hash="index", index_observed_at="2026-01-01T00:00:00Z",
+        index_capture_envelope_hash="index-envelope", records=(row,), capture_envelopes=(),
+    )
+    base = [AtlasCourse(code="MATH 221", title="Catalog title", crosslisted=["MATH_OX 221"]),
+            AtlasCourse(code="MATH_OX 221", title="Oxford catalog")]
+    merged = prepare_authoritative_courses(base, (snapshot,), term="2026FA")
+    by_code = {course.code: course for course in merged}
+    assert by_code["MATH 221"].title == "Atlas Calculus"
+    assert by_code["MATH 221"].authority == "atlas"
+    assert by_code["MATH 221"].crosslisted == []
+    assert by_code["MATH_OX 221"].authority == "catalog"
+    assert by_code["MATH 221"].evidence[0]["capture_set_hash"] == snapshot.capture_set_hash
+    assert by_code["MATH 221"].evidence[0]["notices"]["consent"] == "Instructor"
+    assert by_code["MATH 221"].registration_notes == [
+        "Consent required: Instructor", "Permission required"
+    ]
+    assert by_code["MATH 221"].requisites == "MATH 111"
+
+    # A catalog cross-list edge cannot back-link an overridden Atlas identity.
+    rel = row.__class__(**{**row.__dict__, "raw_course_code": "REL 325",
+                           "matched_identity": "REL 325", "title": "Atlas Religion"})
+    scoped = snapshot.__class__(**{**snapshot.__dict__, "records": (row, rel)})
+    catalog_link = AtlasCourse(code="AAS 325", title="Catalog", crosslisted=["REL 325"])
+    canonical = canonical_code_map(prepare_authoritative_courses(
+        [catalog_link], [scoped], term="2026FA"
+    ))
+    assert canonical["AAS 325"] != canonical["REL 325"]
+
+
+def test_offering_restriction_variants_fail_closed_and_require_one_exact_term():
+    def offering(class_number, restriction, evidence):
+        return OfferingRecord(
+            result_cursor=class_number, raw_course_code="CS 253", title="Live title",
+            class_number=str(class_number), group_identity="group", is_grouped=True,
+            matched_identity="CS 253", srcdb="db", credits="3", description="description",
+            restrictions=restriction, notes=None, notices=(), raw_metadata={"sections": []},
+            evidence_hash=evidence, review_status="eligible", observed_at="2026-01-01T00:00:00Z",
+            capture_envelope_hash=f"capture-{evidence}",
+        )
+    snapshot = ValidatedOfferings(
+        term="2026FA", career="Undergraduate", announced_count=2, search_criteria="all",
+        index_evidence_hash="index", index_observed_at="2026-01-01T00:00:00Z",
+        index_capture_envelope_hash="index-envelope",
+        records=(offering(1, "MATH 111", "a"), offering(2, "MATH 112", "b")),
+        capture_envelopes=(),
+    )
+    course = prepare_authoritative_courses([], [snapshot], term="2026FA")[0]
+    assert "unresolved" in course.requisites
+    assert len(course.evidence) == 2
+    assert parse_requisites(course.requisites).status != "parsed"
+    with pytest.raises(ValueError, match="exact term"):
+        prepare_authoritative_courses([], [snapshot], term="2027SP")

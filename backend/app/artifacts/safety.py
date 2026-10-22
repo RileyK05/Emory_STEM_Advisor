@@ -62,7 +62,9 @@ def inspect_office_archive(data: bytes, *, kind: str) -> OfficeArchive:
     # Defused parsing rejects DTDs/entities before Office libraries parse the package.
     for name in sorted(n for n in names if n.lower().endswith((".xml", ".rels"))):
         try:
-            SafeET.fromstring(archive.read(name))
+            SafeET.fromstring(read_bounded_entry(data, name))
+        except ArtifactLimitError:
+            raise
         except Exception as exc:
             raise ValueError(f"Office archive contains unsafe or invalid XML: {name}") from exc
     lower_names = {name.lower() for name in names}
@@ -135,7 +137,15 @@ def read_bounded_entry(data: bytes, name: str, *, limit: int = MAX_ENTRY_UNCOMPR
             raise ValueError(f"Office archive is missing a required part: {name}") from None
         if info.file_size > limit:
             raise ArtifactLimitError(f"Office XML part is too large: {name}")
-        result = archive.read(name)
-        if len(result) > limit:
-            raise ArtifactLimitError(f"Office XML part is too large: {name}")
-        return result
+        chunks: list[bytes] = []
+        total = 0
+        with archive.open(info) as source:
+            while True:
+                block = source.read(64 * 1024)
+                if not block:
+                    break
+                total += len(block)
+                if total > limit:
+                    raise ArtifactLimitError(f"Office XML part is too large: {name}")
+                chunks.append(block)
+        return b"".join(chunks)

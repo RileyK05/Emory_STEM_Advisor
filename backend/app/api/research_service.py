@@ -2,7 +2,7 @@
 
 import time
 from dataclasses import replace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 
@@ -61,7 +61,8 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
     conn.commit()
     trace_id = write_trace(conn, collection_id=collection_id, query=body.query,
                            config_version=config.version, embed_model=settings.embedding_model_id,
-                           refused=False, seams=[], contributions=[])
+                           refused=False, seams=[], contributions=[],
+                           workspace_key=workspace_key)
     conn.commit()
     conn.execute(queries.get("mark_research_trace"), {"trace_id": trace_id})
     conn.commit()
@@ -126,6 +127,18 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
         response.research = ResearchDecisionInfo(runId=str(run.run_id), outcome=decision.outcome,
             completeness=decision.completeness, blocks=rendered.blocks,
             unresolvedQuestions=list(decision.unresolved_questions))
+        cited_source_ids = sorted({
+            UUID(str(item.source_id)) for item in rendered.answer.citations if item.source_id
+        })
+        if cited_source_ids:
+            from app.advising.applicability import evaluate_sources_applicability
+
+            response.applicability = evaluate_sources_applicability(
+                conn,
+                cited_source_ids,
+                declared_cohort=getattr(body, "studentCohort", None),
+                query=body.query,
+            )
         on_progress({"stage": "validated"})
         return response
     except Exception as exc:

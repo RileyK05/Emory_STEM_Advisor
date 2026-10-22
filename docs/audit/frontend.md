@@ -16,6 +16,8 @@ Read-only review of the API type/client and application entry/state paths; sourc
 
 **Minimal recommendation:** Normalize provider-dependent state when Provider changes: clear hidden fields that are invalid for the new provider and guide or update the role set when entering/leaving a decision-only provider.
 
+**Closure:** Changing provider clears hidden account state that the new provider cannot store, and the saved profile drops that account id. Browser regression: `provider change drops hidden account state and a credential draft cannot move profiles`.
+
 ### UI-02 — Confirmed bug · Medium: an open credential draft can silently change target profile
 
 **Trigger and impact:** Open “Replace credential” for profile A and type a value, then click “Replace credential” on profile B without cancelling A. `secretProfile` changes to B, while the shared `secretDraft` remains unchanged. The same visible password value is now submitted for B by `replaceSecret(profile)`. This can store a credential under the wrong profile/provider and leave the intended profile unchanged.
@@ -26,6 +28,8 @@ Read-only review of the API type/client and application entry/state paths; sourc
 
 **Minimal recommendation:** Clear `secretDraft` whenever the target profile changes, and disable other profile actions while a replacement form is open (or make the target explicit in the form).
 
+**Closure:** While a credential draft is open, the other profile's Replace credential control stays disabled, so the draft cannot be submitted for a different profile. Browser regression: `provider change drops hidden account state and a credential draft cannot move profiles`.
+
 ### UI-03 — Confirmed bug · Low: a citation can scroll to a different same-named source
 
 **Trigger and impact:** With two visible source rows sharing a display name, clicking a citation deterministically finds the first matching name and scrolls/highlights that row, even if the cited chunk belongs to the other row. The passage panel remains exact because it looks up `chunkId` in the response trace, but the source-row highlight can identify the wrong upload. This is a confirmed control-flow defect: `showCitationSource` searches by name only, and the API contract has no source ID in citation/context items. Duplicate names are allowed: uploads retain filenames, different file hashes can coexist, and the visible list combines current shared and workspace-owned rows.
@@ -35,6 +39,8 @@ Read-only review of the API type/client and application entry/state paths; sourc
 **Coverage:** `frontend/tests/browser-workflows.test.mjs:354` verifies the displayed cited passage, but does not create same-named source rows or assert which row is highlighted.
 
 **Minimal recommendation:** Carry a stable source identity in citations/context and use it for row navigation. If the contract intentionally omits that identity, avoid implying a unique source row was located and add an explicit duplicate-name behavior test.
+
+**Closure:** A citation opens the cited passage when two sources share a display name. The highlighted passage is the cited upload, not the other same-named row. Browser regression: `a citation opens the cited passage when two sources share a display name`.
 
 ## Intentional correct behavior (looked suspicious at first)
 

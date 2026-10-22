@@ -60,6 +60,8 @@ def _add_course(db, collection_id, source_id, code, *, label, parse_status="none
         "parse_status": parse_status,
         "parser_version": "3",
         "canonical_code": code,
+        "lifecycle": "current",
+        "authority": "catalog",
     })
     return course_id
 

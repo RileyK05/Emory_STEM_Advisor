@@ -1,21 +1,29 @@
 """End-to-end advising tools over an imported atlas and real retrieval context."""
 
+import hashlib
 import json
+import os
 import re
 from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from psycopg.types.json import Jsonb
 
 from app.advising.catalog import _requirements_are_cited, load_advising_context
+from app.advising.requirement_holds import apply_requirement_hold, release_requirement_hold
+from app.advising.sequence import CourseRequirement, plan_sequence
 from app.api import create_app
 from app.atlas.importer import import_atlas
 from app.config import load_settings
 from app.llm.base import GenerationResult, ToolCall, ToolResultMessage, Usage
 from app.retrieval.config import load_retrieval_config
-from app.retrieval.types import CitedChunk
+from app.retrieval.retrieve import retrieve
+from app.retrieval.types import CitedChunk, Refusal, Retrieved
 from app.simgraph.build import build_simgraph
 from tests.fakes import whitespace_tokens
 from tests.helpers import collection_name, lenient_config
@@ -224,6 +232,150 @@ def _prerequisite_snapshot(db, collection):
             {"collection_id": collection},
         ).fetchall(),
     )
+
+
+def test_source_scoped_requirement_hold_keeps_evidence_and_blocks_verified_graph(db, collection, tmp_path):
+    from app.db import queries
+
+    path = tmp_path / "conflicted-atlas.jsonl"
+    path.write_text("\n".join(json.dumps(record) for record in (
+        {"code": "CS 171", "title": "Introduction to Computer Science II",
+         "description": "Algorithms.", "requisites": "Prerequisite: MUS 221"},
+        {"code": "CS 172", "title": "Later course", "description": "Later algorithms.",
+         "requisites": "Prerequisite: CS 171"},
+        {"code": "MUS 221", "title": "Theory", "description": "Music theory.",
+         "requisites": None},
+    )), encoding="utf-8")
+    source_id = import_atlas(
+        db, collection_id=collection, path=path,
+        embedder=_PlantedAtlasEmbedder(), embed_model=_MODEL,
+        count_tokens=whitespace_tokens, config=load_retrieval_config(),
+    )
+    master_hash = db.execute(
+        "SELECT file_hash FROM sources WHERE source_id = %(source_id)s",
+        {"source_id": source_id},
+    ).fetchone()["file_hash"]
+    master_course = db.execute(
+        "SELECT course_id FROM courses WHERE source_id = %(source_id)s AND code = 'CS 171'",
+        {"source_id": source_id},
+    ).fetchone()
+    before = _prerequisite_snapshot(db, collection)
+    capture_path = tmp_path / "spring-2027-capture.json"
+    capture_path.write_bytes(b"saved live Atlas evidence for CS 171")
+    capture_hash = hashlib.sha256(capture_path.read_bytes()).hexdigest()
+    relative_capture_path = os.path.relpath(capture_path, Path.cwd())
+    index_revision = db.execute(
+        "SELECT index_revision FROM sources WHERE source_id = %(source_id)s",
+        {"source_id": source_id},
+    ).fetchone()["index_revision"]
+    capture_set_hash = hashlib.sha256(b"linked offering capture set").hexdigest()
+    captured_at = datetime.now(UTC)
+    db.execute(queries.get("insert_atlas_offering_snapshot"), {
+        "source_id": source_id, "capture_set_hash": capture_set_hash,
+        "career": "Undergraduate", "term": "Spring 2027",
+        "index_evidence_hash": "d" * 64, "announced_count": 1,
+        "result_row_count": 1, "eligible_row_count": 1, "held_row_count": 0,
+        "search_criteria": "Term: Spring 2027; Career: Undergraduate",
+        "capture_hashes": Jsonb([capture_hash]),
+        "observed_from": captured_at, "observed_until": captured_at,
+    })
+    with pytest.raises(ValueError, match="master file hash"):
+        apply_requirement_hold(
+            db, source_id=source_id, course_code="CS 171", master_file_hash="b" * 64,
+            conflict_reason="wrong source hash", evidence_capture_sha256=capture_hash,
+            evidence_capture_path=str(capture_path), curator="test curator",
+        )
+    with pytest.raises(ValueError, match="does not match the saved capture"):
+        apply_requirement_hold(
+            db, source_id=source_id, course_code="CS 171", master_file_hash=master_hash,
+            conflict_reason="wrong capture digest", evidence_capture_sha256="c" * 64,
+            evidence_capture_path=str(capture_path), curator="test curator",
+        )
+    other_capture_path = tmp_path / "other-capture.json"
+    other_capture_path.write_bytes(b"different saved capture")
+    other_capture_hash = hashlib.sha256(other_capture_path.read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="not part of the exact offering capture set"):
+        apply_requirement_hold(
+            db, source_id=source_id, course_code="CS 171", master_file_hash=master_hash,
+            conflict_reason="capture is outside the pinned offering set",
+            evidence_capture_sha256=other_capture_hash,
+            evidence_capture_path=str(other_capture_path), curator="test curator",
+            evidence_source_id=source_id, evidence_index_revision=index_revision,
+            evidence_capture_set_hash=capture_set_hash,
+        )
+    hold = apply_requirement_hold(
+        db, source_id=source_id, course_code="CS 171", master_file_hash=master_hash,
+        conflict_reason="Spring 2027 offering says CS 170 or CS_OX 170; master says MUS 221.",
+        evidence_capture_sha256=capture_hash,
+        evidence_capture_path=relative_capture_path,
+        curator="test curator",
+        evidence_source_id=source_id, evidence_index_revision=index_revision,
+        evidence_capture_set_hash=capture_set_hash,
+    )
+    assert hold["course_code"] == "CS 171"
+    assert Path(hold["evidence_capture_path"]).is_absolute()
+    assert Path(hold["evidence_capture_path"]) == capture_path.resolve()
+    assert _prerequisite_snapshot(db, collection) == before
+
+    chunk_rows = db.execute(queries.get("diagnostic_current_chunks"), {
+        "collection_id": collection, "workspace_key": None, "model": _MODEL,
+    }).fetchall()
+    chunks = [CitedChunk(
+        row["chunk_id"], row["source_id"], row["chunk_index"], row["source_name"],
+        row["locator_label"], row["text"], ("keyword",), 1.0, 1, index + 1,
+    ) for index, row in enumerate(chunk_rows) if row["locator_label"] == "CS 171"]
+    course = load_advising_context(db, collection_id=collection, chunks=chunks)["courses"][0]
+    assert course["parse_status"] == "ambiguous"
+    assert course["requirements_evidence_complete"] is False
+    assert course["blocker_reason"] == "source_conflict"
+    assert course["prerequisites"] is None
+    assert course["requisites_raw"] == "Prerequisite: MUS 221"
+    assert course["citation_numbers"]
+    assert course["requirement_hold"]["evidence_capture_sha256"] == capture_hash
+
+    plan = plan_sequence({"CS 171": CourseRequirement(
+        code="CS 171", title=course["title"], parse_status=course["parse_status"],
+        prerequisites=course["prerequisites"], corequisites=course["corequisites"],
+        requisites_raw=course["requisites_raw"],
+    )}, ["CS 171"])
+    assert plan.stages == ()
+    assert any(blocker.reason == "requirements_unparsed" for blocker in plan.blockers)
+
+    # Both directions skip a held node, while its own cited master text remains
+    # available through the self lane for transparent explanation.
+    params = {"course_id": master_course["course_id"], "collection_id": collection,
+              "source_ids": None, "workspace_key": None}
+    assert db.execute(queries.get("prereq_upstream"), params).fetchall() == []
+    assert db.execute(queries.get("prereq_downstream"), params).fetchall() == []
+    assert db.execute(queries.get("prereq_self_chunks"), {
+        "collection_id": collection, "code": "CS 171", "source_ids": None,
+        "workspace_key": None,
+    }).fetchall()
+
+    # The ordinary answer path has tools disabled by default. A held master
+    # must not reach its prompt through keyword, vector, self, or planned hits.
+    held_chunks = {chunk.chunk_id for chunk in chunks}
+    for dedupe in (True, False):
+        retrieval_config = lenient_config()
+        retrieval_config = replace(
+            retrieval_config, fusion=replace(retrieval_config.fusion, dedupe=dedupe),
+        )
+        retrieved = retrieve(
+            db, collection_id=collection, query="CS 171 algorithms",
+            embedder=_PlantedAtlasEmbedder(), embed_model=_MODEL, config=retrieval_config,
+        )
+        assert isinstance(retrieved, (Retrieved, Refusal))
+        assert retrieved.trace.warnings
+        if isinstance(retrieved, Retrieved):
+            assert not held_chunks.intersection(chunk.chunk_id for chunk in retrieved.chunks)
+
+    released = release_requirement_hold(
+        db, hold_id=hold["hold_id"], source_id=source_id, course_code="CS 171",
+        master_file_hash=master_hash, curator="test curator",
+        release_note="Reviewed against the authoritative source.",
+    )
+    assert released["status"] == "released"
+    assert db.execute(queries.get("prereq_upstream"), params).fetchall()
 
 
 class _MissingRequirementProvider:

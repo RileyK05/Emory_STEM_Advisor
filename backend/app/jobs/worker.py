@@ -7,7 +7,7 @@ from threading import Event, Lock, Thread
 from typing import Any
 
 from app.jobs.store import JobCancelled, JobStore, LeaseLost, SafeJobError
-from app.jobs.types import Job, JobEvent
+from app.jobs.types import Job, JobEvent, JobStatus
 
 
 class JobContext:
@@ -106,10 +106,22 @@ def run_once(
                 error = {"type": exc.code, "message": exc.safe_message}
             else:
                 error = {"type": "execution_failed", "message": "Job execution failed."}
-            return store._finish_failure(job, job.lease_token, error)
+            finished = store._finish_failure(
+                job, job.lease_token, error,
+                retryable=not isinstance(exc, SafeJobError) or exc.retryable,
+            )
+            if finished.status is JobStatus.FAILED:
+                failure_hook = getattr(executor, "on_failure", None)
+                if callable(failure_hook):
+                    with store._transaction() as conn:
+                        failure_hook(conn, job, exc)
+            return finished
         context.stop_heartbeats()
         try:
             context.check_cancelled()
+            # Publication can wait on row locks; refresh the lease immediately
+            # before entering the finish transaction.
+            context.heartbeat()
         except JobCancelled:
             return store._finish_cancelled(job, job.lease_token)
         publisher = getattr(executor, "publish_success", None)
@@ -126,6 +138,7 @@ def run_once(
                 job,
                 job.lease_token,
                 {"type": exc.code, "message": exc.safe_message},
+                retryable=exc.retryable,
             )
         except Exception:  # noqa: BLE001 - publication boundary must redact arbitrary failures
             return store._finish_failure(

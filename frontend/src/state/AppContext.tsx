@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthSession, SourceDoc } from '../api/types';
 import { getClient } from '../api/client';
@@ -13,6 +13,9 @@ export type SourceScope = string[] | null;
 
 interface AppState {
   session: AuthSession;
+  flags: Record<string, boolean> | null;
+  flagsError: string | null;
+  refreshFlags: () => Promise<void>;
   /** Show retrieval traces under answers (developer detail). */
   showDetails: boolean;
   toggleShowDetails: () => void;
@@ -37,7 +40,33 @@ export function AppProvider({ session, children }: { session: AuthSession; child
   const [sources, setSources] = useState<SourceDoc[]>([]);
   const [sourcesError, setSourcesError] = useState<string | null>(null);
   const [scope, setScope] = useState<SourceScope>(null);
+  const [flags, setFlags] = useState<Record<string, boolean> | null>(null);
+  const [flagsError, setFlagsError] = useState<string | null>(null);
+  const flagsRequest = useRef(0);
   const mounted = useMountedRef();
+
+  const refreshFlags = useCallback(async () => {
+    const requestId = ++flagsRequest.current;
+    try {
+      const result = await getClient().getEffectiveFlags();
+      if (mounted.current && requestId === flagsRequest.current) {
+        setFlags(result.flags);
+        setFlagsError(null);
+      }
+    } catch (cause) {
+      if (mounted.current && requestId === flagsRequest.current) {
+        setFlags(null);
+        setFlagsError(errorMessage(cause));
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshFlags();
+    const refresh = () => void refreshFlags();
+    window.addEventListener('focus', refresh);
+    return () => window.removeEventListener('focus', refresh);
+  }, [refreshFlags]);
 
   const refreshSources = useCallback(async () => {
     setSourcesError(null);
@@ -79,6 +108,9 @@ export function AppProvider({ session, children }: { session: AuthSession; child
   const value = useMemo<AppState>(
     () => ({
       session,
+      flags,
+      flagsError,
+      refreshFlags,
       showDetails,
       toggleShowDetails,
       sources,
@@ -88,7 +120,19 @@ export function AppProvider({ session, children }: { session: AuthSession; child
       scope,
       setScope,
     }),
-    [session, showDetails, toggleShowDetails, sources, sourcesError, refreshSources, uploadSource, scope],
+    [
+      session,
+      flags,
+      flagsError,
+      refreshFlags,
+      showDetails,
+      toggleShowDetails,
+      sources,
+      sourcesError,
+      refreshSources,
+      uploadSource,
+      scope,
+    ],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

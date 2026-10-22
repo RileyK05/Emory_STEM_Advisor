@@ -442,7 +442,7 @@ def test_state_is_optimistic_and_cites_only_issued_evidence(db, collection, tmp_
 
 @pytest.mark.parametrize("scope_kind, publication", [
     ("all", "answer"), ("crowded", "answer"), ("legacy_null", "answer"), ("narrow", "answer"), ("empty", "answer"),
-    ("other_workspace", "answer"), ("other_conversation", "answer"),
+    ("other_workspace", "answer"), ("other_conversation", "answer"), ("reset", "answer"),
     ("changed", "answer"), ("all", "failed"), ("all", "abandoned"),
 ])
 def test_conversation_workspace_reuses_only_published_scoped_work(
@@ -493,8 +493,10 @@ def test_conversation_workspace_reuses_only_published_scoped_work(
         result.update(citations=None, trace={"contextBlock": None})
     conversations.finish(conversation, request, result,
                          state={"answer": "completed", "failed": "failed", "abandoned": "abandoned"}[publication])
+    if scope_kind == "reset":
+        conversations.reset_memory(conversation)
     if scope_kind == "changed":
-        import_atlas_sample(db, collection, tmp_path, text=(
+        import_atlas_sample(db, collection, tmp_path, allow_course_removal=True, text=(
             '{"code":"ECON 201","title":"New edition","description":"Different material."}'))
     workspace_key = "other" if scope_kind == "other_workspace" else "development"
     sources = [] if scope_kind == "empty" else [corpus["policy"]] if scope_kind == "narrow" else None
@@ -507,8 +509,12 @@ def test_conversation_workspace_reuses_only_published_scoped_work(
         scope_kind == "other_conversation") else conversation
     session.open_workspace(selected)
     checkpoint = session.prior_workspace
-    if publication != "answer" or scope_kind in {"other_workspace", "other_conversation"}:
+    if publication != "answer" or scope_kind in {"other_workspace", "other_conversation", "reset"}:
         assert checkpoint is None and not session.recall_page["data"]["references"]
+        if scope_kind == "reset":
+            assert session.workspace.turns("", sequence=1, offset=0)[0] == []
+            assert conversations.context(conversation, archive=True, max_bytes=10_000) == []
+            assert conversations.last_advising_context(conversation) == {}
     else:
         notebook = checkpoint["notebook"]
         assert notebook["student_context"][0]["statement"] == "I prefer flexibility"
@@ -519,6 +525,25 @@ def test_conversation_workspace_reuses_only_published_scoped_work(
             assert notebook["candidates"][0]["program_handles"] != [old_handle]
             assert notebook["candidates"][0]["status"] == "investigating"
             assert [identity for kind, identity in session.handles.values() if kind == "program"] == [corpus["bs"]]
+            memory_handle = session.recall_page["data"]["references"][0]["handle"]
+            registry = session.registry()
+            wrong_tool = registry.invoke("advisor_read_courses", {"handles": [memory_handle]},
+                                         session.tool_scope(lambda: None))
+            assert wrong_tool.status == "conflict"
+            assert "advisor_recall" in wrong_tool.limitations[0]
+            mixed_recall = registry.invoke("advisor_recall", {
+                "handles": [memory_handle], "query": "different search"},
+                session.tool_scope(lambda: None))
+            assert mixed_recall.status == "conflict"
+            assert "omit query and cursor" in mixed_recall.limitations[0]
+            unissued = registry.invoke("advisor_read_courses", {"handles": ["h_unissued"]},
+                                       session.tool_scope(lambda: None))
+            assert unissued.status == "not_found" and not session.active
+            reopened = registry.invoke("advisor_recall", {"handles": [memory_handle]},
+                                       session.tool_scope(lambda: None))
+            assert reopened.status == "ok" and reopened.data["evidence_ids"]
+            reopened_ids = set(reopened.data["evidence_ids"])
+            assert reopened_ids <= set(session.active)
             if scope_kind == "crowded":
                 assert len(notebook["notes"]) == 8
                 assert len(notebook["recall_handles"]) < len(evidence_ids)
@@ -531,7 +556,7 @@ def test_conversation_workspace_reuses_only_published_scoped_work(
                 continued = registry.invoke("advisor_recall", {"cursor": cursor, "query": "reworded"},
                                             session.tool_scope(lambda: None))
                 assert continued.status == "ok" and continued.data["query"] == ""
-                assert continued.data["references"] and not session.active
+                assert continued.data["references"] and set(session.active) == reopened_ids
         else:
             assert not notebook["notes"] and not notebook["candidates"]
             assert checkpoint["unavailable_references"]
@@ -757,6 +782,8 @@ def test_a_conversation_request_runs_at_most_one_investigation(db, collection, t
 
 def _research_provider(monkeypatch, script):
     """Drive the shared typed fake from successive server-owned request contexts."""
+    import inspect
+
     from app.llm.base import GenerationResult
     from tests.fakes import ScriptedProvider
 
@@ -764,32 +791,116 @@ def _research_provider(monkeypatch, script):
     generate = provider.generate
     def scripted(request):
         context = json.loads(request.messages[1].content)
-        provider.result = GenerationResult(tool_calls=tuple(script(context, len(provider.requests))),
-                                           finish_reason="tool_calls", usage=provider.result.usage)
+        if len(inspect.signature(script).parameters) >= 3:
+            scripted_result = script(context, len(provider.requests), request)
+        else:
+            scripted_result = script(context, len(provider.requests))
+        if isinstance(scripted_result, GenerationResult):
+            provider.result = scripted_result
+        else:
+            provider.result = GenerationResult(tool_calls=tuple(scripted_result),
+                finish_reason="tool_calls", usage=provider.result.usage)
         return generate(request)
     monkeypatch.setattr(provider, "generate", scripted)
     return provider
 
 
-@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "preparation", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "cached_read_priority"])
+@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair"])
 def test_research_answers_progressively_and_persists_its_decision(
         db, collection, tmp_path, monkeypatch, scenario):
     from app.api.query_service import query_response
     from app.api.schemas import QueryRequest
     from app.config import load_settings
-    from app.llm.base import ToolCall
+    from app.llm.base import GenerationResult, ToolCall
     from app.operations.budget import OperationBudgetController
     from tests.fakes import FakeEmbedder
     from tests.helpers import MODEL, collection_name, lenient_config
 
     _corpus(db, collection, tmp_path)
+    preparation_or_scenarios = {
+        "preparation_or_selected", "preparation_or_completed",
+        "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice"
+    }
+    if scenario in preparation_or_scenarios:
+        from tests.test_atlas_import import _SAMPLE
+
+        atlas_with_alternatives = (
+            _SAMPLE
+            + '\n{"code":"BIOL 101","title":"Biology I","description":"Intro biology."}'
+            + '\n{"code":"BIOL 102","title":"Biology II","description":"Advanced biology.",'
+              '"requisites":"BIOL 101 or BIOL 103 or equivalent transfer credit as a prerequisite."}'
+            + "\n" + json.dumps({
+                "code": "BIOL 103", "title": "Biology alternate",
+                "description": "Alternative preparation.",
+                "requisites": "BIOL 104" if scenario == "preparation_or_completed_long_unselected_branch" else None,
+            })
+        )
+        if scenario == "preparation_or_completed_long_unselected_branch":
+            atlas_with_alternatives += "\n" + "\n".join(
+                json.dumps({
+                    "code": f"BIOL {code}", "title": f"Biology {code}",
+                    "description": "Unselected alternative branch.",
+                    "requisites": f"BIOL {code + 1}" if code < 140 else None,
+                })
+                for code in range(104, 141)
+            )
+        import_atlas_sample(db, collection, tmp_path, atlas_with_alternatives)
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
         tools_enabled=True, advising_research_enabled=True, routing_enabled=False,
-        embedding_model_id=MODEL, db_pool_max_size=0)
+        embedding_model_id=MODEL, db_pool_max_size=0,
+        research_max_tool_calls=8 if scenario == "program_read_before_preparation" else 24)
     observed = {}
-    def script(context, index):
+    def script(context, index, request=None):
         def call(name, args):
             return [ToolCall(f"call-{index}", "advisor_" + name, args)]
+        if scenario == "program_read_before_preparation":
+            observed.setdefault("actions", [])
+            available = {tool.name for tool in request.tools}
+            state = context.get("state_model_assessments")
+            if context["state_update_requested"]:
+                handle = next(h["handle"] for h in context["issued_handles"] if h["kind"] == "program")
+                ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+                observed["actions"].append("update_state")
+                return call("update_research", {"expected_revision": 0, "state": {
+                    "revision": 0, "decision_question": "Explore an economics program path",
+                    "active_evidence_ids": ids,
+                    "candidates": [{"id": "registered_path", "program_handles": [handle],
+                                    "description": "Investigate this program path",
+                                    "status": "investigating"}]}})
+            if state and context["source_read_requested"] and "advisor_read_program" in available:
+                candidate_handle = state["candidates"][0]["program_handles"][0]
+                observed["actions"].append("read_program")
+                observed["program_read_preceded_preparation"] = not any(
+                    action == "check_preparation" for action in observed["actions"])
+                return call("read_program", {"handle": candidate_handle})
+            if context["executed_preparation_checks"]:
+                check = context["executed_preparation_checks"][0]
+                ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+                observed["actions"].append("finish")
+                return call("finish", {"decision": {
+                    "outcome": "recommendation", "completeness": "complete",
+                    "candidate_ids": ["registered_path"],
+                    "preparation_check_ids": [check["check_id"]],
+                    "preparation_claims": [{"check_id": check["check_id"],
+                        "selected_codes": check["selected_codes"],
+                        "completed_codes": check["completed_codes"],
+                        "conclusion": check["conclusion"]}],
+                    "blocks": [{"kind": "judgment",
+                        "text": "I recommend reviewing this program path based on its cited requirement record.",
+                        "candidate_ids": ["registered_path"], "evidence_ids": ids}]}})
+            if state:
+                observed["actions"].append("check_preparation")
+                return call("check_preparation", {
+                    "selected_codes": ["ECON 201"], "completed_codes": ["ECON 101"]})
+            if any(e["source_title"] and "ECON 201" in e["exact_text"]
+                   for e in context["exact_evidence_untrusted"]):
+                observed["actions"].append("read_courses")
+                return call("read_courses", {"course_codes": ["ECON 201"]})
+            if any(h["kind"] == "program" for h in context["issued_handles"]):
+                observed["actions"].append("read_courses")
+                return call("read_courses", {"course_codes": ["ECON 201"]})
+            observed["actions"].append("list_programs")
+            return call("list_programs", {})
         if scenario in {"clarification", "saved_clarification"}:
             return call("finish", {"decision": {"outcome": "clarification", "completeness": "complete",
                 "blocks": [{"kind": "question", "text": "Which career are you considering?"}]}})
@@ -879,6 +990,103 @@ def test_research_answers_progressively_and_persists_its_decision(
             return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
                 "blocks": [{"kind": "judgment" if index == 4 else "fact",
                     "text": "The policy describes letter grades.", "evidence_ids": ids}]}})
+        if scenario in {"free_json_finish", "finish_repair_extra_field",
+                        "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references"}:
+            if index == 0:
+                return call("read_courses", {"course_codes": ["ECON 201"]})
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            valid = {"outcome": "information", "completeness": "complete", "blocks": [{
+                "kind": "fact", "text": "ECON 201 is in the catalog.", "evidence_ids": ids}]}
+            if scenario == "free_json_finish":
+                return GenerationResult(text=json.dumps({"decision": valid}), finish_reason="stop",
+                                        usage=provider.result.usage)
+            if index == 1 and scenario == "finish_repair_extra_field":
+                invalid = {**valid, "program_handles": ["h_not_authorized"]}
+                return GenerationResult(text=json.dumps({"decision": invalid}), finish_reason="stop",
+                                        usage=provider.result.usage)
+            if index == 1 and scenario == "finish_repair_malformed_then_validation":
+                return GenerationResult(text='{"decision": {"outcome":', finish_reason="stop",
+                                        usage=provider.result.usage)
+            if index == 1 and scenario == "finish_rejects_unsupported_references":
+                bad = {"outcome": "information", "completeness": "complete", "blocks": [{
+                    "kind": "fact", "text": "Unsupported claim.", "evidence_ids": ["e999"]}]}
+                return GenerationResult(text=json.dumps(bad), finish_reason="stop",
+                                        usage=provider.result.usage)
+            if scenario == "finish_repair_malformed_then_validation" and index == 2:
+                assert context["finish_required"]
+                assert "advisor_finish" in context["instruction"]
+                assert "advisor_read_courses" not in context["instruction"]
+                return [ToolCall("bad-judgment", "advisor_finish", {"decision": {
+                    "outcome": "information", "completeness": "complete", "blocks": [{
+                        "kind": "judgment", "text": "Unsupported judgment.", "evidence_ids": ids}]}})]
+            if scenario == "finish_rejects_unsupported_references":
+                # Even after the bounded repair opportunity, an invented evidence ID
+                # remains subject to the normal final validator.
+                return GenerationResult(text=json.dumps({"decision": {
+                    "outcome": "information", "completeness": "complete", "blocks": [{
+                        "kind": "fact", "text": "Still unsupported.", "evidence_ids": ["e999"]}]}}),
+                    finish_reason="stop", usage=provider.result.usage)
+            if index > 1:
+                assert context["finish_required"]
+                assert "advisor_finish" in context["instruction"]
+                assert "advisor_read_courses" not in context["instruction"]
+                if scenario == "finish_repair_extra_field":
+                    assert "program_handles" in context["instruction"]
+                if scenario == "finish_repair_malformed_then_validation" and index == 3:
+                    assert "judgment" in context["instruction"].lower()
+            return GenerationResult(text=json.dumps({"decision": valid}), finish_reason="stop",
+                                    usage=provider.result.usage)
+        if scenario == "truncated_research_repair":
+            if index == 0:
+                return GenerationResult(text='{"partial":', tool_calls=(
+                    ToolCall("partial-read", "advisor_read_courses", {"course_codes": ["ECON 201"]}),
+                ), finish_reason="length", usage=provider.result.usage)
+            if index == 1:
+                assert context["finish_required"]
+                assert "truncat" in context["instruction"].lower() or "incomplete" in context["instruction"].lower()
+                assert {tool.name for tool in request.tools} == {"advisor_finish"}
+            return GenerationResult(text=json.dumps({"decision": {
+                "outcome": "insufficient_evidence", "completeness": "partial",
+                "blocks": [
+                    {"kind": "limitation", "text": "The prior response was truncated, so its partial tool request was discarded and no research action was executed."},
+                    {"kind": "question", "text": "Would you like me to retry with a shorter, focused query?"},
+                ],
+                "unresolved_questions": ["A complete answer was not produced before the response was truncated."]
+            }}), finish_reason="stop", usage=provider.result.usage)
+        if scenario == "finish_feedback_roundtrip":
+            if index == 0:
+                return call("finish", {"decision": {
+                    "outcome": "information", "completeness": "complete", "blocks": [
+                        {"kind": "judgment", "text": "No captured admissions source establishes whether this application is guaranteed.",
+                         "candidate_ids": [], "evidence_ids": []},
+                        {"kind": "fact", "text": "The student reports a 3.7 GPA and Chemistry major.",
+                         "evidence_ids": []},
+                    ]}})
+            if index == 1:
+                from app.llm.base import AssistantToolMessage, ToolResultMessage
+
+                assert context["finish_required"]
+                assistant = next(m for m in request.messages if isinstance(m, AssistantToolMessage))
+                result = next(m for m in request.messages if isinstance(m, ToolResultMessage))
+                assert len(assistant.tool_calls) == 1
+                assert assistant.tool_calls[0].name == "advisor_finish"
+                assert assistant.tool_calls[0].arguments["decision"]["blocks"][0]["kind"] == "judgment"
+                assert result.tool_call_id == assistant.tool_calls[0].id
+                rejection = json.loads(result.content)
+                assert rejection["status"] == "conflict"
+                assert any("judgment requires a candidate" in message
+                           for message in rejection["limitations"])
+                assert any("fact with no supporting evidence" in message
+                           for message in rejection["limitations"])
+            return GenerationResult(text=json.dumps({"decision": {
+                "outcome": "insufficient_evidence", "completeness": "partial",
+                "blocks": [
+                    {"kind": "assumption", "text": "Student-reported: GPA 3.7 and Chemistry major."},
+                    {"kind": "limitation", "text": "No captured Emory MD admissions source here establishes whether this profile guarantees admission."},
+                    {"kind": "question", "text": "Which admissions cycle are you considering?"},
+                ],
+                "unresolved_questions": ["No captured MD admissions source establishes a guarantee."]
+            }}), finish_reason="stop", usage=provider.result.usage)
         if scenario == "program_comparison":
             handles = [h["handle"] for h in context["issued_handles"] if h["kind"] == "program"]
             if index == 0:
@@ -897,20 +1105,41 @@ def test_research_answers_progressively_and_persists_its_decision(
             return call("finish", {"decision": {"outcome": "recommendation", "completeness": "complete",
                 "candidate_ids": ["cs"], "blocks": [{"kind": "judgment", "text": "I would lean toward this CS path.",
                     "candidate_ids": ["cs"], "evidence_ids": context["state_model_assessments"]["active_evidence_ids"]}]}})
+        preparation_scenarios = {
+            "preparation", "preparation_or_selected", "preparation_or_completed",
+            "preparation_or_completed_long_unselected_branch",
+            "preparation_missing_or_choice", "preparation_missing_prerequisite",
+        }
         if index == 0:
-            return call("check_preparation", {"selected_codes": ["ECON 201"], "completed_codes": ["ECON 101"]}) if (
-                scenario == "preparation") else call("read_courses", {"course_codes": ["ECON 201"]})
+            checks = {
+                "preparation": (["ECON 201"], ["ECON 101"]),
+                "preparation_or_selected": (["BIOL 101", "BIOL 102"], []),
+                "preparation_or_completed": (["BIOL 102"], ["BIOL 101"]),
+                "preparation_or_completed_long_unselected_branch": (["BIOL 102"], ["BIOL 101"]),
+                "preparation_missing_or_choice": (["BIOL 102"], []),
+                "preparation_missing_prerequisite": (["ECON 201"], []),
+            }
+            if scenario in preparation_scenarios:
+                selected, completed = checks[scenario]
+                return call("check_preparation", {
+                    "selected_codes": selected, "completed_codes": completed,
+                })
+            return call("read_courses", {"course_codes": ["ECON 201"]})
+        if scenario in preparation_scenarios:
+            check = context["executed_preparation_checks"][0]
+            assert {"stages", "blockers", "complete", "unexplored_codes"} <= set(check)
+            observed["context_preparation_check"] = check
         ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
         decision = {"outcome": "information", "completeness": "complete",
                     "blocks": [{"kind": "fact", "text": "ECON 201 lists ECON 101 as preparation.", "evidence_ids": ids}]}
-        if scenario == "preparation":
+        if scenario in preparation_scenarios:
             check = context["executed_preparation_checks"][0]
             decision.update(preparation_check_ids=[check["check_id"]], preparation_claims=[{
                 "check_id": check["check_id"], "selected_codes": check["selected_codes"],
                 "completed_codes": check["completed_codes"], "conclusion": check["conclusion"]}])
         return call("finish", {"decision": decision})
     provider = _research_provider(monkeypatch, script)
-    sources = [] if scenario in {"clarification", "saved_clarification"} else None
+    sources = [] if scenario in {"clarification", "saved_clarification", "finish_feedback_roundtrip"} else None
     conversation_args = {}
     if scenario == "saved_clarification":
         from app.conversations.store import ConversationStore
@@ -920,11 +1149,61 @@ def test_research_answers_progressively_and_persists_its_decision(
         request_id = uuid4()
         conversations.begin(conversation_id, request_id, 0, {"query": "Help choose a path"})
         conversation_args = {"conversation_id": conversation_id, "conversation_request_id": request_id}
-    response = query_response(QueryRequest(query="Help choose a path", collectionId=collection_name(db, collection),
+    question = ("I have a 3.7 GPA and a Chemistry major. Does that guarantee admission to Emory MD?"
+                if scenario == "finish_feedback_roundtrip" else
+                "What is ECON 201?" if scenario == "truncated_research_repair" else "Help choose a path")
+    if scenario == "finish_rejects_unsupported_references":
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException):
+            query_response(QueryRequest(query=question, collectionId=collection_name(db, collection),
+                sourceIds=sources), db, settings, lenient_config(), FakeEmbedder(8), provider, **conversation_args)
+        assert len(provider.requests) >= 3
+        last_context = json.loads(provider.requests[-1].messages[1].content)
+        assert "e999" not in {e["evidence_id"] for e in last_context["exact_evidence_untrusted"]}
+        return
+    response = query_response(QueryRequest(query=question, collectionId=collection_name(db, collection),
         sourceIds=sources), db, settings, lenient_config(), FakeEmbedder(8), provider, **conversation_args)
     assert response.type == "answer"
-    assert response.research.completeness == ("partial" if scenario == "cached_read_priority" else "complete")
+    assert response.research.completeness == (
+        "partial" if scenario in {"cached_read_priority", "program_read_before_preparation", "finish_feedback_roundtrip",
+                                  "truncated_research_repair"} else "complete")
     run = ResearchStore(db, "development").get(UUID(response.research.runId))
+    if scenario == "program_read_before_preparation":
+        assert observed["program_read_preceded_preparation"]
+        assert observed["actions"].index("read_program") < observed["actions"].index("check_preparation")
+        assert observed["actions"][-1] == "finish"
+        assert response.research.outcome == "recommendation"
+        assert response.research.blocks[0].candidateIds == ["registered_path"]
+    if scenario in {
+        "preparation", "preparation_or_selected", "preparation_or_completed",
+        "preparation_or_completed_long_unselected_branch",
+        "preparation_missing_or_choice", "preparation_missing_prerequisite",
+    }:
+        check = next(step["details"] for step in ResearchStore(db, "development").steps(run.run_id)
+                     if step["action_kind"] == "preparation_check")
+        if scenario in {"preparation", "preparation_or_selected", "preparation_or_completed",
+                        "preparation_or_completed_long_unselected_branch"}:
+            assert check["conclusion"] == "dependency_order", check
+            assert check["blockers"] == []
+            context_check = observed["context_preparation_check"]
+            assert context_check["stages"] == check["stages"]
+            assert context_check["blockers"] == [] and context_check["complete"]
+            if scenario == "preparation_or_selected":
+                assert check["stages"] == [["BIOL 101"], ["BIOL 102"]]
+            if scenario == "preparation_or_completed":
+                assert check["stages"] == [["BIOL 102"]]
+            if scenario == "preparation_or_completed_long_unselected_branch":
+                assert check["unexplored_codes"]
+                assert context_check["unexplored_codes"]
+        elif scenario == "preparation_missing_or_choice":
+            assert check["conclusion"] == "blocked" and not check["complete"]
+            assert any(blocker["code"] == "BIOL 102" and blocker["reason"] == "alternative_required"
+                       for blocker in check["blockers"])
+        else:
+            assert check["conclusion"] == "blocked" and not check["complete"]
+            assert any(blocker["code"] == "ECON 201" and blocker["reason"] == "missing_prerequisite"
+                       for blocker in check["blockers"])
     if scenario == "document_state_repair":
         assert run.state.revision == 1 and not run.state.candidates
         assert run.state.active_evidence_ids
@@ -947,9 +1226,24 @@ def test_research_answers_progressively_and_persists_its_decision(
         assert evidence["research"]["runId"] == response.research.runId
         assert evidence["research"]["outcome"] == "clarification"
     assert run.status == ("clarification" if scenario in {"clarification", "saved_clarification"}
-                          else "partial" if scenario == "cached_read_priority" else "completed")
-    if scenario in {"clarification", "saved_clarification"}:
+                          else "insufficient_evidence" if scenario in {"finish_feedback_roundtrip",
+                                                                       "truncated_research_repair"}
+                          else "partial" if scenario in {"cached_read_priority",
+                                                         "program_read_before_preparation"}
+                          else "completed")
+    if scenario in {"clarification", "saved_clarification", "finish_feedback_roundtrip",
+                    "truncated_research_repair"}:
         assert response.citations == [] and response.trace.contextBlock == []
+        if scenario == "finish_feedback_roundtrip":
+            assert response.research.outcome == "insufficient_evidence"
+            assert {block.kind for block in response.research.blocks} >= {"assumption", "limitation"}
+            assert not any(block.kind == "fact" for block in response.research.blocks)
+        if scenario == "truncated_research_repair":
+            assert len(provider.requests) == 2
+            assert response.research.outcome == "insufficient_evidence"
+            steps = ResearchStore(db, "development").steps(run.run_id)
+            assert not any(step["action_kind"] == "read_courses" for step in steps)
+            assert ResearchStore(db, "development").evidence(run.run_id) == []
     else:
         assert response.citations and response.trace.contextBlock
         assert "[1]" in response.answer
@@ -1002,6 +1296,36 @@ def test_research_rejects_inactive_evidence_and_allows_one_correction(
     assert response.citations == [] and "Old inactive fact" not in response.answer
     steps = ResearchStore(db, "development").steps(UUID(response.research.runId))
     assert any(s["action_kind"] == "rejected_finish" and s["details"]["proposal"] for s in steps)
+
+    from app.config import load_settings
+    from app.generation.research_tools import PreparationInput, ResearchSession
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import lenient_config
+
+    scope, store = _scope(db, collection), ResearchStore(db, "development")
+    run, _ = store.start(scope, run_id=uuid4(), prompt_version="test", config_version="6")
+    session = ResearchSession(db, scope, store, run, settings=load_settings(),
+                              config=lenient_config(), embedder=FakeEmbedder(8))
+    checked = session.preparation(PreparationInput(selected_codes=["ECON 201"]), None)
+    check = checked.data
+    assert check["check_id"] in session.checks and check["evidence_ids"]
+    session.unavailable_preparation_check_ids.add(check["check_id"])
+    session.supplied = set(check["evidence_ids"])
+    hidden_claim = {
+        "outcome": "information", "completeness": "complete",
+        "blocks": [{"kind": "fact", "text": "A sourced course fact.",
+                    "evidence_ids": check["evidence_ids"]}],
+        "preparation_check_ids": [check["check_id"]],
+        "preparation_claims": [{
+            "check_id": check["check_id"], "selected_codes": check["selected_codes"],
+            "completed_codes": check["completed_codes"], "conclusion": check["conclusion"]}],
+    }
+    rejected = session.registry().invoke("advisor_finish", {"decision": hidden_claim},
+                                         session.tool_scope(lambda: None))
+    assert rejected.status == "conflict"
+    assert any("was not executed" in issue for issue in rejected.limitations)
+    assert check["check_id"] in session.checks
+    assert set(check["evidence_ids"]) <= session.supplied
 
 
 def test_program_discovery_prefers_title_matches_to_incidental_requirement_mentions(

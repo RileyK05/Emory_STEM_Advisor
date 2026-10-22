@@ -11,6 +11,8 @@ from psycopg.types.json import Jsonb
 from app.artifacts.errors import ArtifactLimitError
 from app.artifacts.models import DocumentSpec, HtmlArtifactSpec, WorkbookSpec
 from app.db import queries
+from app.privacy.fence import require_live_workspace
+from app.util.localpath import io_path
 
 Spec = DocumentSpec | WorkbookSpec | HtmlArtifactSpec
 SPEC_TYPES = {"document": DocumentSpec, "workbook": WorkbookSpec, "html": HtmlArtifactSpec}
@@ -36,6 +38,9 @@ class ArtifactStore:
         self.conn = conn
         self.workspace_key = workspace_key
         self.data_dir = data_dir
+
+    def _reject_deleted_workspace(self) -> None:
+        require_live_workspace(self.conn, self.workspace_key, lock=True)
 
     def get(self, artifact_id: UUID, revision_id: UUID | None = None) -> dict:
         row = self.conn.execute(
@@ -67,6 +72,7 @@ class ArtifactStore:
 
     def create_uncommitted(self, spec: Spec) -> dict:
         """Insert an artifact using the caller's transaction; do not commit."""
+        self._reject_deleted_workspace()
         artifact_id, revision_id = uuid4(), uuid4()
         self.conn.execute(
             queries.get("insert_artifact"),
@@ -101,6 +107,7 @@ class ArtifactStore:
         draft_id: str | None = None,
     ) -> dict:
         """CAS a revision using the caller's transaction; do not commit."""
+        self._reject_deleted_workspace()
         if draft_id:
             existing = self.conn.execute(
                 queries.get("get_artifact_draft_revision"),
@@ -146,6 +153,7 @@ class ArtifactStore:
     def create(
         self, spec: Spec, *, original: bytes | None = None, filename: str | None = None
     ) -> dict:
+        self._reject_deleted_workspace()
         artifact_id, revision_id = uuid4(), uuid4()
         digest, path = None, None
         if original is not None:
@@ -154,14 +162,16 @@ class ArtifactStore:
             digest = hashlib.sha256(original).hexdigest()
             workspace_hash = hashlib.sha256(self.workspace_key.encode()).hexdigest()
             directory = self.data_dir / "artifacts" / "originals" / workspace_hash
-            directory.mkdir(parents=True, exist_ok=True)
+            io_path(directory).mkdir(parents=True, exist_ok=True)
             path = directory / digest
-            if path.exists():
-                if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            stored = io_path(path)
+            if stored.exists():
+                if hashlib.sha256(stored.read_bytes()).hexdigest() != digest:
                     raise ValueError("stored original failed integrity check")
             else:
                 temporary = directory / (str(uuid4()) + ".tmp")
-                with temporary.open("xb") as handle:
+                staged = io_path(temporary)
+                with staged.open("xb") as handle:
                     handle.write(original)
                 try:
                     if (
@@ -169,11 +179,9 @@ class ArtifactStore:
                         or path.resolve().parent != directory.resolve()
                     ):
                         raise ValueError("original storage path escaped configured directory")
-                    temporary.replace(
-                        path
-                    )  # Publish complete bytes atomically; hash is the identity.
+                    staged.replace(stored)  # Publish complete bytes atomically.
                 finally:
-                    temporary.unlink(missing_ok=True)
+                    staged.unlink(missing_ok=True)
         with self.conn.transaction():
             self.conn.execute(
                 queries.get("insert_artifact"),
@@ -269,7 +277,7 @@ class ArtifactStore:
         path = Path(row["original_path"]).resolve()
         if path.parent != expected_dir or path.name != row["original_sha256"]:
             raise ValueError("original storage path failed validation")
-        content = path.read_bytes()
+        content = io_path(path).read_bytes()
         if hashlib.sha256(content).hexdigest() != row["original_sha256"]:
             raise ValueError("original file failed integrity check")
         return row["original_filename"], content

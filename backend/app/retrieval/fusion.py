@@ -16,6 +16,12 @@ from app.retrieval.types import Candidate, SeamResult
 GROUNDED_SEAMS = frozenset({"keyword", "prereq"})
 # Seams whose raw scores are already on the shared [0, 1] scale.
 FIXED_SCALE_SEAMS = frozenset({"prereq"})
+# A keyword set below this is not min-maxed. Stretching 0.02 against 0.01
+# made the best boilerplate 1.0, so fusion.min_score could not drop it (DA-03).
+# A real one-term ts_rank_cd is about 0.1, and a longer topical token is ranked
+# at >= 1, so both still min-max. One keyword hit has no competitor and stays
+# citable at 1.0 even when its raw rank is below the floor.
+_KEYWORD_WEAK_SCORE = 0.05
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,8 @@ def _normalize(name: str, candidates: list[Candidate]) -> dict[UUID, float]:
         return {c.chunk_id: min(1.0, max(0.0, c.raw_score)) for c in candidates}
     scores = [c.raw_score for c in candidates]
     low, high = min(scores), max(scores)
+    if name == "keyword" and len(candidates) > 1 and high < _KEYWORD_WEAK_SCORE:
+        return {c.chunk_id: min(1.0, max(0.0, c.raw_score)) for c in candidates}
     if high == low:
         return {c.chunk_id: 1.0 for c in candidates}
     return {c.chunk_id: (c.raw_score - low) / (high - low) for c in candidates}
@@ -72,7 +80,7 @@ def _select_with_soft_source_cap(
     represented = source_order[: min(budget, len(source_order))]
     selected = [ranked[source][0] for source in represented]
 
-    if budget > len(source_order):
+    if budget >= len(source_order):
         remaining = [
             chunk_id
             for source in source_order

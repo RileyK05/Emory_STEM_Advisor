@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from math import isfinite
 from uuid import UUID, uuid4
 
@@ -21,6 +22,7 @@ from app.operations.budget import (
     OperationLimits,
     fence_violation,
 )
+from app.pricing import PricingService
 from app.util.digest import json_digest
 
 
@@ -297,6 +299,17 @@ class DecisionService:
         latency = int((time.monotonic() - started) * 1000)
         self.budgets.account_usage(conn, reservation, usage=call.usage,
                                    outcome="failed" if call.error else "completed")
+        created_at = datetime.now(UTC)
+        schedule_id, cost, cost_status = PricingService.compute_call_cost(
+            conn,
+            provider=selected.profile.provider,
+            model_id=selected.profile.model_id,
+            created_at=created_at,
+            prompt_tokens=call.usage.prompt_tokens,
+            completion_tokens=call.usage.completion_tokens,
+            cached_prompt_tokens=call.usage.cached_prompt_tokens,
+            usage_source=call.usage.source,
+        )
         with conn.transaction():
             conn.execute(queries.get("insert_decision_model_call"), {
                 "model_call_id": uuid4(), "decision_id": body.decision_id,
@@ -311,6 +324,10 @@ class DecisionService:
                 "reasoning_effort": selected.settings.llm_reasoning_effort,
                 "requested_timeout_seconds": reservation.timeout_seconds,
                 "profile_id": selected.profile_id, "profile_revision": selected.profile_revision,
+                "cached_prompt_tokens": call.usage.cached_prompt_tokens,
+                "schedule_id": schedule_id,
+                "estimated_cost": cost,
+                "cost_status": cost_status,
             })
         return call
 

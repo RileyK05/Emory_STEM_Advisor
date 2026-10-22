@@ -1,5 +1,7 @@
+import pytest
+
 from app.advising.sequence import CourseRequirement, plan_sequence
-from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef
+from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef, parse_requisites
 
 
 def course(code, *, prereq=None, coreq=None, status="none", raw=None):
@@ -24,18 +26,29 @@ def test_chain_and_requirements_create_stable_stages():
     assert plan.complete
 
 
-def test_unselected_prerequisite_blocks_course_but_completed_discharges_it():
-    courses = {"CS 170": course("CS 170", prereq=CourseRef("MATH 111"), status="parsed")}
-
-    missing = plan_sequence(courses, ["CS 170"])
-    completed = plan_sequence(courses, ["CS 170"], ["MATH 111"])
-
-    assert missing.stages == ()
-    assert ("CS 170", "missing_prerequisite", ("MATH 111",)) in {
-        (b.code, b.reason, b.alternatives) for b in missing.blockers
-    }
-    assert completed.stages == (("CS 170",),)
-    assert completed.complete
+@pytest.mark.parametrize("raw,completed,ready", [
+    ("MATH 111", [], False),
+    ("MATH 111", ["MATH 111"], True),
+    ("(CS 170 or CS_OX 170) and (MATH 111 or MATH_OX 111) or equivalent transfer credit as prerequisites",
+     ["CS_OX 170", "MATH_OX 111"], True),
+    ("(CS 170 or CS_OX 170) and (MATH 111 or MATH_OX 111) or equivalent transfer credit as prerequisites",
+     ["CS 170", "MATH 111"], True),
+    ("(CS 170 or CS_OX 170) and (MATH 111 or MATH_OX 111) or equivalent transfer credit as prerequisites",
+     ["CS 170"], False),
+    ("(CS 170 or CS_OX 170) and (MATH 111 or MATH_OX 111) and equivalent transfer credit as prerequisites",
+     ["CS 170", "MATH 111"], False),
+    ("CS 170 or equivalent transfer credit", ["CS 170"], True),
+    ("CS 170 and equivalent transfer credit", ["CS 170"], False),
+    ("CS 170 and permission of instructor", ["CS 170"], False),
+])
+def test_unselected_prerequisite_blocks_course_but_completed_discharges_it(raw, completed, ready):
+    parsed = parse_requisites(raw, course_code="CS 224")
+    courses = {"CS 224": course("CS 224", prereq=parsed.trees.get("prerequisite"),
+                               status=parsed.status, raw=raw)}
+    plan = plan_sequence(courses, ["CS 224"], completed)
+    assert plan.complete is ready
+    assert plan.stages == ((("CS 224",),) if ready else ())
+    assert bool(plan.blockers) is not ready
 
 
 def test_or_requires_one_explicit_choice_and_never_guesses():

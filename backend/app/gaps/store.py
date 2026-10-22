@@ -6,7 +6,10 @@ import re
 import unicodedata
 from uuid import UUID, uuid4
 
+from fastapi import HTTPException
+
 from app.db import queries
+from app.privacy.fence import require_live_workspace
 from app.util.digest import json_digest
 from app.util.workspace import is_valid_workspace_key
 
@@ -59,6 +62,7 @@ def public_gap(row) -> dict:
             "sourceIds": row["resolution_source_ids"],
             "note": row["resolution_note"] or "",
             "resolvedAt": row["resolved_at"],
+            "evidenceState": row.get("evidence_state") or "current",
         }
     return {
         "gapId": row["gap_id"],
@@ -115,6 +119,10 @@ class GapStore:
 
         self.conn.commit()
         with self.conn.transaction():
+            try:
+                require_live_workspace(self.conn, self.workspace_key, lock=True)
+            except HTTPException as exc:
+                raise GapConflict("workspace has been deleted") from exc
             self._authorize(collection_id, trace_id, canonical_sources)
             if event_kind in _FAILURE_KINDS:
                 self.conn.execute(queries.get("ensure_gap_identity"), {

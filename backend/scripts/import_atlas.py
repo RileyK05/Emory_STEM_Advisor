@@ -38,6 +38,8 @@ def main() -> None:
     parser.add_argument("--database-url", default=None)
     parser.add_argument("--reparse-only", action="store_true",
                         help="Refresh parser metadata for the exact indexed file without models")
+    parser.add_argument("--allow-course-removal", action="store_true",
+                        help="Allow a reviewed replacement snapshot to retire missing course codes")
     parser.add_argument("file", type=Path)
     args = parser.parse_args()
 
@@ -71,6 +73,7 @@ def main() -> None:
             embed_model=settings.embedding_model_id,
             count_tokens=count_tokens,
             config=config,
+            allow_course_removal=args.allow_course_removal,
         )
         for course in unresolved_courses(load_atlas(args.file)):
             print(f"[{course.code}] {course.requisites!r}")

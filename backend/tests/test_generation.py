@@ -88,11 +88,53 @@ def test_trailing_space_bullet_does_not_swallow_uncited_self_talk():
 
 
 def test_resource_id_tokens_are_stripped_from_the_published_answer():
-    answer = answer_from_context(chunks(1), "question", provider=FakeProvider(
+    context = [
+        CitedChunk(uuid4(), uuid4(), 0, "src.pdf", "CS 253",
+                   "CS 253 requires CS 171.", ("keyword",), 1.0, 1, 1),
+    ]
+    answer = answer_from_context(context, "question", provider=FakeProvider(
         "CS 253 requires CS 171 [1][resource:5b643eea-3cc8-5751-883b-403cb2e03796]."
     ))
     assert answer.text == "CS 253 requires CS 171 [1]."
     assert "[resource:" not in answer.text
+
+
+def test_course_code_must_appear_in_the_cited_passage():
+    """DA-04: a citation marker does not make an absent or extended course code true."""
+    context = [
+        CitedChunk(uuid4(), uuid4(), 0, "src.pdf", "page 1",
+                   "CS 100: Introduction to programming. ITAL 301 is intermediate Italian.",
+                   ("keyword",), 1.0, 1, 1),
+    ]
+    held = answer_from_context(context, "question", provider=FakeProvider(
+        "CS 100 is an introduction to programming [1]."
+    ))
+    assert held.citations[0].chunk_id == context[0].chunk_id
+    with pytest.raises(GenerationRejected, match="ITAL 301W"):
+        answer_from_context(context, "question", provider=FakeProvider(
+            "ITAL 301W is a writing-intensive version [1]."
+        ))
+    with pytest.raises(GenerationRejected, match="CS 999"):
+        answer_from_context(context, "question", provider=FakeProvider(
+            "CS 999 guarantees a six-figure job [1]."
+        ))
+    for code in ("PAE 8100", "BIOL_OX 385RWE", "ARCH 16", "M2M 401", "VM 999D1"):
+        exact = [CitedChunk(uuid4(), uuid4(), 0, "atlas.md", code,
+                            f"{code}: supplied course description.", ("keyword",), 1.0, 1, 1)]
+        accepted = answer_from_context(exact, "question", provider=FakeProvider(
+            f"{code} is described in the passage [1]."))
+        assert accepted.citations
+        with pytest.raises(GenerationRejected, match=code):
+            answer_from_context(context, "question", provider=FakeProvider(
+                f"{code} is described in the passage [1]."))
+    # Calendar and section labels are not fabricated course identities.
+    answer_from_context(context, "question", provider=FakeProvider(
+        "In Spring 2027, section 12 uses the stated description [1]."))
+    # Naming a code while saying the passage does not establish it stays allowed.
+    absent = answer_from_context(context, "question", provider=FakeProvider(
+        "The passage does not support CS 301 [1]."
+    ))
+    assert "CS 301" in absent.text
 
 
 def test_single_rewrite_is_accounted_and_still_validated():

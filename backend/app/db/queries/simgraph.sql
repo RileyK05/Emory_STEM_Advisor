@@ -6,6 +6,7 @@ JOIN sources s          ON s.source_id = co.source_id
 JOIN chunks c           ON c.locator_id = co.locator_id
 JOIN chunk_embeddings e ON e.chunk_id = c.chunk_id
 WHERE co.collection_id = %(collection_id)s
+  AND co.lifecycle = 'current'
   AND s.status = 'indexed'
   AND s.is_current
   AND e.model = %(model)s
@@ -53,6 +54,11 @@ WHERE collection_id = %(collection_id)s AND is_current AND graph_version = 2
         AND s.is_current
       LIMIT 1
   );
+
+-- name: retire_topic_build_for_atlas
+UPDATE sim_builds SET is_current = false
+WHERE collection_id = %(collection_id)s AND is_current AND graph_version = 2
+  AND content_hash IS DISTINCT FROM %(file_hash)s;
 
 -- name: insert_sim_course
 INSERT INTO sim_courses (build_id, course_id, embedding)

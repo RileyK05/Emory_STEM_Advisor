@@ -348,6 +348,15 @@ def retrieve(
 
 def _finish(conn, collection_id, query, embed_model, config, source_ids, workspace_key,
             results, fused, details, trace_id) -> Retrieved | Refusal:
+    held = set()
+    if fused:
+        held = {row["chunk_id"] for row in conn.execute(
+            queries.get("held_atlas_context_chunks"), {
+                "chunk_ids": [item.chunk_id for item in fused],
+                "collection_id": collection_id,
+            },
+        ).fetchall()}
+        fused = [item for item in fused if item.chunk_id not in held]
     cited, contributions = _cite(conn, fused, collection_id, source_ids, workspace_key,
                                  config.fusion.dedupe, details)
     if details:
@@ -364,6 +373,7 @@ def _finish(conn, collection_id, query, embed_model, config, source_ids, workspa
         refused=refused,
         seams=results,
         contributions=contributions,
+        workspace_key=workspace_key,
     )
     trace = RetrievalTrace(
         trace_id=trace_id,
@@ -374,7 +384,13 @@ def _finish(conn, collection_id, query, embed_model, config, source_ids, workspa
         embed_model=embed_model,
         refused=refused,
         seams=tuple(results),
+        warnings=([f"Withheld {len(held)} master course excerpt(s) pending source conflict review."]
+                  if held else []),
     )
     if refused:
-        return Refusal(reason="no relevant material found", trace=trace)
+        return Refusal(
+            reason=("relevant course requirements are awaiting source conflict review"
+                    if held else "no relevant material found"),
+            trace=trace,
+        )
     return Retrieved(chunks=cited, trace=trace)

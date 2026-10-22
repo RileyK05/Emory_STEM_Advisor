@@ -1,5 +1,4 @@
-"""Committed per-attempt accounting and immutable source snapshots."""
-
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
@@ -8,6 +7,7 @@ from app.db import queries
 from app.generation.answer import PROMPT_VERSION, GeneratedAnswer
 from app.generation.claims import review_units
 from app.llm.base import GenerationResult, Usage
+from app.pricing import PricingService
 from app.retrieval.types import Refusal, Retrieved
 
 
@@ -16,11 +16,24 @@ def record_attempt(conn, trace_id, settings, result: GenerationResult | None,
     usage = result.usage if result else getattr(error, "usage", None)
     if not isinstance(usage, Usage):
         usage = Usage(source="unknown")
+    provider = settings.llm_provider
+    model_id = (result.model if result else None) or settings.llm_model_id or settings.hf_model_id
+    created_at = datetime.now(UTC)
+    schedule_id, cost, cost_status = PricingService.compute_call_cost(
+        conn,
+        provider=provider,
+        model_id=model_id,
+        created_at=created_at,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        cached_prompt_tokens=usage.cached_prompt_tokens,
+        usage_source=usage.source,
+    )
     with conn.transaction():
         conn.execute(queries.get("insert_model_call"), {
             "model_call_id": uuid4(), "trace_id": trace_id,
-            "provider": settings.llm_provider,
-            "model_id": (result.model if result else None) or settings.llm_model_id or settings.hf_model_id,
+            "provider": provider,
+            "model_id": model_id,
             "status": "failed" if error else "completed",
             "finish_reason": result.finish_reason if result else None,
             "request_id": result.request_id if result else getattr(error, "request_id", None),
@@ -38,7 +51,11 @@ def record_attempt(conn, trace_id, settings, result: GenerationResult | None,
             "profile_id": selection.profile_id if selection else None,
             "profile_revision": selection.profile_revision if selection else None,
             "cached_prompt_tokens": usage.cached_prompt_tokens,
+            "schedule_id": schedule_id,
+            "estimated_cost": cost,
+            "cost_status": cost_status,
         })
+
 
 
 def persist_response(conn, retrieved: Retrieved | Refusal, *, status: str, reason: str | None = None,

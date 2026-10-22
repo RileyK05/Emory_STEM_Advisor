@@ -37,6 +37,7 @@ JOIN conversation_requests q ON q.conversation_id = t.conversation_id
     AND q.request_id = t.request_id
 WHERE c.conversation_id = %(conversation_id)s AND c.workspace_key = %(workspace_key)s
   AND r.workspace_key = %(workspace_key)s AND r.collection_id = %(collection_id)s
+  AND t.sequence > c.context_boundary_sequence
   AND t.status = 'answer' AND q.state = 'completed' AND r.state IS NOT NULL
   AND r.status IN ('completed', 'partial', 'clarification', 'insufficient_evidence')
 ORDER BY t.sequence DESC LIMIT 1;
@@ -51,6 +52,7 @@ WITH published AS (
     JOIN conversation_requests q ON q.conversation_id = t.conversation_id
         AND q.request_id = t.request_id
     WHERE c.conversation_id = %(conversation_id)s AND c.workspace_key = %(workspace_key)s
+      AND t.sequence > c.context_boundary_sequence
       AND t.role = 'assistant' AND t.status = 'answer' AND q.state = 'completed'
 ), archive AS (
     SELECT p.sequence, b->>'chunkId' AS chunk_id, b->>'sourceId' AS source_id
@@ -95,6 +97,7 @@ JOIN conversation_requests q ON q.conversation_id = t.conversation_id
     AND q.request_id = t.request_id
 WHERE c.conversation_id = %(conversation_id)s AND c.workspace_key = %(workspace_key)s
   AND q.state = 'completed' AND t.sequence >= %(sequence)s
+  AND t.sequence > c.context_boundary_sequence
   AND (%(query)s = '' OR to_tsvector('english', t.text)
        @@ websearch_to_tsquery('english', %(query)s))
 ORDER BY t.sequence LIMIT 7;
@@ -171,7 +174,7 @@ SELECT p.program_id,
            || setweight(to_tsvector('english', coalesce(string_agg(i.text, ' '), '')), 'D'),
            websearch_to_tsquery('english', %(query)s), 32) AS score
 FROM programs p LEFT JOIN program_items i ON i.program_id = p.program_id
-WHERE p.collection_id = %(collection_id)s
+WHERE p.collection_id = %(collection_id)s AND p.is_active
   AND p.source_id = ANY(%(source_ids)s::uuid[])
   AND (p.title ILIKE ANY(%(patterns)s::text[])
        OR p.department ILIKE ANY(%(patterns)s::text[])
@@ -195,7 +198,7 @@ WHERE conversation_id = %(conversation_id)s AND conversation_request_id = %(requ
 
 -- name: research_current_program_pins
 SELECT program_id, source_id, source_index_revision, parsed_content_digest, binding_status
-FROM programs WHERE program_id = ANY(%(program_ids)s::uuid[])
+FROM programs WHERE program_id = ANY(%(program_ids)s::uuid[]) AND is_active
 ORDER BY program_id FOR SHARE;
 
 -- name: mark_research_trace
@@ -275,6 +278,7 @@ SELECT program_id, title, kind, degree, hours, courses_required, department,
        catalog, source_id, source_index_revision, parsed_content_digest, binding_status
 FROM programs
 WHERE collection_id = %(collection_id)s
+  AND is_active
   AND binding_status IN ('bound', 'evidence_unresolved')
   AND source_id = ANY(%(source_ids)s::uuid[])
 ORDER BY kind, title, program_id;
@@ -289,7 +293,7 @@ WHERE c.chunk_id = ANY(%(chunk_ids)s::uuid[])
 
 -- name: research_courses_by_codes
 SELECT co.course_id, co.code, co.title, co.requisites_raw, co.parse_status,
-       co.canonical_code, co.source_id, co.locator_id
+       co.canonical_code, co.source_id, co.locator_id, co.lifecycle
 FROM courses co
 WHERE co.collection_id = %(collection_id)s
   AND co.code = ANY(%(codes)s::text[])

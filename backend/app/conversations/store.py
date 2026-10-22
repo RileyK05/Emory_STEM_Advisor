@@ -8,6 +8,8 @@ from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
 from app.db import queries
+from app.privacy.fence import require_live_workspace
+from app.quotas.service import QuotaService
 from app.util.digest import json_digest
 
 
@@ -98,6 +100,8 @@ class ConversationStore:
         return {"conversation_id": conversation_id, "workspace_key": self.workspace_key}
 
     def get(self, conversation_id: UUID, *, lock=False):
+        if lock:
+            require_live_workspace(self.conn, self.workspace_key, lock=True)
         row = self.conn.execute(queries.get("lock_conversation" if lock else "get_conversation"),
                                 self._params(conversation_id)).fetchone()
         if row is None:
@@ -106,6 +110,7 @@ class ConversationStore:
 
     def create(self, title: str):
         with self.conn.transaction():
+            require_live_workspace(self.conn, self.workspace_key, lock=True)
             row = self.conn.execute(queries.get("create_conversation"), {
                 "conversation_id": uuid4(), "workspace_key": self.workspace_key, "title": title,
             }).fetchone()
@@ -135,14 +140,15 @@ class ConversationStore:
 
     def context(self, conversation_id, *, max_bytes: int, archive: bool = False,
                 enforce: bool = True):
-        self.get(conversation_id)
+        conv = self.get(conversation_id)
+        boundary = conv.get("context_boundary_sequence", 0)
         if archive:
             rows = self.conn.execute(queries.get("conversation_recent_context"), {
                 "conversation_id": conversation_id}).fetchall()
             self.conn.commit()
             return list(reversed(rows))
         rows = self.conn.execute(queries.get("conversation_turns"), {
-            "conversation_id": conversation_id, "after": 0, "limit": 1000}).fetchall()
+            "conversation_id": conversation_id, "after": boundary, "limit": 1000}).fetchall()
         size = len(history_prompt(rows).encode("utf-8"))
         if enforce and (size > max_bytes or len(rows) >= 1000):
             self.conn.commit()
@@ -248,13 +254,20 @@ class ConversationStore:
 
     def begin_stream(self, conversation_id, request_id, expected_sequence, snapshot,
                      admission=None):
-        """Atomically bind the immutable request, pending turn, and one queued job."""
+        """Atomically bind the immutable request, pending turn, one queued job, and its charge.
+
+        The quota policy is read in the transaction. The settlement row and bucket
+        increment commit only with that job. A stale sequence, admission refusal,
+        or quota refusal rolls the job back and leaves the bucket unchanged.
+        """
         self.conn.commit()
         with self.conn.transaction():
             prior = self._lock_request_slot(conversation_id, request_id, expected_sequence)
             if prior:
                 self._check_same_inputs(prior, snapshot)
                 return prior
+
+            policy = QuotaService.resolve_policy(self.conn, workspace_key=self.workspace_key)
 
             if admission is not None:
                 admission.check(self.conn, self.workspace_key)
@@ -279,6 +292,10 @@ class ConversationStore:
                 "job_id": job_id,
             })
             self._append_user_turn(conversation_id, request_id, expected_sequence, snapshot)
+            QuotaService.settle_generation(
+                self.conn, workspace_key=self.workspace_key, request_id=request_id,
+                policy=policy, commit=False,
+            )
             return {"job_id": job_id, "state": "pending", "result": None}
 
     def request_for_owner(self, conversation_id, request_id):
@@ -322,6 +339,7 @@ class ConversationStore:
                 "traceId": result.get("trace", {}).get("traceId"),
                 "turnReferences": result.get("turnReferences", []),
                 **({"research": result["research"]} if result.get("research") else {}),
+                **({"applicability": result["applicability"]} if result.get("applicability") else {}),
             })})
         if research or result["type"] in {"failed", "abandoned"}:
             status = ("cancelled" if result["type"] == "abandoned" else
@@ -374,19 +392,33 @@ class ConversationStore:
             previous = self.conn.execute(queries.get("latest_conversation_summary"), {
                 "conversation_id": conversation_id, "workspace_key": self.workspace_key,
             }).fetchone()
-            base_sequence = previous["covered_through"] if previous else 0
-            reference_metadata = list(previous["reference_metadata"] or []) if previous else []
-            if previous and [item.get("sequence") for item in reference_metadata] != list(
-                range(1, base_sequence + 1)
+            boundary = conversation.get("context_boundary_sequence", 0)
+            base_sequence = max(boundary, previous["covered_through"] if previous else 0)
+            reference_metadata = (
+                list(previous["reference_metadata"] or [])
+                if previous and previous["covered_through"] > boundary
+                else []
+            )
+            if (
+                previous
+                and previous["covered_through"] > boundary
+                and [item.get("sequence") for item in reference_metadata]
+                != list(range(boundary + 1, base_sequence + 1))
             ):
                 raise HTTPException(409, "prior summary reference coverage is incomplete")
             candidate = self._checkpoint_boundary(
                 conversation_id, base_sequence, expected_sequence, keep_turns=keep_turns)
             raw_turns = self._covered_turns(conversation_id, base_sequence, candidate)
             input_snapshot = {
-                "previousSummary": ({"summaryId": str(previous["summary_id"]),
-                                     "coveredThrough": previous["covered_through"],
-                                     "text": previous["summary_text"]} if previous else None),
+                "previousSummary": (
+                    {
+                        "summaryId": str(previous["summary_id"]),
+                        "coveredThrough": previous["covered_through"],
+                        "text": previous["summary_text"],
+                    }
+                    if previous and previous["covered_through"] > boundary
+                    else None
+                ),
                 "turns": raw_turns, "expectedSequence": expected_sequence,
                 "coveredThrough": candidate,
             }
@@ -402,6 +434,7 @@ class ConversationStore:
                 "input_snapshot": Jsonb(input_snapshot),
                 "reference_metadata": Jsonb(reference_metadata),
                 "operation_id": summary_id,
+                "context_epoch": conversation.get("context_epoch", 0),
             }).fetchone()
         return {"replay": None, "row": inserted, "input": input_snapshot,
                 "references": reference_metadata}
@@ -479,6 +512,8 @@ class ConversationStore:
             if state == "completed" and (
                 conversation["last_sequence"] != summary["expected_sequence"]
                 or conversation["pending_request_id"] is not None
+                or conversation.get("context_epoch", 0) != summary.get("context_epoch", 0)
+                or conversation.get("context_boundary_sequence", 0) >= summary["candidate_covered_through"]
             ):
                 state, summary_text, failure_code = "stale", None, "stale_conversation"
             row = self.conn.execute(queries.get("finish_conversation_summary"), {
@@ -508,15 +543,57 @@ class ConversationStore:
                                    failure_code="explicitly_abandoned")
 
 
+    def reset_memory(self, conversation_id: UUID) -> dict:
+        self.conn.commit()
+        with self.conn.transaction():
+            conv = self.get(conversation_id, lock=True)
+            if conv["pending_request_id"] is not None:
+                raise HTTPException(409, "Cannot reset memory while a turn request is pending.")
+            self._expire_stale_pending_summary(conversation_id)
+            pending_summary = self.conn.execute(queries.get("pending_conversation_summary"), {
+                "conversation_id": conversation_id, "workspace_key": self.workspace_key,
+            }).fetchone()
+            if pending_summary is not None:
+                raise HTTPException(409, "Cannot reset memory while a conversation summary is pending.")
+            row = self.conn.execute(queries.get("reset_conversation_memory"), {
+                "conversation_id": conversation_id, "workspace_key": self.workspace_key,
+            }).fetchone()
+            if row is None:
+                raise HTTPException(404, "Conversation not found.")
+        return public_conversation(row)
+
+    def latest_research_notebook(self, conversation_id: UUID) -> dict | None:
+        self.get(conversation_id)
+        row = self.conn.execute(queries.get("latest_conversation_research_notebook"), {
+            "conversation_id": conversation_id, "workspace_key": self.workspace_key,
+        }).fetchone()
+        self.conn.commit()
+        if row is None or not row["state"]:
+            return None
+        return {
+            "runId": str(row["run_id"]),
+            "status": row["status"],
+            "state": row["state"],
+            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
+        }
+
+
 def fingerprint(snapshot):
     return json_digest(snapshot.get("request", snapshot))
 
 
 def public_conversation(row):
-    return {"conversationId": str(row["conversation_id"]), "title": row["title"],
-            "lastSequence": row["last_sequence"],
-            "pendingRequestId": str(row["pending_request_id"]) if row["pending_request_id"] else None,
-            "createdAt": row["created_at"].isoformat(), "updatedAt": row["updated_at"].isoformat()}
+    return {
+        "conversationId": str(row["conversation_id"]),
+        "title": row["title"],
+        "lastSequence": row["last_sequence"],
+        "pendingRequestId": str(row["pending_request_id"]) if row["pending_request_id"] else None,
+        "contextEpoch": row.get("context_epoch", 0),
+        "contextBoundarySequence": row.get("context_boundary_sequence", 0),
+        "contextResetAt": row["context_reset_at"].isoformat() if row.get("context_reset_at") else None,
+        "createdAt": row["created_at"].isoformat(),
+        "updatedAt": row["updated_at"].isoformat(),
+    }
 
 
 _HISTORY_CITATION_KEYS = ("chunkId", "sourceName", "locatorLabel")
@@ -556,18 +633,25 @@ def history_prompt(rows) -> str:
 
 
 def research_history_prompt(rows, *, max_bytes: int) -> str:
-    """An explicit whole-turn selection; archive tools can recover everything omitted."""
+    """Keep exact student reports ahead of verbose replies; archive omissions."""
     total = rows[-1].get("total_turns", len(rows)) if rows else 0
     selected = []
     def render():
         return json.dumps({"kind": "selected_conversation_history", "total_turns": total,
-            "omitted_turns": total - len(selected), "turns": selected,
+            "omitted_turns": total - len(selected),
+            "turns": sorted(selected, key=lambda turn: turn["sequence"]),
             "read_older_with": "advisor_read_conversation"}, ensure_ascii=False, separators=(",", ":"))
-    for row in reversed(rows):
-        selected.insert(0, history_turn(row))
-        if len(render().encode("utf-8")) > max_bytes:
-            selected.pop(0)
-            break
+    # Course corrections and preferences come from the student, not the
+    # assistant's retelling. One long reply must not evict earlier reports.
+    # Keep whole messages in chronological order; never extract/merge their
+    # meaning or turn them into verified academic facts.
+    for role in ("user", "assistant"):
+        for row in reversed(rows):
+            if row["role"] != role:
+                continue
+            selected.append(history_turn(row))
+            if len(render().encode("utf-8")) > max_bytes:
+                selected.pop()
     return render()
 
 
@@ -636,4 +720,5 @@ def public_summary(row):
             "referenceMetadata": row["reference_metadata"], "failureCode": row["failure_code"],
             "profileId": str(row["profile_id"]) if row["profile_id"] else None,
             "profileRevision": row["profile_revision"],
+            "contextEpoch": row.get("context_epoch", 0),
             "createdAt": row["created_at"].isoformat(), "updatedAt": row["updated_at"].isoformat()}

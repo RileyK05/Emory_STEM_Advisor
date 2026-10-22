@@ -128,7 +128,9 @@ def test_resource_ids_are_in_the_tool_prompt_and_citations_still_use_chunk_posit
         def generate(self, request):
             for chunk in chunks:
                 assert f"resource_id={chunk.chunk_id}" in request.messages[1]["content"]
-            return GenerationResult(text="The second course is MATH 112 [2].")
+            return GenerationResult(
+                text="The second course is MATH 112 [2].", finish_reason="stop"
+            )
 
     answer = answer_from_context(chunks, "calculus", provider=Provider(), include_resource_ids=True)
     assert answer.citations[0].chunk_id == chunks[1].chunk_id

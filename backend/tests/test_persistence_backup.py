@@ -108,6 +108,48 @@ def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_orig
         "chunk_index": 0, "start_char": 0, "end_char": 29, "token_count": 5,
         "text": "Stable citation source bytes.",
     })
+    capture_bytes = b'{"kind":"detail","term":"Spring 2027"}'
+    capture_hash = hashlib.sha256(capture_bytes).hexdigest()
+    capture_set_hash = hashlib.sha256(b"capture-set").hexdigest()
+    capture_path = data_dir / "raw" / "atlas-captures" / f"{capture_hash}.json"
+    capture_path.parent.mkdir(parents=True)
+    capture_path.write_bytes(capture_bytes)
+    db.execute(queries.get("insert_atlas_offering_snapshot"), {
+        "source_id": source_id, "capture_set_hash": capture_set_hash,
+        "career": "Undergraduate", "term": "Spring 2027",
+        "index_evidence_hash": "a" * 64, "announced_count": 1,
+        "result_row_count": 1, "eligible_row_count": 1, "held_row_count": 0,
+        "search_criteria": "Term: Spring 2027; Career: Undergraduate",
+        "capture_hashes": Jsonb([capture_hash]),
+        "observed_from": datetime.now(UTC), "observed_until": datetime.now(UTC),
+    })
+    db.execute(queries.get("insert_atlas_offering_capture_file"), {
+        "source_id": source_id, "capture_set_hash": capture_set_hash,
+        "capture_hash": capture_hash, "raw_path": str(capture_path),
+    })
+    hold_id = uuid4()
+    db.execute(queries.get("insert_atlas_requirement_hold"), {
+        "hold_id": hold_id, "source_id": source_id, "course_code": "CS 171",
+        "master_file_hash": "b" * 64, "conflict_reason": "Captured requirement conflict",
+        "evidence_capture_sha256": capture_hash,
+        "evidence_capture_path": str(capture_path), "evidence_source_id": None,
+        "evidence_index_revision": None, "evidence_capture_set_hash": None,
+        "created_by": "backup-test",
+    })
+    released_hold_id = uuid4()
+    db.execute(queries.get("insert_atlas_requirement_hold"), {
+        "hold_id": released_hold_id, "source_id": source_id, "course_code": "CS 172",
+        "master_file_hash": "c" * 64, "conflict_reason": "Historical captured conflict",
+        "evidence_capture_sha256": capture_hash,
+        "evidence_capture_path": str(capture_path), "evidence_source_id": None,
+        "evidence_index_revision": None, "evidence_capture_set_hash": None,
+        "created_by": "backup-test",
+    })
+    db.execute(queries.get("release_atlas_requirement_hold"), {
+        "hold_id": released_hold_id, "source_id": source_id, "course_code": "CS 172",
+        "master_file_hash": "c" * 64, "released_by": "backup-reviewer",
+        "release_note": "Historical review completed",
+    })
     db.commit()
 
     artifact_store = ArtifactStore(db, workspace_key="workspace-a", data_dir=data_dir)
@@ -194,10 +236,24 @@ def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_orig
         db, dsn=migrated_dsn, data_dir=data_dir, destination=archive,
         maintenance_confirmed=True,
     )
-    assert len(manifest["files"]) == 2  # raw source plus imported artifact original
-    raw_manifest = next(item for item in manifest["files"] if item["path"].startswith("raw/"))
+    assert len(manifest["files"]) == 3  # raw source, Atlas evidence, and artifact original
+    raw_manifest = next(
+        item for item in manifest["files"]
+        if set(item["source_ids"]) == {str(source_id), str(second_source_id)}
+    )
     assert set(raw_manifest["source_ids"]) == {str(source_id), str(second_source_id)}
     assert archive.is_file()
+    capture_manifest = next(
+        item for item in manifest["files"] if item["path"].startswith("raw/atlas-captures/")
+    )
+    assert capture_manifest["capture_file_refs"] == [{
+        "source_id": str(source_id), "capture_set_hash": capture_set_hash,
+        "capture_hash": capture_hash,
+    }]
+    assert {(item["hold_id"], item["capture_hash"])
+            for item in capture_manifest["hold_capture_refs"]} == {
+        (str(hold_id), capture_hash), (str(released_hold_id), capture_hash),
+    }
 
     target_db_name = f"restore_{uuid4().hex}"
     _create_database(migrated_dsn, target_db_name)
@@ -219,6 +275,29 @@ def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_orig
             "source_id": second_source_id, "workspace_key": "workspace-a",
         }).fetchone()
         assert Path(second_source["raw_path"]).read_bytes() == raw
+        restored_capture = target.execute(queries.get("list_atlas_offering_capture_files"), {
+            "source_id": source_id, "capture_set_hash": capture_set_hash,
+        }).fetchone()
+        assert restored_capture is not None
+        assert Path(restored_capture["raw_path"]).read_bytes() == capture_bytes
+        restored_holds = target.execute(
+            queries.get("backup_requirement_hold_capture_files")
+        ).fetchall()
+        assert {row["hold_id"] for row in restored_holds} >= {hold_id, released_hold_id}
+        for row in restored_holds:
+            if row["hold_id"] in {hold_id, released_hold_id}:
+                assert Path(row["raw_path"]).read_bytes() == capture_bytes
+                assert Path(row["raw_path"]) == target_data / "raw" / "atlas-captures" / (
+                    f"{capture_hash}.json"
+                )
+        hold_states = target.execute(
+            "SELECT hold_id, status FROM atlas_requirement_holds "
+            "WHERE hold_id = ANY(%(hold_ids)s)",
+            {"hold_ids": [hold_id, released_hold_id]},
+        ).fetchall()
+        assert {row["hold_id"]: row["status"] for row in hold_states} == {
+            hold_id: "active", released_hold_id: "released",
+        }
 
         history = target.execute(queries.get("list_artifact_revisions"), {
             "artifact_id": artifact["artifact_id"], "workspace_key": "workspace-a",

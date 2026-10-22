@@ -8,6 +8,7 @@ import type {
   NativeArtifactKind,
   RetrievalTrace,
   ResearchDecisionInfo,
+  ApplicabilityNotice,
 } from '../../api/types';
 import type { SourceScope } from '../../state/AppContext';
 
@@ -34,6 +35,7 @@ export interface AssistantEntry {
   context: ContextItem[];
   trace?: RetrievalTrace;
   research?: ResearchDecisionInfo | null;
+  applicability?: ApplicabilityNotice | null;
   /** The question this answers, for turning the answer into an artifact. */
   question?: string;
   /** The source scope that question searched. */
@@ -104,7 +106,7 @@ export interface ChatController {
   setDraft: (text: string) => void;
   /** Sending is not possible right now (a turn is in flight, or the chat is loading). */
   busy: boolean;
-  send: (attachments: Attachment[]) => void;
+  send: (attachments: Attachment[], onAccepted?: () => void) => void;
   /** Change the source scope for the next question. */
   changeScope: (scope: SourceScope) => void;
   open: (id: string) => void;
@@ -133,8 +135,8 @@ export function entriesFromTurns(turns: ConversationTurn[]): ChatEntry[] {
         attachments: references.map((ref) => ({
           artifactId: ref.artifactId,
           revisionId: ref.revisionId,
-          title: ref.spec.title,
-          kind: ref.spec.kind,
+          title: ref.spec.title ?? ref.spec.name ?? 'Artifact',
+          kind: (ref.spec.kind as NativeArtifactKind | null | undefined) ?? 'document',
         })),
       };
     }
@@ -155,6 +157,7 @@ export function entriesFromTurns(turns: ConversationTurn[]): ChatEntry[] {
       citations: assistantEvidence?.citations ?? [],
       context: assistantEvidence?.contextBlock ?? [],
       research: assistantEvidence?.research,
+      applicability: assistantEvidence?.applicability,
       question: question?.text,
       scope: questionEvidence ? questionEvidence.effective.sourceIds : undefined,
     };

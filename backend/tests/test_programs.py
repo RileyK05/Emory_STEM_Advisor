@@ -1,6 +1,7 @@
 """Program requirement parsing and import. Deterministic; no models."""
 
 import json
+import uuid
 
 import pytest
 
@@ -154,6 +155,63 @@ def test_duplicate_catalog_programs_keep_first_and_conflicts_fail():
         dedupe_programs([first, changed])
 
 
+def test_reimport_keeps_saved_release_and_audit(db, collection, tmp_path):
+    """An identical program reimport leaves the published release and saved audit in place."""
+    from tests.helpers import api_client
+
+    title = "Pocket Major (BA)"
+    text = "Pocket Major (BA)\nDEGREE AWARDED BA\nRequirements\n• CS 170\n"
+    identity = _ingest_catalog_file(db, collection, tmp_path, title, text, name="pocket.md")
+    record = to_record(parse_program(title, text), catalog="Test Catalog",
+                       source_url="https://example.test/catalog.pdf", first_page=3, last_page=4)
+    record["source"] = identity
+    path = tmp_path / "pocket.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    assert import_programs(db, collection_id=collection, path=path)["bound"] == 1
+    pid = program_id(collection, title)
+    client = api_client(db, collection)
+    draft = client.post(f"/api/admin/programs/{pid}/rules/draft", json={"notes": "reviewed"})
+    assert draft.status_code == 201, draft.text
+    release_id = draft.json()["releaseId"]
+    assert client.post(f"/api/admin/programs/{pid}/rules/{release_id}/approve", json={}).status_code == 200
+    published = client.post(f"/api/admin/programs/{pid}/rules/{release_id}/publish", json={})
+    assert published.status_code == 200, published.text
+    record_id = uuid.uuid4()
+    audit_id = uuid.uuid4()
+    db.execute(
+        "INSERT INTO student_academic_records (record_id, workspace_key) VALUES (%s, 'development')",
+        (record_id,),
+    )
+    db.execute(
+        """
+        INSERT INTO degree_audits (
+            audit_id, workspace_key, program_id, rule_release_id, record_id, record_revision,
+            rules_digest, overall_status
+        ) VALUES (%s, 'development', %s, %s, %s, 1, %s, 'outstanding')
+        """,
+        (audit_id, pid, release_id, record_id, published.json()["rulesDigest"]),
+    )
+    db.commit()
+    reviews_before = db.execute(
+        "SELECT count(*) AS n FROM program_rule_reviews WHERE release_id = %s", (release_id,),
+    ).fetchone()["n"]
+
+    assert import_programs(db, collection_id=collection, path=path)["bound"] == 1
+
+    release = db.execute(
+        "SELECT status FROM program_rule_releases WHERE release_id = %s", (release_id,),
+    ).fetchone()
+    audit = db.execute(
+        "SELECT overall_status FROM degree_audits WHERE audit_id = %s", (audit_id,),
+    ).fetchone()
+    reviews_after = db.execute(
+        "SELECT count(*) AS n FROM program_rule_reviews WHERE release_id = %s", (release_id,),
+    ).fetchone()["n"]
+    assert release["status"] == "published"
+    assert audit["overall_status"] == "outstanding"
+    assert reviews_after == reviews_before
+
+
 def test_import_commits_even_inside_an_open_transaction(db, collection, tmp_path, migrated_dsn):
     from app.db.connection import connect
 
@@ -255,6 +313,69 @@ def test_program_binds_only_to_its_exact_current_source(db, collection, tmp_path
         assert unsupported == []
     else:
         assert [row["text"] for row in unsupported] == ["CS 171"]
+
+
+@pytest.mark.parametrize("change", ["same", "changed", "removed", "unbound"])
+def test_program_refresh_retains_released_rules_and_saved_audits(db, collection, tmp_path, change):
+    from app.advising.audit_service import DegreeAuditService
+    from app.auth.models import Principal
+    from app.programs.review_service import ProgramReviewService
+
+    title = "Computer Science (BS)"
+    identity = _ingest_catalog_file(db, collection, tmp_path, title, CS_BS)
+    record = to_record(parse_program(title, CS_BS), catalog="Test Catalog",
+                       source_url="https://example.test/catalog.pdf", first_page=3, last_page=4)
+    record["source"] = identity
+    path = tmp_path / "programs.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    import_programs(db, collection_id=collection, path=path)
+    pid = program_id(collection, title)
+    release = ProgramReviewService.create_rule_draft(db, pid, None)
+    ProgramReviewService.approve_rule_release(db, release["release_id"], None)
+    ProgramReviewService.publish_rule_release(db, release["release_id"], None)
+    student = Principal("development", None, "development")
+    saved = DegreeAuditService.run_audit(db, student.workspace_key, pid, student)
+    db.commit()
+
+    if change == "changed":
+        record["items"][1]["text"] += " (review updated wording)"
+    elif change == "unbound":
+        record["source"] = {**identity, "content_sha256": "0" * 64}
+    if change == "removed":
+        # A genuinely removed program is a non-empty import that no longer
+        # contains its title. An empty file is rejected before any retirement.
+        other_title = "Other Program (BA)"
+        other_text = CS_BS.replace("Computer Science (BS)", other_title)
+        other_identity = _ingest_catalog_file(
+            db, collection, tmp_path, other_title, other_text, name="other.md"
+        )
+        other = to_record(
+            parse_program(other_title, other_text), catalog="Test Catalog",
+            source_url="https://example.test/catalog.pdf", first_page=3, last_page=4,
+        )
+        other["source"] = other_identity
+        path.write_text(json.dumps(other) + "\n", encoding="utf-8")
+    else:
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    import_programs(db, collection_id=collection, path=path)
+
+    retained = db.execute(queries.get("get_program_rule_release"), {
+        "release_id": release["release_id"],
+    }).fetchone()
+    assert retained["rules_tree"] == release["rules_tree"]
+    assert retained["status"] == ("published" if change == "same" else "archived")
+    audit = DegreeAuditService.get_audit(
+        db, student.workspace_key, saved["audit"]["audit_id"], student,
+    )["audit"]
+    assert audit["is_stale"] == (change != "same")
+    assert audit["rules_digest"] == release["rules_digest"]
+    listed = db.execute(queries.get("list_programs"), {"collection_id": collection}).fetchall()
+    active_ids = {row["program_id"] for row in listed}
+    if change == "removed":
+        assert pid not in active_ids
+        assert [row["title"] for row in listed] == ["Other Program (BA)"]
+    else:
+        assert active_ids == {pid}
 
 
 def test_alignment_steps_over_separator_gaps_but_never_long_holes():

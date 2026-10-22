@@ -117,6 +117,14 @@ class Settings:
     # estimate because provider tokenizers are model-specific.
     conversation_token_estimate_bytes: int = 4
     batch_operation_timeout_seconds: float = 172800.0
+    # Optional visual feedback for HTML artifacts: render the draft, send the
+    # screenshot to a vision-capable profile, and allow one bounded correction.
+    visual_artifact_review_enabled: bool = False
+    screenshot_renderer: str = "disabled"  # disabled | playwright
+    screenshot_timeout_seconds: int = 30
+    screenshot_width: int = 1280
+    screenshot_height: int = 800
+    screenshot_max_bytes: int = 8 * 1024 * 1024
 
     llm_sampling_policy: str = "greedy"
     llm_reasoning_effort: str | None = None
@@ -165,10 +173,12 @@ class Settings:
     research_operation_token_budget: int = 640_000
     research_max_prompt_bytes: int = 48_000
     research_max_output_tokens: int = 4096
+    audit_max_search_states: int = 50_000
     office_enabled: bool = False
     sandbox_remote_url: str | None = None
     sandbox_bearer_token: str | None = field(default=None, repr=False)
     sandbox_office_image: str = "emory-sandbox-office:7.4.7-v1"
+    sandbox_screenshot_image: str = "emory-sandbox-browser:1.50.0-v1"
     office_timeout_seconds: float = 60.0
     office_max_input_bytes: int = 16 * 1024 * 1024
     office_max_output_bytes: int = 32 * 1024 * 1024
@@ -260,6 +270,8 @@ class Settings:
             raise ValueError("QUERY_PLANNING_TOKEN_BUDGET must be between 1000 and 2000000")
         if not 1 <= self.research_max_calls <= 100:
             raise ValueError("RESEARCH_MAX_CALLS must be between 1 and 100")
+        if not 1 <= self.audit_max_search_states <= 1_000_000:
+            raise ValueError("AUDIT_MAX_SEARCH_STATES must be between 1 and 1000000")
         if not 1 <= self.research_max_tool_calls <= 100:
             raise ValueError("RESEARCH_MAX_TOOL_CALLS must be between 1 and 100")
         if (not math.isfinite(self.research_operation_timeout_seconds)
@@ -313,6 +325,17 @@ class Settings:
                 or not 1 <= self.operation_max_calls <= 100
                 or self.operation_token_budget < 1):
             raise ValueError("operation limits are invalid")
+        if self.screenshot_renderer not in {"disabled", "sandbox", "playwright"}:
+            raise ValueError("SCREENSHOT_RENDERER must be disabled, sandbox, or playwright")
+        if self.screenshot_renderer == "sandbox" and not (
+            self.sandbox_remote_url and self.sandbox_bearer_token
+        ):
+            raise ValueError("sandbox screenshots require an authenticated remote sandbox")
+        if (not 1 <= self.screenshot_timeout_seconds <= 120
+                or not 320 <= self.screenshot_width <= 3840
+                or not 240 <= self.screenshot_height <= 2160
+                or not 1024 <= self.screenshot_max_bytes <= 32 * 1024 * 1024):
+            raise ValueError("screenshot limits are invalid")
 
 
 def load_settings() -> Settings:
@@ -403,6 +426,13 @@ def load_settings() -> Settings:
         conversation_compaction_token_budget=compaction_budget,
         conversation_token_estimate_bytes=bytes_per_token,
         batch_operation_timeout_seconds=float(os.environ.get("BATCH_OPERATION_TIMEOUT_SECONDS", "172800")),
+        visual_artifact_review_enabled=os.environ.get(
+            "VISUAL_ARTIFACT_REVIEW_ENABLED", "false").lower() == "true",
+        screenshot_renderer=os.environ.get("SCREENSHOT_RENDERER", "disabled"),
+        screenshot_timeout_seconds=_int("SCREENSHOT_TIMEOUT_SECONDS", 30),
+        screenshot_width=_int("SCREENSHOT_WIDTH", 1280),
+        screenshot_height=_int("SCREENSHOT_HEIGHT", 800),
+        screenshot_max_bytes=_int("SCREENSHOT_MAX_BYTES", 8 * 1024 * 1024),
         llm_sampling_policy=os.environ.get("LLM_SAMPLING_POLICY", "greedy"),
         llm_reasoning_effort=os.environ.get("LLM_REASONING_EFFORT") or None,
         llm_compatible_thinking=os.environ.get("LLM_COMPATIBLE_THINKING") or None,
@@ -442,10 +472,13 @@ def load_settings() -> Settings:
         research_operation_token_budget=_int("RESEARCH_OPERATION_TOKEN_BUDGET", 640_000),
         research_max_prompt_bytes=_int("RESEARCH_MAX_PROMPT_BYTES", 48_000),
         research_max_output_tokens=_int("RESEARCH_MAX_OUTPUT_TOKENS", 4096),
+        audit_max_search_states=_int("AUDIT_MAX_SEARCH_STATES", 50_000),
         office_enabled=os.environ.get("OFFICE_ENABLED", "false").lower() == "true",
         sandbox_remote_url=os.environ.get("SANDBOX_REMOTE_URL") or None,
         sandbox_bearer_token=os.environ.get("SANDBOX_BEARER_TOKEN") or None,
         sandbox_office_image=os.environ.get("SANDBOX_OFFICE_IMAGE", "emory-sandbox-office:7.4.7-v1"),
+        sandbox_screenshot_image=os.environ.get(
+            "SANDBOX_SCREENSHOT_IMAGE", "emory-sandbox-browser:1.50.0-v1"),
         office_timeout_seconds=float(os.environ.get("OFFICE_TIMEOUT_SECONDS", "60")),
         office_max_input_bytes=_int("OFFICE_MAX_INPUT_BYTES", 16 * 1024 * 1024),
         office_max_output_bytes=_int("OFFICE_MAX_OUTPUT_BYTES", 32 * 1024 * 1024),

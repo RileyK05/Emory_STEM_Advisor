@@ -12,6 +12,7 @@ from psycopg import conninfo, sql
 from app.db import migrate, queries
 from app.db.connection import close_pools, connect, pooled_connect
 from app.db.migrate import MigrationChanged, MigrationError, apply_migrations
+from app.ops.backup import _referenced_files
 
 
 @contextmanager
@@ -115,6 +116,17 @@ def test_fresh_database_applies_baseline_once_and_binds_vector_on_the_same_conne
             if pooled:
                 conn.close()
                 close_pools()  # release pooled sessions before the database is dropped
+
+
+def test_backup_file_discovery_accepts_pre_offerings_schema(migrated_dsn, tmp_path):
+    """Backups from before migrations 070/071 remain readable without implicit upgrades."""
+    with isolated_database(migrated_dsn) as conn:
+        conn.execute(migrate._BASELINE_PATH.read_text(encoding="utf-8"))
+        conn.commit()
+        optional = conn.execute(queries.get("backup_optional_file_tables")).fetchone()
+        assert optional["offerings"] is False
+        assert optional["requirement_holds"] is False
+        assert _referenced_files(conn, tmp_path) == []
 
 
 def _custom_migration_history(conn, tmp_path, monkeypatch, body: bytes):

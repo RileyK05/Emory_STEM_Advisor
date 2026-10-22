@@ -13,6 +13,7 @@ import type { AssistantEntry, Attachment, ChatController } from '../chat/model';
 import { useDemoChat } from '../chat/useDemoChat';
 import { useSavedChat } from '../chat/useSavedChat';
 import { useLocalConnectionsAvailable } from '../connection/ConnectionSettings';
+import { MemoryDialog } from '../chat/MemoryDialog';
 import { ExploreDialog } from '../source/ExploreDialog';
 import { SourcesDialog } from '../source/SourcesDialog';
 import { Sidebar } from './Sidebar';
@@ -28,10 +29,10 @@ const MAKE_PROMPTS: Record<NativeArtifactKind, (question: string) => string> = {
   html: (q) => `Make a simple web page that explains: ${q}`,
 };
 
-type DialogName = 'sources' | 'explore' | 'library' | 'tools';
+type DialogName = 'sources' | 'explore' | 'library' | 'tools' | 'memory';
 
 export function Shell({ onLogout }: { onLogout?: () => void }) {
-  const { session, sources, scope } = useApp();
+  const { session, sources, scope, flags, flagsError, refreshFlags } = useApp();
   const chat = useChat();
   const demo = !chat.saved;
   const referenced = useMemo(
@@ -44,10 +45,15 @@ export function Shell({ onLogout }: { onLogout?: () => void }) {
   const [dialog, setDialog] = useState<DialogName | null>(null);
   const [newRequest, setNewRequest] = useState<NewArtifactRequest | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [exportingSummary, setExportingSummary] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const nonce = useRef(0);
   const previousChat = useRef<string | null>(chat.activeId);
   const autoOpenedFor = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!flags?.memory_inspector && dialog === 'memory') setDialog(null);
+  }, [flags, dialog]);
 
   // Moving to a different chat leaves the previous chat's attachments and open artifact behind.
   // A new chat getting its id (null → id) is the same chat, so nothing is cleared then.
@@ -108,11 +114,25 @@ export function Shell({ onLogout }: { onLogout?: () => void }) {
     document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus();
   };
 
+  const exportSummary = async () => {
+    if (!chat.activeId || exportingSummary) return;
+    setExportingSummary(true);
+    try {
+      const record = await getClient().exportSummary(chat.activeId, {
+        artifactReferences: attachments.map(({ artifactId, revisionId }) => ({ artifactId, revisionId })),
+      });
+      await created(record, 'Exported advising summary as an artifact.');
+    } catch (err) {
+      setToast(err instanceof Error ? err.message : 'Failed to export advising summary.');
+    } finally {
+      setExportingSummary(false);
+    }
+  };
+
   const chatForView: ChatController = {
     ...chat,
     send: (items) => {
-      chat.send(items);
-      setAttachments([]);
+      chat.send(items, () => setAttachments([]));
     },
   };
   const showPanel = !demo && workspace.panelOpen;
@@ -121,6 +141,14 @@ export function Shell({ onLogout }: { onLogout?: () => void }) {
   return (
     <div className={'shell' + (showPanel ? ' with-panel' : '') + (showPanel && workspace.record ? ' with-canvas' : '')}>
       <TopBar session={session} onLogout={onLogout} onMenu={() => setDrawerOpen(true)} />
+      {!demo && flagsError && (
+        <div className="error-banner" role="alert">
+          Optional features could not be checked: {flagsError}{' '}
+          <button type="button" className="secondary-button" onClick={() => void refreshFlags()}>
+            Retry feature check
+          </button>
+        </div>
+      )}
       <div className="shell-body">
         <Sidebar
           chat={chat}
@@ -146,6 +174,9 @@ export function Shell({ onLogout }: { onLogout?: () => void }) {
           onToggleArtifacts={demo ? undefined : () => workspace.setPanelOpen(!workspace.panelOpen)}
           onManageSources={() => setDialog('sources')}
           onExplore={() => setDialog('explore')}
+          onExportSummary={demo || !flags?.advising_summary_export ? undefined : exportSummary}
+          exportingSummary={exportingSummary}
+          onOpenMemory={demo || !flags?.memory_inspector ? undefined : () => setDialog('memory')}
         />
         {showPanel && (
           <ArtifactPanel
@@ -173,6 +204,12 @@ export function Shell({ onLogout }: { onLogout?: () => void }) {
         onOpenRevision={async (artifactId, revisionId) => {
           await workspace.openArtifact(artifactId, revisionId);
         }}
+      />
+      <MemoryDialog
+        open={dialog === 'memory'}
+        onClose={() => setDialog(null)}
+        conversationId={chat.activeId}
+        onResetSuccess={() => setToast('Conversation context memory reset.')}
       />
       {!demo && (
         <>

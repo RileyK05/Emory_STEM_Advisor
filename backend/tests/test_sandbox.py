@@ -67,6 +67,28 @@ def make_config(tmp_path, **changes):
     return SandboxConfig(**values)
 
 
+def test_screenshot_argv_uses_the_dedicated_browser_sandbox(tmp_path):
+    from app.sandbox.screenshot import build_screenshot_create_argv
+
+    config = make_config(tmp_path, browser_image="emory-sandbox-browser:1.50.0-v1")
+    root = config.work_root
+    root.mkdir(parents=True, exist_ok=True)
+    input_dir, output_dir = root / "inputs", root / "outputs"
+    input_dir.mkdir(parents=True)
+    output_dir.mkdir(parents=True)
+    argv = build_screenshot_create_argv(
+        config, container_name="advisor-shot-" + "a" * 32,
+        image=config.browser_image, input_dir=input_dir, output_dir=output_dir,
+        width=1280, height=800, timeout_seconds=10,
+    )
+    assert "--network" in argv and argv[argv.index("--network") + 1] == "none"
+    assert "--read-only" in argv
+    assert "--cap-drop" in argv and "ALL" in argv
+    assert "python3" in argv and "/usr/local/bin/html-screenshot" in argv
+    assert str(input_dir.resolve()).replace("\\", "/") in " ".join(argv)
+    assert str(output_dir.resolve()).replace("\\", "/") in " ".join(argv)
+
+
 def test_sandbox_argv_has_no_network_credentials_or_shell_and_source_is_file_input(tmp_path):
     runtime = RecordingRuntime()
     config = make_config(tmp_path, max_cpu_count=0.25, max_memory_bytes=128 * 1024 * 1024)

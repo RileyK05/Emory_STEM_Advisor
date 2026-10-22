@@ -106,12 +106,31 @@ def test_soft_source_cap_admits_a_stronger_sibling():
         ],
     )
 
-    fused = fuse([keyword], cited_set_size=3, embed_only_quota=4)
+    fused = fuse([keyword], cited_set_size=2, embed_only_quota=4)
 
     assert [(c.source_id, c.chunk_index) for c in fused] == [
-        (strong, 0), (strong, 1), (medium, 0)
+        (strong, 0), (strong, 1)
     ]
+    assert medium not in {c.source_id for c in fused}
     assert weak not in {c.source_id for c in fused}
+
+
+def test_full_source_budget_keeps_every_covered_source():
+    strong, medium, weak = uuid4(), uuid4(), uuid4()
+    keyword = _seam(
+        "keyword",
+        [
+            _candidate(strong, 0, "keyword", 10.0),
+            _candidate(strong, 1, "keyword", 8.0),
+            _candidate(medium, 0, "keyword", 5.0),
+            _candidate(weak, 0, "keyword", 3.0),
+        ],
+    )
+
+    fused = fuse([keyword], cited_set_size=3, embed_only_quota=4)
+
+    assert {c.source_id for c in fused} == {strong, medium, weak}
+    assert (strong, 1) not in {(c.source_id, c.chunk_index) for c in fused}
 
 
 def test_soft_source_cap_keeps_diversity_when_sibling_is_weaker():
@@ -126,9 +145,10 @@ def test_soft_source_cap_keeps_diversity_when_sibling_is_weaker():
         ],
     )
 
-    fused = fuse([keyword], cited_set_size=3, embed_only_quota=4)
+    fused = fuse([keyword], cited_set_size=2, embed_only_quota=4)
 
-    assert {c.source_id for c in fused} == {strong, medium, weak}
+    assert {c.source_id for c in fused} == {strong, medium}
+    assert all(c.chunk_index == 0 for c in fused)
 
 
 def test_availability_clamp_redistributes():
@@ -173,11 +193,10 @@ def test_prereq_scores_keep_their_fixed_scale():
     assert scores == {0: 1.0, 1: 0.8}
 
 
-def test_min_max_promotes_weak_matches_so_fusion_cannot_reject_topical_negatives():
-    # Two weak, unrelated keyword matches: min-max still promotes the stronger
-    # one to a perfect 1.0. Fusion has no absolute score floor, so a topical
-    # negative cannot be rejected here; that requires the embed seam's
-    # min_similarity floor or the fusion min_score. This pins that boundary.
+def test_weak_lexical_matches_are_not_promoted_to_the_top():
+    # DA-03: a weak keyword set must not be stretched to a perfect 1.0.
+    # The configured relevance floor then drops it, so boilerplate cannot
+    # occupy the top cited slot or count as a grounded hit.
     source = uuid4()
     seam = _seam(
         "keyword",
@@ -186,8 +205,16 @@ def test_min_max_promotes_weak_matches_so_fusion_cannot_reject_topical_negatives
             _candidate(source, 1, "keyword", 0.01),
         ],
     )
-    fused = fuse([seam], cited_set_size=6, embed_only_quota=4)
-    assert [c.normalized_score for c in fused] == [1.0, 0.0]
+    kept = fuse([seam], cited_set_size=6, embed_only_quota=4)
+    assert [c.normalized_score for c in kept] == [0.02, 0.01]
+    assert fuse([seam], cited_set_size=6, embed_only_quota=4, min_score=0.15) == []
+    topical = _candidate(uuid4(), 0, "keyword", 5.2)
+    generic = _candidate(uuid4(), 0, "keyword", 0.2)
+    ranked = fuse(
+        [_seam("keyword", [generic, topical])],
+        cited_set_size=6, embed_only_quota=4, min_score=0.15,
+    )
+    assert [c.chunk_id for c in ranked] == [topical.chunk_id]
 
 
 def test_duplicate_candidates_do_not_consume_context_slots():
@@ -262,7 +289,7 @@ def test_filtered_source_representative_does_not_leave_a_context_hole():
 
 
 def test_dedupe_keeps_real_grounded_identity_on_a_score_tie():
-    grounded = _candidate(uuid4(), 0, "keyword", 0.1)
+    grounded = _candidate(uuid4(), 0, "keyword", 1.0)
     embedded = _candidate(uuid4(), 0, "embed", 0.8)
     fused = fuse([_seam("keyword", [grounded]), _seam("embed", [embedded])],
                  cited_set_size=2, embed_only_quota=0,

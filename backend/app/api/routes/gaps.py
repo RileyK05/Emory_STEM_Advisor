@@ -24,6 +24,7 @@ class GapResolution(BaseModel):
     sourceIds: list[UUID]
     note: str
     resolvedAt: datetime
+    evidenceState: Literal["current", "ineligible"] = "current"
 
 
 class GapSummary(BaseModel):

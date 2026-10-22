@@ -1,14 +1,17 @@
 import type {
   AdvisorClient,
+  EffectiveFlagsResponse,
   QueryRequest,
   QueryResponse,
   SourceDoc,
   CollectionDoc,
   Recommendation,
+  RetiredCourse,
   ArtifactPreview,
   ArtifactRevisionRequest,
   NativeArtifactRecord,
   NativeArtifactSpec,
+  ExportSummaryRequest,
   ArtifactRun,
   ArtifactRunEvent,
   ArtifactRunRequest,
@@ -30,11 +33,37 @@ import type {
   ConversationStreamEventsResponse,
   ConversationTerminalResponse,
   ConversationSummaryCheckpoint,
+  ConversationMemoryInspection,
+  ConversationResetResponse,
   NativeDecisionRequest,
   NativeDecision,
   GapListResponse,
   ResolveGapRequest,
   RetrievalGap,
+  ResourceGrant,
+  SupportGrantRequest,
+  SupportGrantRequestCreate,
+  SupportGrantRequestDecision,
+  AcademicRecordAttemptItem,
+  AcademicRecordAttemptUpsertRequest,
+  AcademicRecordDetailResponse,
+  AcademicRecordImportBatchResponse,
+  AcademicRecordImportCommitRequest,
+  AcademicRecordImportCommitResponse,
+  AcademicRecordImportPreviewRequest,
+  AcademicRecordImportUpdateRequest,
+  AcademicRecordRevisionResponse,
+  AuditableProgramItem,
+  DegreeAuditDetailResponse,
+  DegreeAuditRecordItem,
+  DegreeAuditRunRequest,
+  ProgramComparisonCreateRequest,
+  ProgramComparisonResponse,
+  ProgramComparisonSummary,
+  PrivacyExportDownloadResponse,
+  PrivacyExportResponse,
+  ResponseFeedbackRequest,
+  ResponseFeedbackResponse,
 } from './types';
 
 /** Base URL of the backend. Defaults to the Vite dev proxy path. */
@@ -147,6 +176,11 @@ export class HttpClient implements AdvisorClient {
     return request<Recommendation[]>(`/api/recommendations?${params.toString()}`);
   }
 
+  async retiredCourses(query: string): Promise<RetiredCourse[]> {
+    const params = new URLSearchParams({ query });
+    return request<RetiredCourse[]>(`/api/retired-courses?${params.toString()}`);
+  }
+
   async listConversations(): Promise<ConversationSummary[]> {
     return request<ConversationSummary[]>('/api/conversations');
   }
@@ -198,6 +232,23 @@ export class HttpClient implements AdvisorClient {
 
   async listConversationSummaries(id: string): Promise<ConversationSummaryCheckpoint[]> {
     return request<ConversationSummaryCheckpoint[]>(`/api/conversations/${encodeURIComponent(id)}/summaries`);
+  }
+
+  async inspectConversationMemory(id: string): Promise<ConversationMemoryInspection> {
+    return request<ConversationMemoryInspection>(`/api/conversations/${encodeURIComponent(id)}/memory`);
+  }
+
+  async resetConversationMemory(id: string): Promise<ConversationResetResponse> {
+    return request<ConversationResetResponse>(`/api/conversations/${encodeURIComponent(id)}/memory/reset`, {
+      method: 'POST',
+    });
+  }
+
+  async exportSummary(id: string, body?: ExportSummaryRequest): Promise<NativeArtifactRecord> {
+    return request<NativeArtifactRecord>(`/api/conversations/${encodeURIComponent(id)}/export-summary`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    });
   }
 
   async submitDecision(body: NativeDecisionRequest): Promise<NativeDecision> {
@@ -389,6 +440,9 @@ export class HttpClient implements AdvisorClient {
   async getSession(): Promise<AuthSession> {
     return request<AuthSession>('/api/session', { cache: 'no-store' });
   }
+  async getEffectiveFlags(): Promise<EffectiveFlagsResponse> {
+    return request<EffectiveFlagsResponse>('/api/flags/effective', { cache: 'no-store' });
+  }
   async logout(): Promise<void> {
     await request<void>('/api/auth/logout', { method: 'POST' });
   }
@@ -397,5 +451,111 @@ export class HttpClient implements AdvisorClient {
   }
   async listArtifacts(): Promise<NativeArtifactSummary[]> {
     return request<NativeArtifactSummary[]>('/api/artifacts');
+  }
+  async listSupportGrantRequests(): Promise<SupportGrantRequest[]> {
+    return request<SupportGrantRequest[]>('/api/admin/grant-requests');
+  }
+  async createSupportGrantRequest(body: SupportGrantRequestCreate): Promise<SupportGrantRequest> {
+    return request<SupportGrantRequest>('/api/admin/grant-requests', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+  async approveSupportGrantRequest(requestId: string, body: SupportGrantRequestDecision): Promise<SupportGrantRequest> {
+    return request<SupportGrantRequest>(`/api/admin/grant-requests/${encodeURIComponent(requestId)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+  async revokeResourceGrant(grantId: string): Promise<ResourceGrant> {
+    return request<ResourceGrant>(`/api/admin/grants/${encodeURIComponent(grantId)}/revoke`, {
+      method: 'POST',
+    });
+  }
+  async getAcademicRecord(): Promise<AcademicRecordDetailResponse> {
+    return request<AcademicRecordDetailResponse>('/api/academic-record');
+  }
+  async upsertAcademicAttempt(body: AcademicRecordAttemptUpsertRequest): Promise<AcademicRecordAttemptItem> {
+    return request<AcademicRecordAttemptItem>('/api/academic-record/attempts', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+  async previewAcademicImport(body: AcademicRecordImportPreviewRequest): Promise<AcademicRecordImportBatchResponse> {
+    return request<AcademicRecordImportBatchResponse>('/api/academic-record/imports/preview', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+  async updateAcademicImport(
+    batchId: string,
+    body: AcademicRecordImportUpdateRequest,
+  ): Promise<AcademicRecordImportBatchResponse> {
+    return request<AcademicRecordImportBatchResponse>(
+      `/api/academic-record/imports/${encodeURIComponent(batchId)}/rows`,
+      {
+        method: 'POST',
+        body: JSON.stringify(body),
+      },
+    );
+  }
+  async commitAcademicImport(
+    batchId: string,
+    body: AcademicRecordImportCommitRequest,
+  ): Promise<AcademicRecordImportCommitResponse> {
+    return request<AcademicRecordImportCommitResponse>(
+      `/api/academic-record/imports/${encodeURIComponent(batchId)}/commit`,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+  }
+  async getAcademicRecordRevision(revision: number): Promise<AcademicRecordRevisionResponse> {
+    return request<AcademicRecordRevisionResponse>(`/api/academic-record/revisions/${revision}`);
+  }
+  async listAuditablePrograms(): Promise<AuditableProgramItem[]> {
+    return request<AuditableProgramItem[]>('/api/audits/programs');
+  }
+  async listProgramAudits(): Promise<DegreeAuditRecordItem[]> {
+    return request<DegreeAuditRecordItem[]>('/api/audits');
+  }
+  async runProgramAudit(body: DegreeAuditRunRequest): Promise<DegreeAuditDetailResponse> {
+    return request<DegreeAuditDetailResponse>('/api/audits/run', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+  async getProgramAudit(auditId: string): Promise<DegreeAuditDetailResponse> {
+    return request<DegreeAuditDetailResponse>(`/api/audits/${encodeURIComponent(auditId)}`);
+  }
+  async exportProgramAudit(auditId: string): Promise<DegreeAuditDetailResponse> {
+    return request<DegreeAuditDetailResponse>(`/api/audits/${encodeURIComponent(auditId)}/export`);
+  }
+  async listProgramComparisons(): Promise<ProgramComparisonSummary[]> {
+    return request<ProgramComparisonSummary[]>('/api/comparisons');
+  }
+  async createProgramComparison(body: ProgramComparisonCreateRequest): Promise<ProgramComparisonResponse> {
+    return request<ProgramComparisonResponse>('/api/comparisons', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+  async getProgramComparison(comparisonId: string): Promise<ProgramComparisonResponse> {
+    return request<ProgramComparisonResponse>(`/api/comparisons/${encodeURIComponent(comparisonId)}`);
+  }
+  async submitResponseFeedback(body: ResponseFeedbackRequest): Promise<ResponseFeedbackResponse> {
+    return request<ResponseFeedbackResponse>('/api/feedback', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+  async listPrivacyExports(): Promise<PrivacyExportResponse[]> {
+    return request<PrivacyExportResponse[]>('/api/privacy/exports');
+  }
+  async createPrivacyExport(): Promise<PrivacyExportResponse> {
+    return request<PrivacyExportResponse>('/api/privacy/exports', { method: 'POST' });
+  }
+  async downloadPrivacyExport(exportId: string, token: string): Promise<PrivacyExportDownloadResponse> {
+    return request<PrivacyExportDownloadResponse>(`/api/privacy/exports/${encodeURIComponent(exportId)}/download`, {
+      headers: { 'X-Export-Token': token },
+    });
   }
 }

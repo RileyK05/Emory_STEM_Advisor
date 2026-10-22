@@ -13,6 +13,7 @@ from app.config import load_settings
 from app.db import queries
 from app.embeddings.base import Embedder
 from app.ingest.chunker import chunk
+from app.ingest.evidence import preserve_indexed_source_evidence
 from app.ingest.extract import extract
 from app.retrieval.config import RetrievalConfig
 from app.util.workspace import is_valid_workspace_key
@@ -131,6 +132,8 @@ def _replace_index(conn: Connection, source_id: UUID, index_revision: int, versi
         }).fetchone()
         if current is None or current["index_revision"] != index_revision:
             return
+        # The rows about to be deleted still belong to the last successful revision.
+        preserve_indexed_source_evidence(conn, source_id)
         conn.execute(queries.get("delete_chunks_for_source"), {"source_id": source_id})
         conn.execute(queries.get("delete_locators_for_source"), {"source_id": source_id})
         with conn.cursor() as cursor:
@@ -168,6 +171,7 @@ def _replace_index(conn: Connection, source_id: UUID, index_revision: int, versi
         conn.execute(queries.get("set_source_indexed"), {
             "source_id": source_id, "index_revision": index_revision,
         })
+        preserve_indexed_source_evidence(conn, source_id)
         if provenance is not None:
             # Verified classification publishes with the indexed version it describes.
             conn.execute(queries.get("upsert_source_provenance"),

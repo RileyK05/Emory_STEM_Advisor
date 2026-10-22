@@ -27,6 +27,23 @@ def _append_turn_pair(store, conversation_id, sequence, *, effective=None, answe
     return sequence + 1
 
 
+def test_summary_truncation_uses_the_utf8_byte_budget():
+    from dataclasses import replace
+
+    from app.config import load_settings
+    from app.conversations.compact import _summary_limits, _with_reference_index
+
+    settings = replace(
+        load_settings(),
+        llm_context_window_tokens=1000,
+        conversation_token_estimate_bytes=4,
+    )
+    max_bytes, _ = _summary_limits(settings)
+    result = _with_reference_index("😀" * 5000, 5, "- pointer", settings)
+    assert len(result.encode("utf-8")) <= max_bytes
+    assert result.endswith("- pointer")
+
+
 def test_summary_checkpoint_covers_contiguous_old_turns_and_keeps_exact_references(db):
     store = ConversationStore(db, "workspace-a")
     made = store.create("Checkpoint")
@@ -141,8 +158,21 @@ def _append_referenced_pair(store, conversation_id, sequence, *, answer):
     return sequence + 1
 
 
-def test_auto_compaction_replaces_old_turns_with_exact_pointer_memory(db, collection):
+@pytest.mark.parametrize("stop_compaction", [False, True])
+def test_auto_compaction_replaces_old_turns_with_exact_pointer_memory(db, collection, monkeypatch,
+                                                                    stop_compaction):
     provider = FakeProvider("Compacted memory narrative.")
+    chat = provider.chat
+
+    def maybe_stop(*args, **kwargs):
+        result = chat(*args, **kwargs)
+        if stop_compaction:
+            from app.flags.service import FeatureFlagService
+
+            FeatureFlagService.set_kill_switch(db, "conversation_compaction", True, "test stop")
+        return result
+
+    monkeypatch.setattr(provider, "chat", maybe_stop)
     client = api_client(db, collection, provider=provider)
     client.app.state.settings = replace(
         client.app.state.settings,
@@ -176,6 +206,13 @@ def test_auto_compaction_replaces_old_turns_with_exact_pointer_memory(db, collec
     assert provider.calls == 1
     checkpoints = client.get(
         f"/api/conversations/{conversation_id}/summaries").json()
+    if stop_compaction:
+        assert [item["state"] for item in checkpoints] == ["failed"]
+        from app.pricing import PricingService
+
+        assert PricingService.telemetry_summary(db)["totalCalls"] == 1
+        assert ConversationStore(db, "development").latest_summary(conversation_id) is None
+        return
     assert [item["state"] for item in checkpoints] == ["completed"]
     text = checkpoints[0]["text"]
     assert "Compacted conversation memory" in text
@@ -183,6 +220,13 @@ def test_auto_compaction_replaces_old_turns_with_exact_pointer_memory(db, collec
     assert "source-1" in text
     assert "artifact-id" in text and "revision-id" in text and "Degree plan" in text
     assert checkpoints[0]["coveredThrough"] == 6
+    # The checkpoint consumes generation budget and appears in cost/cache telemetry.
+    from app.pricing import PricingService
+
+    usage = PricingService.telemetry_summary(db)
+    assert usage["totalCalls"] == 1
+    assert usage["totalPromptTokens"] > 0
+    assert usage["unknownCostCalls"] == 1
 
     row = db.execute(queries.get("get_conversation_request"), {
         "conversation_id": conversation_id, "request_id": request_id,

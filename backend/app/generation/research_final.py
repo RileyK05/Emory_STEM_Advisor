@@ -19,7 +19,7 @@ from app.llm.base import Usage
 from app.programs.requirements import course_mentions
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-4"
+RESEARCH_PROMPT_VERSION = "research-13"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
 

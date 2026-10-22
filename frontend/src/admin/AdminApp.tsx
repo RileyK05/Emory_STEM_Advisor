@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AuthSession } from '../api/types';
 import type {
@@ -12,19 +12,24 @@ import type {
   AdminTranscript,
   AdminUser,
   AdminUserSession,
+  ModelPriceSchedule,
+  TelemetryUsageResponse,
 } from '../api/types';
 import {
   cancelAdminJob,
   createAdminCollection,
   deleteAdminCollection,
   deleteAdminConversation,
+  exportAdminAuditUrl,
   getAdminOverview,
+  getAdminTelemetryUsage,
   getAdminTranscript,
   listAdminArtifacts,
   listAdminAudit,
   listAdminCollections,
   listAdminConversations,
   listAdminJobs,
+  listAdminPriceSchedules,
   listAdminSources,
   listAdminUserSessions,
   listAdminUsers,
@@ -32,12 +37,37 @@ import {
   revokeAdminUserSessions,
   updateAdminUser,
 } from '../api/backoffice';
+import type { AdminAuditParams } from '../api/backoffice';
 import { isDemoMode } from '../api/client';
 import { errorMessage } from '../lib/errors';
 import { TopBar } from '../components/shell/TopBar';
 import { SessionGate } from '../app/SessionGate';
+import { FeatureFlagsPanel } from './FeatureFlagsPanel';
+import { CourseMaintenancePanel } from './CourseMaintenancePanel';
+import { CatalogRefreshPanel } from './CatalogRefreshPanel';
+import { ExperimentPanel } from './ExperimentPanel';
+import { FeedbackTriagePanel } from './FeedbackTriagePanel';
+import { GrantsPanel } from './GrantsPanel';
+import { PromptPromotionPanel } from './PromptPromotionPanel';
+import { SourceReviewPanel } from './SourceReviewPanel';
 
-type Tab = 'overview' | 'users' | 'chats' | 'jobs' | 'sources' | 'artifacts' | 'collections' | 'audit';
+type Tab =
+  | 'overview'
+  | 'users'
+  | 'chats'
+  | 'jobs'
+  | 'sources'
+  | 'artifacts'
+  | 'collections'
+  | 'audit'
+  | 'telemetry'
+  | 'flags'
+  | 'courses'
+  | 'grants'
+  | 'refresh'
+  | 'triage'
+  | 'experiments'
+  | 'prompts';
 
 type Selected =
   | { kind: 'user'; value: AdminUser }
@@ -56,12 +86,35 @@ const TABS: Array<[Tab, string]> = [
   ['artifacts', 'Artifacts'],
   ['collections', 'Collections'],
   ['audit', 'Audit'],
+  ['telemetry', 'Usage & Cost'],
+  ['flags', 'Feature Rollouts'],
+  ['courses', 'Courses'],
+  ['grants', 'Support grants'],
+  ['refresh', 'Catalog refresh'],
+  ['triage', 'Feedback triage'],
+  ['experiments', 'Experiments'],
+  ['prompts', 'Prompt promotion'],
 ];
 
 const PAGE = 50;
 
 function when(value?: string | null): string {
   return value ? new Date(value).toLocaleString() : '—';
+}
+
+function costHeadline(row: {
+  totalCost?: number | null;
+  costCurrency?: string | null;
+  unknownCostCalls: number;
+  costCompleteness?: 'complete' | 'partial' | 'unknown';
+}): { headline: string; known: string | null } {
+  const known = row.totalCost != null ? `${row.costCurrency || ''} ${row.totalCost.toFixed(4)}`.trim() : null;
+  const unpriced = row.unknownCostCalls > 0 || row.costCompleteness === 'partial' || row.costCompleteness === 'unknown';
+  if (unpriced && (row.unknownCostCalls > 0 || row.costCompleteness === 'partial')) {
+    return { headline: 'Unknown', known: known ? `Known portion ${known}` : null };
+  }
+  if (row.costCompleteness === 'unknown') return { headline: 'Unknown', known: null };
+  return { headline: known ?? '—', known: null };
 }
 
 function FieldLine({ label, children }: { label: string; children: ReactNode }) {
@@ -74,7 +127,7 @@ function FieldLine({ label, children }: { label: string; children: ReactNode }) 
 }
 
 function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: () => void }) {
-  const [tab, setTab] = useState<Tab>('overview');
+  const [tab, setTab] = useState<Tab>(session.role === 'auditor' ? 'audit' : 'overview');
   const [overview, setOverview] = useState<AdminOverview | null>(null);
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [conversations, setConversations] = useState<AdminConversation[]>([]);
@@ -83,6 +136,18 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
   const [artifacts, setArtifacts] = useState<AdminArtifact[]>([]);
   const [collections, setCollections] = useState<AdminCollection[]>([]);
   const [audit, setAudit] = useState<AdminAuditEntry[]>([]);
+  const [auditAction, setAuditAction] = useState('');
+  const [auditActor, setAuditActor] = useState('');
+  const [auditTargetType, setAuditTargetType] = useState('');
+  const [auditTargetId, setAuditTargetId] = useState('');
+  const [auditSince, setAuditSince] = useState('');
+  const [auditUntil, setAuditUntil] = useState('');
+  const [auditApplied, setAuditApplied] = useState<AdminAuditParams>({});
+  const [auditCursor, setAuditCursor] = useState('');
+  const [auditNextCursor, setAuditNextCursor] = useState<string | null>(null);
+  const [telemetry, setTelemetry] = useState<TelemetryUsageResponse | null>(null);
+  const [schedules, setSchedules] = useState<ModelPriceSchedule[]>([]);
+  const [telemetryGroupBy, setTelemetryGroupBy] = useState<'date' | 'model' | 'operation'>('date');
   const [selected, setSelected] = useState<Selected>(null);
   const [sessions, setSessions] = useState<AdminUserSession[] | null>(null);
   const [transcript, setTranscript] = useState<AdminTranscript | null>(null);
@@ -93,29 +158,78 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
   const [editCollection, setEditCollection] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const requestSeq = useRef(0);
 
   const load = useCallback(async () => {
+    if (
+      (session.role !== 'admin' && session.role !== 'auditor') ||
+      tab === 'flags' ||
+      tab === 'grants' ||
+      tab === 'refresh' ||
+      tab === 'triage' ||
+      tab === 'experiments' ||
+      tab === 'prompts'
+    )
+      return;
+    const seq = ++requestSeq.current;
     setBusy(true);
     setError(null);
     try {
-      if (tab === 'overview') setOverview(await getAdminOverview());
+      if (tab === 'overview') {
+        const value = await getAdminOverview();
+        if (seq === requestSeq.current) setOverview(value);
+      }
       if (tab === 'users') {
-        setUsers(await listAdminUsers({ query: search, limit: PAGE, offset }));
+        const value = await listAdminUsers({ query: search, limit: PAGE, offset });
+        if (seq === requestSeq.current) setUsers(value);
       }
       if (tab === 'chats') {
-        setConversations(await listAdminConversations({ query: search, limit: PAGE, offset }));
+        const value = await listAdminConversations({ query: search, limit: PAGE, offset });
+        if (seq === requestSeq.current) setConversations(value);
       }
-      if (tab === 'jobs') setJobs(await listAdminJobs('', PAGE, offset));
-      if (tab === 'sources') setSources(await listAdminSources('', PAGE, offset));
-      if (tab === 'artifacts') setArtifacts(await listAdminArtifacts(PAGE, offset));
-      if (tab === 'collections') setCollections(await listAdminCollections(PAGE, offset));
-      if (tab === 'audit') setAudit(await listAdminAudit(200));
+      if (tab === 'jobs') {
+        const value = await listAdminJobs('', PAGE, offset);
+        if (seq === requestSeq.current) setJobs(value);
+      }
+      if (tab === 'sources') {
+        const value = await listAdminSources('', PAGE, offset);
+        if (seq === requestSeq.current) setSources(value);
+      }
+      if (tab === 'artifacts') {
+        const value = await listAdminArtifacts(PAGE, offset);
+        if (seq === requestSeq.current) setArtifacts(value);
+      }
+      if (tab === 'collections') {
+        const value = await listAdminCollections(PAGE, offset);
+        if (seq === requestSeq.current) setCollections(value);
+      }
+      if (tab === 'audit') {
+        const res = await listAdminAudit({
+          ...auditApplied,
+          cursor: auditCursor || undefined,
+          limit: PAGE,
+        });
+        if (seq === requestSeq.current) {
+          setAudit(res.entries);
+          setAuditNextCursor(res.nextCursor);
+        }
+      }
+      if (tab === 'telemetry') {
+        const [usageRes, schedulesRes] = await Promise.all([
+          getAdminTelemetryUsage({ groupBy: telemetryGroupBy }),
+          listAdminPriceSchedules(),
+        ]);
+        if (seq === requestSeq.current) {
+          setTelemetry(usageRes);
+          setSchedules(schedulesRes);
+        }
+      }
     } catch (cause) {
-      setError(errorMessage(cause));
+      if (seq === requestSeq.current) setError(errorMessage(cause));
     } finally {
-      setBusy(false);
+      if (seq === requestSeq.current) setBusy(false);
     }
-  }, [tab, search, offset]);
+  }, [session.role, tab, search, offset, auditApplied, auditCursor, telemetryGroupBy]);
 
   useEffect(() => {
     void load();
@@ -135,7 +249,7 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
     );
   }
 
-  if (session.role !== 'admin') {
+  if (session.role !== 'admin' && session.role !== 'auditor') {
     return (
       <div className="shell">
         <TopBar session={session} onLogout={onLogout} />
@@ -155,6 +269,9 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
   const switchTab = (value: Tab) => {
     setTab(value);
     setOffset(0);
+    setAuditCursor('');
+    setAuditNextCursor(null);
+    setTelemetry(null);
     setSelected(null);
     setSessions(null);
     setTranscript(null);
@@ -175,7 +292,7 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
               : tab === 'collections'
                 ? collections
                 : [];
-  const hasNext = !['overview', 'audit'].includes(tab) && visible.length === PAGE;
+  const hasNext = !['overview', 'audit', 'telemetry'].includes(tab) && visible.length === PAGE;
 
   const openUser = async (user: AdminUser) => {
     setTranscript(null);
@@ -319,31 +436,42 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
       <div className="surface-nav">
         <strong>Institutional Admin</strong>
         <a href="/">Main</a>
-        <a href="/debug.html">Debug</a>
+        {session.role === 'admin' && <a href="/debug.html">Debug</a>}
       </div>
       <main className="admin-main">
         <div className="admin-tabs" role="tablist">
-          {TABS.map(([value, label]) => (
-            <button
-              key={value}
-              type="button"
-              role="tab"
-              aria-selected={tab === value}
-              className={tab === value ? 'admin-tab active' : 'admin-tab'}
-              onClick={() => switchTab(value)}
-            >
-              {label}
+          {TABS.filter(([value]) => session.role !== 'auditor' || ['audit', 'telemetry'].includes(value)).map(
+            ([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={tab === value}
+                className={tab === value ? 'admin-tab active' : 'admin-tab'}
+                onClick={() => switchTab(value)}
+              >
+                {label}
+              </button>
+            ),
+          )}
+          {!['flags', 'grants', 'refresh', 'triage', 'experiments', 'prompts'].includes(tab) && (
+            <button type="button" className="secondary-button" onClick={() => void load()} disabled={busy}>
+              Refresh
             </button>
-          ))}
-          <button type="button" className="secondary-button" onClick={() => void load()} disabled={busy}>
-            Refresh
-          </button>
+          )}
         </div>
         {error && (
           <p role="alert" className="admin-error">
             {error}
           </p>
         )}
+        {tab === 'flags' && <FeatureFlagsPanel />}
+        {tab === 'courses' && session.role === 'admin' && <CourseMaintenancePanel />}
+        {tab === 'grants' && session.role === 'admin' && <GrantsPanel />}
+        {tab === 'refresh' && session.role === 'admin' && <CatalogRefreshPanel />}
+        {tab === 'triage' && session.role === 'admin' && <FeedbackTriagePanel />}
+        {tab === 'experiments' && session.role === 'admin' && <ExperimentPanel />}
+        {tab === 'prompts' && session.role === 'admin' && <PromptPromotionPanel />}
         {(tab === 'users' || tab === 'chats') && (
           <form
             className="admin-search"
@@ -626,35 +754,340 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
             )}
 
             {tab === 'audit' && (
-              <div className="admin-table-wrap">
-                <table className="admin-table">
-                  <thead>
-                    <tr>
-                      <th>Action</th>
-                      <th>Actor</th>
-                      <th>Target</th>
-                      <th>Detail</th>
-                      <th>When</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {audit.map((entry) => (
-                      <tr key={entry.auditId}>
-                        <td>{entry.action}</td>
-                        <td>{entry.actorEmail || entry.actorDisplayName || entry.actorWorkspace}</td>
-                        <td className="mono">
-                          {entry.targetType}:{entry.targetId || '—'}
-                        </td>
-                        <td className="mono admin-detail">{JSON.stringify(entry.detail)}</td>
-                        <td>{when(entry.createdAt)}</td>
+              <div>
+                <form
+                  className="admin-search"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (auditSince && auditUntil && new Date(auditSince) > new Date(auditUntil)) {
+                      setError('The start of the audit range must precede its end.');
+                      return;
+                    }
+                    setAuditCursor('');
+                    setAuditApplied({
+                      action: auditAction || undefined,
+                      actor: auditActor || undefined,
+                      targetType: auditTargetType || undefined,
+                      targetId: auditTargetId || undefined,
+                      since: auditSince ? new Date(auditSince).toISOString() : undefined,
+                      until: auditUntil ? new Date(auditUntil).toISOString() : undefined,
+                    });
+                  }}
+                  style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}
+                >
+                  <input
+                    value={auditAction}
+                    onChange={(e) => setAuditAction(e.target.value)}
+                    placeholder="Filter by action (e.g. user.role_status)"
+                    aria-label="Filter action"
+                    style={{ flex: '1 1 180px' }}
+                  />
+                  <input
+                    value={auditActor}
+                    onChange={(e) => setAuditActor(e.target.value)}
+                    placeholder="Filter by actor (email, workspace)"
+                    aria-label="Filter actor"
+                    style={{ flex: '1 1 180px' }}
+                  />
+                  <input
+                    value={auditTargetType}
+                    onChange={(e) => setAuditTargetType(e.target.value)}
+                    placeholder="Target type (e.g. user, conversation)"
+                    aria-label="Filter target type"
+                    style={{ flex: '1 1 140px' }}
+                  />
+                  <input
+                    value={auditTargetId}
+                    onChange={(e) => setAuditTargetId(e.target.value)}
+                    placeholder="Target ID"
+                    aria-label="Filter target ID"
+                    style={{ flex: '1 1 140px' }}
+                  />
+                  <label>
+                    From (local time)
+                    <input
+                      type="datetime-local"
+                      aria-label="Filter from date"
+                      value={auditSince}
+                      onChange={(event) => setAuditSince(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Until (local time)
+                    <input
+                      type="datetime-local"
+                      aria-label="Filter until date"
+                      value={auditUntil}
+                      onChange={(event) => setAuditUntil(event.target.value)}
+                    />
+                  </label>
+                  <button type="submit" className="secondary-button" disabled={busy}>
+                    Apply filters
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy}
+                    onClick={() => {
+                      setAuditAction('');
+                      setAuditActor('');
+                      setAuditTargetType('');
+                      setAuditTargetId('');
+                      setAuditSince('');
+                      setAuditUntil('');
+                      setAuditApplied({});
+                      setAuditCursor('');
+                    }}
+                  >
+                    Reset
+                  </button>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
+                    <a
+                      className="secondary-button"
+                      href={exportAdminAuditUrl({
+                        format: 'csv',
+                        ...auditApplied,
+                      })}
+                      download
+                    >
+                      Export CSV
+                    </a>
+                    <a
+                      className="secondary-button"
+                      href={exportAdminAuditUrl({
+                        format: 'json',
+                        ...auditApplied,
+                      })}
+                      download
+                    >
+                      Export JSON
+                    </a>
+                  </div>
+                </form>
+
+                <div className="admin-table-wrap">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Action</th>
+                        <th>Actor</th>
+                        <th>Target</th>
+                        <th>Detail</th>
+                        <th>When</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {audit.length === 0 ? (
+                        <tr>
+                          <td colSpan={5} style={{ textAlign: 'center', padding: '2rem' }}>
+                            {busy ? 'Loading audit logs...' : 'No audit records match the current filters.'}
+                          </td>
+                        </tr>
+                      ) : (
+                        audit.map((entry) => (
+                          <tr key={entry.auditId}>
+                            <td>{entry.action}</td>
+                            <td>{entry.actorEmail || entry.actorDisplayName || entry.actorWorkspace}</td>
+                            <td className="mono">
+                              {entry.targetType}:{entry.targetId || '—'}
+                            </td>
+                            <td className="mono admin-detail">{JSON.stringify(entry.detail)}</td>
+                            <td>{when(entry.createdAt)}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="admin-pagination">
+                  <span>{audit.length ? `Showing ${audit.length} records` : 'No rows'}</span>
+                  {auditCursor && (
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      disabled={busy}
+                      onClick={() => {
+                        setAuditCursor('');
+                      }}
+                    >
+                      First page
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busy || !auditNextCursor}
+                    onClick={() => {
+                      if (auditNextCursor) setAuditCursor(auditNextCursor);
+                    }}
+                  >
+                    Next page
+                  </button>
+                </div>
               </div>
             )}
 
-            {!['overview', 'audit'].includes(tab) && (
+            {tab === 'telemetry' && (
+              <div className="admin-audit-panel">
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    marginBottom: '1rem',
+                  }}
+                >
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <label htmlFor="telemetry-group" style={{ fontSize: '0.85rem', fontWeight: 600 }}>
+                      Group by:
+                    </label>
+                    <select
+                      id="telemetry-group"
+                      value={telemetryGroupBy}
+                      onChange={(e) => setTelemetryGroupBy(e.target.value as 'date' | 'model' | 'operation')}
+                      disabled={busy}
+                    >
+                      <option value="date">Date</option>
+                      <option value="model">Model</option>
+                      <option value="operation">Operation</option>
+                    </select>
+                  </div>
+                </div>
+
+                {telemetry && (
+                  <>
+                    <div className="admin-overview-grid" style={{ marginBottom: '1.5rem' }}>
+                      <div className="admin-stat-card">
+                        <div className="admin-stat-number">{telemetry.summary.totalCalls}</div>
+                        <div className="admin-stat-label">
+                          Total Calls ({telemetry.summary.completedCalls} ok, {telemetry.summary.failedCalls} failed)
+                        </div>
+                      </div>
+                      <div className="admin-stat-card">
+                        <div className="admin-stat-number">{costHeadline(telemetry.summary).headline}</div>
+                        <div className="admin-stat-label">
+                          Cost
+                          {costHeadline(telemetry.summary).known ? ` (${costHeadline(telemetry.summary).known})` : ''}
+                        </div>
+                      </div>
+                      <div className="admin-stat-card">
+                        <div className="admin-stat-number">
+                          {telemetry.summary.cachedTokenShare != null
+                            ? `${(telemetry.summary.cachedTokenShare * 100).toFixed(1)}%`
+                            : '—'}
+                        </div>
+                        <div className="admin-stat-label">Cached Token Share (reporting calls)</div>
+                      </div>
+                      <div className="admin-stat-card">
+                        <div className="admin-stat-number">
+                          {telemetry.summary.cacheHitFraction != null
+                            ? `${(telemetry.summary.cacheHitFraction * 100).toFixed(1)}%`
+                            : '—'}
+                        </div>
+                        <div className="admin-stat-label">
+                          Cache Hit Rate ({telemetry.summary.callsWithCacheHits}/{telemetry.summary.callsReportingCache}{' '}
+                          reported)
+                        </div>
+                      </div>
+                    </div>
+
+                    <p className="muted">
+                      Costs use recorded tariff versions, not reconciled invoices. Unknown cost is not zero. Cache
+                      metrics are not answer quality. Cache usage is known for {telemetry.summary.callsReportingCache}{' '}
+                      of {telemetry.summary.totalCalls} calls.
+                      {(telemetry.summary.costCurrencies?.length || 0) > 1 &&
+                        ' Cost totals span multiple currencies; filter by model to inspect them separately.'}
+                    </p>
+                    <h3>Usage Breakdown</h3>
+                    <div className="admin-table-wrap" style={{ marginBottom: '2rem' }}>
+                      <table className="admin-table">
+                        <thead>
+                          <tr>
+                            <th>Bucket</th>
+                            <th>Total Calls</th>
+                            <th>Prompt Tokens</th>
+                            <th>Cached Tokens</th>
+                            <th>Completion Tokens</th>
+                            <th>Cache Share</th>
+                            <th>Est. Cost</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {telemetry.breakdown.length === 0 ? (
+                            <tr>
+                              <td colSpan={7} style={{ textAlign: 'center', padding: '1.5rem' }}>
+                                No usage records found.
+                              </td>
+                            </tr>
+                          ) : (
+                            telemetry.breakdown.map((row) => (
+                              <tr key={`${row.bucket}-${row.provider || ''}-${row.modelId || ''}`}>
+                                <td className="mono">{row.bucket}</td>
+                                <td>{row.totalCalls}</td>
+                                <td>{row.totalPromptTokens != null ? row.totalPromptTokens.toLocaleString() : '—'}</td>
+                                <td>{row.totalCachedTokens != null ? row.totalCachedTokens.toLocaleString() : '—'}</td>
+                                <td>
+                                  {row.totalCompletionTokens != null ? row.totalCompletionTokens.toLocaleString() : '—'}
+                                </td>
+                                <td>
+                                  {row.cachedTokenShare != null ? `${(row.cachedTokenShare * 100).toFixed(1)}%` : '—'}
+                                </td>
+                                <td>{row.unknownCostCalls > 0 ? 'Unknown' : costHeadline(row).headline}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
+
+                <h3>Model Price Schedules</h3>
+                <div className="admin-table-wrap">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Provider</th>
+                        <th>Model</th>
+                        <th>Billing / currency</th>
+                        <th>Input / 1M</th>
+                        <th>Cached Read / 1M</th>
+                        <th>Output / 1M</th>
+                        <th>Effective From</th>
+                        <th>Provenance</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {schedules.length === 0 ? (
+                        <tr>
+                          <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem' }}>
+                            No price schedules configured.
+                          </td>
+                        </tr>
+                      ) : (
+                        schedules.map((s) => (
+                          <tr key={s.scheduleId}>
+                            <td>{s.provider}</td>
+                            <td className="mono">{s.modelId}</td>
+                            <td>
+                              {s.billingMode} / {s.currency}
+                            </td>
+                            <td>{s.inputRatePerMillion.toFixed(6)}</td>
+                            <td>{s.cachedReadRatePerMillion.toFixed(6)}</td>
+                            <td>{s.outputRatePerMillion.toFixed(6)}</td>
+                            <td>{when(s.effectiveFrom)}</td>
+                            <td>{s.provenance}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {!['overview', 'audit', 'telemetry', 'flags', 'triage', 'experiments', 'prompts'].includes(tab) && (
               <div className="admin-pagination">
                 <span>{visible.length ? `${offset + 1}–${offset + visible.length}` : 'No rows'}</span>
                 <button
@@ -818,6 +1251,12 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
                   <p className="admin-sub">
                     Source deletion stays in ingest tooling because it also owns raw-file cleanup.
                   </p>
+                  {session.role === 'admin' && (
+                    <SourceReviewPanel
+                      sourceId={selected.value.sourceId}
+                      indexRevision={selected.value.indexRevision}
+                    />
+                  )}
                 </>
               )}
 
@@ -921,7 +1360,9 @@ function UserRow({
       <td onClick={(event) => event.stopPropagation()}>
         <select value={role} onChange={(event) => setRole(event.target.value as AdminUser['role'])}>
           <option value="student">student</option>
+          <option value="advisor">advisor</option>
           <option value="admin">admin</option>
+          <option value="auditor">auditor</option>
         </select>
       </td>
       <td onClick={(event) => event.stopPropagation()}>

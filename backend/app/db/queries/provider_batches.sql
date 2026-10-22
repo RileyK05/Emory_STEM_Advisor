@@ -96,7 +96,8 @@ RETURNING *;
 -- name: start_provider_batch_submission
 UPDATE provider_batches
 SET state = 'submitting', submission_token = %(submission_token)s,
-    submission_lease_until = %(submission_lease_until)s, updated_at = clock_timestamp()
+    submission_lease_until = %(submission_lease_until)s, updated_at = clock_timestamp(),
+    pricing_at = coalesce(pricing_at, clock_timestamp())
 WHERE batch_id = %(batch_id)s AND workspace_key = %(workspace_key)s AND state = 'prepared' AND cancel_requested = false
 RETURNING *;
 
@@ -139,6 +140,7 @@ SET state = %(state)s, total_count = %(total_count)s,
     finished_at = CASE WHEN %(terminal)s THEN clock_timestamp() ELSE NULL END,
     updated_at = clock_timestamp()
 WHERE batch_id = %(batch_id)s AND workspace_key = %(workspace_key)s
+  AND state NOT IN ('completed', 'failed', 'expired', 'cancelled', 'unknown')
 RETURNING *;
 
 -- name: request_provider_batch_cancel

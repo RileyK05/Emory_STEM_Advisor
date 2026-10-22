@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pypdf import PdfReader
 
 from app.ingest.normalize import decode_text, normalize_text
+from app.programs.requirements import SUBJECT_ALIASES
 
 
 class UnsupportedContentType(ValueError):
@@ -161,17 +162,27 @@ def _extract_markdown(text: str, lines_per_locator: int) -> list[LocatorSpan]:
 
 
 _PDF_COURSE_SPLIT_RE = re.compile(r"\b([A-Z]{2,7}|[A-Z][a-z]{1,11})\s(\d{1,2})\s(\d{2})\b")
+_TITLE_SUBJECTS = set(SUBJECT_ALIASES)
 
 
-def _repair_pdf_kerning(text: str) -> str:
+def repair_pdf_kerning(text: str) -> str:
     """Rejoin a course number that pypdf split on kerning (EMO-014).
 
-    pypdf renders some course numbers with an inserted space ("Math 1 11",
-    "PHIL 1 15"), which defeats code parsing and keyword search. Join a
-    subject-shaped word followed by split digits; leave ordinary lowercase prose
-    ("page 1 11") alone.
+    Only a recognized subject (an uppercase code or a known title-case alias)
+    is joined. Ordinary prose such as "Section 2 14" or "May 3 24" must not be
+    rewritten into a false course number in indexed text.
     """
-    return _PDF_COURSE_SPLIT_RE.sub(r"\1 \2\3", text)
+    def join(match: re.Match[str]) -> str:
+        subject = match.group(1)
+        if subject in _TITLE_SUBJECTS or re.fullmatch(r"[A-Z]{2,7}", subject):
+            return f"{subject} {match.group(2)}{match.group(3)}"
+        return match.group(0)
+
+    return _PDF_COURSE_SPLIT_RE.sub(join, text)
+
+
+# Backward-compatible private name used by existing extract internals/tests.
+_repair_pdf_kerning = repair_pdf_kerning
 
 
 def _read_pdf(raw: bytes) -> tuple[str, list[str]]:
@@ -217,6 +228,10 @@ def extract(raw: bytes, content_type: str, *, lines_per_locator: int = 40) -> Ex
                 "title": normalize_text(course.title),
                 "description": normalize_text(course.description),
                 "requisites": normalize_text(course.requisites) if course.requisites else None,
+                  "term": normalize_text(course.term) if course.term else None,
+                  "careers": [normalize_text(value) for value in course.careers],
+                  "registration_notes": [normalize_text(value)
+                                         for value in course.registration_notes],
             })
             for course in courses
         ]

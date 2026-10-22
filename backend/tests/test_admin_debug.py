@@ -3,6 +3,8 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
+import pytest
+from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
 from app.auth.dependencies import get_principal
@@ -27,6 +29,64 @@ def _app_user(db, *, email="target@emory.edu", role="student", status="active") 
         })
     db.commit()
     return user_id
+
+
+def test_prompt_promotion_requires_review_and_a_fixture(db, collection):
+    from app.admin.prompt_registry import PromptRegistry
+
+    reviewer = Principal(
+        workspace_key="development", issuer=None, subject="development",
+        role="admin", mode="development",
+    )
+    student = Principal(
+        workspace_key="development", issuer=None, subject="student", role="student",
+    )
+    calls = db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"]
+    with pytest.raises(HTTPException) as denied:
+        PromptRegistry.register(db, student, name="answer", template_text="Cite the catalog.")
+    assert denied.value.status_code == 403
+    first = PromptRegistry.register(db, reviewer, name="answer", template_text="Cite the catalog.")
+    same = PromptRegistry.register(db, reviewer, name="answer", template_text="Cite the catalog.")
+    assert same["version_id"] == first["version_id"]
+    second = PromptRegistry.register(
+        db, reviewer, name="answer", template_text="Cite a different line.",
+    )
+    assert second["version_id"] != first["version_id"]
+    with pytest.raises(HTTPException) as reused:
+        PromptRegistry.register(
+            db, reviewer, name="answer", template_text="Cite a different line.",
+            version_id=first["version_id"],
+        )
+    assert reused.value.status_code == 409
+    unchanged = db.execute(
+        "SELECT template_text FROM prompt_versions WHERE version_id = %s",
+        (first["version_id"],),
+    ).fetchone()
+    assert unchanged["template_text"] == "Cite the catalog."
+    with pytest.raises(HTTPException) as unreviewed:
+        PromptRegistry.promote(db, reviewer, version_id=first["version_id"], suite_name="catalog")
+    assert unreviewed.value.status_code == 409
+    assert PromptRegistry.approve(db, reviewer, first["version_id"])["review_state"] == "approved"
+    with pytest.raises(HTTPException) as missing_fixture:
+        PromptRegistry.promote(db, reviewer, version_id=first["version_id"], suite_name="catalog")
+    assert missing_fixture.value.status_code == 409
+    assert db.execute("SELECT count(*) AS n FROM prompt_promotions").fetchone()["n"] == 0
+    PromptRegistry.put_fixture(db, reviewer, suite_name="catalog", fixture_text="CS 170 is listed.")
+    promoted = PromptRegistry.promote(
+        db, reviewer, version_id=first["version_id"], suite_name="catalog",
+    )
+    assert promoted["status"] == "published"
+    again = PromptRegistry.promote(
+        db, reviewer, version_id=first["version_id"], suite_name="catalog",
+    )
+    assert again["promotion_id"] == promoted["promotion_id"]
+    assert db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"] == calls
+    client = api_client(db, collection)
+    blocked = client.post(
+        f"/api/admin/prompts/{second['version_id']}/promote",
+        json={"suiteName": "catalog"},
+    )
+    assert blocked.status_code == 409, blocked.text
 
 
 def test_admin_lists_and_updates_users_with_an_audit_trail(db, collection):
@@ -63,13 +123,23 @@ def test_admin_cannot_remove_the_last_active_admin(db, collection):
     assert "last active administrator" in response.text
 
 
-def test_non_admin_is_rejected_from_admin_and_debug_surfaces(db, collection):
+@pytest.mark.parametrize("role", ["student", "advisor", "auditor"])
+def test_non_admin_is_rejected_from_admin_and_debug_surfaces(db, collection, role, monkeypatch):
     client = api_client(db, collection)
-    client.app.dependency_overrides[get_principal] = lambda: Principal(
-        "development", None, "student", role="student")
+    principal = Principal("development", None, role, role=role)
+    client.app.dependency_overrides[get_principal] = lambda: principal
+    monkeypatch.setattr(client.app.state.auth_service, "resolve", lambda *a, **kw: principal)
     try:
+        assert client.get("/api/session").json()["role"] == role
         assert client.get("/api/admin/overview").status_code == 403
         assert client.get("/api/debug/settings").status_code == 403
+        if role == "auditor":
+            assert client.get("/api/admin/audit").status_code == 200
+            assert client.get("/api/admin/telemetry/usage").status_code == 200
+            assert client.get("/api/admin/pricing/schedules").status_code == 200
+            assert client.get("/api/conversations").status_code == 200
+            assert client.post("/api/conversations", json={"title": "Denied"}).status_code == 403
+            assert client.post("/api/query", json={"query": "Denied"}).status_code == 403
     finally:
         client.app.dependency_overrides.pop(get_principal, None)
 
@@ -282,3 +352,174 @@ def test_admin_collection_crud(db, collection):
         default = created_default.json()
     assert client.delete(f"/api/admin/collections/{default['collectionId']}").status_code == 409
     assert client.get("/api/admin/artifacts").status_code == 200
+
+
+def test_admin_audit_filtering_and_keyset_cursor_pagination(db, collection):
+    client = api_client(db, collection)
+    actor_id = _app_user(db, email="admin1@emory.edu", role="admin")
+
+    # Insert controlled audit rows
+    for i in range(5):
+        db.execute(queries.get("admin_insert_audit"), {
+            "audit_id": uuid4(),
+            "actor_user_id": actor_id,
+            "actor_workspace": "development",
+            "action": "filter.test.read" if i % 2 == 0 else "filter.test.write",
+            "target_type": "artifact" if i < 3 else "user",
+            "target_id": f"target-{i}",
+            "detail": Jsonb({"index": i}),
+        })
+    db.commit()
+
+    # Filter by action
+    filtered_action = client.get("/api/admin/audit?action=filter.test.read")
+    assert filtered_action.status_code == 200
+    action_items = filtered_action.json()
+    assert len(action_items) >= 3
+    assert all(item["action"] == "filter.test.read" for item in action_items)
+
+    # Filter by target_type
+    filtered_target = client.get("/api/admin/audit?target_type=artifact")
+    assert filtered_target.status_code == 200
+    target_items = filtered_target.json()
+    assert all(item["targetType"] == "artifact" for item in target_items)
+
+    # Filter by target_id
+    filtered_id = client.get("/api/admin/audit?target_id=target-1")
+    assert filtered_id.status_code == 200
+    assert len(filtered_id.json()) == 1
+    assert filtered_id.json()[0]["targetId"] == "target-1"
+
+    # Filter by actor email / workspace
+    filtered_actor = client.get("/api/admin/audit?actor=admin1@emory.edu")
+    assert filtered_actor.status_code == 200
+    assert len(filtered_actor.json()) >= 5
+
+    # Test keyset pagination with cursor
+    p1 = client.get("/api/admin/audit?limit=2")
+    assert p1.status_code == 200
+    assert len(p1.json()) == 2
+    cursor = p1.headers.get("X-Next-Cursor")
+    assert cursor is not None
+
+    p2 = client.get(f"/api/admin/audit?limit=2&cursor={cursor}")
+    assert p2.status_code == 200
+    assert len(p2.json()) == 2
+    p1_ids = {row["auditId"] for row in p1.json()}
+    p2_ids = {row["auditId"] for row in p2.json()}
+    assert p1_ids.isdisjoint(p2_ids), "Keyset pagination must not duplicate items across pages"
+
+
+def test_admin_audit_export_csv_and_json_with_formula_neutralization(db, collection):
+    client = api_client(db, collection)
+    actor_id = _app_user(db, email="admin2@emory.edu", role="admin")
+
+    # Insert entries with spreadsheet formula attack payloads
+    test_audit_id = uuid4()
+    db.execute(queries.get("admin_insert_audit"), {
+        "audit_id": test_audit_id,
+        "actor_user_id": actor_id,
+        "actor_workspace": "development",
+        "action": "=CMD|' /C calc'!A0",
+        "target_type": "exploit_test",
+        "target_id": "+123456789",
+        "detail": Jsonb({"note": "test-1"}),
+    })
+    db.execute(queries.get("admin_insert_audit"), {
+        "audit_id": uuid4(),
+        "actor_user_id": actor_id,
+        "actor_workspace": "development",
+        "action": "calc.eval",
+        "target_type": "-PAYLOAD",
+        "target_id": "@SUM(A1:A10)",
+        "detail": Jsonb({"note": "test-2"}),
+    })
+    db.commit()
+
+    # CSV Export
+    csv_resp = client.get("/api/admin/audit/export?format=csv&actor=admin2@emory.edu")
+    assert csv_resp.status_code == 200
+    assert "text/csv" in csv_resp.headers["content-type"]
+    assert "attachment; filename=" in csv_resp.headers["content-disposition"]
+    assert "X-Snapshot-Until" in csv_resp.headers
+
+    csv_text = csv_resp.text
+    # Verify formula prefixes were neutralized with a leading single quote
+    assert "'=CMD|' /C calc'!A0" in csv_text
+    assert "'+123456789" in csv_text
+    assert "'@SUM(A1:A10)" in csv_text
+    assert "'-PAYLOAD" in csv_text
+
+    # JSON Export
+    json_resp = client.get(f"/api/admin/audit/export?format=json&target_id={test_audit_id}")
+    assert json_resp.status_code == 200
+    assert json_resp.headers["content-type"] == "application/json"
+
+    # Verify that export logged an audit event without recursive churn
+    all_audits = client.get("/api/admin/audit?action=audit.export").json()
+    assert len(all_audits) >= 1
+    assert all_audits[0]["action"] == "audit.export"
+
+
+def test_admin_audit_cursor_invalid_fails_safely(db, collection):
+    client = api_client(db, collection)
+    bad1 = client.get("/api/admin/audit?cursor=invalid-cursor-string")
+    assert bad1.status_code == 422
+    assert "invalid audit cursor" in bad1.text
+
+    bad2 = client.get("/api/admin/audit?cursor=bm9uLWJhc2U2NA==")
+    assert bad2.status_code == 422
+    assert "invalid audit cursor" in bad2.text
+
+
+def test_admin_audit_concurrent_inserts_keyset_stability(db, collection):
+    client = api_client(db, collection)
+    actor_id = _app_user(db, email="admin3@emory.edu", role="admin")
+
+    # Insert 4 items with distinct action prefix
+    prefix = f"stability-{uuid4().hex[:8]}"
+    initial_ids = []
+    for i in range(4):
+        aid = uuid4()
+        initial_ids.append(str(aid))
+        db.execute(queries.get("admin_insert_audit"), {
+            "audit_id": aid,
+            "actor_user_id": actor_id,
+            "actor_workspace": "development",
+            "action": f"{prefix}.action",
+            "target_type": "test",
+            "target_id": str(i),
+            "detail": Jsonb({"i": i}),
+        })
+    db.commit()
+
+
+    # Fetch page 1 (limit 2)
+    p1 = client.get(f"/api/admin/audit?action={prefix}.action&limit=2")
+    assert p1.status_code == 200
+    cursor = p1.headers.get("X-Next-Cursor")
+    assert cursor is not None
+    p1_items = p1.json()
+    assert len(p1_items) == 2
+
+    # Simulate concurrent insert happening while user is reading page 1
+    db.execute(queries.get("admin_insert_audit"), {
+        "audit_id": uuid4(),
+        "actor_user_id": actor_id,
+        "actor_workspace": "development",
+        "action": f"{prefix}.action",
+        "target_type": "test",
+        "target_id": "concurrent-new",
+        "detail": Jsonb({}),
+    })
+    db.commit()
+
+    # Fetch page 2 using the cursor from page 1
+    p2 = client.get(f"/api/admin/audit?action={prefix}.action&limit=2&cursor={cursor}")
+    assert p2.status_code == 200
+    p2_items = p2.json()
+    assert len(p2_items) == 2
+
+    combined_ids = [row["auditId"] for row in p1_items] + [row["auditId"] for row in p2_items]
+    assert len(set(combined_ids)) == 4, "No duplicate rows across pages despite concurrent insert"
+    assert set(combined_ids) == set(initial_ids), "All 4 initial items were returned across the two pages"

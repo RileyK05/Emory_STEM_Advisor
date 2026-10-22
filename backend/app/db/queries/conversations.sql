@@ -67,9 +67,12 @@ AND sequence > %(after)s ORDER BY sequence LIMIT %(limit)s;
 
 -- Research keeps a bounded recent view; older turns remain available by tool.
 -- name: conversation_recent_context
-SELECT *, count(*) OVER () AS total_turns
-FROM conversation_turns WHERE conversation_id = %(conversation_id)s
-ORDER BY sequence DESC LIMIT 50;
+SELECT t.*, count(*) OVER () AS total_turns
+FROM conversation_turns t
+JOIN conversations c ON c.conversation_id = t.conversation_id
+WHERE t.conversation_id = %(conversation_id)s
+  AND t.sequence > c.context_boundary_sequence
+ORDER BY t.sequence DESC LIMIT 50;
 
 -- Source selection survives even when its last advising turn is outside the
 -- recent view (for example after many explicit history-mode requests).
@@ -77,9 +80,53 @@ ORDER BY sequence DESC LIMIT 50;
 SELECT t.evidence->'effective' AS effective
 FROM conversation_turns t JOIN conversations c ON c.conversation_id = t.conversation_id
 WHERE c.conversation_id = %(conversation_id)s AND c.workspace_key = %(workspace_key)s
+  AND t.sequence > c.context_boundary_sequence
   AND t.role = 'user' AND coalesce(t.evidence->'request'->>'mode', 'advising') = 'advising'
 ORDER BY t.sequence DESC LIMIT 1;
+
+-- name: reset_conversation_memory
+UPDATE conversations
+SET context_epoch = context_epoch + 1,
+    context_boundary_sequence = last_sequence,
+    context_reset_at = now(),
+    updated_at = now()
+WHERE conversation_id = %(conversation_id)s AND workspace_key = %(workspace_key)s
+RETURNING conversation_id, title, last_sequence, pending_request_id,
+          context_epoch, context_boundary_sequence, context_reset_at,
+          created_at, updated_at;
 
 -- name: insert_claim
 INSERT INTO claims (claim_id, response_id, ordinal, text, citation_numbers)
 VALUES (%(claim_id)s, %(response_id)s, %(ordinal)s, %(text)s, %(citation_numbers)s);
+
+
+-- name: latest_conversation_research_notebook
+SELECT r.run_id, r.state, r.status, r.created_at
+FROM research_runs r
+JOIN conversations c ON c.conversation_id = r.conversation_id
+JOIN conversation_turns t ON t.conversation_id = r.conversation_id
+    AND t.request_id = r.conversation_request_id AND t.role = 'assistant'
+WHERE c.conversation_id = %(conversation_id)s
+  AND c.workspace_key = %(workspace_key)s
+  AND r.workspace_key = %(workspace_key)s
+  AND t.sequence > c.context_boundary_sequence
+  AND t.status = 'answer'
+  AND r.state IS NOT NULL
+ORDER BY t.sequence DESC LIMIT 1;
+
+-- name: get_published_conversation_turns
+SELECT t.sequence, t.request_id, t.role, t.text, t.status, t.evidence, t.created_at
+FROM conversation_turns t
+JOIN conversation_requests r ON r.conversation_id = t.conversation_id AND r.request_id = t.request_id
+WHERE t.conversation_id = %(conversation_id)s
+  AND t.status IN ('input', 'answer')
+  AND r.state = 'completed'
+  AND coalesce(r.result->>'type', 'answer') NOT IN ('failed', 'abandoned')
+  AND (%(through_sequence)s::integer IS NULL OR t.sequence <= %(through_sequence)s)
+  AND EXISTS (
+      SELECT 1 FROM conversation_turns assistant
+      WHERE assistant.conversation_id = t.conversation_id AND assistant.request_id = t.request_id
+        AND assistant.role = 'assistant' AND assistant.status = 'answer'
+        AND (%(through_sequence)s::integer IS NULL OR assistant.sequence <= %(through_sequence)s)
+  )
+ORDER BY t.sequence ASC;

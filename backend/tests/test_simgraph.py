@@ -5,6 +5,7 @@ import dataclasses
 import numpy as np
 import pytest
 
+import app.atlas.importer as atlas_importer
 import app.simgraph.build as build_mod
 from app.atlas.importer import import_atlas
 from app.db import queries
@@ -204,7 +205,7 @@ def test_config_rejects_non_nesting_cuts(tmp_path):
 # --- database -------------------------------------------------------------
 
 
-def _import(db, collection, tmp_path, codes=_CODES):
+def _import(db, collection, tmp_path, codes=_CODES, *, allow_course_removal=False):
     lines = [
         f'{{"code": "{code}", "title": "Title {code}", "description": "about {code}"}}'
         for code in codes
@@ -219,6 +220,7 @@ def _import(db, collection, tmp_path, codes=_CODES):
         embed_model=_MODEL,
         count_tokens=whitespace_tokens,
         config=load_retrieval_config(),
+        allow_course_removal=allow_course_removal,
     )
 
 
@@ -409,7 +411,7 @@ def test_small_topic_can_be_selected_without_scoring_course_pairs(db, collection
 
 
 def test_single_course_department_remains_visible(db, collection, tmp_path):
-    _import(db, collection, tmp_path, codes=["CS 170"])
+    _import(db, collection, tmp_path, codes=["CS 170"], allow_course_removal=True)
     result = _build(db, collection)
     recs = _recommend(db, collection, query=_CS)
     assert result.courses == 1 and result.clusters == 2 and result.edges == 2
@@ -516,7 +518,7 @@ def test_changed_catalog_retires_the_topic_build_and_keeps_history(db, collectio
     clusters_before, members_before = _build_counts(db, result.build_id)
     assert clusters_before > 0 and members_before > 0
 
-    _import(db, collection, tmp_path, codes=_CODES[:5])  # a different catalog
+    _import(db, collection, tmp_path, codes=_CODES[:5], allow_course_removal=True)
 
     assert db.execute(queries.get("list_current_clusters"), {
         "collection_id": collection,
@@ -524,3 +526,25 @@ def test_changed_catalog_retires_the_topic_build_and_keeps_history(db, collectio
     assert _recommend(db, collection) == []
     # The retired build keeps its rows (and the snapshotted courses).
     assert _build_counts(db, result.build_id) == (clusters_before, members_before)
+
+
+def test_topic_retirement_commits_with_publication_before_post_publish_failure(
+    db, collection, tmp_path, monkeypatch,
+):
+    _import(db, collection, tmp_path)
+    result = _build(db, collection)
+    before = _build_counts(db, result.build_id)
+    assert before[0] > 0 and before[1] > 0
+
+    def fail_after_publication(*args, **kwargs):
+        raise RuntimeError("injected post-publication parser refresh failure")
+
+    monkeypatch.setattr(atlas_importer, "refresh_atlas_requisites", fail_after_publication)
+    with pytest.raises(RuntimeError, match="post-publication"):
+        _import(db, collection, tmp_path, codes=_CODES[:5], allow_course_removal=True)
+
+    assert db.execute(queries.get("list_current_clusters"), {
+        "collection_id": collection,
+    }).fetchall() == []
+    assert _recommend(db, collection) == []
+    assert _build_counts(db, result.build_id) == before

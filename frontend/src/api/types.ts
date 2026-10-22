@@ -114,12 +114,25 @@ export interface QueryRequest {
   collectionId?: string;
   /** Omitted/null searches the collection; [] means explicitly search no sources. */
   sourceIds?: string[] | null;
+  studentCohort?: string | null;
 }
 
 export interface Recommendation {
   clusterId: string;
   path: string[];
-  courses: { courseId: string; code: string; title: string }[];
+  courses: {
+    courseId: string;
+    code: string;
+    title: string;
+    lifecycle: 'current' | 'retired';
+  }[];
+}
+
+export interface RetiredCourse {
+  courseId: string;
+  code: string;
+  title: string;
+  lifecycle: 'retired';
 }
 
 export interface TopicGraphNode {
@@ -458,7 +471,7 @@ export interface AuthSession {
   workspaceKey?: string;
   displayName?: string | null;
   email?: string | null;
-  role?: 'student' | 'admin' | null;
+  role?: 'student' | 'advisor' | 'admin' | 'auditor' | null;
 }
 export interface NativeArtifactSummary {
   artifactId: string;
@@ -484,6 +497,29 @@ export interface ResearchDecisionInfo {
   unresolvedQuestions: string[];
 }
 
+export interface SourceApplicabilityItem {
+  sourceId: string;
+  sourceName: string;
+  sourceCategory: string;
+  edition?: string | null;
+  publishedAt?: string | null;
+  isCurrent: boolean;
+  isSuperseded: boolean;
+  freshness: 'current' | 'aging' | 'stale' | 'unknown';
+  applicabilityStatus: 'reviewed_default' | 'historical' | 'unknown';
+  cohortCompatibility: 'compatible' | 'mismatch' | 'unknown';
+  summary: string;
+}
+
+export interface ApplicabilityNotice {
+  level: 'info' | 'warning' | 'conflict';
+  headline: string;
+  hasConflicts: boolean;
+  conflicts: string[];
+  sources: SourceApplicabilityItem[];
+  declaredCohort?: string | null;
+}
+
 export type QueryResponse =
   | {
       type: 'answer';
@@ -493,6 +529,7 @@ export type QueryResponse =
       trace: RetrievalTrace;
       claims?: ParagraphClaimReviewUnit[];
       research?: ResearchDecisionInfo | null;
+      applicability?: ApplicabilityNotice | null;
     }
   | { type: 'refusal'; reason: string; trace?: RetrievalTrace };
 
@@ -507,11 +544,20 @@ export interface ArtifactRevisionReference {
   revisionId: string;
 }
 
+export interface ExportSummaryRequest {
+  title?: string | null;
+  throughSequence?: number | null;
+  artifactReferences?: ArtifactRevisionReference[];
+}
+
+export interface EffectiveArtifactReference extends ArtifactRevisionReference {
+  spec: { title?: string | null; name?: string | null; kind?: string | null };
+}
 export interface EffectiveConversationInputs {
   collectionId: string | null;
   sourceIds: string[] | null;
-  retrievalQuery: string;
-  artifactReferences: (ArtifactRevisionReference & { spec: NativeArtifactSpec })[];
+  retrievalQuery?: string;
+  artifactReferences: EffectiveArtifactReference[];
 }
 export interface ConversationUserTurnEvidence {
   request: ConversationTurnRequest;
@@ -525,6 +571,7 @@ export interface ConversationAssistantTurnEvidence {
   traceId: string | null;
   turnReferences: number[];
   research?: ResearchDecisionInfo;
+  applicability?: ApplicabilityNotice;
 }
 export type ConversationTurnEvidence = ConversationUserTurnEvidence | ConversationAssistantTurnEvidence;
 
@@ -543,6 +590,9 @@ export interface ConversationSummary {
   title: string;
   lastSequence: number;
   pendingRequestId: string | null;
+  contextEpoch?: number;
+  contextBoundarySequence?: number;
+  contextResetAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -571,8 +621,26 @@ export interface ConversationSummaryCheckpoint {
   failureCode: string | null;
   profileId: string | null;
   profileRevision: number | null;
+  contextEpoch?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ConversationMemoryInspection {
+  conversationId: string;
+  contextEpoch: number;
+  contextBoundarySequence: number;
+  contextResetAt?: string | null;
+  checkpoints: ConversationSummaryCheckpoint[];
+  researchNotebook?: Record<string, unknown> | null;
+}
+
+export interface ConversationResetResponse {
+  conversationId: string;
+  contextEpoch: number;
+  contextBoundarySequence: number;
+  contextResetAt: string;
+  message?: string;
 }
 
 export type NativeDecisionState = 'pending' | 'completed' | 'refused' | 'invalid' | 'failed' | 'unknown' | 'abandoned';
@@ -600,6 +668,7 @@ export interface GapResolution {
   sourceIds: string[];
   note: string;
   resolvedAt: string;
+  evidenceState?: 'current' | 'ineligible';
 }
 export interface RetrievalGap {
   gapId: string;
@@ -641,6 +710,7 @@ export interface ConversationTurnRequest {
   expectedSequence: number;
   mode?: 'advising' | 'history';
   artifactReferences?: ArtifactRevisionReference[];
+  studentCohort?: string | null;
 }
 
 export interface ConversationHistoryResponse {
@@ -713,6 +783,7 @@ export interface CollectionDoc {
 }
 
 export interface AdvisorClient {
+  getEffectiveFlags(): Promise<EffectiveFlagsResponse>;
   listCollections(): Promise<CollectionDoc[]>;
   query(req: QueryRequest): Promise<QueryResponse>;
   listConversations(): Promise<ConversationSummary[]>;
@@ -728,6 +799,9 @@ export interface AdvisorClient {
   ): Promise<ConversationStreamEventsResponse>;
   abandonConversationTurn(id: string, requestId: string): Promise<ConversationTerminalResponse>;
   listConversationSummaries(id: string): Promise<ConversationSummaryCheckpoint[]>;
+  inspectConversationMemory(id: string): Promise<ConversationMemoryInspection>;
+  resetConversationMemory(id: string): Promise<ConversationResetResponse>;
+  exportSummary(id: string, request?: ExportSummaryRequest): Promise<NativeArtifactRecord>;
   submitDecision(request: NativeDecisionRequest): Promise<NativeDecision>;
   getDecision(id: string): Promise<NativeDecision>;
   abandonDecision(id: string): Promise<NativeDecision>;
@@ -738,6 +812,7 @@ export interface AdvisorClient {
   /** Ingest a file into the backend. The mock rejects; the HttpClient posts. */
   uploadSource(file: File): Promise<SourceDoc>;
   recommendations(query: string): Promise<Recommendation[]>;
+  retiredCourses(query: string): Promise<RetiredCourse[]>;
   createArtifact(spec: NativeArtifactSpec): Promise<NativeArtifactRecord>;
   importArtifact(file: File): Promise<NativeArtifactRecord>;
   getArtifact(id: string, revisionId?: string): Promise<NativeArtifactRecord>;
@@ -778,6 +853,30 @@ export interface AdvisorClient {
   logout(): Promise<void>;
   listArtifacts(): Promise<NativeArtifactSummary[]>;
   beginLogin(): void;
+  getAcademicRecord(): Promise<AcademicRecordDetailResponse>;
+  upsertAcademicAttempt(body: AcademicRecordAttemptUpsertRequest): Promise<AcademicRecordAttemptItem>;
+  previewAcademicImport(body: AcademicRecordImportPreviewRequest): Promise<AcademicRecordImportBatchResponse>;
+  updateAcademicImport(
+    batchId: string,
+    body: AcademicRecordImportUpdateRequest,
+  ): Promise<AcademicRecordImportBatchResponse>;
+  commitAcademicImport(
+    batchId: string,
+    body: AcademicRecordImportCommitRequest,
+  ): Promise<AcademicRecordImportCommitResponse>;
+  getAcademicRecordRevision(revision: number): Promise<AcademicRecordRevisionResponse>;
+  listAuditablePrograms(): Promise<AuditableProgramItem[]>;
+  listProgramAudits(): Promise<DegreeAuditRecordItem[]>;
+  runProgramAudit(body: DegreeAuditRunRequest): Promise<DegreeAuditDetailResponse>;
+  getProgramAudit(auditId: string): Promise<DegreeAuditDetailResponse>;
+  exportProgramAudit(auditId: string): Promise<DegreeAuditDetailResponse>;
+  listProgramComparisons(): Promise<ProgramComparisonSummary[]>;
+  createProgramComparison(body: ProgramComparisonCreateRequest): Promise<ProgramComparisonResponse>;
+  getProgramComparison(comparisonId: string): Promise<ProgramComparisonResponse>;
+  submitResponseFeedback(body: ResponseFeedbackRequest): Promise<ResponseFeedbackResponse>;
+  listPrivacyExports(): Promise<PrivacyExportResponse[]>;
+  createPrivacyExport(): Promise<PrivacyExportResponse>;
+  downloadPrivacyExport(exportId: string, token: string): Promise<PrivacyExportDownloadResponse>;
 }
 
 export interface AdminOverview {
@@ -796,6 +895,10 @@ export interface AdminOverview {
   traces: number;
 }
 
+export type UserRole = 'student' | 'advisor' | 'admin' | 'auditor';
+export type GrantType = 'advisor_access' | 'support_access';
+export type GrantResourceType = 'conversation' | 'plan' | 'all_records';
+
 export interface AdminUser {
   userId: string;
   issuer: string;
@@ -803,7 +906,7 @@ export interface AdminUser {
   workspaceKey: string;
   displayName?: string | null;
   email?: string | null;
-  role: 'student' | 'admin';
+  role: UserRole;
   status: 'active' | 'disabled';
   conversationCount: number;
   activeSessions: number;
@@ -813,8 +916,124 @@ export interface AdminUser {
 }
 
 export interface AdminUserUpdate {
-  role: 'student' | 'admin';
+  role: UserRole;
   status: 'active' | 'disabled';
+}
+
+export interface ResourceGrantCreate {
+  grantType: GrantType;
+  actorUserId: string;
+  targetWorkspaceKey: string;
+  resourceType: GrantResourceType;
+  resourceId?: string | null;
+  reason: string;
+  expiresAt: string;
+  allowedActions?: string[];
+}
+
+export interface ResourceGrant {
+  grantId: string;
+  grantType: GrantType;
+  actorUserId: string;
+  targetWorkspaceKey: string;
+  resourceType: GrantResourceType;
+  resourceId?: string | null;
+  allowedActions: string[];
+  reason: string;
+  approvedByUserId: string;
+  expiresAt: string;
+  createdAt: string;
+  revokedAt?: string | null;
+  revokedByUserId?: string | null;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
+  approvedByEmail?: string | null;
+  approvedByDisplayName?: string | null;
+}
+
+export interface SupportGrantRequestCreate {
+  targetWorkspaceKey: string;
+  resourceType: GrantResourceType;
+  resourceId?: string | null;
+  reason: string;
+  expiresAt: string;
+}
+
+export interface SupportGrantRequestUpdate extends SupportGrantRequestCreate {
+  expectedRevision: number;
+}
+
+export interface SupportGrantRequestDecision {
+  expectedRevision: number;
+  note?: string | null;
+}
+
+export interface SupportGrantRequest {
+  requestId: string;
+  requesterUserId: string;
+  actorUserId: string;
+  targetWorkspaceKey: string;
+  resourceType: GrantResourceType;
+  resourceId?: string | null;
+  allowedActions: string[];
+  reason: string;
+  expiresAt: string;
+  status: 'pending' | 'approved' | 'rejected';
+  revision: number;
+  decisionNote?: string | null;
+  decidedByUserId?: string | null;
+  decidedAt?: string | null;
+  grantId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  actorEmail?: string | null;
+  actorDisplayName?: string | null;
+}
+
+export interface GrantedResultStaging {
+  stagingId: string;
+  grantId: string;
+  status: 'staged' | 'published' | 'withheld';
+  resourceId: string;
+}
+
+export type PrivacyStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export interface PrivacyExportResponse {
+  exportId: string;
+  workspaceKey: string;
+  status: PrivacyStatus;
+  manifest?: Record<string, unknown> | null;
+  downloadToken?: string | null;
+  expiresAt: string;
+  createdAt: string;
+  finishedAt?: string | null;
+  error?: string | null;
+}
+
+export interface PrivacyExportDownloadResponse {
+  exportId: string;
+  workspaceKey: string;
+  status: PrivacyStatus;
+  manifest: Record<string, unknown>;
+  contentDigest: string;
+  expiresAt: string;
+}
+
+export interface PrivacyDeletionRequest {
+  confirmation: string;
+  reason?: string;
+}
+
+export interface PrivacyDeletionResponse {
+  deletionId: string;
+  workspaceKey: string;
+  status: PrivacyStatus;
+  deletedCounts: Record<string, unknown>;
+  createdAt: string;
+  finishedAt?: string | null;
+  error?: string | null;
+  message?: string;
 }
 
 export interface AdminAuditEntry {
@@ -940,4 +1159,941 @@ export interface AdminCollection {
   name: string;
   sourceCount: number;
   createdAt: string;
+}
+
+export interface TelemetryUsageSummary {
+  costCurrency?: string | null;
+  costCurrencies?: string[];
+  totalCalls: number;
+  completedCalls: number;
+  failedCalls: number;
+  totalPromptTokens?: number | null;
+  totalCompletionTokens?: number | null;
+  totalCachedTokens?: number | null;
+  cachedTokenShare?: number | null;
+  callsReportingCache: number;
+  callsWithCacheHits: number;
+  cacheHitFraction?: number | null;
+  cacheReportingCoverage?: number | null;
+  totalCost?: number | null;
+  measuredCost?: number | null;
+  estimatedCost?: number | null;
+  unknownCostCalls: number;
+  costCompleteness: 'complete' | 'partial' | 'unknown';
+}
+
+export interface TelemetryUsageBreakdownRow {
+  costCurrency?: string | null;
+  costCurrencies?: string[];
+  bucket: string;
+  provider?: string | null;
+  modelId?: string | null;
+  totalCalls: number;
+  completedCalls: number;
+  failedCalls: number;
+  totalPromptTokens?: number | null;
+  totalCompletionTokens?: number | null;
+  totalCachedTokens?: number | null;
+  cachedTokenShare?: number | null;
+  callsReportingCache: number;
+  callsWithCacheHits: number;
+  cacheHitFraction?: number | null;
+  cacheReportingCoverage?: number | null;
+  totalCost?: number | null;
+  measuredCost?: number | null;
+  estimatedCost?: number | null;
+  unknownCostCalls: number;
+  costCompleteness: 'complete' | 'partial' | 'unknown';
+}
+
+export interface TelemetryUsageResponse {
+  summary: TelemetryUsageSummary;
+  breakdown: TelemetryUsageBreakdownRow[];
+}
+
+export interface ModelPriceScheduleCreate {
+  billingMode?: 'standard' | 'batch';
+  provider: string;
+  modelId: string;
+  currency?: string;
+  inputRatePerMillion: number;
+  cachedReadRatePerMillion?: number;
+  outputRatePerMillion: number;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+  provenance: string;
+}
+
+export interface ModelPriceSchedule {
+  billingMode: 'standard' | 'batch';
+  scheduleId: string;
+  provider: string;
+  modelId: string;
+  currency: string;
+  inputRatePerMillion: number;
+  cachedReadRatePerMillion: number;
+  outputRatePerMillion: number;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+  provenance: string;
+  createdAt: string;
+}
+
+export interface FeatureFlagSummary {
+  flagName: string;
+  description: string;
+  envCeilingKey?: string | null;
+  defaultEnabled: boolean;
+  killSwitchActive: boolean;
+  killReason?: string | null;
+  overridesCount: number;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface FeatureFlagOverride {
+  overrideId: string;
+  flagName: string;
+  scopeType: 'global' | 'cohort' | 'workspace';
+  scopeId: string;
+  enabled: boolean;
+  reason?: string | null;
+  actorUserId?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface FeatureFlagOverrideRequest {
+  expectedUpdatedAt?: string | null;
+  requireAbsent?: boolean;
+  scopeType: 'global' | 'cohort' | 'workspace';
+  scopeId: string;
+  enabled: boolean;
+  reason?: string | null;
+}
+
+export interface FeatureFlagKillSwitchRequest {
+  expectedUpdatedAt?: string | null;
+  killSwitchActive: boolean;
+  reason?: string | null;
+}
+
+export interface CohortSummary {
+  cohortName: string;
+  memberCount: number;
+}
+
+export interface CohortAssignmentRequest {
+  userId: string;
+}
+
+export interface CohortMember {
+  userId: string;
+  displayName?: string | null;
+  email?: string | null;
+  role: 'student' | 'advisor' | 'admin' | 'auditor';
+  assignedAt: string;
+}
+
+export interface CohortAssignmentResponse {
+  status: 'assigned';
+  cohortName: string;
+  userId: string;
+}
+
+export interface EffectiveFlagsResponse {
+  flags: Record<string, boolean>;
+}
+
+export interface EffectiveQuotaResponse {
+  remainingQueriesMinute: number;
+  remainingQueriesDay: number;
+  minuteQueryLimit: number;
+  dailyQueryLimit: number;
+  activeJobsLimit: number;
+  resetDaySeconds: number;
+}
+
+export interface QuotaPolicySummary {
+  policyId: string;
+  scopeType: 'global' | 'cohort' | 'workspace' | 'user';
+  scopeId: string;
+  queriesPerMinute?: number | null;
+  queriesPerDay?: number | null;
+  tokensPerDay?: number | null;
+  spendUsdPerDay?: number | null;
+  maxActiveJobs?: number | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
+export interface QuotaPolicyUpsertRequest {
+  scopeType: 'global' | 'cohort' | 'workspace' | 'user';
+  scopeId: string;
+  queriesPerMinute?: number | null;
+  queriesPerDay?: number | null;
+  tokensPerDay?: number | null;
+  spendUsdPerDay?: number | null;
+  maxActiveJobs?: number | null;
+}
+
+export interface AlertStatusResponse {
+  alertName: string;
+  status: 'firing' | 'resolved' | 'unknown';
+  severity: 'critical' | 'warning' | 'info';
+  currentValue: number | null;
+  threshold: number;
+  owner: string;
+  runbook: string;
+  description: string;
+  evaluatedAt: string;
+}
+
+export interface SourceReviewProposal {
+  proposalId: string;
+  sourceId: string;
+  expectedMetadataRevision: number;
+  proposedByUserId?: string | null;
+  status: string;
+  sourceCategory: string;
+  classificationOrigin: string;
+  publisher?: string | null;
+  sourceUrl?: string | null;
+  edition?: string | null;
+  geography?: string | null;
+  occupationId?: string | null;
+  publishedAt?: string | null;
+  acquiredAt?: string | null;
+  attribution?: string | null;
+  title?: string | null;
+  institution?: string | null;
+  issuingUnit?: string | null;
+  documentRoles?: string[];
+  applicability?: Record<string, string[]>;
+  applicabilityStatus: string;
+  lifecycleStatus: string;
+  replacementIntent?: string | null;
+  reviewNotes?: string | null;
+  rejectionReason?: string | null;
+  reviewedByUserId?: string | null;
+  reviewedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SourceLifecycleEvent {
+  eventId: string;
+  sourceId: string;
+  eventType: string;
+  proposalId?: string | null;
+  metadataRevision: number;
+  actorUserId?: string | null;
+  details?: Record<string, any>;
+  createdAt: string;
+}
+
+export interface SourceDependencies {
+  programCount: number;
+  courseCount: number;
+  gapCount: number;
+  researchRunCount: number;
+  programs?: Array<Record<string, any>>;
+}
+
+export interface SourceReviewDetailResponse {
+  source: Record<string, any>;
+  pendingProposal?: SourceReviewProposal | null;
+  proposals?: SourceReviewProposal[];
+  lifecycleEvents?: SourceLifecycleEvent[];
+  dependencies: SourceDependencies;
+}
+
+export interface SourceImpactPreviewResponse {
+  sourceId: string;
+  filename: string;
+  programCount: number;
+  courseCount: number;
+  gapCount: number;
+  researchRunCount: number;
+  programs?: Array<Record<string, any>>;
+}
+
+export interface SourceReviewProposalCreate {
+  expectedMetadataRevision: number;
+  sourceCategory: string;
+  publisher?: string | null;
+  sourceUrl?: string | null;
+  edition?: string | null;
+  geography?: string | null;
+  occupationId?: string | null;
+  publishedAt?: string | null;
+  acquiredAt?: string | null;
+  attribution?: string | null;
+  title?: string | null;
+  institution?: string | null;
+  issuingUnit?: string | null;
+  documentRoles?: string[];
+  applicability?: Record<string, string[]>;
+  applicabilityStatus?: string;
+  lifecycleStatus?: string;
+  replacementIntent?: string | null;
+  reviewNotes?: string | null;
+}
+
+export interface SourceReviewProposalReject {
+  reason: string;
+}
+
+export interface SourceLifecycleChangeRequest {
+  action: 'activate' | 'deprecate' | 'archive';
+  expectedMetadataRevision: number;
+  notes?: string;
+}
+
+export interface SourceRevisionPassage {
+  chunkId: string;
+  chunkIndex: number;
+  locatorLabel: string;
+  text: string;
+  textDigest: string;
+}
+
+export interface SourceRevisionEvidenceResponse {
+  sourceId: string;
+  indexRevision: number;
+  passages?: SourceRevisionPassage[];
+}
+
+export interface SourceLifecycleChangeResponse {
+  sourceId: string;
+  lifecycleStatus: string;
+  metadataRevision: number;
+}
+
+export interface ProgramRawItem {
+  position: number;
+  section?: string | null;
+  text: string;
+  choose?: number | null;
+  mentions?: string[];
+  evidence?: Array<Record<string, any>>;
+}
+
+export interface ProgramRuleReleaseSummary {
+  releaseId: string;
+  programId: string;
+  collectionId: string;
+  sourceId: string;
+  sourceIndexRevision: number;
+  sourceSha256: string;
+  releaseVersion: number;
+  status: string;
+  rulesDigest: string;
+  coverageSummary?: Record<string, any>;
+  createdByUserId?: string | null;
+  approvedByUserId?: string | null;
+  approvedAt?: string | null;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProgramRuleReleaseDetail {
+  releaseId: string;
+  programId: string;
+  collectionId: string;
+  sourceId: string;
+  sourceIndexRevision: number;
+  sourceSha256: string;
+  releaseVersion: number;
+  status: string;
+  rulesTree: Record<string, any>;
+  rulesDigest: string;
+  coverageSummary?: Record<string, any>;
+  createdByUserId?: string | null;
+  approvedByUserId?: string | null;
+  approvedAt?: string | null;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProgramInspectionResponse {
+  program: Record<string, any>;
+  items?: ProgramRawItem[];
+  releases?: ProgramRuleReleaseSummary[];
+  currentRelease?: ProgramRuleReleaseDetail | null;
+}
+
+export interface ProgramRuleDraftCreate {
+  rulesTree?: Record<string, any> | null;
+  notes?: string;
+}
+
+export interface ProgramRuleReviewAction {
+  notes?: string;
+}
+
+export interface ProgramRuleRejectAction {
+  reason: string;
+}
+
+export interface ProgramRuleDiffResponse {
+  programId: string;
+  releaseIdA: string;
+  versionA: number;
+  releaseIdB: string;
+  versionB: number;
+  addedNodeIds?: string[];
+  removedNodeIds?: string[];
+  modifiedNodes?: Array<Record<string, any>>;
+  digestMatch: boolean;
+}
+
+export interface AcademicRecordSummary {
+  recordId: string;
+  workspaceKey: string;
+  recordRevision: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AcademicRecordAttemptItem {
+  attemptId: string;
+  recordId: string;
+  workspaceKey: string;
+  institution: string;
+  submittedCourseCode: string;
+  resolvedCourseCode?: string | null;
+  courseTitle?: string | null;
+  term: string;
+  attemptedCredits: number;
+  earnedCredits: number;
+  grade?: string | null;
+  status: string;
+  provenance: string;
+  isVerified: boolean;
+  verificationMethod?: string | null;
+  verifiedByUserId?: string | null;
+  verifiedAt?: string | null;
+  verificationNotes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AcademicRecordVerificationEventItem {
+  eventId: string;
+  recordId: string;
+  attemptId?: string | null;
+  eventType: string;
+  actorUserId?: string | null;
+  actorRole: string;
+  details?: Record<string, any>;
+  createdAt: string;
+}
+
+export interface AcademicRecordDetailResponse {
+  record: AcademicRecordSummary;
+  attempts?: AcademicRecordAttemptItem[];
+  recentEvents?: AcademicRecordVerificationEventItem[];
+}
+
+export interface AcademicRecordAttemptUpsertRequest {
+  attemptId?: string | null;
+  institution?: string;
+  submittedCourseCode: string;
+  resolvedCourseCode?: string | null;
+  courseTitle?: string | null;
+  term: string;
+  attemptedCredits?: number;
+  earnedCredits?: number | null;
+  grade?: string | null;
+  status?: string | null;
+  provenance?: string;
+  workspaceKey?: string | null;
+}
+
+export interface AcademicRecordVerifyAttemptRequest {
+  method?: 'manual_staff' | 'official_transcript' | 'sis_feed';
+  notes?: string | null;
+  workspaceKey?: string | null;
+}
+
+export interface AcademicRecordImportPreviewRequest {
+  filename: string;
+  rawContent: string;
+  expectedRecordRevision: number;
+  workspaceKey?: string | null;
+}
+
+export interface AcademicRecordImportBatchResponse {
+  batchId: string;
+  recordId: string;
+  workspaceKey: string;
+  expectedRecordRevision: number;
+  status: string;
+  filename: string;
+  parsedRows?: Array<Record<string, any>>;
+  rowErrors?: Array<Record<string, any>>;
+  duplicateCandidates?: Array<Record<string, any>>;
+  previewDigest?: string | null;
+  rowDecisions?: Array<'select' | 'reject'>;
+  createdAt: string;
+  committedAt?: string | null;
+}
+
+export interface AcademicRecordImportCommitRequest {
+  expectedRecordRevision: number;
+  previewDigest: string;
+  workspaceKey?: string | null;
+}
+
+export interface AcademicRecordImportUpdateRequest {
+  expectedRecordRevision: number;
+  decisions?: Array<'select' | 'reject'>;
+  corrections?: Array<{ rowIndex: number; grade?: string; submittedCourseCode?: string; term?: string }>;
+  workspaceKey?: string | null;
+}
+
+export interface AcademicRecordRevisionResponse {
+  recordId: string;
+  revision: number;
+  attempts?: Array<Record<string, any>>;
+}
+
+export interface AcademicRecordImportCommitResponse {
+  batchId: string;
+  status: string;
+  attemptsImported: number;
+  newRecordRevision: number;
+}
+
+export interface DegreeAuditRuleEvaluationItem {
+  evaluationId: string;
+  auditId: string;
+  nodeId: string;
+  parentNodeId?: string | null;
+  nodeType: string;
+  title: string;
+  status: string;
+  allocatedAttemptIds?: string[];
+  allocatedCredits: number;
+  requiredCount?: number | null;
+  satisfiedCount?: number | null;
+  unresolvedReason?: string | null;
+  rawPosition?: number | null;
+  createdAt: string;
+}
+
+export interface DegreeAuditRecordItem {
+  auditId: string;
+  workspaceKey: string;
+  programId: string;
+  ruleReleaseId: string;
+  recordId: string;
+  recordRevision: number;
+  rulesDigest: string;
+  overallStatus: string;
+  isStale: boolean;
+  completedCredits: number;
+  inProgressCredits: number;
+  unverifiedCredits: number;
+  resultsSummary?: Record<string, any>;
+  blockers?: string[];
+  assumptions?: string[];
+  programTitle?: string | null;
+  programKind?: string | null;
+  createdAt: string;
+}
+
+export interface DegreeAuditDetailResponse {
+  audit: DegreeAuditRecordItem;
+  evaluations?: DegreeAuditRuleEvaluationItem[];
+  programTitle: string;
+  programKind: string;
+  coverageScope: 'program_audit';
+}
+
+export interface AuditableProgramItem {
+  programId: string;
+  title: string;
+  kind: string;
+  ruleReleaseId: string;
+}
+
+export interface DegreeAuditRunRequest {
+  programId: string;
+  workspaceKey?: string | null;
+}
+
+export interface ProgramComparisonMember {
+  position: number;
+  programId: string;
+  programTitle: string;
+  ruleReleaseId: string;
+  auditId: string;
+  savedStatus: string;
+  savedCompletedCredits: number;
+  overlayStatus: string;
+  unresolvedCount: number;
+}
+
+export interface ProgramComparisonResponse {
+  comparisonId: string;
+  workspaceKey: string;
+  recordId: string;
+  recordRevision: number;
+  sharingPolicy: 'unknown' | 'evidenced';
+  mentionKind: string;
+  sharedMentions?: string[];
+  creditSavings?: number | null;
+  coverageComparable: boolean;
+  rankingBlockedReason?: string | null;
+  members?: ProgramComparisonMember[];
+  createdAt: string;
+}
+
+export interface ProgramComparisonSummary {
+  comparisonId: string;
+  recordRevision: number;
+  sharingPolicy: 'unknown' | 'evidenced';
+  mentionKind: string;
+  sharedMentions?: string[];
+  creditSavings?: number | null;
+  coverageComparable: boolean;
+  rankingBlockedReason?: string | null;
+  createdAt: string;
+}
+
+export interface ProgramComparisonCreateRequest {
+  programIds: string[];
+  addCourseCodes?: string[];
+  removeCourseCodes?: string[];
+  workspaceKey?: string | null;
+}
+
+export interface CatalogEditionItem {
+  editionId: string;
+  revision: number;
+  editionKey: string;
+  isCurrent: boolean;
+  topicBuildId?: string | null;
+  sourceIds?: string[];
+}
+
+export interface CatalogRefreshBatchResponse {
+  batchId: string;
+  collectionId: string;
+  editionKey: string;
+  status: 'staging' | 'cancelled' | 'published';
+  baseRevision: number;
+  stagedRevision: number;
+  compatible: boolean;
+  currentEdition: CatalogEditionItem;
+  stagedEdition: CatalogEditionItem;
+}
+
+export interface CatalogRefreshStartRequest {
+  collectionId: string;
+  editionKey: string;
+  compatible?: boolean;
+}
+
+export interface CatalogRefreshPublishRequest {
+  expectedRevision: number;
+}
+
+export interface ResponseFeedbackRequest {
+  responseId: string;
+  vote: 'up' | 'down';
+  reasonCode: string;
+  comment?: string | null;
+  workspaceKey?: string | null;
+}
+
+export interface ResponseFeedbackResponse {
+  feedbackId: string;
+  workspaceKey: string;
+  responseId: string;
+  revision: number;
+  vote: 'up' | 'down';
+  reasonCode: string;
+  comment?: string | null;
+  currentVotes: number;
+  createdAt: string;
+}
+
+export interface EvalCandidateCreateRequest {
+  redactedPrompt: string;
+  redactedExpected: string;
+  sourceFeedbackId?: string | null;
+}
+
+export interface EvalCandidateResponse {
+  candidateId: string;
+  redactedPrompt: string;
+  redactedExpected: string;
+  sourceFeedbackId?: string | null;
+  createdAt: string;
+}
+
+export interface FeedbackTriageRequest {
+  feedbackId: string;
+  issueType: 'missing_evidence' | 'provider' | 'explanation' | 'privacy' | 'ui';
+  toStatus: 'open' | 'reviewed' | 'withdrawn';
+  expectedRevision: number;
+  expectedTriageRevision: number;
+  note?: string | null;
+  traceId?: string | null;
+  collectionId?: string | null;
+  investigationQuery?: string | null;
+}
+
+export interface FeedbackTriageResponse {
+  feedbackId: string;
+  issueType: string;
+  triageStatus: string;
+  triageRevision: number;
+  voteRevision: number;
+  gapId?: string | null;
+  eventId?: string | null;
+}
+
+export interface FeedbackTriageListItem {
+  eventId: string;
+  feedbackId: string;
+  issueType: string;
+  triageStatus: string;
+  triageRevision: number;
+  voteRevision: number;
+  vote: 'up' | 'down';
+  gapId?: string | null;
+  createdAt: string;
+}
+
+export interface EvalCandidatePromotionRequest {
+  feedbackId: string;
+  redactedPrompt: string;
+  redactedExpected: string;
+  sourceId: string;
+  traceId: string;
+  collectionId: string;
+  reReview?: boolean;
+}
+
+export interface EvalCandidatePromotionResponse {
+  candidateId: string;
+  redactedPrompt: string;
+  redactedExpected: string;
+  sourceFeedbackId?: string | null;
+  sourceIndexRevision: number;
+  promotionState: 'current' | 'stale';
+  reviewState: 'reviewed' | 're_reviewed';
+  createdAt: string;
+}
+
+export interface DebugExperimentCreateRequest {
+  conversationId: string;
+  requestId: string;
+  snapshot: Record<string, unknown>;
+}
+
+export interface DebugExperimentResponse {
+  experimentId: string;
+  sourceConversationId: string;
+  sourceRequestId: string;
+  state: 'recorded';
+  createdAt: string;
+}
+
+export interface PromptVersionCreateRequest {
+  name: string;
+  templateText: string;
+  versionId?: string | null;
+}
+
+export interface PromptVersionResponse {
+  versionId: string;
+  name: string;
+  templateText: string;
+  contentDigest: string;
+  reviewState: 'draft' | 'approved';
+  createdAt: string;
+}
+
+export interface PromptFixtureCreateRequest {
+  suiteName: string;
+  fixtureText: string;
+}
+
+export interface PromptFixtureResponse {
+  fixtureId: string;
+  suiteName: string;
+  fixtureDigest: string;
+  present: boolean;
+}
+
+export interface PromptPromotionRequest {
+  suiteName: string;
+}
+
+export interface PromptPromotionResponse {
+  promotionId: string;
+  versionId: string;
+  suiteName: string;
+  fixtureDigest: string;
+  status: 'published';
+  createdAt: string;
+}
+
+// ---- Reviewed course maintenance (phase B) ---------------------------------
+
+export interface AdminCourse {
+  courseId: string;
+  code: string;
+  subject: string;
+  title: string;
+  canonicalCode?: string | null;
+  parseStatus: string;
+  lifecycle: 'current' | 'retired';
+  authority: 'atlas' | 'catalog' | 'admin_correction' | 'admin_created';
+  adminRevision: number;
+  requisitesRaw?: string | null;
+  oxford?: boolean;
+  mentionCount?: number;
+  unresolvedCount?: number;
+  programCount?: number;
+  filename?: string | null;
+  contentType?: string | null;
+  originKey?: string | null;
+  indexRevision?: number | null;
+  sourceStatus?: string | null;
+  sourceIsCurrent?: boolean | null;
+  publisher?: string | null;
+  sourceUrl?: string | null;
+  sourceTitle?: string | null;
+  institution?: string | null;
+  issuingUnit?: string | null;
+  documentRoles?: string[];
+  applicability?: Record<string, string[]>;
+  applicabilityStatus?: string | null;
+}
+
+export interface AdminCourseListResponse {
+  courses: AdminCourse[];
+  total: number;
+  subjects: string[];
+}
+
+export interface AdminCourseMention {
+  kind: string;
+  targetCode: string;
+  resolved: boolean;
+  position?: number | null;
+}
+
+export interface AdminCourseNode {
+  nodeId: string;
+  kind: string;
+  parentNodeId?: string | null;
+  position: number;
+  nodeType: string;
+  targetCode?: string | null;
+  conditionText?: string | null;
+}
+
+export interface AdminCourseDependent {
+  courseId: string;
+  code: string;
+  title: string;
+  kind: string;
+  targetCode: string;
+  resolved: boolean;
+}
+
+export interface AdminCourseProgramReference {
+  programId: string;
+  title: string;
+  kind: string;
+}
+
+export interface AdminCourseChange {
+  changeId: string;
+  code: string;
+  changeKind: 'create' | 'update' | 'retire' | 'restore' | 'baseline_conflict';
+  status: 'draft' | 'published' | 'rejected' | 'superseded' | 'conflicted';
+  expectedRevision: number;
+  publishedRevision?: number | null;
+  baseAuthority?: string | null;
+  baseValue?: Record<string, any>;
+  proposedValue?: Record<string, any>;
+  reason: string;
+  actorUserId?: string | null;
+  publishedByUserId?: string | null;
+  conflictNote?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  publishedAt?: string | null;
+}
+
+export interface AdminCourseDetail {
+  course: AdminCourse;
+  mentions: AdminCourseMention[];
+  nodes: AdminCourseNode[];
+  programs: AdminCourseProgramReference[];
+  dependents: AdminCourseDependent[];
+  changes: AdminCourseChange[];
+  currentCodes: string[];
+}
+
+export interface AdminCourseParsedMention {
+  kind: string;
+  targetCode: string;
+  resolved: boolean;
+}
+
+export interface AdminCourseParsedRequisites {
+  status: string;
+  parseStatus: string;
+  mentions: AdminCourseParsedMention[];
+  unresolved: string[];
+  leftover: string[];
+}
+
+export interface AdminCoursePreviewResponse {
+  change: AdminCourseChange;
+  current?: Record<string, any> | null;
+  changedFields: string[];
+  parsed?: AdminCourseParsedRequisites | null;
+  programs: AdminCourseProgramReference[];
+  dependents: AdminCourseDependent[];
+  staleAuditCount: number;
+  activeTopicBuilds: number;
+  warnings: string[];
+}
+
+export interface AdminCoursePublishResponse {
+  change: AdminCourseChange;
+}
+
+export interface AdminCourseConflict {
+  changeId: string;
+  code: string;
+  changeKind: string;
+  status: string;
+  conflictNote?: string | null;
+  createdAt: string;
+}
+
+export interface AdminCourseChangeCreate {
+  code: string;
+  changeKind?: 'create' | 'update' | 'retire' | 'restore' | null;
+  title?: string | null;
+  requisitesRaw?: string | null;
+  sourceId?: string | null;
+  reason: string;
+  expectedRevision?: number;
+}
+
+export interface AdminCourseChangeReject {
+  reason: string;
 }

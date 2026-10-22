@@ -63,7 +63,8 @@ WHERE source_id = %(source_id)s AND index_revision = %(index_revision)s;
 
 -- name: set_source_indexed
 UPDATE sources
-SET status = 'indexed', error_message = NULL, updated_at = now()
+SET status = 'indexed', error_message = NULL, updated_at = now(),
+    indexed_content_revision = %(index_revision)s
 WHERE source_id = %(source_id)s AND index_revision = %(index_revision)s;
 
 -- name: lock_source_origin_publication

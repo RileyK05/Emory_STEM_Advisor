@@ -1,6 +1,9 @@
-"""Prerequisite seam: a course's own chunks and what it requires / unlocks.
+"""Retrieve course chunks and parsed prerequisite/corequisite neighbors.
 
-Uses mentions, not trees, so ambiguous or unparsed courses still contribute.
+Neighbor chunks are retrieval candidates, not standalone claims that a course
+is unconditionally required: sourced prose retains any alternatives and
+conditions. Ambiguous/unparsed requisite mentions do not create graph neighbors,
+but the course's own chunks remain available through the ``self`` direction.
 No model is involved anywhere in this module.
 """
 
@@ -20,8 +23,9 @@ from app.retrieval.types import Candidate, SeamResult
 # out subjects ("Physics 151", "Chemistry 150", "Biology 141"); those map through
 # SUBJECT_ALIASES so the seam does not go dormant on a spelled-out subject
 # (EMO-015).
-_SUBJECT_RE = re.compile(r"\b([A-Za-z]{2,11})\s?(\d{3}(?:[A-Z]{2}|[A-Za-z])?)\b")
-_NUMBER_RE = re.compile(r"\b(\d{3}(?:[A-Z]{2}|[A-Za-z])?)\b")
+_TAIL = r"\d{2,4}(?:[A-Z][A-Z0-9]{0,7}|[a-z][A-Z]?)?"
+_SUBJECT_RE = re.compile(rf"\b([A-Za-z][A-Za-z0-9]{{0,10}}[A-Za-z](?:_OX)?)\s?({_TAIL})\b")
+_NUMBER_RE = re.compile(rf"\b({_TAIL})\b")
 _CARRY_SEP = re.compile(r"\s*(?:(?:,|/|and|or)\s*)*")
 _CONJUNCTIONS = frozenset({"and", "or"})
 _SUBJECT_ALIASES = {word.lower(): code for word, code in SUBJECT_ALIASES.items()}
@@ -31,7 +35,7 @@ def _resolve_subject(word: str) -> str | None:
     alias = _SUBJECT_ALIASES.get(word.lower())
     if alias is not None:
         return alias
-    if re.fullmatch(r"[A-Z]{2,7}", word):
+    if re.fullmatch(r"[A-Z][A-Z0-9]{0,5}[A-Z](?:_OX)?", word):
         return word
     return None
 

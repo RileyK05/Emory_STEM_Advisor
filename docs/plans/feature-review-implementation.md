@@ -1,5 +1,10 @@
 # Feature review: implementation handoff
 
+> Completion review, 2026-10-19: the checkmarks below overstate several current
+> implementations. Use [feature-completion-plan.md](feature-completion-plan.md)
+> for the verified partial/missing work, acceptance gates and later goal sequence.
+> This older handoff remains a description of intended behavior.
+
 Requested 2026-10-18. Covers all 30 numbered additions in
 [feature-review.md](../feature-review.md), using the current working tree rather
 than only committed code. This is a proposed implementation sequence, not a
@@ -17,7 +22,7 @@ what-if comparisons require this subsystem as well as an academic record.
 
 | Wave | Deliverables, using review numbers | Exit condition |
 |---|---|---|
-| 0: establish the base | Re-triage prior audits; 29 browser coverage; contract additions for the next slice | Existing behavior is verified against current code; open data defects have owners and scoped repairs |
+| 0: establish the base | [x] Re-triage prior audits; [x] 29 browser coverage; contract additions for the next slice | Existing behavior is verified against current code; open data defects have owners and scoped repairs |
 | 1: bounded improvements | 5 summary export, 6 memory inspector/reset, 7 applicability notices, 18 audit browsing/export, 24 cost/cache telemetry | Useful student/admin improvements with ownership, evidence, and failure behavior preserved |
 | 2: access and release controls | 15 roles/support grants, 16 retention/export/delete, 17 flags, 26 storage/networking, 27 quotas, 28 alerts | Required before the corresponding student-data pilot or production expansion |
 | 3: trusted advising inputs | 1 academic records, 11 provenance lifecycle, 12 requirement review; then 10 catalog refresh approval | Private record revisions and reviewed, evidence-bound rule releases can be pinned |
@@ -47,7 +52,8 @@ Do not treat feature flags as a substitute for access, retention, or data gates.
   meaningful forgetting requires changes across all those context paths.
 - `admin/store.py`, `api/routes/admin.py`, `debug/store.py`, and the separate
   frontend bundles provide audited institutional operations and scoped overrides.
-  Current institutional roles are `student|admin`.
+  At the time of this handoff, institutional roles were `student|admin`; the
+  delivered completion plan adds advisor and auditor plus scoped support grants.
 - `llm/base.py` already represents `cached_prompt_tokens` and measured, estimated,
   and unknown usage. Extend accounting and aggregation instead of adding a
   competing usage ledger.
@@ -83,7 +89,8 @@ alone does not establish that the local corpus was regenerated or backfilled.
 
 ## Shared implementation rules
 
-- New persisted entities use additive migrations after the current head (041).
+- New persisted entities use additive migrations after the head at the time of
+  this handoff, 041 (the current head is 068; see the completion plan).
   Allocate migration numbers when implementing to avoid collisions. Never edit
   the baseline, archive, or an applied migration. Put SQL in named query blocks.
 - All student records, audit results, plans, feedback, exports, and replay inputs
@@ -110,7 +117,7 @@ alone does not establish that the local corpus was regenerated or backfilled.
 
 ## Student-facing features
 
-### 1. Academic record and transcript import
+### [x] 1. Academic record and transcript import (Completed 2026-10-19)
 
 **Scope/dependencies:** First deliver manual entry and CSV import. Before accepting
 real student records, apply the ownership, retention, export/delete, and storage
@@ -242,7 +249,7 @@ legend, exact revision download, polling, and cancellation.
 passages, pending/failed turns are excluded, and later chat changes do not rewrite
 the exported snapshot. Unsupported advice cannot become a verified plan by export.
 
-### 6. Conversation memory inspector and reset
+### [x] 6. Conversation memory inspector and reset (Completed 2026-10-19)
 
 **Scope/dependencies:** Inspection reuses existing `GET .../summaries`. Implement
 forgetting as an explicit context reset, coordinated with existing compaction and
@@ -267,7 +274,7 @@ task state, and evidence references.
 through any of the paths above. Cross-owner and concurrent resets are fenced;
 failed summaries never claim coverage or hide raw turns.
 
-### 7. Source freshness and applicability banner
+### [x] 7. Source freshness and applicability banner (Completed 2026-10-19)
 
 **Scope/dependencies:** Can ship now using verified provenance; gains richer review
 state from 11 and cohort choice from 1/2.
@@ -358,7 +365,7 @@ public sources/cache; it never routes around a challenge.
 intact. Concurrent import changes reject publication. Readers cannot see mixed
 program/catalog releases, and historical citations survive removal of a listing.
 
-### 11. Source and provenance lifecycle UI
+### [x] 11. Source and provenance lifecycle UI (Completed 2026-10-19)
 
 **Scope/dependencies:** Extend trusted ingestion/provenance seams, with a dedicated
 source-review capability from 15 for institutional use.
@@ -381,7 +388,7 @@ changes fence research reads/publication, invalidated approvals require renewed
 review, and evidence snapshots keep their historical labels. Deletion is never
 an incidental metadata edit.
 
-### 12. Program requirement review UI
+### [x] 12. Program requirement review UI (Completed 2026-10-19)
 
 **Scope/dependencies:** Begin with the existing bound program projection. Deliver
 raw inspection first, then the executable rule authoring/release step required by 2.
@@ -446,7 +453,7 @@ private evidence enters a shared suite.
 
 ## Governance and admin
 
-### 15. Finer roles and time-boxed support access
+### [x] 15. Finer roles and time-boxed support access (Completed 2026-10-19)
 
 **Scope/dependencies:** Before a pilot that involves staff access or real academic
 records. Product owners must define actual responsibilities; implement capabilities
@@ -471,7 +478,7 @@ events without copying content/secrets into audit details.
 protection, grant expiry/revocation, direct URL/API bypasses, and cross-workspace
 jobs. Role changes take effect for existing sessions and pending publication.
 
-### 16. Retention, student export, and deletion
+### [x] 16. Retention, student export, and deletion (Completed 2026-10-19)
 
 **Scope/dependencies:** Establish policy before real-record collection and before
 production. This plan does not choose legal retention periods or certify compliance;
@@ -499,7 +506,7 @@ content cannot return through summaries, eval copies, exports, or late jobs.
 Restore drills verify deletion handling alongside DB/object recovery. Choose actual
 retention intervals only after the institution supplies them.
 
-### 17. Feature flags and cohort rollout
+### [x] 17. Feature flags and cohort rollout (Completed 2026-10-19)
 
 **Scope/dependencies:** Use the existing env controls as global ceilings; new
 cohort policy must never enable a feature disabled globally.
@@ -520,7 +527,7 @@ kill-switch controls. Return only relevant effective capabilities to Main.
 predictable, clients cannot self-enable features, and rollback/kill behavior is
 tested for pending work. No per-cohort secret or credential overrides.
 
-### 18. Audit filters, pagination, and export
+### [x] 18. Audit filters, pagination, and export (Completed 2026-10-19)
 
 **Scope/dependencies:** Quick win extending the current limit-only `/api/admin/audit`
 and the existing `admin_audit` table; use 15's auditor capability when available.
@@ -654,7 +661,7 @@ validation evidence.
 cases remain separately scored; changed corpus labels cannot silently pass a case;
 required regressions, unresolved cases, or absent human signoff prevent promotion.
 
-### 24. Cache and cost telemetry
+### [x] 24. Cache and cost telemetry (Completed 2026-10-19)
 
 **Scope/dependencies:** Quick win extending existing `Usage` and model-call records.
 No hardcoded current provider prices are introduced by this plan.
@@ -698,7 +705,7 @@ partial failures cannot be presented as a valid quality ranking.
 
 ## Platform and release
 
-### 26. Blob storage and private networking
+### [x] 26. Blob storage and private networking (Completed 2026-10-19)
 
 **Scope/dependencies:** Release gate for the target replicated/school deployment.
 Extend the Azure and scale handoffs; do not provision infrastructure as part of
@@ -725,7 +732,7 @@ Restore DB plus referenced object versions and deletion policy together. Verify
 private DNS, allowed provider/IdP egress, probes, drain, and rollback in the actual
 deployment, following the scale plan's release gates.
 
-### 27. Per-student rate limits and quotas
+### [x] 27. Per-student rate limits and quotas (Completed 2026-10-19)
 
 **Scope/dependencies:** Extend pending-work admission and per-operation budgets;
 release gate before cohort expansion. 24 supplies auditable price inputs but
@@ -750,7 +757,7 @@ raise institutional/global hard caps.
 unknown usage, price changes, day boundaries, and batch fan-out cannot overspend or
 double-charge. Hard cap enforcement is tested separately from estimated reporting.
 
-### 28. Observability alerts
+### [x] 28. Observability alerts (Completed 2026-10-19)
 
 **Scope/dependencies:** Extend the current loopback-only `/metrics` and Azure
 monitoring base. Define launch service classes and SLOs with the capacity plan.
@@ -773,7 +780,7 @@ information; student content and high-cardinality identifiers stay out of labels
 rule syntax. Load/drain checks verify sustained queue/pool failures and spend caps
 are detected across replicas without duplicate fleet totals or leaked query text.
 
-### 29. Admin/Debug browser tests in required CI
+### [x] 29. Admin/Debug browser tests in required CI (Completed 2026-10-18)
 
 **Scope/dependencies:** First implementation slice. Existing required frontend CI
 already runs `npm test`; extend that suite to exercise the two additional bundles.
@@ -827,14 +834,21 @@ accessibility. No runtime translation of evidence is treated as authoritative.
 
 Start with small reviewable changes rather than one feature branch for all 30:
 
-1. Reconcile wave 0 against current code/corpus and add required Admin/Debug browser
-   coverage (29). Avoid redoing repairs already delivered in migrations 034/035.
-2. Ship filtered audit browsing/export (18), then cache/cost accounting views (24).
-3. Ship applicability notices (7), template-based advising summary export (5), and
-   memory inspection followed by the separately fenced reset behavior (6).
-4. Define and implement access/retention/rollout controls (15/16/17); integrate
-   quotas, storage migration, and alerts with the existing release handoffs
-   (27/26/28). These need separate schema and rollout reviews.
+1. [x] Reconcile wave 0 against current code/corpus and add required Admin/Debug browser
+   coverage (29). Avoid redoing repairs already delivered in migrations 034/035. (Completed 2026-10-18)
+2. [x] Ship filtered audit browsing/export (18), then cache/cost accounting views (24). (Completed 2026-10-19)
+3. [x] Slice 3: (Completed 2026-10-19)
+   - [x] Applicability notices (7) (Completed 2026-10-19)
+   - [x] Template-based advising summary export (5) (Completed 2026-10-19)
+   - [x] Memory inspection followed by the separately fenced reset behavior (6) (Completed 2026-10-19)
+4. [x] Slice 4: Define and implement access/retention/rollout controls (15/16/17); integrate
+   quotas, storage migration, and alerts with the existing release handoffs (27/26/28) (Completed 2026-10-19):
+   - [x] Finer roles and time-boxed support access (15) (Completed 2026-10-19)
+   - [x] Retention, student export, and deletion (16) (Completed 2026-10-19)
+   - [x] Feature flags and gradual rollout controls (17) (Completed 2026-10-19)
+   - [x] Per-student rate limits and quotas (27) (Completed 2026-10-19)
+   - [x] Storage layout migration (26) (Completed 2026-10-19)
+   - [x] Observability runbooks and alert thresholds (28) (Completed 2026-10-19)
 5. Build source and program review (11/12), then a synthetic manual/CSV academic
    record workflow (1), then a named-program deterministic audit pilot (2).
    Bring in real records only once the applicable data controls are ready.

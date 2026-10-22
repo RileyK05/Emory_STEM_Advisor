@@ -25,6 +25,17 @@ SELECT COALESCE(EXTRACT(EPOCH FROM (now() - min(available_at))), 0) AS seconds
 FROM jobs
 WHERE status = 'queued';
 
+-- name: telemetry_recent_failures
+SELECT COUNT(*) AS failures
+FROM jobs
+WHERE status = 'failed'
+  AND updated_at > now() - INTERVAL '5 minutes';
+
+-- name: metrics_hourly_spend_usd
+SELECT SUM(estimated_cost) AS spend
+FROM model_calls
+WHERE created_at > now() - INTERVAL '1 hour';
+
 -- name: claim_next_job
 WITH candidate AS (
     SELECT job_id

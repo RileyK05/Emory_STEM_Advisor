@@ -251,8 +251,19 @@ open transaction must survive; all release sites commit first.
   subject and a university department are the same entity. Never infer or
   merge department membership from embeddings. Verified membership can be
   added to the config and rebuilt without changing the clustering algorithm.
-- **A3** The atlas arrives as a JSONL file in the format described under
-  "Ingest". How it is fetched from Emory's atlas is not part of the design.
+- **A3** The public College Catalog baseline and a browser-observed live Atlas
+  comparison are separate evidence. `backend/app/atlas/live.py` reads saved
+  Spring 2027 Atlas index/detail DOM captures into typed staging records. It
+  preserves the observed career, term, class number, section identity, and raw
+  evidence hash; it does not map live identities to catalog course codes, infer
+  equivalence, or write to the course atlas or database. The manual helper
+  `python -m scripts.manual.capture_course_atlas` accepts browser-copied DOM and
+  stores immutable local capture files under `data/atlas/spring-2027-capture`;
+  it does not fetch the site. `personal-check.md` tracks evidence-backed
+  identity and restriction questions, not a completed coverage inventory. No
+  all-school or all-course coverage claim is warranted until captured career
+  indexes reconcile with their announced result counts and the review queue is
+  resolved.
   **Before the prerequisites parser is trusted, 30+ real requisite strings must
   be supplied**. A recorded 2026–27 public College Catalog baseline now contains
   33 exact statements and individual official URLs in
@@ -260,6 +271,11 @@ open transaction must survive; all release sites commit first.
   Current conservative grammar classifies 14 parsed, 17 ambiguous, and 2 unparsed;
   uncertain cases retain mentions without requirement trees. Explicit transfer
   credit remains a condition, and Oxford `_OX` course IDs remain distinct.
+  An explicit trailing `or equivalent transfer credit` is an alternative to
+  the complete preceding course expression, including a conjunction. An
+  explicit `and` retains the additional condition. The parser must not absorb
+  unrelated permission wording into that condition; unsupported suffixes fail
+  closed with their raw wording retained.
   This is catalog grammar evidence, not a live Course Atlas offerings import or
   institutional verification of every prerequisite tree.
 - **O1 (open, not blocking):** should visuals also draw prerequisite edges, or
@@ -380,11 +396,16 @@ and dimensions must remain isolated.
 
 The prerequisite graph (D6). `courses` holds one row per atlas course, linked
 to its locator, with `requisites_raw` and a `parse_status` of `none`,
-`parsed`, `ambiguous`, or `unparsed`. `prereq_mentions` holds every code each
-course mentions, by kind (`prerequisite`, `corequisite`, `recommended`);
-`target_course_id` is NULL when the course is not in the atlas. `prereq_nodes`
-holds the requirement tree (`all`, `any`, `course`, `condition`) only for
-`parsed` courses.
+`parsed`, `ambiguous`, or `unparsed`. `lifecycle` is `current` for a course in
+the published catalog and `retired` for a known historical identity that left
+it; retired rows keep their original source, locator, chunks and parsed
+evidence, and are excluded from current catalog, prerequisite-seam, planning
+and similarity reads. `prereq_mentions` holds every code each course mentions,
+by kind (`prerequisite`, `corequisite`, `recommended`); `target_course_id` is
+NULL when the course is not in the atlas. `prereq_nodes` holds the requirement
+tree (`all`, `any`, `course`, `condition`) only for `parsed` courses. Historical
+lookup is explicit: `GET /api/retired-courses` returns only retired identities,
+separate from current recommendations.
 
 ### sim_builds / sim_courses / sim_clusters / sim_cluster_members
 
@@ -590,10 +611,10 @@ never cuts a chunk, and reports an oversized chunk as incomplete.
   issued evidence only, every fact cited) with their digest.
 
 Runs are workspace-private: another workspace reads them as not found. Backups
-are a full logical dump and include these tables. There is no workspace-deletion
-feature yet. Note: `research_runs` references `conversation_requests` without an
-ON DELETE action, so a future conversation-deletion path must decide whether
-research audit is retained or removed.
+are a full logical dump and include these tables. An owner deletion removes
+research runs, steps, evidence, and decisions before conversations and their
+requests; the deletion inventory and tombstone fence are recorded by the privacy
+service.
 
 ### Research answering (039)
 
@@ -628,8 +649,24 @@ with a stable scope/provider/tool/prompt fingerprint. Changed arguments on a reu
 call ID fail closed. Identical read/discovery calls can reuse their result within
 the run. Research-specific settings replace legacy operation limits in one persisted
 operation; prompt bounds include tool schemas. The controller reserves final-call
-capacity, offers only finish when limits/no-progress require it, and allows one
-structural correction within the original budget. Free text cannot publish.
+capacity for a final proposal and up to two corrections within the original
+budget. A rejected proposal forces a finish-only round with its validation
+feedback retained. The rejected finish proposal and matching tool result stay
+together in the correction context when the prompt bound permits; old read
+rounds are still dropped. A whole JSON terminal decision (optionally fenced) may supply
+the missing tool-call envelope, then passes through the same ledger, schema,
+evidence and decision validation as a native finish call. Prose, ambiguous JSON
+and unsupported proposals cannot publish. Truncated/incomplete provider replies
+use the same bounded correction allowance; their partial tool batches and text
+are discarded before any execution or terminal JSON normalization. Provider
+errors, content filters and explicit provider refusals still fail closed.
+
+Preparation checks may discover prerequisite alternatives for evidence, but only
+the student's explicitly selected course set enters the sequence plan. Unselected
+OR branches are not added as mandatory selections; unfinished discovery on an
+unused branch does not invalidate an otherwise complete plan. The rebuilt model
+context retains each check's actual stages, blockers, completeness, unexplored
+codes and enrollment-scope limit so the answer reports the deterministic result.
 
 `generation/research_final.py` checks active evidence/candidate references, factual
 support, recommended entity reads, preparation claim coverage and executed results.
@@ -680,13 +717,23 @@ With up to four issued handles it reopens the current exact database chunks unde
 the pinned source locks, preserving their real identities and indexes before issuing
 current-run evidence. Excluded/retired sources never appear, and removed chunks are
 reported unavailable. Cached recall reads reactivate only their server-issued IDs.
+Wrong-reader issued handles return actionable typed guidance; unissued handles
+remain out of scope. Memory handles reopen through `advisor_recall` in handle-only
+mode, separately from archive search queries and cursors.
 Program recommendations and preparation conclusions still require their ordinary
 program reads and newly executed deterministic checks.
 
-Research requests use an explicit whole-turn recent-history selection (at most
+Research requests use an explicit whole-turn history selection from the latest
+50 saved turns (at most
 6,000 UTF-8 bytes, further bounded by `CONVERSATION_CONTEXT_MAX_BYTES`) instead of
 failing when the complete transcript exceeds 12 KB. The selection reports its total
-and omitted turn counts. `advisor_read_conversation` searches/pages the saved
+and omitted turn counts. Exact student messages are selected newest first before
+assistant replies, then rendered in chronological order. Oversized messages are
+omitted whole without preventing smaller messages from being selected. This
+preserves student corrections ahead of assistant retellings; it does not merge
+reports, verify them or promise recall beyond the bounded view. Further prompt
+compaction drops selected assistant replies before student messages.
+`advisor_read_conversation` searches/pages the saved
 published transcript as untrusted discussion, with a cursor inside long turns and
 at most 6,000 text bytes per page. This recovers student reports and earlier goals;
 it never acquires source evidence. Referenced artifact revisions retain their
@@ -712,6 +759,24 @@ remove additional whole selected-history turns without dropping referenced artif
 revisions. A run with no scoped sources advertises only conversation reads,
 notebook updates and finish, so source verification cannot spend calls on an empty
 corpus. Source facts still require actually supplied exact evidence.
+Finish compaction reserves all supporting evidence of each executed preparation
+check, including support deactivated by a later notebook update, ahead of optional
+passages. If a complete check and its support cannot fit, it omits the check as
+one unit, identifies it as unavailable, and requires a disclosed readiness limit.
+The final validator still requires the exact executed check and all its evidence;
+compaction never grants citation authority to an omitted passage.
+It also restores already acquired support for declared program and course
+candidates from the server's entity-to-evidence bindings, reserving one passage
+per entity before optional passages. A notebook's active selection cannot make
+a still-declared candidate's read record disappear. Model-proposed evidence IDs
+never acquire new passages or bypass pinned-source verification.
+
+The advising prompt treats QTM as historical departmental/course naming and
+searches both QTM and DATASCI without inventing a course-level substitution.
+Course recommendations distinguish required core courses, supported electives
+and unknown degree applicability using actual program reads. Subjective fit is a
+conditional judgment supported by course content and student preferences, not an
+objective major ranking or an employment guarantee.
 
 Manual judgment checks: `python -m scripts.smoke.live_advising --mode research
 --case research-data-major --limit 1 --max-calls 12 --token-budget 640000`.
@@ -748,6 +813,193 @@ whole-degree rules. Current dependency stages do not verify semester schedules o
 graduation. An audit must expose satisfied, outstanding and unresolved conditions
 rather than replace missing rule support with model judgment. The model can propose
 and explain paths while deterministic tools enforce the rules they support.
+
+### Program audit completion base (2026-10-19)
+
+Program imports update stable program identities and retire missing projections
+using `programs.is_active`; publication does not delete rule releases, reviews
+or saved audits. Identical reimports preserve the active release pointer. Changed
+source identity, parsed content or retirement clears incompatible current pointers
+and archives the old published release. Historical releases/audits restrict parent
+deletion rather than cascading with a current projection. Current discovery and
+research exclude retired programs.
+
+The executable rule language supports exact courses, all-of, any-of, choose-count
+and explicit credit thresholds. Raw course mentions and parser counts prepare
+unresolved review drafts; they do not decide full-clause semantics. Structure
+validation rejects duplicate IDs/options, empty containers, invalid credit bounds
+and global student waivers. Supported reviewed clauses must reference their exact
+bound item evidence. The pure bounded allocator considers alternatives and repeat
+attempts while consuming each course identity once. Search exhaustion returns
+`unresolved`, never an asserted deficit. `AUDIT_MAX_SEARCH_STATES` bounds execution.
+Verified completed allocations can be `satisfied`; unverified or planned
+contributions are `conditional_satisfied`, in-progress work remains
+`in_progress_satisfied`, and unused alternatives are `not_selected`. Unknown
+pass/fail equivalence for a letter-grade threshold remains unresolved. These
+program results are not whole-degree or semester-completion claims.
+
+Academic-record verification requires both a verification capability and target
+record authorization, including the explicit `verify` grant action for a different
+workspace. Support grants permit only reads and grants do not cross resource
+types. Record/audit HTTP handlers explicitly commit persisted mutations so request
+connection close cannot discard apparently successful writes. Each record mutation stores an immutable attempt snapshot for that revision.
+A later edit leaves the older snapshot readable, including its resolved course
+identity and verification details. Record writers lock the parent record before
+changing attempts. Manual edits stay
+`student_manual` even when a client sends another provenance. CSV commit
+uses the reviewed preview digest and the selected rows; repeating that commit
+does not insert the rows again. A stale record revision leaves the saved
+preview unchanged. Corrected CSV rows are normalized and validated before their
+review digest is saved; a changed grade recalculates inferred status and earned
+credit. Credit values must be finite, and an explicit zero earned-credit value
+is preserved. The import UI requires saving an edited grade before committing.
+
+### Publication scope, memory and summaries
+
+Rule releases pin the parsed program digest and source metadata revision, as well
+as the exact source identity/index/hash. Approval and publication serialize on the
+program and revalidate that binding; publication requires an approved release.
+Current audit detail, list and export responses derive staleness from the same
+database view, including record revision, release pointer and source
+lifecycle/binding. A later source index leaves the saved program audit readable
+and visibly stale, and drops that program from the applicable published list
+until its release matches the current evidence again. Detail and export name
+the coverage `program_audit`; the result is not a degree-completion claim.
+
+A program comparison pins one record revision and two or three published
+releases. Added or removed courses stay on the comparison overlay. They are
+not inserted into the academic record, and a repeated comparison does not
+create another scenario. Shared requirement-line mentions stay
+`mention_overlap_only` with no credit savings while sharing policy is unknown.
+Unequal unresolved coverage blocks any ease ranking.
+
+A catalog refresh batch stages the next edition without becoming current.
+Cancelling it leaves the published edition, its source, and the current topic
+build usable. An incompatible manifest is not published and does not rebuild
+or retire the topic graph. Corpus regeneration stays a separate verified import.
+
+Response feedback keeps one current vote per owner and response. Submitting a
+different vote replaces that row's current flag and does not add another
+current vote. Only the owner may submit a vote; a read grant cannot submit on
+the owner's behalf. Feedback is not tied to the original result, so it remains
+readable when that result or a depended-on source becomes stale. A reviewer
+with source-review authority records an issue type and a triage transition.
+Missing evidence on a negative vote opens a gap investigation and does not
+write a course or prerequisite fact. Provider, explanation, privacy, and UI
+issues stay separate and do not open that gap. A stale triage revision is
+rejected and the reviewer's note is left in the draft. An eval candidate stores
+only a redacted prompt, expected answer, and optional feedback id. Promotion
+deduplicates that digest, rejects another collection's trace, and marks the
+candidate stale when the pinned source index moves unless the reviewer sends
+an explicit re-review. The candidate has no workspace, comment, or student
+history, and a request that includes student history is rejected.
+
+A debug experiment records a new id for an authorized immutable request
+snapshot. Replaying the saved conversation request does not create an
+experiment, and the experiment is not appended to the student conversation.
+A pending or unknown provider outcome is not replayed. The stored experiment
+snapshot keeps the query and scope pointers and drops secret-bearing fields.
+
+Prompt text is an immutable version identity. Different text cannot reuse a
+version id. Promotion stays blocked until a human marks the version approved
+and a current eval fixture is present. No model call approves or judges the
+release.
+
+Usage totals keep a known portion when some calls are priced and others are
+not. The dashboard headline stays Unknown while any call is unpriced or the
+currency cannot be summed. An all-unknown set does not become a zero total.
+Cache ratios stay cache measurements, not answer quality.
+
+A privacy export inventories conversations, artifacts, research, gaps, sessions,
+academic records, import batches, program audits, feedback, and jobs. The create
+response reveals the download token once. Later list and detail responses omit
+it. Download requires the owner session and that token, and it expires. The
+manifest digest is the checksum of the stored bundle. Deletion fences the
+workspace and removes local artifact originals before deleting owned rows. A
+failed delete stays resumable and does not write those files back. A tombstone
+blocks later private record, conversation, feedback and artifact writes, new jobs,
+and worker execution/publication. Short store writes serialize with fence creation;
+job cancellation follows the committed fence to avoid reversing job-publication locks.
+A stored quota of zero stays zero. Generation
+admission settles one query charge per request id in the same transaction as the
+queued turn. A rejected start, including a stale sequence or a missing source,
+does not charge. Replaying an admitted stream does not charge again, and an
+unknown provider outcome of that admitted job stays charged. Admission resolves
+the same user/workspace/cohort policy as the effective-quota read. Quota checks
+and increments serialize per workspace, including the first empty bucket;
+opening the policy list never overwrites an administrator's limits. Policy
+mutations and their audit entries commit together. Alert probes that
+fail or have no source stay unknown rather than a healthy zero, and one failed
+SQL probe does not abort the next reading.
+The blob adapter's dictionary is process-local storage, not remote blob
+durability or private networking. Deployed alert delivery, legal retention, and
+real student records stay outside this behavior.
+A refresh archives incompatible pending reviews as well as published releases.
+
+Summary exports preserve per-turn citation numbers, exact saved excerpts and
+owned artifact revisions. A missing saved passage becomes an open question.
+The native document records a deterministic input digest and turn boundary;
+Markdown and DOCX downloads name that same immutable artifact revision. Queued
+summary jobs pin the boundary at admission and stage their document for atomic
+job publication, including cancellation and feature-access fences.
+
+Memory inspection distinguishes checkpoints excluded by a reset from current
+context, shows exact passage/source/revision pointers and selected scope, and
+recovers explicit reset conflicts. Reset changes future context, notebook,
+recall and inherited-scope behavior without deleting transcript history.
+
+### Execution policy and cost telemetry
+
+The four session roles are student, advisor, admin and auditor. Authenticated
+workspace routes require the corresponding read/write capability; auditor Main
+navigation leads to the read-only Audit and Usage & Cost surfaces. Worker entry
+and publication recheck persisted role/status. Short shared publication locks
+serialize that decision against role changes. Support grants remain scoped,
+expiring and read-only; cross-workspace verification also needs a verify action.
+
+Support access is requested by one administrator and approved by another.
+The request keeps its draft when the expected revision is stale. Approval pins
+an expiring read-only grant to the workspace and resource. Revocation or expiry
+denies the next transcript read, the direct transcript download, and publication
+of a result that was already staged under that grant. Worker publication applies
+the same grant fence when a job payload carries `supportGrantId`. A caller-supplied
+workspace key is not authorization: record and audit routes still require ownership
+or an active scoped grant, including verification.
+
+A reviewer proposes, rejects, approves, deprecates, or replaces a source through
+the admin review surface. Approval is pinned to the expected metadata revision;
+a stale revision keeps the typed draft. The worker consumes source-invalidation
+events once under a lease. A resolved gap whose source appears in that outbox
+is ineligible as soon as the event exists, before consumption finishes. Each
+successful index copies its chunk text into `source_revision_evidence`. A later
+reindex can replace the live chunks, and a fetch by the exact older revision
+still returns the stored text. An identical program reimport keeps saved
+releases, reviews, and audits.
+
+Feature policy is evaluated from current database overrides and cohort membership
+at execution boundaries. Process settings remain ceilings over debug/profile
+settings. Workspace overrides precede cohorts (a cohort denial wins a cohort
+conflict), then global override and shipped default. Kill switches take precedence;
+research also requires tools. Planning, tools, citation repair, research and
+compaction use this policy in HTTP and worker execution. Changes during calls
+withhold affected output while preserving usage accounting. Memory and summary
+endpoints enforce their flags directly; Main refreshes availability on focus.
+The Admin rollout surface manages overrides, kills and cohort membership, retains
+drafts on errors and uses expected update timestamps for conflicting edits.
+Policy mutations and their administrative audit events commit together. Policy
+and ownership denials are terminal job failures, not automatic retries.
+
+Model-call telemetry includes compaction, planning, answer/repair/retry, research,
+artifact and native-batch attempts. Dated tariffs distinguish standard and batch
+billing; missing batch tariffs remain unknown, with no inferred discount. Batch
+pricing is pinned at submission admission rather than the later result poll.
+Provider-reported token counts with unreported cache use are conservative tariff
+estimates when cached and ordinary input prices differ. Cache-share denominators
+include only calls reporting cache counts, and reporting coverage stays visible.
+API summaries and breakdowns expose costCurrency/costCurrencies; mixed currencies
+have no combined monetary total. All costs are tariff calculations rather than
+reconciled provider invoices. Model and operation breakdowns obey the same filters
+as totals. Migration 056 invalidates earlier batch costs priced as ordinary calls.
 
 ## Ingest
 
@@ -904,13 +1156,21 @@ list[ChunkSpan(locator_ordinal, start_char, end_char, token_count)]`.
   is never rendered into the searchable text.
 
 `app/atlas/importer.py` `import_atlas(conn, *, collection_id, path, embedder,
-embed_model, count_tokens, config) -> UUID`:
+embed_model, count_tokens, config, allow_course_removal=False) -> UUID`:
 
-1. The atlas file is a source like any other. Importing an atlas into a
-   collection that already has an atlas source **deletes the old atlas source
-   first** (cascade removes its courses, mentions, nodes, chunks).
+1. The atlas file is a versioned source under the atlas origin. A replacement
+   is staged and embedded while the previous published source remains current.
+   The importer rejects an empty atlas and, by default, rejects a snapshot that
+   omits any existing current course code. A reviewed complete snapshot may opt
+   in to removals with `allow_course_removal=True`; the CLI exposes this as
+   `--allow-course-removal`. Removed codes are not deleted: they move to
+   `lifecycle='retired'`, retaining their source, locator, chunks and parsed
+   evidence for historical citation. A retired code that returns to a later
+   published snapshot becomes `current` again under the same content-addressed
+   `course_id`. The course set is checked again under the serialized publication
+   transaction, so a concurrent replacement cannot bypass the guard.
 2. The rendered text is chunked and embedded through the normal pipeline.
-3. In the same transaction as locators/chunks: insert `courses` (`locator_id`
+3. In the same publication transaction as locators/chunks: insert `courses` (`locator_id`
    = that course's locator, `canonical_code` = the course's cross-list group
    anchor), run `parse_requisites` on the structured
    `requisites` field. If empty, use the exact description text from an explicit
@@ -919,9 +1179,12 @@ embed_model, count_tokens, config) -> UUID`:
    only for fully parsed records, tree nodes
    (`node_id = uuid5(course_id, f"{kind}:{path}")` where `path` is the node's
    position path like `"0.1"`), then resolve `target_course_id` for all
-   mentions in one UPDATE.
+   mentions in one UPDATE. Program requirement mentions are re-linked to the
+   newly published course rows. The topic build is retired in the same
+   transaction as publication, so a failure before commit preserves the old
+   source and current topic build together.
 4. An unchanged indexed atlas still refreshes old parser metadata. Parser
-   version 4 uses a locked, byte-identical current source and an atomic update;
+   version 7 uses a locked, byte-identical current source and an atomic update;
    it preserves source, chunk, locator, vector, and department topic identities,
    and advances the source revision to invalidate queued jobs using old facts.
    A canonical-code change is not a parser fact: it updates `canonical_code`
@@ -938,7 +1201,114 @@ atlas is imported with cross-list metadata.
 
 `scripts/import_atlas.py` (`python -m scripts.import_atlas --collection NAME
 FILE`) also prints every `ambiguous`/`unparsed` course with its raw text so a
-human can fix the parser.
+human can fix the parser. A replacement that removes existing current course
+codes also requires `--allow-course-removal` after snapshot completeness is
+reviewed; removal retires those identities instead of deleting their history.
+
+### Term-scoped offerings (migration 070)
+
+Live Atlas offerings are a separate evidence lane from the master course
+records and parsed prerequisite graph. `app/atlas/offerings.py` accepts the
+latest captured index for a career and term and requires exact detail captures
+for every visible result link. Details attach to that index by exact result
+identity, which survives cursor shifts, while each original cursor remains
+acquisition metadata. Atlas's announced course count is a lower bound:
+group cards and their child links can make the visible link count higher. It
+checks cursor, raw course code, class number, and the result's group, matched
+identity, and source-database metadata before staging. Empty indexes and
+missing or mismatched details fail closed. Known placeholder rows are retained
+as held structured records and excluded from searchable Markdown and ordinary
+snapshot reads; a snapshot containing only held placeholders cannot publish as
+ordinary advising evidence. Raw displayed course codes remain exact; no suffix
+or cross-list equivalence is inferred. A group card stays one offering row
+with a null class number, and its section identities remain nested metadata
+instead of fanning out into independent offerings.
+
+After explicit `--publish`, the script writes a deterministic Markdown source
+under `data/atlas/offerings/` and sends it through normal source indexing. The
+source origin is scoped by exact career and term. Migration 070 stores the
+snapshot header and per-result metadata in the same source-publication
+transaction as its chunks and embeddings. Distinct raw capture sets for the
+same canonical source append under a capture-set hash; repeat source ingests
+cannot replace earlier acquisition evidence. The reader defaults to the newest
+capture set and can pin an exact set hash. The structured reader is pinned to
+the source ID, source revision, collection ID, and optional capture-set hash;
+workspace-private sources are excluded from this institutional lane. Capture
+timestamps are acquisition metadata: the header and each raw result retain observation times and canonical
+capture-envelope SHA-256 hashes alongside the parser's HTML evidence hashes.
+Those timestamps and envelope hashes do not enter canonical Markdown identity,
+so identical facts keep stable source IDs across recaptures. Searchable Markdown
+contains course facts and concise section scope; class cards expose only their
+own CRN's section scope, while group cards retain all child-section scope. Raw
+identity, cursor, notices, all section payloads, and capture proofs remain in the
+structured snapshot. The selected original capture envelopes are also written
+as canonical JSON under `data/raw/atlas-captures/<sha256>.json`; migration 070
+stores source/capture-set/hash/path references, and the normal checksummed backup
+includes these files and rewrites their pointers on restore. This raw acquisition
+archive is separate from canonical Markdown identity.
+Historical indexed snapshots can be read only by exact source ID and index
+revision; the reader returns the source's current flag, and does not perform
+global discovery.
+Offering publication alone never populates `courses`, prerequisite mentions/trees,
+or the department topic graph. Verified reconciliation is the separate path below. Dry validation is the CLI default, and publishing a
+snapshot does not establish that all careers or all Atlas offerings have been
+captured.
+
+### Atlas-primary course reconciliation
+
+Course Atlas registration restrictions take precedence over conflicting catalog
+requirements (user decision, 2026-10-21). `app/atlas/authority.py` deterministically
+prepares one exact term's authoritative course records from validated, eligible
+offering snapshots. Exact displayed identities from every captured career,
+including Oxford, enter the same course dataset. Oxford campus markers, writing
+suffixes, short course numbers, four-digit health-science numbers and longer
+program suffixes remain intact. No equivalence or prerequisite is inferred from
+a title, matching number, campus relationship, or plausibility.
+
+Atlas title, description, credits and registration restrictions replace matching
+catalog fields. A missing restriction field uses only an explicitly labeled
+requisite description tail, never the entire description. Notes and raw capture
+proofs are retained separately; structured restrictions control prerequisite
+parsing. Different section rules retain all variants and fail closed instead of
+choosing a section or majority. Courses absent from the captured term remain
+explicitly labeled catalog fallbacks. This preserves Fall-only/historical records
+without presenting their requirements as current verified Atlas rules.
+
+`scripts.reconcile_atlas` writes a separate canonical JSONL, atomically, without
+overwriting the catalog input. Validation/build is the default; `--publish` uses
+`import_authoritative_atlas`. That trusted importer verifies the complete Atlas
+record set and each field against deterministic preparation and the exact indexed
+offering evidence in the same collection. It rechecks the pins in the publication
+transaction, then builds the graph with the ordinary deterministic parser. The
+existing course-source origin is replaced atomically, so current retrieval uses
+the new authority while immutable prior sources/chunks remain available for
+historical citations. Course IDs remain content-addressed by collection and code.
+A plain catalog import cannot replace an Atlas-primary source.
+
+Only conflict holds backed by the same incoming course's exact capture are
+released in that publication transaction. Other holds remain unchanged. Topic
+builds are retired on replacement and rebuilt against the published vectors.
+Canonical per-course metadata retains authority, term, careers, capture-set/hash
+proofs, and section notes; citable text visibly labels Atlas authority and catalog
+fallbacks. Term snapshots alone do not establish a complete academic-year schedule.
+
+**Requirement conflict holds (migration 071)** are explicit curator decisions
+keyed by the exact indexed master source and course code. Applying a hold
+requires the exact current master file hash and a course present in that source;
+the record retains the conflict reason and a SHA-256/local pointer to the
+captured offering evidence. It may also pin an indexed offering source revision
+and capture-set hash; the capture digest must belong to that exact set. Saved
+evidence pointers are resolved to absolute paths before persistence. The advising
+snapshot keeps the cited master text visible,
+marks the requirements incomplete and ambiguous, and omits the parser tree from
+verified requirements and sequence planning. Automatic retrieval removes active
+held-master chunks from the generation context after fusion across all seams and
+adds a trace warning (or a review-pending refusal if no other evidence remains).
+Direct source reads and historical citations remain available for review. The
+prerequisite retrieval seam also skips graph adjacency through the held course.
+A hold never edits prerequisite mentions or nodes. A curator releases it against
+the same source, course, and master hash with a recorded review note; a different
+master source or hash requires its own review.
 
 ## Retrieval seams
 
@@ -946,8 +1316,13 @@ human can fix the parser.
 
 Full-text OR-match over chunk text (`tsvector`, `ts_rank_cd`). Query text is
 tokenized to `[a-z0-9]+` before it reaches `to_tsquery`, so hostile input
-can't build an expression. It has zero model dependency and is the baseline
-every other seam must beat.
+can't build an expression. Explicit course-shaped queries also contribute their
+literal subject and number tokens, preserving Oxford markers and suffixes;
+compact `CS171` can therefore find `CS 171` without creating an alias. Exact
+Markdown course headings receive a bounded ranking preference over repeated
+term boilerplate and body-text references to the course. Term/year phrases do
+not receive this course preference. It has zero model dependency and is the
+baseline every other seam must beat.
 
 `app/retrieval/seams/keyword.py` `keyword_seam(conn, collection_id, query,
 config) -> SeamResult`:
@@ -1015,14 +1390,20 @@ parser. The seam returns, per `seams.prereq.directions`:
 - `upstream`: chunks of the courses it requires, score `decay` (0.8);
 - `downstream`: chunks of the courses it unlocks, score `decay`.
 
-It walks mentions, not trees, so ambiguous and unparsed courses still
-contribute. Only `indexed` sources. Order `raw_score DESC, source_id,
-chunk_index`. It is deterministic and authoritative: there is no
-evidence-level review or dormancy, because the atlas is the source of truth.
+Neighbor expansion uses only course references in successfully parsed
+prerequisite/corequisite trees. Mention rows from ambiguous or unparsed text and
+courses with an active source conflict hold do not create graph neighbors.
+Neighbor chunks are retrieval candidates for the
+original request, not standalone claims that their course is unconditionally
+required: the returned source text preserves catalog alternatives, conditions,
+and exclusions (for example, `A or B` is not asserted as `A and B`). The
+queried course's own chunks remain available through `self`, including when its
+requisite text did not parse. Only `indexed` sources are eligible. Order
+`raw_score DESC, source_id, chunk_index`; retrieval remains deterministic.
 
 #### The parser (`app/atlas/requisites.py`)
 
-Pure functions over fixed rules; no model. `PARSER_VERSION = "5"`. It splits by
+Pure functions over fixed rules; no model. `PARSER_VERSION = "7"`. It splits by
 label (`Prerequisite:`, `Corequisite:`, `Recommended:`); collects every code,
 carrying the subject forward (`MATH 111, 112, or 115`); strips grade
 qualifiers; maps a fixed allowlist of conditions (`permission of instructor`,
@@ -1089,8 +1470,13 @@ min_score=0.0, chunk_texts=None, canonical_keys=None) ->
 list[FusedChunk]`. Pure, no DB. `FusedChunk` carries `chunk_id, source_id,
 chunk_index, seams, normalized_score, source_slot, rank`.
 
-1. **Normalize per seam, higher is better.** Keyword and embedding scores are
-   min-max normalized per query to [0, 1] (all-equal scores become 1.0). The
+1. **Normalize per seam, higher is better.** Embedding scores are min-max
+   normalized per query to [0, 1] (all-equal scores become 1.0). Keyword scores
+   min-max the same way, except a set whose best raw score is below 0.05 keeps
+   those absolute scores so `fusion.min_score` can drop it. A single keyword
+   hit has no competitor and becomes 1.0, so one exact term stays citable. The
+   keyword seam folds lexical rank into [0, 1) and places a longer topical
+   token in [1, 2), so repeated shorter words cannot sort above it. The
    prerequisite seam's scores are already fixed values in (0, 1] and are used
    as-is; min-max would turn every prerequisite into 0.
 2. **Union, max not sum.** A chunk found by several seams keeps every seam in
@@ -1119,13 +1505,14 @@ chunk_index, seams, normalized_score, source_slot, rank`.
 6. Final order: `normalized_score DESC, source_id, chunk_index`; `rank` 1..n.
 
 Fusion applies the **relevance floor** (`fusion.min_score`) before allocating
-slots. The floor is per-seam normalized, so even an
-unrelated query can have a best candidate at 1.0; ties and different seams can
-produce several. It drops the weak relative tail, not absolutely irrelevant
-results. The embedding seam applies a raw cosine floor before fusion, but its
-current value is not a calibrated abstention boundary. The broader baseline's
-unrelated query exceeded it and returned six passages. Set `min_score = 0` to
-disable the relative floor.
+slots. Embedding min-max can still place one candidate at 1.0. A keyword set
+whose best raw score is below 0.05 does not: those scores stay absolute, and
+the floor removes them. One keyword hit becomes 1.0. A longer topical token is
+ranked in [1, 2), above any number of shorter generic matches such as repeated
+"work" or "first". The embedding seam applies a raw cosine
+floor before fusion, but its current value is not a calibrated abstention
+boundary. The broader baseline's unrelated query exceeded it and returned six
+passages. Set `min_score = 0` to disable the floor.
 
 With `fusion.dedupe`, candidates whose stripped text is identical collapse
 before selection, and cross-listed aliases collapse by canonical identity even
@@ -1323,7 +1710,9 @@ erDiagram
 ```
 
 - `retrieval_traces`: query, normalized query, config version, embedding
-  model, refused flag.
+  model, refused flag, and the requesting `workspace_key` where one exists
+  (migration 069). Owner deletion removes attributed traces and the legacy
+  traces still reachable through saved turn evidence.
 - `trace_seams`: every seam on every query, including disabled ones, with
   its state (`active`, `dormant`, `disabled`, `failed`), reason, and
   candidate count.
@@ -1416,7 +1805,11 @@ its own valid current-context marker. A cited example or preamble cannot cover
 a separate uncited body. Blank-line handling includes CRLF and whitespace-only
 separators. Code masking must preserve fence state across the whole answer
 before per-paragraph coverage is checked. This is a conservative structural
-requirement, not a proof of entailment or human verification.
+requirement, not a proof of entailment or human verification. A course code in
+a factual paragraph must occur with the same subject and number, including any
+suffix, in the cited passage or its locator. A paragraph that says the context
+does not support the claim may name a code that is absent. A model does not
+judge whether the surrounding prose is entailed.
 Empty, refused, filtered, truncated, and unexecuted-tool output is also withheld.
 Usage is recorded before rejecting output. There is no all-context citation
 fallback. `PROMPT_VERSION` identifies the prompt for the evidence chain;
@@ -1468,7 +1861,8 @@ tests overwrite them with fakes. `scripts/serve.py` runs it
 | GET | `/api/sources?collection=` | sources with status, chunk count, error message, extraction warnings |
 | POST | `/api/sources` | ingest an uploaded file -> source |
 | POST | `/api/query` | grounded answer or refusal (with trace) |
-| GET | `/api/recommendations?query=&collection=` | similarity-graph recommendations |
+| GET | `/api/recommendations?query=&collection=` | similarity-graph recommendations (current courses only) |
+| GET | `/api/retired-courses?query=&collection=` | separately listed retired course identities for historical lookup |
 | GET | `/api/subgraph/{cluster_id}` | department/topic/course containment tree |
 
 Request/response schemas mirror `frontend/src/api/types.ts` field-for-field.
@@ -1592,7 +1986,7 @@ for algorithm, issuer, audience/authorized party, nonce, and finite time claims.
 Discovery, token, and JWKS responses are bounded before parsing and cannot
 redirect. Opaque server-side sessions expire and are revoked on logout. `app_users` is the
 durable identity record keyed by `(issuer, subject)`: it carries the institutional
-role (`student|admin`) and `active|disabled` status. A first verified login may be
+role (`student|advisor|admin|auditor`) and `active|disabled` status. A first verified login may be
 promoted by `ADMIN_BOOTSTRAP_EMAILS` or `ADMIN_BOOTSTRAP_SUBJECTS`; that list is
 first-insert only, so later role changes are made in the Admin surface and are not
 overwritten by a stale environment list. A disabled user's existing sessions
@@ -1601,10 +1995,11 @@ Cookie-authenticated mutations require the configured Origin and Host. API
 responses are private/no-store; forwarded headers never establish identity.
 
 The Admin surface is a separate bundle and API boundary
-(`/api/admin/*`). It requires an admin role; `ADMIN_PANEL_ENABLED=false` disables
-it. It lists and pages users/workspaces, changes role/status, inspects sessions,
-revokes sessions, lists conversations/jobs/sources/artifacts metadata, and
-exposes an audit log. A transcript read is a separate, audited content action,
+(`/api/admin/*`). It requires the operation's admin capability;
+`ADMIN_PANEL_ENABLED=false` disables it. Auditors may read audit and telemetry
+views without mutation. The surface lists and pages users/workspaces, changes
+role/status, inspects sessions, revokes sessions, lists conversations, jobs,
+sources, and artifact metadata, and exposes an audit log. A transcript read is a separate, audited content action,
 not part of the metadata list; deleting a conversation also deletes its turns,
 checkpoints, requests, and turn jobs and is audited. A queued job can be
 cancelled and a running job can receive a cancel request, both audited.
@@ -1639,7 +2034,8 @@ does not send the header.
 | POST | `/api/admin/users/{id}/revoke-sessions` | Admin-only session revocation with audit |
 | GET/DELETE | `/api/admin/conversations`, `.../{id}/transcript` | Metadata list; audited transcript read; audited conversation delete |
 | GET/POST | `/api/admin/jobs`, `/api/admin/jobs/{id}/cancel` | Admin-only job inspection and audited cancellation |
-| GET | `/api/admin/sources`, `/api/admin/artifacts`, `/api/admin/audit` | Admin-only operational inspection |
+| GET | `/api/admin/sources`, `/api/admin/artifacts`, `/api/admin/audit` | Authorized operational inspection; audit reads allow auditor |
+| GET | `/api/admin/telemetry/usage`, `/api/admin/pricing/schedules` | Authorized read-only usage, cost, cache, and price views; schedule mutation is admin-only |
 | GET/POST/PATCH/DELETE | `/api/admin/collections`, `/api/admin/collections/{id}` | Empty-collection CRUD with audit |
 | GET | `/api/debug/settings` | Admin-only allowlisted registry and defaults |
 | POST/GET/PATCH/DELETE | `/api/debug/sessions`, `/api/debug/session` | Admin-only scoped override session (bearer token) |
@@ -1832,7 +2228,7 @@ provider call. The focused backend checks pass. The browser exposes optional
 ordered section and worksheet plans, typed columns, explicit revision targets,
 and configured budget guidance while retaining the simple prompt flow. Invalid
 plans and stale-head responses preserve the form; retry requires user review.
-The broader integrated verification remains in progress.
+The broader integrated verification passes in the current test suite.
 
 Office PDF preview runs the selected document/workbook revision through the
 authenticated isolated LibreOffice runner. Formula workbooks require verified
@@ -2112,6 +2508,150 @@ files, revisions, conversations, shared file references, and unknown reserves;
 they also reject checksum damage and path traversal. Production Linux restore,
 deployment rollback, scheduling, retention, and monitoring remain unverified.
 
+## Advising quality and course maintenance (2026-10-22)
+
+This section is the contract for the implementation handoff in
+[plans/advising-quality-and-data-management.md](plans/advising-quality-and-data-management.md).
+It defines publication, comparison and completion semantics, and records what
+already existed when the handoff started. It does not claim the remaining
+phases are implemented.
+
+### Course authority and lifecycle
+
+A course row is one identity in one collection. Two orthogonal fields carry its
+provenance and its availability:
+
+- `courses.authority` — `atlas` (an explicitly captured public Course Atlas
+  record), `catalog` (the catalog baseline or a labeled catalog fallback),
+  `admin_correction` (a reviewed manual correction to an existing identity) or
+  `admin_created` (a course introduced by a reviewed admin action with no
+  institutional evidence). Editing never produces `atlas`. A correction cannot
+  acquire Atlas authority by being saved.
+- `courses.lifecycle` — `current` or `retired`. Retirement removes an identity
+  from current catalog reads while keeping its source, locator, parsed evidence
+  and citations resolvable. A retired identity is never satisfied as another
+  course's prerequisite; the dependent edge becomes an explicit unresolved
+  dependency.
+
+Current reads filter `lifecycle = 'current'`. Explicit historical lookup may
+read retired rows. An Atlas capture is primary for the course it captures;
+catalog fallbacks stay labeled wherever Atlas evidence is absent. Program
+requirements, admissions documents and career references never rewrite a course
+requirement.
+
+### Course change publication
+
+Admin course maintenance is a versioned, reviewable publication, not a mutable
+row edit:
+
+1. A change is recorded with actor, reason, expected admin revision, base
+   authority, the observed original values and the proposed values. A draft is
+   not active.
+2. Preview renders the changed fields, the deterministically parsed
+   prerequisite text, unresolved wording, program references and the derived
+   artifacts that publication will invalidate.
+3. Publication applies in one transaction: it replaces the course values,
+   re-runs the deterministic requisites parser, replaces mentions and nodes,
+   re-resolves mention targets, advances `courses.admin_revision`, writes the
+   audit record and queues invalidation. A failed parse still publishes the raw
+   wording with `parse_status` `unparsed`/`ambiguous` and writes no invented
+   edges.
+4. `admin_revision` is optimistic concurrency. A change whose expected revision
+   is stale is rejected, not merged.
+5. A later Atlas import does not overwrite an admin-controlled identity
+   (`admin_correction`/`admin_created`) and does not resurrect an admin-retired
+   course. When the incoming baseline differs from the evidence the correction
+   was based on, a `conflicted` change is queued for review and the published
+   correction stays active.
+6. Retirement and restoration are themselves changes. Restoration is a reviewed
+   publication with a preview of the identities that will become current.
+
+### Comparison semantics
+
+A comparison is a bounded, evidence-linked result, not a degree audit and not a
+registration clearance.
+
+- Inputs are conversation identity, exact course/program identities, a term or
+  cohort when known, stated goals and reported course statuses. Statuses stay
+  distinct: completed, in progress, planned and explicitly not completed.
+  Hypothetical changes are scenario overlays and never rewrite reported history.
+- Comparison context belongs to the existing private conversation or scenario.
+  A new chat inherits nothing.
+- A comparison never creates or mutates an academic record. Reported coursework
+  stays unverified unless a separate verified institutional action says
+  otherwise, and an assistant summary cannot supersede the student's own
+  correction.
+- Rows separate sourced facts from judgment, carry source authority and
+  applicability, and disclose missing coverage. Prerequisite support is never
+  presented as registration clearance, and term availability or degree
+  applicability that is unknown stays labeled unknown.
+- Program-family metadata supports discovery only. Department membership does
+  not establish interchangeability; school, campus, degree, track and edition
+  are preserved.
+
+### Completion semantics
+
+A request has required deliverables and optional research. Required work is
+tracked separately and its capacity is reserved before research broadens.
+Completion is derived from obligations covered and available evidence; a model's
+self-assigned "complete" label is insufficient.
+
+Check status is rendered from the execution ledger, never from prose:
+`not_requested`, `not_executed`, `executed_supported`, or
+`executed_but_unavailable`. The last state must not be reported as "no check
+ran". Deterministic academic checks stay in application code.
+
+### Implementation inventory at handoff
+
+| Area | Present before this work | Added by this handoff |
+| --- | --- | --- |
+| Admin | `admin/source_review.py`, `admin/catalog_refresh.py`, admin routes, `SourceReviewPanel` | `admin/course_maintenance.py`, course routes, `CourseMaintenancePanel` |
+| Course data | atlas import/authority (`atlas/authority.py`), `courses.lifecycle` (072), parser, offering snapshots (070), requirement holds (071) | `courses.authority`, `courses.admin_revision`, `course_changes`, baseline-conflict handling |
+| Comparisons | `advising/comparison_service.py`, `/api/comparisons`, `ProgramComparisonPanel` | not started (phase C) |
+| Degree rules | `programs/rules.py`, review/publish, deterministic audit engine | not started (phase D) |
+| Conversations | saved turns, memory/summaries, corrected history selection | not started (phase C/E) |
+| External material | upload/extract/chunk/embed, provenance, allowlist, source review | not started (phase F) |
+
+Implementation status: phase A (contracts and inventory) and phase B (admin
+course maintenance) are implemented and covered by
+`tests/test_course_maintenance.py`. The Courses surface in the Admin bundle
+lists, searches, edits, retires and restores an identity through a draft,
+preview and publication flow; publication re-parses requisites deterministically,
+replaces mentions and nodes, unresolves dependents of a retired course, marks
+affected audits stale, retires the collection's current topic build, and records
+the change. A baseline import preserves an admin-controlled identity and queues
+a `conflicted` change instead of overwriting it. Phases C–G are not implemented.
+
+Existing `POST /api/comparisons` invokes the academic-record/audit path and can
+create a workspace academic record. It must not be used for ordinary
+conversation comparisons; phase C adds a conversation-scoped entry point that
+does not write a record.
+
+### Data coverage measured at handoff
+
+Measured over the local `default` collection on 2026-10-22 (read-only probes;
+detail in [audit/db-data-review.md](audit/db-data-review.md)):
+
+- 3,342 course identities, of which 2,525 publish no requisites (`none`) and
+  817 were parsed to some degree.
+- 2,353 prerequisite mentions; 905 (38.5%) resolve to no course. 697 of those
+  are Oxford (`_OX`) identities and 64 are subjects outside the captured
+  catalog (Goizueta `FIN`/`BUS`/`ISOM`/`IBS`, `QTM`).
+- 10 self-referential mentions and 11 cyclic walks, all parser artifacts of
+  prohibition/restriction text and `Used for:` trailers.
+- 20 courses whose text says co-requisite store `kind = 'prerequisite'`; the
+  graph contains no `corequisite` or `recommended` rows at all.
+- 28 courses lost every prerequisite because the subject was spelled out
+  (`Arabic 101`, `Biology 142`), and 8 mentions use a non-canonical alias
+  (`HINDI`, `MUSIC`, `DANCE`) for an identity that exists.
+- 53 prerequisite edges point at a higher course level; 28 are PE activity-list
+  rows and some are the co-requisite mislabel, not sequencing constraints.
+
+These are coverage and parser gaps, not evidence that a course is invalid. An
+absent College master row is a coverage gap; Oxford identities are preserved
+with their campus suffix. The acceptance sweep in the data review is the
+regression gate for parser fixes, and no model may edit the graph to satisfy it.
+
 ## Platform extension scope (2026-10-07)
 
 This section records the requested expansion and the lessons adopted from the
@@ -2218,6 +2758,15 @@ supply evidence, not additional instructions. There is no separate build plan.
   Current previews and downloads are sanitized static HTML in a script-disabled
   sandbox. Enabling arbitrary scripts requires a separately verified boundary;
   CSP alone is not evidence of network or navigation containment.
+- HTML visual review is opt-in and advisory. When enabled, the dedicated
+  sandbox worker renders the candidate in a disposable Chromium container with
+  no network, a read-only root filesystem, and JavaScript disabled; only the
+  bounded PNG returns. The app sends it to a connection profile that declares
+  the `vision` capability and allows one bounded, schema-validated HTML
+  correction. The screenshot is not persisted or published; the visual verdict
+  and screenshot digest are artifact provenance. A missing browser image, a
+  missing vision capability, or a failed review leaves the original candidate
+  publishable; no browser runs in the API or worker process.
 
 ### Product, access, and deployment
 
@@ -2348,6 +2897,10 @@ locator and would turn a wrong answer into permanent "knowledge").
    and accessible, indexed, same-collection sources with locators and chunks.
    A restricted original scope must contain every selected resolution source.
    The note and source IDs record human attestation, not factual verification.
+   That check is a point-in-time snapshot of indexed, current sources. It does
+   not lock those source rows through commit. A later reindex or replacement
+   leaves the attestation readable and makes dependent reviews ineligible
+   through the source-invalidation outbox, including before the consumer finishes.
    A later failure reopens the gap and preserves the prior resolution audit.
 4. **Promotion.** New material enters through normal ingestion; cached model
    answers never become sources. Prerequisite facts change only through the atlas.
@@ -2420,8 +2973,9 @@ here, or that a code fix has passed an installed-product or semantic check.
   Author metadata is not extracted; filenames must not be treated as authors.
 - **Vector compatibility:** model/dimension filters and write validation prevent
   incompatible vectors from being scored together.
-- **Relevance:** embedding and fusion floors exist, but keyword min-max gives
-  the best keyword hit 1.0 even if irrelevant. Semantic refusal quality is open.
+- **Relevance:** embedding and fusion floors exist. A weak keyword set is not
+  stretched to 1.0, and a longer topical token outranks repeated shorter
+  generic words. Semantic refusal quality for free-text entailment is open.
 - **Duplicates:** fusion deduplicates identical selected text, not arbitrary
   overlaps or all duplicate passages at ingest.
 - **Markdown and normalization:** body-less headings merge with surrounding

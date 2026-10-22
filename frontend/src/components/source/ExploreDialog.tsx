@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { getClient } from '../../api/client';
-import type { Recommendation } from '../../api/types';
+import type { Recommendation, RetiredCourse } from '../../api/types';
 import { errorMessage } from '../../lib/errors';
 import { Dialog } from '../shell/Dialog';
 import { ChatIcon, CompassIcon } from '../icons';
@@ -9,6 +9,7 @@ import { ChatIcon, CompassIcon } from '../icons';
 function Explore({ onAsk }: { onAsk: (question: string) => void }) {
   const [query, setQuery] = useState('');
   const [recommendations, setRecommendations] = useState<Recommendation[] | null>(null);
+  const [retired, setRetired] = useState<RetiredCourse[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -19,8 +20,15 @@ function Explore({ onAsk }: { onAsk: (question: string) => void }) {
     setLoading(true);
     setError(null);
     setRecommendations(null);
+    setRetired([]);
     try {
-      setRecommendations(await getClient().recommendations(topic));
+      const [groupsResult, retiredResult] = await Promise.allSettled([
+        getClient().recommendations(topic),
+        getClient().retiredCourses(topic),
+      ]);
+      if (groupsResult.status === 'rejected') throw groupsResult.reason;
+      setRecommendations(groupsResult.value);
+      setRetired(retiredResult.status === 'fulfilled' ? retiredResult.value : []);
     } catch (cause) {
       setError(errorMessage(cause));
     } finally {
@@ -84,6 +92,23 @@ function Explore({ onAsk }: { onAsk: (question: string) => void }) {
         ) : (
           <p className="muted">No course groups matched that goal. Try a broader topic.</p>
         ))}
+      {retired.length > 0 && (
+        <section className="recommendation-group retired-courses">
+          <h3 className="recommendation-path">Retired courses</h3>
+          <p className="muted">
+            These course identities are kept for historical reference and are not currently offered.
+          </p>
+          <ul>
+            {retired.map((course) => (
+              <li key={course.courseId}>
+                <span>
+                  <strong>{course.code}</strong> {course.title}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

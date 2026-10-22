@@ -2,6 +2,13 @@
 
 A grounded advising system with a Python API, Postgres/pgvector retrieval, and a React frontend. The architecture contract and current implementation status live in [docs/architecture.md](docs/architecture.md).
 
+The frontend ships three entries from one codebase: **Main** for students and
+advisors, **Admin** at `/admin` (`/admin.html` under Vite) for institutional
+management and review, and **Debug** at `/debug` (`/debug.html`) for an expiring,
+scoped prompt/retrieval session. Main, Admin, and Debug share authentication but
+load separate bundles. The four session roles are student, advisor, admin, and
+auditor.
+
 ## Repository layout
 
 | Location | Purpose |
@@ -65,11 +72,31 @@ If Windows denies access to pytest's default temporary folder, pass
 directory for each run; pytest clears an existing basetemp, so concurrent runs
 must never share it. Keep test scratch under ignored `data/test-runs/`.
 
+## Optional HTML visual review
+
+HTML artifacts can be rendered to a screenshot and reviewed by a
+vision-capable connection profile before publication. The screenshot runs
+inside the disposable sandbox host, not the API or worker process.
+
+Build the fixed browser image on the separate sandbox host:
+
+```sh
+docker build -f sandbox/Dockerfile.browser -t emory-sandbox-browser:1.50.0-v1 .
+```
+
+Set `VISUAL_ARTIFACT_REVIEW_ENABLED=true`, `SCREENSHOT_RENDERER=sandbox`,
+`SANDBOX_SCREENSHOT_IMAGE`, and the existing `SANDBOX_REMOTE_URL` /
+`SANDBOX_BEARER_TOKEN`. The selected profile must declare the `vision`
+capability. The renderer aborts all network routes and disables JavaScript; a
+failed or unavailable review keeps the original validated artifact instead of
+blocking generation. `SCREENSHOT_RENDERER=playwright` exists only as a local
+development convenience and is not the deployed path.
+
 ## Schema baseline and existing data
 
 Fresh databases apply [032_schema.sql](backend/app/db/baseline/032_schema.sql)
 once, followed by the post-baseline
-[migrations](backend/app/db/migrations/) (`033`–`040`).
+[migrations](backend/app/db/migrations/) (`033`–`069`).
 Existing databases and backups keep their original migration history and upgrade
 through the byte-preserved [legacy archive](backend/app/db/legacy_migrations/),
 then the same post-baseline migrations. Neither path requires resetting the database.
@@ -96,7 +123,7 @@ The repository does not commit catalog, program, or eval data. From `backend/`,
 the following rebuilds the same corpus a teammate can verify against:
 
 ```powershell
-python -m scripts.migrate                                   # reaches migration 040
+python -m scripts.migrate                                   # reaches migration 069
 python -m scripts.scrape_programs --skip-departments       # catalog PDF -> data/programs/catalog/
 python -m scripts.ingest --collection NAME --origin-manifest ../data/programs/ingest-manifest.json ../data/programs/catalog/*
 python -m scripts.import_programs --collection NAME        # after ingest: binds programs to their sources

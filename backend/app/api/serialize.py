@@ -4,6 +4,7 @@ from uuid import UUID
 
 from app.api.schemas import (
     AnswerResponse,
+    ApplicabilityNotice,
     Citation,
     ClaimReviewUnit,
     ContextItem,
@@ -75,6 +76,7 @@ def answer_response(
     settings,
     trace_id: UUID,
     latency_ms: int,
+    applicability: ApplicabilityNotice | None = None,
 ) -> AnswerResponse:
     warnings = list(answer.warnings) + list(retrieved.trace.warnings)
     return AnswerResponse(
@@ -103,6 +105,7 @@ def answer_response(
             warnings=warnings,
             errors=[],
         ),
+        applicability=applicability,
     )
 
 

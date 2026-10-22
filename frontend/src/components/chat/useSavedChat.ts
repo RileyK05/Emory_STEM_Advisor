@@ -56,6 +56,9 @@ export function useSavedChat(): ChatController {
   // Whether the user changed the scope since it was last saved with a turn. When unchanged,
   // a follow-up omits sourceIds so the server inherits the conversation's saved scope.
   const scopeChanged = useRef(true);
+  // The first list read opens the newest chat. A New chat click during that
+  // read must win, or the late response puts the user back in the old chat.
+  const skipInitialOpen = useRef(false);
 
   /** False once the chat unmounted or the user moved to another conversation since `epoch`. */
   const isCurrent = (id: string | null, epoch: number) =>
@@ -144,7 +147,7 @@ export function useSavedChat(): ChatController {
         if (!alive.current || listEpoch.current !== epoch) return;
         setConversations(items);
         setLoadingList(false);
-        if (items.length) void open(items[0].conversationId);
+        if (!skipInitialOpen.current && items.length) void open(items[0].conversationId);
       })
       .catch((cause: unknown) => {
         if (!alive.current || listEpoch.current !== epoch) return;
@@ -254,6 +257,8 @@ export function useSavedChat(): ChatController {
     // An in-flight conversation load was cancelled by the epoch bump above and
     // will not clear its flags; do it here so the panel never sticks busy.
     setLoadingConversation(false);
+    setLoadingList(false);
+    skipInitialOpen.current = true;
   };
 
   /** The open conversation, creating it first if this is a new chat. Null if it changed underneath us. */
@@ -292,7 +297,7 @@ export function useSavedChat(): ChatController {
     }
   };
 
-  const send = async (attachments: Attachment[]) => {
+  const send = async (attachments: Attachment[], onAccepted?: () => void) => {
     const query = draft.trim();
     if (!query) return;
     setError(null);
@@ -325,6 +330,7 @@ export function useSavedChat(): ChatController {
     const sentText = draft;
     try {
       await getClient().startConversationTurnStream(id, request);
+      onAccepted?.();
       scopeChanged.current = false;
       if (!isCurrent(id, epoch)) return;
       await loadConversation(id, epoch);
@@ -411,7 +417,7 @@ export function useSavedChat(): ChatController {
     draft,
     setDraft: (text) => setDrafts((current) => ({ ...current, [draftKey]: text })),
     busy: currentBusy || abandoning || loadingConversation || !!conversation?.pendingRequestId,
-    send: (attachments) => void send(attachments),
+    send: (attachments, onAccepted) => void send(attachments, onAccepted),
     changeScope: (next) => {
       scopeChanged.current = true;
       setScope(next);

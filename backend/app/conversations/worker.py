@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
@@ -18,6 +19,8 @@ from app.jobs.store import JobCancelled, SafeJobError
 from app.jobs.types import Job
 from app.jobs.worker import JobContext
 from app.operations.budget import fence_violation
+
+logger = logging.getLogger(__name__)
 
 PROGRESS_STAGES = frozenset({"planning", "retrieving", "routing", "generating", "using_tools",
                              "validating", "validated", "researching", "comparing", "finalizing"})
@@ -169,6 +172,10 @@ class ConversationTurnExecutor:
                 config = validate_retrieval(self.config, debug.get("retrieval") or {})
             except OverrideError as exc:
                 raise SafeJobError("invalid_debug_overrides", str(exc)) from None
+            from app.flags.service import FeatureFlagService
+
+            settings = FeatureFlagService.execution_settings(
+                conn, settings, job.scope_key, ceilings=self.settings)
             system_prompt = debug.get("systemPrompt")
             collection_id = UUID(effective["collectionUuid"])
             source_snapshot = {str(key): int(value) for key, value in
@@ -218,9 +225,44 @@ class ConversationTurnExecutor:
             conn.close()
 
     @classmethod
+    def on_failure(cls, conn, job: Job, exc: Exception) -> None:
+        """Settle the conversation request when its only job attempt fails.
+
+        Without this, `pending_request_id` stays set forever and every later
+        turn is rejected with 409 until the student manually abandons it.
+        """
+        conversation_id, request_id = _request_ids(job)
+        try:
+            store = ConversationStore(conn, job.scope_key)
+            store.finish(
+                conversation_id,
+                request_id,
+                {
+                    "type": "failed",
+                    "reason": "The answer could not be completed. You can retry this turn.",
+                },
+                state="failed",
+            )
+        except HTTPException:
+            # The request was already settled or abandoned concurrently.
+            pass
+        except Exception:
+            logger.exception("conversation failure cleanup did not settle %s", request_id)
+
+    @classmethod
     def publish_success(cls, conn, job: Job, value: ConversationTurnResult) -> dict[str, Any]:
         if not isinstance(value, ConversationTurnResult):
             raise SafeJobError("invalid_result", "Conversation answer failed validation.")
+        from app.auth.capabilities import require_workspace_execution
+
+        try:
+            require_workspace_execution(conn, job.scope_key, lock=True)
+            from app.auth.grants import assert_job_support_grant
+
+            assert_job_support_grant(conn, job)
+        except HTTPException as exc:
+            raise SafeJobError("access_changed", "Workspace access changed; output was withheld.",
+                               retryable=False) from exc
         conversation_id, request_id = _request_ids(job)
         request_row = conn.execute(queries.get("get_conversation_request"), {
             "conversation_id": conversation_id, "request_id": request_id,

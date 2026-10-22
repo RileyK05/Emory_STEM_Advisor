@@ -11,6 +11,7 @@ import re
 import time
 import unicodedata
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from psycopg.types.json import Jsonb
@@ -22,6 +23,7 @@ from app.operations.budget import (
     estimate_prompt_reservation,
     fence_violation,
 )
+from app.pricing import PricingService
 from app.util.digest import json_digest
 
 REVIEW_VERSION = 1
@@ -611,6 +613,17 @@ class ClaimReviewService:
     @staticmethod
     def _audit(conn, trace_id, request, selection, call: _ProviderCall):
         result, error, usage, generation_request = call.result, call.error, call.usage, call.request
+        created_at = datetime.now(UTC)
+        schedule_id, cost, cost_status = PricingService.compute_call_cost(
+            conn,
+            provider=selection.profile.provider,
+            model_id=selection.profile.model_id,
+            created_at=created_at,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cached_prompt_tokens=usage.cached_prompt_tokens,
+            usage_source=usage.source,
+        )
         with conn.transaction():
             conn.execute(queries.get("insert_claim_review_model_call"), {
                 "model_call_id": uuid4(), "trace_id": trace_id,
@@ -631,4 +644,8 @@ class ClaimReviewService:
                 "profile_id": selection.profile_id,
                 "profile_revision": selection.profile_revision,
                 "claim_review_id": request.review_id,
+                "cached_prompt_tokens": usage.cached_prompt_tokens,
+                "schedule_id": schedule_id,
+                "estimated_cost": cost,
+                "cost_status": cost_status,
             })
