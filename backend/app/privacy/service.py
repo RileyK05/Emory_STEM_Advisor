@@ -40,6 +40,8 @@ _DELETE_STEPS = (
     # Jobs own artifact-run plans/units; remove them before operations because
     # artifact_run_unit_calls restricts operation_calls.
     "delete_workspace_jobs",
+    # Private uploads, after the jobs whose run plans pinned them.
+    "delete_workspace_sources",
     "delete_workspace_operations",
     "delete_workspace_academic_records",
     "delete_workspace_quota_settlements",
@@ -87,27 +89,26 @@ def _inventory(conn, workspace_key: str) -> dict[str, Any]:
 
 
 def _original_paths(conn, workspace_key: str) -> list[str]:
-    rows = conn.execute(
-        queries.get("list_workspace_artifact_originals"),
-        {"workspace_key": workspace_key},
-    ).fetchall()
-    return [row["original_path"] for row in rows if row["original_path"]]
+    """Stored files the workspace owns: artifact originals and private source uploads."""
+    paths: list[str] = []
+    for name in ("list_workspace_artifact_originals", "list_workspace_source_originals"):
+        rows = conn.execute(queries.get(name), {"workspace_key": workspace_key}).fetchall()
+        paths.extend(row["original_path"] for row in rows if row["original_path"])
+    return paths
 
 
 def _purge_originals(paths: list[str], data_dir: Path | None) -> None:
     """Remove local originals. Missing files stay missing; nothing is written back."""
-    root = (Path(data_dir) / "artifacts" / "originals").resolve() if data_dir is not None else None
+    roots = ([(Path(data_dir) / sub).resolve() for sub in ("artifacts/originals", "raw")]
+             if data_dir is not None else None)
     for raw in paths:
         path = Path(raw)
         try:
             resolved = path.resolve()
         except OSError:
             continue
-        if root is not None:
-            try:
-                resolved.relative_to(root)
-            except ValueError:
-                continue
+        if roots is not None and not any(resolved.is_relative_to(root) for root in roots):
+            continue
         target = io_path(resolved)
         if target.is_file():
             target.unlink()

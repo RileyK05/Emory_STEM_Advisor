@@ -16,6 +16,7 @@ from app.ingest.chunker import chunk
 from app.ingest.evidence import preserve_indexed_source_evidence
 from app.ingest.extract import extract
 from app.retrieval.config import RetrievalConfig
+from app.util.localpath import io_path
 from app.util.workspace import is_valid_workspace_key
 
 # Called inside the transaction that inserts locators and chunks. Receives the
@@ -64,34 +65,24 @@ def _chunk_id(source_id: UUID, chunker_version: str, chunk_index: int) -> UUID:
 
 def _store_raw(collection_id: UUID, file_hash: str, raw: bytes,
                workspace_key: str | None = None) -> Path:
+    """Store content-addressed bytes; private uploads get a per-workspace directory."""
     directory = load_settings().data_dir / "raw" / str(collection_id)
     if workspace_key is not None:
         workspace_dir = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()
         directory = directory / "private" / workspace_dir
-    directory.mkdir(parents=True, exist_ok=True)
     path = directory / file_hash
-    if path.exists():
-        if hashlib.sha256(path.read_bytes()).hexdigest() != file_hash:
-            raise ValueError("stored raw source failed integrity check")
-        return path
-    temporary = directory / (f"{uuid4().hex}.tmp")
-    try:
-        temporary.parent.mkdir(parents=True, exist_ok=True)
-        if not temporary.parent.is_dir():
-            raise OSError("raw source storage directory is unavailable")
-        with temporary.open("xb") as handle:
-            handle.write(raw)
-            handle.flush()
-        if path.exists():
-            if hashlib.sha256(path.read_bytes()).hexdigest() != file_hash:
-                raise ValueError("stored raw source failed integrity check")
-            temporary.unlink()
-        else:
-            temporary.replace(path)
-        if hashlib.sha256(path.read_bytes()).hexdigest() != file_hash:
-            raise ValueError("stored raw source failed integrity check")
-    finally:
-        temporary.unlink(missing_ok=True)
+    target = io_path(path)
+    if not target.exists():
+        io_path(directory).mkdir(parents=True, exist_ok=True)
+        temporary = io_path(directory / f"{uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(raw)
+            # Atomic; a concurrent writer of the same hash wrote identical bytes.
+            temporary.replace(target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    if hashlib.sha256(target.read_bytes()).hexdigest() != file_hash:
+        raise ValueError("stored raw source failed integrity check")
     return path
 
 

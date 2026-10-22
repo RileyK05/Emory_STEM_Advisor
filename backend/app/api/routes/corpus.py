@@ -32,6 +32,7 @@ from app.llm.base import Provider
 from app.retrieval.config import RetrievalConfig
 from app.simgraph.view import subgraph_view
 from app.simgraph.walk import recommend
+from app.util.localpath import io_path
 
 router = APIRouter()
 
@@ -191,7 +192,7 @@ def reindex_source(
                 / hashlib.sha256(workspace.encode("utf-8")).hexdigest()).resolve()
     if raw_path.parent != raw_root or raw_path.name != row["file_hash"]:
         raise HTTPException(status_code=409, detail="stored source failed integrity validation")
-    if hashlib.sha256(raw_path.read_bytes()).hexdigest() != row["file_hash"]:
+    if hashlib.sha256(io_path(raw_path).read_bytes()).hexdigest() != row["file_hash"]:
         raise HTTPException(status_code=409, detail="stored source failed integrity validation")
     count_tokens = getattr(embedder, "count_tokens", None)
     if count_tokens is None:

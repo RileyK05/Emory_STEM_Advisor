@@ -14,7 +14,7 @@ from app.conversations.store import ConversationStore
 from app.db import queries
 from app.privacy.service import PrivacyService, privacy_export_digest
 from app.util.localpath import io_path
-from tests.helpers import api_client
+from tests.helpers import api_client, ingest_text
 
 
 def _setup_workspace_data(db, workspace_key: str, data_dir: Path | None = None):
@@ -357,7 +357,7 @@ def test_owner_download_hides_token_and_inventory_covers_student_domains(db, col
     assert expired.status_code == 410
 
 
-def test_deletion_resume_does_not_restore_local_originals(db, tmp_path, monkeypatch):
+def test_deletion_resume_does_not_restore_local_originals(db, collection, tmp_path, monkeypatch):
     ws = "ws-delete-resume"
     user_id, _conv_id, _art_id = _setup_workspace_data(db, ws, tmp_path)
     spec = DocumentSpec(
@@ -369,6 +369,12 @@ def test_deletion_resume_does_not_restore_local_originals(db, tmp_path, monkeypa
     )
     path = Path(created["original_path"])
     assert io_path(path).read_bytes() == b"private-bytes"
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    upload_id = ingest_text(db, collection, tmp_path, "upload.txt", "Private upload text.",
+                            workspace_key=ws)
+    upload = Path(db.execute("SELECT raw_path FROM sources WHERE source_id = %(s)s",
+                             {"s": upload_id}).fetchone()["raw_path"])
+    assert io_path(upload).is_file()
     db.execute(
         queries.get("get_or_create_academic_record"),
         {"record_id": uuid4(), "workspace_key": ws},
@@ -394,6 +400,7 @@ def test_deletion_resume_does_not_restore_local_originals(db, tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="deletion interrupted"):
         PrivacyService.delete_workspace(db, ws, user_id=user_id, data_dir=tmp_path)
     assert not io_path(path).exists()
+    assert not io_path(upload).exists()
     deletion = db.execute(
         queries.get("list_privacy_deletions"),
         {"workspace_key": ws, "limit": 1},
@@ -425,6 +432,7 @@ def test_deletion_resume_does_not_restore_local_originals(db, tmp_path, monkeypa
     assert inventory["academic_records"] == 0
     assert inventory["response_feedback"] == 0
     assert inventory["degree_audits"] == 0
+    assert inventory["sources"] == 0
     with pytest.raises(HTTPException) as gone:
         PrivacyService.start_export(db, ws, user_id=user_id)
     assert gone.value.status_code == 410

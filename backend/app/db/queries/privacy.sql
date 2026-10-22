@@ -71,6 +71,7 @@ SELECT
     (SELECT count(*) FROM student_academic_records WHERE workspace_key = %(workspace_key)s) AS academic_records,
     (SELECT count(*) FROM academic_record_import_batches WHERE workspace_key = %(workspace_key)s) AS academic_imports,
     (SELECT count(*) FROM degree_audits WHERE workspace_key = %(workspace_key)s) AS degree_audits,
+    (SELECT count(*) FROM sources WHERE workspace_key = %(workspace_key)s) AS sources,
     (SELECT count(*) FROM response_feedback WHERE workspace_key = %(workspace_key)s) AS response_feedback,
     (SELECT count(*) FROM jobs WHERE scope_key = %(workspace_key)s) AS jobs;
 
@@ -91,6 +92,11 @@ SELECT original_path
 FROM artifacts
 WHERE workspace_key = %(workspace_key)s
   AND original_path IS NOT NULL;
+
+-- name: list_workspace_source_originals
+SELECT raw_path AS original_path
+FROM sources
+WHERE workspace_key = %(workspace_key)s;
 
 -- name: set_privacy_export_expiry
 UPDATE privacy_exports
@@ -128,6 +134,10 @@ DELETE FROM quota_settlements WHERE workspace_key = %(workspace_key)s;
 
 -- name: delete_workspace_jobs
 DELETE FROM jobs WHERE scope_key = %(workspace_key)s;
+
+-- name: delete_workspace_sources
+-- Private uploads; chunks, locators and embeddings cascade.
+DELETE FROM sources WHERE workspace_key = %(workspace_key)s;
 
 -- name: delete_workspace_privacy_exports
 DELETE FROM privacy_exports WHERE workspace_key = %(workspace_key)s;
