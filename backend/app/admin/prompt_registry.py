@@ -1,4 +1,8 @@
-"""Immutable prompt versions. Promotion stays blocked until a human review and a fixture exist."""
+"""Immutable prompt versions. Promotion stays blocked until a human review and a fixture exist.
+
+Generation reads the newest promoted version of a prompt by name (`promoted`);
+without one it uses the prompt built into the code.
+"""
 
 from __future__ import annotations
 
@@ -14,6 +18,14 @@ from app.util.digest import json_digest
 
 
 class PromptRegistry:
+    @staticmethod
+    def promoted(conn, name: str):
+        """(template text, recorded prompt version) of the live promotion, or None."""
+        row = conn.execute(queries.get("get_promoted_prompt"), {"name": name}).fetchone()
+        if row is None:
+            return None
+        return row["template_text"], f"registry-{row['content_digest'][:16]}"
+
     @staticmethod
     def _reviewer(actor: Principal) -> None:
         require_operation(actor, "sources.review")

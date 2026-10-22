@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 from psycopg import Error as DatabaseError
 
+from app.admin.prompt_registry import PromptRegistry
 from app.advising.catalog import load_advising_context
 from app.api import deps
 from app.api.schemas import AnswerResponse, QueryRequest, RefusalResponse
@@ -27,7 +28,13 @@ from app.db import queries
 from app.db.connection import connector, release_borrow, resolved_database_url
 from app.embeddings.base import Embedder
 from app.gaps.store import GapError, GapStore
-from app.generation.answer import GenerationRejected, answer_from_context, citation_repair_hint
+from app.generation.answer import (
+    ANSWER_PROMPT_NAME,
+    PROMPT_VERSION,
+    GenerationRejected,
+    answer_from_context,
+    citation_repair_hint,
+)
 from app.generation.answer_tools import ToolAnswerProvider, answer_tool_context
 from app.generation.controller import ToolConversationController, ToolConversationError
 from app.generation.evidence import persist_response, record_attempt
@@ -510,6 +517,13 @@ def query_response(
         check_cancelled()
         return operation.prepare(request)
 
+    if system_prompt is not None:
+        prompt_version = "debug-override"
+    else:
+        promoted = PromptRegistry.promoted(conn, ANSWER_PROMPT_NAME)
+        conn.commit()
+        system_prompt, prompt_version = promoted or (None, PROMPT_VERSION)
+
     def generate_answer():
         return answer_from_context(
             outcome.chunks, body.query, provider=answer_provider,
@@ -527,6 +541,7 @@ def query_response(
             on_provisional_reset=on_provisional_reset,
             before_provider_call=lambda: release_borrow(conn),
             system_prompt=system_prompt,
+            prompt_version=prompt_version,
         )
 
     try:

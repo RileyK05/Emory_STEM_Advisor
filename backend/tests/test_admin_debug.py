@@ -89,6 +89,39 @@ def test_prompt_promotion_requires_review_and_a_fixture(db, collection):
     assert blocked.status_code == 409, blocked.text
 
 
+def test_promoted_answer_prompt_drives_grounded_answers(db, collection, tmp_path):
+    from app.admin.prompt_registry import PromptRegistry
+    from app.generation.answer import ANSWER_PROMPT_NAME, PROMPT_VERSION, SYSTEM_PROMPT
+
+    reviewer = Principal(
+        workspace_key="development", issuer=None, subject="development",
+        role="admin", mode="development",
+    )
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma")
+    provider = FakeProvider(text="The answer is alpha [1].")
+    client = api_client(db, collection, provider=provider)
+    query = {"query": "alpha", "collectionId": collection_name(db, collection)}
+
+    def answered():
+        response = client.post("/api/query", json=query)
+        assert response.status_code == 200, response.text
+        return db.execute(
+            "SELECT prompt_version FROM responses WHERE trace_id = %s",
+            (response.json()["trace"]["traceId"],),
+        ).fetchone()["prompt_version"], provider.last_messages[0]["content"]
+
+    assert answered() == (PROMPT_VERSION, SYSTEM_PROMPT)
+    text = SYSTEM_PROMPT + " Prefer the newest catalog edition."
+    version = PromptRegistry.register(db, reviewer, name=ANSWER_PROMPT_NAME, template_text=text)
+    PromptRegistry.approve(db, reviewer, version["version_id"])
+    PromptRegistry.put_fixture(db, reviewer, suite_name="answers", fixture_text="alpha")
+    PromptRegistry.promote(db, reviewer, version_id=version["version_id"], suite_name="answers")
+    db.commit()
+    recorded, used = answered()
+    assert used == text
+    assert recorded == "registry-" + version["content_digest"][:16]
+
+
 def test_admin_lists_and_updates_users_with_an_audit_trail(db, collection):
     client = api_client(db, collection)
     user_id = _app_user(db, email="student@emory.edu")

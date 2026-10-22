@@ -49,3 +49,12 @@ INSERT INTO prompt_promotions (
     %(promotion_id)s, %(version_id)s, %(suite_name)s, %(fixture_digest)s, 'published'
 )
 RETURNING promotion_id, version_id, suite_name, fixture_digest, status, created_at;
+
+-- name: get_promoted_prompt
+-- The newest promotion of an approved version with this prompt name.
+SELECT v.version_id, v.template_text, v.content_digest
+FROM prompt_promotions p
+JOIN prompt_versions v ON v.version_id = p.version_id
+WHERE v.name = %(name)s AND v.review_state = 'approved' AND p.status = 'published'
+ORDER BY p.created_at DESC
+LIMIT 1;

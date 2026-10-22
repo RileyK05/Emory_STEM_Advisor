@@ -59,7 +59,7 @@ def record_attempt(conn, trace_id, settings, result: GenerationResult | None,
 
 
 def persist_response(conn, retrieved: Retrieved | Refusal, *, status: str, reason: str | None = None,
-                     answer: GeneratedAnswer | None = None, prompt_version: str = PROMPT_VERSION,
+                     answer: GeneratedAnswer | None = None, prompt_version: str | None = None,
                      claim_units: list[dict] | None = None):
     response_id = uuid4()
     chunks = getattr(retrieved, "chunks", [])
@@ -73,7 +73,8 @@ def persist_response(conn, retrieved: Retrieved | Refusal, *, status: str, reaso
         conn.execute(queries.get("insert_response"), {
             "response_id": response_id, "trace_id": retrieved.trace.trace_id,
             "status": status, "text": answer.text if answer and status == "answer" else "",
-            "reason": reason, "prompt_version": prompt_version,
+            "reason": reason,
+            "prompt_version": prompt_version or (answer.prompt_version if answer else PROMPT_VERSION),
             "context_snapshot": Jsonb(snapshots),
         })
         for ordinal, citation in enumerate(answer.citations if answer and status == "answer" else ()):

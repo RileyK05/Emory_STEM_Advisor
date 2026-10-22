@@ -80,6 +80,10 @@ export function PromptPromotionPanel() {
   return (
     <section className="stack">
       {!version && <p>No prompt version is saved.</p>}
+      <p>
+        Promoting a version named <code>grounded-answer</code> replaces the built-in system prompt for grounded answers.
+        Other names are stored for review only.
+      </p>
       {error && (
         <p role="alert">
           {error}{' '}
