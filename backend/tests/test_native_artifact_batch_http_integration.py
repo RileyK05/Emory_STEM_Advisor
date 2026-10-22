@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.api import create_app
 from app.config import load_settings
-from app.connections.models import EvaluationEvidence, ProfileCreate
+from app.connections.models import EvaluationEvidence, MissingCredential, ProfileCreate
 from app.db.connection import connect
 from app.jobs.provider_batches import ProviderBatchConflict, ProviderBatchService
 from app.llm.base import GenerationRequest, GenerationResult, Usage
@@ -80,7 +80,7 @@ class FakeRuntime:
     def existing_batch_provider(self, profile, *, expected_provider):
         self.existing_builds += 1
         if self.existing_error:
-            raise RuntimeError("simulated missing credential")
+            raise MissingCredential("simulated missing credential")
         assert expected_provider == profile.provider
         return self.adapter
 

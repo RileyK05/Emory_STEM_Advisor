@@ -6,11 +6,13 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from psycopg import OperationalError
+from psycopg_pool import PoolTimeout
 
 from app.api import deps
 from app.api.schemas import ArtifactBatchRecord, ArtifactBatchSummary
 from app.auth.dependencies import get_workspace_key
-from app.connections.models import ConnectionUnavailable
+from app.connections.models import ConnectionUnavailable, CredentialUnreadable, MissingCredential
 from app.db.connection import connector
 from app.jobs.native_artifact_batches import (
     ArtifactBatchInput,
@@ -28,9 +30,13 @@ from app.jobs.provider_batches import (
     ProviderBatchService,
     ProviderBatchUnknown,
 )
+from app.llm.base import ProviderError
 from app.operations.budget import OperationBudgetError
 
 router = APIRouter(prefix="/api/artifact-batches", tags=["artifact-batches"])
+# Outages answer 503; any other exception is a bug and surfaces as a logged 500.
+_UNAVAILABLE = (ProviderError, ConnectionUnavailable, ProviderBatchUnknown,
+                OperationalError, PoolTimeout)
 WorkspaceDep = Annotated[str, Depends(get_workspace_key)]
 
 
@@ -88,7 +94,8 @@ def _provider_for_batch(request: Request, snapshot):
     try:
         return request.app.state.connection_runtime.existing_batch_provider(
             profile, expected_provider=snapshot.provider)
-    except Exception as exc:
+    except (ConnectionUnavailable, CredentialUnreadable, MissingCredential, ProviderError,
+            ValueError) as exc:
         raise HTTPException(409, detail="Batch connection is unavailable.") from exc
 
 
@@ -111,19 +118,13 @@ def submit_batch(body: ArtifactBatchInput, request: Request, workspace: Workspac
             runtime=request.app.state.connection_runtime,
             connect=connect_factory, workspace_key=workspace,
         )
-    except (ValueError, TypeError) as exc:
+    except ValueError as exc:
         raise HTTPException(422, detail=str(exc)) from exc
     except OperationBudgetError as exc:
         raise HTTPException(429, detail=str(exc)) from exc
-    except ConnectionUnavailable as exc:
-        raise HTTPException(503, detail=str(exc)) from exc
-    except ProviderBatchInProgress as exc:
+    except (ProviderBatchInProgress, ProviderBatchConflict) as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    except ProviderBatchConflict as exc:
-        raise HTTPException(409, detail=str(exc)) from exc
-    except ProviderBatchUnknown as exc:
-        raise HTTPException(503, detail=str(exc)) from exc
-    except Exception as exc:
+    except _UNAVAILABLE as exc:
         raise HTTPException(503, detail="Batch submission is temporarily unavailable.") from exc
     return _public(snapshot)
 
@@ -163,10 +164,10 @@ def poll_batch(batch_id: UUID, request: Request, workspace: WorkspaceDep):
         raise HTTPException(404, detail="Batch not found.") from exc
     except (ProviderBatchConflict, ProviderBatchProfileChanged) as exc:
         raise HTTPException(409, detail="Batch can no longer be processed with this connection.") from exc
+    except _UNAVAILABLE as exc:
+        raise HTTPException(503, detail="Batch status is temporarily unavailable.") from exc
     except ProviderBatchError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(503, detail="Batch status is temporarily unavailable.") from exc
     return _public(result)
 
 
@@ -188,6 +189,6 @@ def cancel_batch(batch_id: UUID, request: Request, workspace: WorkspaceDep):
         raise HTTPException(404, detail="Batch not found.") from exc
     except ProviderBatchConflict as exc:
         raise HTTPException(409, detail="Batch cannot be cancelled with this connection.") from exc
-    except Exception as exc:
+    except _UNAVAILABLE as exc:
         raise HTTPException(503, detail="Batch cancellation is temporarily unavailable.") from exc
     return _public(result)
