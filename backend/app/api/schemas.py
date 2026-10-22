@@ -424,6 +424,30 @@ class NativeDecision(_WireModel):
     usage: NativeDecisionUsage
 
 
+class ClaimAssessmentUnit(_WireModel):
+    ordinal: int
+    answerStart: int
+    answerEnd: int
+    text: str
+    coverage: str
+    modelAssessment: str
+    modelConfidence: float | None
+    evidence: list[dict]
+    humanVerified: bool
+
+
+class ClaimReview(_WireModel):
+    reviewId: str
+    responseId: str
+    state: Literal["pending", "completed", "refused", "invalid", "failed", "unknown", "abandoned"]
+    reviewVersion: int
+    profileRevision: int | None
+    provider: str | None
+    model: str | None
+    usage: NativeDecisionUsage
+    units: list[ClaimAssessmentUnit]
+
+
 class ConversationTurnResponse(_WireModel):
     """The envelope every turn outcome shares; answer, refusal, history, and
     terminal bodies carry their own fields beyond it (passed through unchanged)."""

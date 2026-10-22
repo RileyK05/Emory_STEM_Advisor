@@ -1705,6 +1705,31 @@ export interface ProgramComparisonCreateRequest {
   workspaceKey?: string | null;
 }
 
+export interface ClaimAssessmentUnit {
+  ordinal: number;
+  answerStart: number;
+  answerEnd: number;
+  text: string;
+  coverage: string;
+  modelAssessment: string;
+  modelConfidence: number | null;
+  evidence: Record<string, unknown>[];
+  /** Always false: a model assessment is never human verification. */
+  humanVerified: boolean;
+}
+
+export interface ClaimReview {
+  reviewId: string;
+  responseId: string;
+  state: 'pending' | 'completed' | 'refused' | 'invalid' | 'failed' | 'unknown' | 'abandoned';
+  reviewVersion: number;
+  profileRevision: number | null;
+  provider: string | null;
+  model: string | null;
+  usage: { source: 'provider' | 'estimated' | 'unknown'; promptTokens: number | null; completionTokens: number | null };
+  units: ClaimAssessmentUnit[];
+}
+
 export interface CatalogEditionItem {
   editionId: string;
   revision: number;

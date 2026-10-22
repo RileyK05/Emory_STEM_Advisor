@@ -68,6 +68,7 @@ def _include_routers(app: FastAPI) -> None:
     from app.api.routes.audits import router as audits_router
     from app.api.routes.auth import router as auth_router
     from app.api.routes.batches import router as batch_router
+    from app.api.routes.claim_reviews import router as claim_review_router
     from app.api.routes.comparisons import router as comparisons_router
     from app.api.routes.connections import router as connection_router
     from app.api.routes.conversation_summaries import router as summary_router
@@ -109,8 +110,9 @@ def _include_routers(app: FastAPI) -> None:
     app.include_router(run_router, dependencies=[
         Depends(get_workspace_principal), Depends(deps.ensure_database_ready_dependency),
     ])
-    app.include_router(decision_router,
-                       dependencies=[Depends(get_workspace_principal), Depends(deps.get_conn)])
+    for private_router in (decision_router, claim_review_router):
+        app.include_router(private_router,
+                           dependencies=[Depends(get_workspace_principal), Depends(deps.get_conn)])
 
 
 def _install_error_handlers(app: FastAPI) -> None:

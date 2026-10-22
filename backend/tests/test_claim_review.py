@@ -16,18 +16,8 @@ from app.generation.claim_review import (
     ReviewRequest,
 )
 from app.llm.base import GenerationResult, Usage
-from tests.fakes import FakeEmbedder, FakeProvider, whitespace_tokens
-from tests.helpers import collection_name, lenient_config
-
-
-def ingest_text(db, collection, tmp_path):
-    from app.ingest.pipeline import ingest_file
-
-    path = tmp_path / "claim-review-source.txt"
-    path.write_text("The course requires MATH 111.", encoding="utf-8")
-    ingest_file(db, collection_id=collection, path=path, content_type="text/plain",
-                count_tokens=whitespace_tokens, embedder=FakeEmbedder(dim=8),
-                embed_model="fake-model", config=lenient_config())
+from tests.fakes import FakeEmbedder, FakeProvider
+from tests.helpers import api_client, collection_name, ingest_text, lenient_config
 
 
 class ReviewProvider:
@@ -79,7 +69,8 @@ def _make_answer(db, collection, tmp_path):
 
     from app.api import create_app
 
-    ingest_text(db, collection, tmp_path)
+    ingest_text(db, collection, tmp_path, "claim-review-source.txt",
+                "The course requires MATH 111.")
     settings = load_settings()
     app = create_app(allow_test_client=True, settings=settings, config=lenient_config(),
                      embedder=FakeEmbedder(dim=8), provider=FakeProvider("The course requires MATH 111 [1]."))
@@ -88,7 +79,7 @@ def _make_answer(db, collection, tmp_path):
         "query": "What does the course require?",
         "collectionId": collection_name(db, collection),
     })
-    assert response.status_code == 200 and response.json()["type"] == "answer"
+    assert response.status_code == 200 and response.json()["type"] == "answer", response.text
     trace_id = response.json()["trace"]["traceId"]
     row = db.execute(queries.get("get_response_for_trace"), {"trace_id": trace_id}).fetchone()
     operation_id = db.execute(queries.get("get_operation_for_trace"), {"trace_id": trace_id}).fetchone()
@@ -255,3 +246,22 @@ def test_claim_review_valid_model_assessment_is_not_promoted_to_fact(db, collect
     assert result["state"] == "completed"
     assert result["units"][0]["modelAssessment"] == "supported"
     assert result["units"][0]["humanVerified"] is False
+
+
+def test_claim_review_route_resolves_the_answer_and_fails_closed_without_a_profile(
+        db, collection, tmp_path):
+    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma")
+    client = api_client(db, collection, provider=FakeProvider(text="The answer is alpha [1]."))
+    answer = client.post("/api/query", json={
+        "query": "alpha", "collectionId": collection_name(db, collection),
+    })
+    trace_id = answer.json()["trace"]["traceId"]
+    missing = client.post("/api/claim-reviews", json={"reviewId": str(uuid4()),
+                                                      "traceId": str(uuid4())})
+    assert missing.status_code == 404
+    # Routing is off by default, so no evaluated profile exists: refuse, write nothing.
+    unavailable = client.post("/api/claim-reviews", json={"reviewId": str(uuid4()),
+                                                          "traceId": trace_id})
+    assert unavailable.status_code == 503, unavailable.text
+    assert db.execute("SELECT count(*) AS n FROM claim_reviews").fetchone()["n"] == 0
+    assert client.get(f"/api/claim-reviews/{uuid4()}").status_code == 404
