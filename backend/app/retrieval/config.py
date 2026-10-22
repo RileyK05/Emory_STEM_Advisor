@@ -87,7 +87,7 @@ class PlanningConfig:
 
 @dataclass(frozen=True)
 class ResearchConfig:
-    # Bounds on the research advising working state (docs/plans/research-advisor-v1.md).
+    # Bounds on the research advising working state (docs/architecture.md).
     # These cap the model's own comparison, not the evidence it may read: the
     # durable register is separate and larger. Starting values, not a claim that
     # they are enough for every question. Kept in sync by hand with

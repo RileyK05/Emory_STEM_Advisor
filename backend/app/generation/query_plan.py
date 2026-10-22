@@ -1,4 +1,4 @@
-"""Bounded model search planning before retrieval (docs/plans/catalog-context.md).
+"""Bounded model search planning before retrieval (docs/architecture.md).
 
 The model reads the scoped catalog directory and proposes what to look up: search
 phrases, directory course codes, and directory documents. It never answers the

@@ -4,7 +4,7 @@
 `prereq_mentions`), collection `default` (`cf9d7a06-5d2c-44a8-956f-66eb68394666`).
 **Method:** read-only SQL sweeps over the live database. No model judgement about what any
 prerequisite *should* be.
-**Companion:** `mimo_scan.md` (code review). This document is the data half of that review.
+**Companion:** the 2026-10-20 code scan (closed; see [README.md](README.md)). This document is the data half of that review.
 
 ---
 
@@ -58,7 +58,7 @@ and each is fixable deterministically.
 ## 1.1 Fabricated course codes — 24 mentions of 5 impossible courses
 
 The subject regex accepts any 2–5 letter word with no word boundary and no subject
-validation (see `mimo_scan.md` §0.1). The parser then writes the result into the graph as if
+validation. The parser then writes the result into the graph as if
 it were a course.
 
 | Phantom code | × | Written as the prerequisite of |

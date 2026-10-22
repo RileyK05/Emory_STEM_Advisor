@@ -151,12 +151,12 @@ class Settings:
     answer_citation_repair_enabled: bool = False
     tool_max_calls: int = 4
     # Opt-in: before retrieval, the answering connection reads the scoped catalog
-    # directory and proposes bounded searches (docs/plans/catalog-context.md).
+    # directory and proposes bounded searches (docs/architecture.md).
     # The planning call gets its own call and reservation allowance inside the
     # same operation; reservation units are serialized prompt bytes.
     query_planning_enabled: bool = False
     query_planning_token_budget: int = 300_000
-    # Opt-in research advising path (docs/plans/research-advisor-v1.md).
+    # Opt-in research advising path (docs/architecture.md).
     # Feature precedence is explicit: when enabled it replaces the one-shot
     # query-planning route for that request. It requires a tools-capable
     # permitted provider and TOOLS_ENABLED; an unavailable research provider is

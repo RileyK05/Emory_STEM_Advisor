@@ -1,7 +1,7 @@
 name: CI
 
 # Every push to main and every pull request runs the same checks a reviewer
-# would run by hand on a clean machine. See docs/plans/review-readiness.md.
+# would run by hand on a clean machine.
 on:
   push:
     branches: [main]
@@ -107,8 +107,7 @@ jobs:
   frontend-integration:
     name: frontend integration (experimental)
     # Real API + Postgres + offline fake models. Kept separate and allowed to
-    # fail until Chromium/Postgres wiring on CI is settled; see
-    # docs/plans/review-readiness.md.
+    # fail until Chromium/Postgres wiring on CI is settled.
     continue-on-error: true
     runs-on: ubuntu-latest
     defaults:

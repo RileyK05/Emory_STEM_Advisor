@@ -47,8 +47,7 @@ revisit earlier passages, and search older conversation turns. Published work
 carries between turns in the same chat; source selection and fresh citation checks
 still apply. Long research chats use paged history instead of the legacy 12 KB
 transcript limit. API and worker processes must both load the same configuration;
-restart them after changing it. See the [working-space contract](docs/architecture.md)
-and [implementation plan](docs/plans/advisor-workspace.md).
+restart them after changing it. See the [working-space contract](docs/architecture.md).
 
 ## Run backend checks against real Postgres
 
@@ -150,9 +149,8 @@ Notes:
   `scripts.prepare_advising_documents` and ingested the same way. Ordinary uploads
   cannot set it.
 - `reconcile_source_origins` merges duplicated legacy program sources only for
-  groups explicitly verified. The last session derived its manifest with
-  [reconcile_cloned_program_sources_20261009.py](backend/scripts/manual/reconcile_cloned_program_sources_20261009.py);
-  keep that verification explicit rather than merging on a name match.
+  groups explicitly verified; keep that verification explicit rather than
+  merging on a name match.
 - Retire the bogus "Department of Veterans Affairs" program source with the
   existing named query. The catalog splitter fix prevents it on a fresh scrape,
   so on a clean rebuild this is a no-op.

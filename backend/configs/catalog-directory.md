@@ -2,7 +2,7 @@
 
 Discovery-only directory of the current course atlas, for LLM query planning.
 Source: `data/atlas/emory_college.jsonl` (2026-10-10). 3,342 courses, 66 subjects.
-Design and rules: `docs/plans/catalog-context.md`.
+Design and rules: `docs/architecture.md`.
 
 Line format: `CODE|Title|keyword,keyword,keyword` under a `## SUBJECT` header.
 Codes and titles are copied exactly from the atlas; keywords are short discovery

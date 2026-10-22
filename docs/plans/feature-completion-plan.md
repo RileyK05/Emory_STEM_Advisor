@@ -2,14 +2,12 @@
 
 Reviewed 2026-10-19 against the current working tree, including untracked files.
 Requested scope: review every numbered feature in
-[feature-review.md](../feature-review.md), find partial implementations, and
+the feature review (now in git history), find partial implementations, and
 prepare work that can be executed later in goal mode. The initial review was
 read-only; implementation began after the user activated the goal. Three Luna agents reviewed features 1–9, 10–20,
 and 21–30; the coordinator checked the critical findings and ran the checks below.
 
-Use this document for completion status and execution order. The earlier
-[implementation handoff](feature-review-implementation.md) remains useful for
-its intended behavior, but its completion checkmarks are not reliable evidence.
+Use this document for completion status and execution order.
 [architecture.md](../architecture.md) remains the design contract. This is a
 proposed handoff, not an expansion of the approved release scope.
 
@@ -235,7 +233,7 @@ of the older findings. Do not reimplement them blindly or claim the corpus was
 regenerated merely because a parser changed. Verify split boundaries, canonical
 deduplication before quotas, compatible topic-build publication, exact-ID source
 navigation, one-slot pool behavior, and evidence-dependent review invalidation.
-Use the existing [audit](../audit/README.md) and [repair plan](../audit/repair-plan.md).
+Use the existing [audit status](../audit/README.md).
 
 ## Completion work by feature
 
