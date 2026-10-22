@@ -849,43 +849,23 @@ def _insert_batch_model_call(conn, parent, item, stored, usage, *, error_code, s
         policy = {}
     result = _result_from_record(stored) if stored is not None else None
     model_id = result.model if result and result.model else parent["model_id"]
-    schedule_id, cost, cost_status = PricingService.compute_call_cost(
-        conn,
-        provider=parent["provider"],
-        model_id=model_id,
-        created_at=parent["pricing_at"] or parent["created_at"],
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        cached_prompt_tokens=usage.cached_prompt_tokens,
-        usage_source=usage.source if parent["pricing_at"] else "unknown",
-        billing_mode="batch",
+    PricingService.record_model_call(
+        conn, provider=parent["provider"], model_id=model_id, usage=usage,
+        created_at=parent["pricing_at"] or parent["created_at"], billing_mode="batch",
+        pricing_usage_source=None if parent["pricing_at"] else "unknown",
+        trace_id=UUID(str(metadata["trace_id"])),
+        status="completed" if state == "completed" else "failed",
+        finish_reason=result.finish_reason if result else None,
+        request_id=result.request_id if result else None,
+        latency_ms=0,  # Native batch APIs do not report per-item wall-clock latency.
+        error_type=error_code, operation_id=item["operation_id"],
+        sampling_policy=policy.get("sampling_policy", "greedy"),
+        reasoning_effort=policy.get("reasoning_effort"),
+        requested_output_tokens=policy.get("max_output_tokens"),
+        requested_timeout_seconds=policy.get("timeout_seconds"),
+        requested_temperature=policy.get("temperature"),
+        profile_id=parent["profile_id"], profile_revision=parent["profile_revision"],
     )
-    conn.execute(queries.get("insert_model_call"), {
-        "model_call_id": uuid4(), "trace_id": UUID(str(metadata["trace_id"])),
-        "provider": parent["provider"],
-        "model_id": model_id,
-        "status": "completed" if state == "completed" else "failed",
-        "finish_reason": result.finish_reason if result else None,
-        "request_id": result.request_id if result else None,
-        "prompt_tokens": usage.prompt_tokens,
-        "completion_tokens": usage.completion_tokens,
-        "usage_source": usage.source,
-        # Native batch APIs do not report per-item wall-clock latency.
-        "latency_ms": 0,
-        "error_type": error_code,
-        "operation_id": item["operation_id"],
-        "sampling_policy": policy.get("sampling_policy", "greedy"),
-        "reasoning_effort": policy.get("reasoning_effort"),
-        "requested_output_tokens": policy.get("max_output_tokens"),
-        "requested_timeout_seconds": policy.get("timeout_seconds"),
-        "requested_temperature": policy.get("temperature"),
-        "profile_id": parent["profile_id"],
-        "profile_revision": parent["profile_revision"],
-        "cached_prompt_tokens": usage.cached_prompt_tokens,
-        "schedule_id": schedule_id,
-        "estimated_cost": cost,
-        "cost_status": cost_status,
-    })
 
 
 def _first_consumer_value(rows, key: str) -> str | None:

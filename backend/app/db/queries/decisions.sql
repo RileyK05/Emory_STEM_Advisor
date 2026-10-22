@@ -52,19 +52,3 @@ UPDATE decisions SET state = 'failed', prediction = NULL, probability = NULL,
     updated_at = clock_timestamp()
 WHERE decision_id = %(decision_id)s AND workspace_key = %(workspace_key)s
   AND state IN ('completed','refused') RETURNING *;
-
--- name: insert_decision_model_call
-INSERT INTO model_calls (
-    model_call_id, trace_id, decision_id, provider, model_id, status, finish_reason, request_id,
-    prompt_tokens, completion_tokens, usage_source, latency_ms, error_type,
-    operation_id, sampling_policy, reasoning_effort, requested_output_tokens,
-    requested_timeout_seconds, requested_temperature, profile_id, profile_revision,
-    cached_prompt_tokens, schedule_id, estimated_cost, cost_status
-) VALUES (
-    %(model_call_id)s, NULL, %(decision_id)s, %(provider)s, %(model_id)s, %(status)s,
-    NULL, %(request_id)s, %(prompt_tokens)s, %(completion_tokens)s,
-    %(usage_source)s, %(latency_ms)s, %(error_type)s, %(operation_id)s,
-    %(sampling_policy)s, %(reasoning_effort)s, NULL, %(requested_timeout_seconds)s,
-    NULL, %(profile_id)s, %(profile_revision)s,
-    %(cached_prompt_tokens)s, %(schedule_id)s, %(estimated_cost)s, coalesce(%(cost_status)s, 'unknown')
-);

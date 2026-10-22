@@ -12,7 +12,7 @@ import time
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from psycopg.types.json import Jsonb
 
@@ -613,39 +613,19 @@ class ClaimReviewService:
     @staticmethod
     def _audit(conn, trace_id, request, selection, call: _ProviderCall):
         result, error, usage, generation_request = call.result, call.error, call.usage, call.request
-        created_at = datetime.now(UTC)
-        schedule_id, cost, cost_status = PricingService.compute_call_cost(
-            conn,
-            provider=selection.profile.provider,
-            model_id=selection.profile.model_id,
-            created_at=created_at,
-            prompt_tokens=usage.prompt_tokens,
-            completion_tokens=usage.completion_tokens,
-            cached_prompt_tokens=usage.cached_prompt_tokens,
-            usage_source=usage.source,
-        )
         with conn.transaction():
-            conn.execute(queries.get("insert_claim_review_model_call"), {
-                "model_call_id": uuid4(), "trace_id": trace_id,
-                "provider": selection.profile.provider, "model_id": selection.profile.model_id,
-                "status": "failed" if error else "completed",
-                "finish_reason": result.finish_reason if result else None,
-                "request_id": result.request_id if result else getattr(error, "request_id", None),
-                "prompt_tokens": usage.prompt_tokens,
-                "completion_tokens": usage.completion_tokens,
-                "usage_source": usage.source, "latency_ms": call.latency_ms,
-                "error_type": type(error).__name__ if error else None,
-                "operation_id": request.operation_id,
-                "sampling_policy": selection.settings.llm_sampling_policy,
-                "reasoning_effort": generation_request.reasoning_effort,
-                "requested_output_tokens": generation_request.max_output_tokens,
-                "requested_timeout_seconds": generation_request.timeout_seconds,
-                "requested_temperature": generation_request.temperature,
-                "profile_id": selection.profile_id,
-                "profile_revision": selection.profile_revision,
-                "claim_review_id": request.review_id,
-                "cached_prompt_tokens": usage.cached_prompt_tokens,
-                "schedule_id": schedule_id,
-                "estimated_cost": cost,
-                "cost_status": cost_status,
-            })
+            PricingService.record_model_call(
+                conn, provider=selection.profile.provider, model_id=selection.profile.model_id,
+                usage=usage, created_at=datetime.now(UTC), trace_id=trace_id,
+                claim_review_id=request.review_id, status="failed" if error else "completed",
+                finish_reason=result.finish_reason if result else None,
+                request_id=result.request_id if result else getattr(error, "request_id", None),
+                latency_ms=call.latency_ms, error_type=type(error).__name__ if error else None,
+                operation_id=request.operation_id,
+                sampling_policy=selection.settings.llm_sampling_policy,
+                reasoning_effort=generation_request.reasoning_effort,
+                requested_output_tokens=generation_request.max_output_tokens,
+                requested_timeout_seconds=generation_request.timeout_seconds,
+                requested_temperature=generation_request.temperature,
+                profile_id=selection.profile_id, profile_revision=selection.profile_revision,
+            )

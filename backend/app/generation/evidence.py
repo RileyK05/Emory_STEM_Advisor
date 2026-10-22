@@ -16,46 +16,23 @@ def record_attempt(conn, trace_id, settings, result: GenerationResult | None,
     usage = result.usage if result else getattr(error, "usage", None)
     if not isinstance(usage, Usage):
         usage = Usage(source="unknown")
-    provider = settings.llm_provider
-    model_id = (result.model if result else None) or settings.llm_model_id or settings.hf_model_id
-    created_at = datetime.now(UTC)
-    schedule_id, cost, cost_status = PricingService.compute_call_cost(
-        conn,
-        provider=provider,
-        model_id=model_id,
-        created_at=created_at,
-        prompt_tokens=usage.prompt_tokens,
-        completion_tokens=usage.completion_tokens,
-        cached_prompt_tokens=usage.cached_prompt_tokens,
-        usage_source=usage.source,
-    )
     with conn.transaction():
-        conn.execute(queries.get("insert_model_call"), {
-            "model_call_id": uuid4(), "trace_id": trace_id,
-            "provider": provider,
-            "model_id": model_id,
-            "status": "failed" if error else "completed",
-            "finish_reason": result.finish_reason if result else None,
-            "request_id": result.request_id if result else getattr(error, "request_id", None),
-            "prompt_tokens": usage.prompt_tokens,
-            "completion_tokens": usage.completion_tokens,
-            "usage_source": usage.source,
-            "latency_ms": latency_ms,
-            "error_type": type(error).__name__ if error else None,
-            "operation_id": operation_id,
-            "sampling_policy": settings.llm_sampling_policy,
-            "reasoning_effort": request.reasoning_effort if request else settings.llm_reasoning_effort,
-            "requested_output_tokens": request.max_output_tokens if request else None,
-            "requested_timeout_seconds": request.timeout_seconds if request else None,
-            "requested_temperature": request.temperature if request else None,
-            "profile_id": selection.profile_id if selection else None,
-            "profile_revision": selection.profile_revision if selection else None,
-            "cached_prompt_tokens": usage.cached_prompt_tokens,
-            "schedule_id": schedule_id,
-            "estimated_cost": cost,
-            "cost_status": cost_status,
-        })
-
+        PricingService.record_model_call(
+            conn, provider=settings.llm_provider,
+            model_id=(result.model if result else None) or settings.llm_model_id or settings.hf_model_id,
+            usage=usage, created_at=datetime.now(UTC), trace_id=trace_id,
+            status="failed" if error else "completed",
+            finish_reason=result.finish_reason if result else None,
+            request_id=result.request_id if result else getattr(error, "request_id", None),
+            latency_ms=latency_ms, error_type=type(error).__name__ if error else None,
+            operation_id=operation_id, sampling_policy=settings.llm_sampling_policy,
+            reasoning_effort=request.reasoning_effort if request else settings.llm_reasoning_effort,
+            requested_output_tokens=request.max_output_tokens if request else None,
+            requested_timeout_seconds=request.timeout_seconds if request else None,
+            requested_temperature=request.temperature if request else None,
+            profile_id=selection.profile_id if selection else None,
+            profile_revision=selection.profile_revision if selection else None,
+        )
 
 
 def persist_response(conn, retrieved: Retrieved | Refusal, *, status: str, reason: str | None = None,

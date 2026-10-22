@@ -10,6 +10,14 @@ from fastapi import HTTPException
 
 from app.db import queries
 
+# model_calls columns a caller may set; anything left out is stored as NULL.
+_MODEL_CALL_FIELDS = (
+    "trace_id", "decision_id", "claim_review_id", "status", "finish_reason", "request_id",
+    "latency_ms", "error_type", "operation_id", "sampling_policy", "reasoning_effort",
+    "requested_output_tokens", "requested_timeout_seconds", "requested_temperature",
+    "profile_id", "profile_revision",
+)
+
 
 def format_schedule(row: dict) -> dict[str, Any]:
     return {
@@ -99,6 +107,32 @@ class PricingService:
         rows = conn.execute(queries.get("list_price_schedules")).fetchall()
         conn.commit()
         return [format_schedule(dict(row)) for row in rows]
+
+    @staticmethod
+    def record_model_call(conn, *, provider: str, model_id: str | None, usage,
+                          created_at: datetime, billing_mode: str = "standard",
+                          pricing_usage_source: str | None = None, **fields) -> None:
+        """Price one provider call and append its model_calls row (caller's transaction).
+
+        `pricing_usage_source` overrides the usage source used for pricing only, e.g.
+        a native batch with no recorded pricing time is priced as unknown.
+        """
+        unknown = set(fields) - set(_MODEL_CALL_FIELDS)
+        if unknown:
+            raise TypeError(f"unknown model_calls fields: {sorted(unknown)}")
+        schedule_id, cost, cost_status = PricingService.compute_call_cost(
+            conn, provider=provider, model_id=model_id, created_at=created_at,
+            prompt_tokens=usage.prompt_tokens, completion_tokens=usage.completion_tokens,
+            cached_prompt_tokens=usage.cached_prompt_tokens,
+            usage_source=pricing_usage_source or usage.source, billing_mode=billing_mode,
+        )
+        conn.execute(queries.get("insert_model_call"), {
+            **dict.fromkeys(_MODEL_CALL_FIELDS), **fields,
+            "model_call_id": uuid4(), "provider": provider, "model_id": model_id,
+            "prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens,
+            "usage_source": usage.source, "cached_prompt_tokens": usage.cached_prompt_tokens,
+            "schedule_id": schedule_id, "estimated_cost": cost, "cost_status": cost_status,
+        })
 
     @staticmethod
     def compute_call_cost(

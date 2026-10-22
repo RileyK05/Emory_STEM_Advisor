@@ -238,6 +238,7 @@ def test_telemetry_metrics_and_breakdowns(db):
     call_id_1 = uuid4()
     db.execute(queries.get("insert_model_call"), {
         "model_call_id": call_id_1, "trace_id": None, "provider": "openai",
+        "decision_id": None, "claim_review_id": None,
         "model_id": "gpt-4o", "status": "completed", "finish_reason": "stop",
         "request_id": "req-1", "prompt_tokens": 1000, "completion_tokens": 200,
         "usage_source": "provider", "latency_ms": 150, "error_type": None,
@@ -252,6 +253,7 @@ def test_telemetry_metrics_and_breakdowns(db):
     call_id_2 = uuid4()
     db.execute(queries.get("insert_model_call"), {
         "model_call_id": call_id_2, "trace_id": None, "provider": "openai",
+        "decision_id": None, "claim_review_id": None,
         "model_id": "gpt-4o", "status": "completed", "finish_reason": "stop",
         "request_id": "req-2", "prompt_tokens": 2000, "completion_tokens": 300,
         "usage_source": "estimated", "latency_ms": 200, "error_type": None,
@@ -266,6 +268,7 @@ def test_telemetry_metrics_and_breakdowns(db):
     call_id_3 = uuid4()
     db.execute(queries.get("insert_model_call"), {
         "model_call_id": call_id_3, "trace_id": None, "provider": "openai",
+        "decision_id": None, "claim_review_id": None,
         "model_id": "gpt-4o", "status": "failed", "finish_reason": None,
         "request_id": "req-3", "prompt_tokens": None, "completion_tokens": None,
         "usage_source": "unknown", "latency_ms": 50, "error_type": "ConnectionError",
@@ -332,6 +335,7 @@ def test_telemetry_metrics_and_breakdowns(db):
 def test_unknown_cost_is_not_reported_as_zero(db):
     db.execute(queries.get("insert_model_call"), {
         "model_call_id": uuid4(), "trace_id": None, "provider": "openai",
+        "decision_id": None, "claim_review_id": None,
         "model_id": "gpt-4o", "status": "failed", "finish_reason": None,
         "request_id": "req-unknown", "prompt_tokens": None, "completion_tokens": None,
         "usage_source": "unknown", "latency_ms": 50, "error_type": "ConnectionError",
