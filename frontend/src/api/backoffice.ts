@@ -1,4 +1,4 @@
-import { ApiError } from './http';
+import { API_BASE_URL, request as apiRequest, requestWithHeaders } from './http';
 import type {
   AdminArtifact,
   AdminAuditEntry,
@@ -11,7 +11,6 @@ import type {
   AdminUser,
   AdminUserSession,
   AdminUserUpdate,
-  GrantedResultStaging,
   ResourceGrant,
   SupportGrantRequest,
   SupportGrantRequestCreate,
@@ -25,12 +24,10 @@ import type {
   SourceRevisionEvidenceResponse,
   ProgramInspectionResponse,
   ProgramRuleReleaseDetail,
-  ProgramRuleDiffResponse,
   DebugSession,
   DebugSessionCreated,
   DebugSettingsResponse,
   ModelPriceSchedule,
-  ModelPriceScheduleCreate,
   TelemetryUsageResponse,
   FeatureFlagSummary,
   FeatureFlagOverride,
@@ -63,32 +60,10 @@ import type {
   AdminCoursePublishResponse,
 } from './types';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
-
-async function request<T>(path: string, init: RequestInit = {}, debugToken?: string | null): Promise<T> {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    credentials: 'same-origin',
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(debugToken ? { 'X-Debug-Session': debugToken } : {}),
-      ...(init.headers ?? {}),
-    },
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    let detail = text || response.statusText;
-    try {
-      const parsed = JSON.parse(text) as { detail?: unknown };
-      if (typeof parsed.detail === 'string') detail = parsed.detail;
-      else if (parsed.detail != null) detail = JSON.stringify(parsed.detail);
-    } catch {
-      /* plain text */
-    }
-    throw new ApiError(`${response.status}: ${detail}`, response.status);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+// Backoffice calls send a debug session only when one is passed explicitly, never the
+// token the Debug bundle set for its test chat.
+function request<T>(path: string, init: RequestInit = {}, debugToken: string | null = null): Promise<T> {
+  return apiRequest<T>(path, init, debugToken);
 }
 
 export function getAdminOverview(): Promise<AdminOverview> {
@@ -120,36 +95,6 @@ export function updateAdminUser(id: string, body: AdminUserUpdate): Promise<Admi
   });
 }
 
-async function requestWithHeaders<T>(
-  path: string,
-  init: RequestInit = {},
-  debugToken?: string | null,
-): Promise<{ data: T; headers: Headers }> {
-  const response = await fetch(`${BASE_URL}${path}`, {
-    credentials: 'same-origin',
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(debugToken ? { 'X-Debug-Session': debugToken } : {}),
-      ...(init.headers ?? {}),
-    },
-  });
-  if (!response.ok) {
-    const text = await response.text();
-    let detail = text || response.statusText;
-    try {
-      const parsed = JSON.parse(text) as { detail?: unknown };
-      if (typeof parsed.detail === 'string') detail = parsed.detail;
-      else if (parsed.detail != null) detail = JSON.stringify(parsed.detail);
-    } catch {
-      /* plain text */
-    }
-    throw new ApiError(`${response.status}: ${detail}`, response.status);
-  }
-  if (response.status === 204) return { data: undefined as T, headers: response.headers };
-  return { data: (await response.json()) as T, headers: response.headers };
-}
-
 export function revokeAdminUserSessions(id: string): Promise<{ revoked: number }> {
   return request<{ revoked: number }>(`/api/admin/users/${encodeURIComponent(id)}/revoke-sessions`, { method: 'POST' });
 }
@@ -179,7 +124,7 @@ export async function listAdminAudit(
   if (p.cursor) search.set('cursor', p.cursor);
   search.set('limit', String(p.limit ?? 100));
 
-  const { data, headers } = await requestWithHeaders<AdminAuditEntry[]>(`/api/admin/audit?${search}`);
+  const { data, headers } = await requestWithHeaders<AdminAuditEntry[]>(`/api/admin/audit?${search}`, {}, null);
   return {
     entries: Array.isArray(data) ? data : [],
     nextCursor: headers.get('X-Next-Cursor'),
@@ -207,7 +152,7 @@ export function exportAdminAuditUrl(
   if (params.since) search.set('since', params.since);
   if (params.until) search.set('until', params.until);
   if (params.limit) search.set('limit', String(params.limit));
-  return `${BASE_URL}/api/admin/audit/export?${search}`;
+  return `${API_BASE_URL}/api/admin/audit/export?${search}`;
 }
 
 export function listAdminConversations(
@@ -361,26 +306,6 @@ export function rejectProgramRelease(
   );
 }
 
-export function diffProgramReleases(
-  programId: string,
-  releaseIdA: string,
-  releaseIdB: string,
-): Promise<ProgramRuleDiffResponse> {
-  const search = new URLSearchParams({ release_id_a: releaseIdA, release_id_b: releaseIdB });
-  return request<ProgramRuleDiffResponse>(`/api/admin/programs/${encodeURIComponent(programId)}/rules/diff?${search}`);
-}
-
-export function stageGrantedTranscript(conversationId: string): Promise<GrantedResultStaging> {
-  return request<GrantedResultStaging>(
-    `/api/admin/conversations/${encodeURIComponent(conversationId)}/granted-results`,
-    { method: 'POST' },
-  );
-}
-
-export function getAdminUser(id: string): Promise<AdminUser> {
-  return request<AdminUser>(`/api/admin/users/${encodeURIComponent(id)}`);
-}
-
 export function listAdminUserSessions(id: string): Promise<AdminUserSession[]> {
   return request<AdminUserSession[]>(`/api/admin/users/${encodeURIComponent(id)}/sessions`);
 }
@@ -507,13 +432,6 @@ export function getAdminTelemetryUsage(
 
 export function listAdminPriceSchedules(): Promise<ModelPriceSchedule[]> {
   return request<ModelPriceSchedule[]>('/api/admin/pricing/schedules');
-}
-
-export function createAdminPriceSchedule(body: ModelPriceScheduleCreate): Promise<ModelPriceSchedule> {
-  return request<ModelPriceSchedule>('/api/admin/pricing/schedules', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
 }
 
 export function listAdminFlags(): Promise<FeatureFlagSummary[]> {

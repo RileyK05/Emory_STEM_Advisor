@@ -44,13 +44,13 @@ export const DocumentIcon = (p: P) => (
     <path d="M14 3v5h5M9 13h6M9 17h6" />
   </Icon>
 );
-export const SheetIcon = (p: P) => (
+const SheetIcon = (p: P) => (
   <Icon {...p}>
     <rect x="3" y="4" width="18" height="16" rx="2" />
     <path d="M3 10h18M3 15h18M9 4v16" />
   </Icon>
 );
-export const WebIcon = (p: P) => (
+const WebIcon = (p: P) => (
   <Icon {...p}>
     <rect x="3" y="4" width="18" height="16" rx="2" />
     <path d="M3 9h18M7 6.5h.01M10 6.5h.01" />
@@ -136,21 +136,10 @@ export const ChatIcon = (p: P) => (
     <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z" />
   </Icon>
 );
-export const PaperclipIcon = (p: P) => (
-  <Icon {...p}>
-    <path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" />
-  </Icon>
-);
 export const AlertIcon = (p: P) => (
   <Icon {...p}>
     <circle cx="12" cy="12" r="9" />
     <path d="M12 8v4M12 16h.01" />
-  </Icon>
-);
-export const EyeIcon = (p: P) => (
-  <Icon {...p}>
-    <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
-    <circle cx="12" cy="12" r="3" />
   </Icon>
 );
 

@@ -9,13 +9,10 @@ import type {
   RetrievalTrace,
   SeamStatus,
   SourceDoc,
-  CollectionDoc,
   Recommendation,
   RetiredCourse,
   AuthSession,
   NativeArtifactSummary,
-  NativeDecisionRequest,
-  ResolveGapRequest,
 } from './types';
 import { chunk, MOCK_SOURCES } from './corpus';
 
@@ -52,6 +49,15 @@ function contribution(chunkId: string, seams: Contribution['seams'], score: numb
 function citation(chunkId: string): Citation {
   const c = chunk(chunkId);
   return { sourceId: c.sourceId, sourceName: c.sourceName, locatorLabel: c.locatorLabel, chunkId: c.chunkId };
+}
+
+function seam(
+  name: SeamStatus['name'],
+  state: SeamStatus['state'],
+  candidateCount: number,
+  reason?: string,
+): SeamStatus {
+  return { name, enabled: true, state, ...(reason ? { reason } : {}), candidateCount };
 }
 
 interface TraceSeed {
@@ -94,6 +100,37 @@ function buildTrace(seed: TraceSeed): RetrievalTrace {
   };
 }
 
+/** A canned answer: the context block and citations are both drawn from the mock corpus. */
+function answerResponse(
+  query: string,
+  wait: number,
+  seed: Omit<TraceSeed, 'query' | 'latencyMs'> & { citationChunkIds: string[] },
+): QueryResponse {
+  return {
+    type: 'answer',
+    answer: seed.answer,
+    citations: seed.citationChunkIds.map(citation),
+    trace: buildTrace({ ...seed, query, latencyMs: wait }),
+  };
+}
+
+/** A canned refusal: no context was assembled and the model was not called. */
+function refusal(query: string, wait: number, reason: string, seams: SeamStatus[], warnings: string[]): QueryResponse {
+  return {
+    type: 'refusal',
+    reason,
+    trace: buildTrace({
+      query,
+      seams,
+      contributions: [],
+      contextChunkIds: [],
+      answer: '',
+      latencyMs: Math.round(wait / 2),
+      warnings,
+    }),
+  };
+}
+
 function latency(min = 500, max = 1200): number {
   return Math.round(min + Math.random() * (max - min));
 }
@@ -105,26 +142,26 @@ function sleep(ms: number): Promise<void> {
 // The prerequisite graph is parsed deterministically from the course atlas, so
 // it is authoritative (never review-gated). It is dormant when the query names
 // no course code.
-const PREREQ_DORMANT: SeamStatus = {
-  name: 'prereq',
-  enabled: true,
-  state: 'dormant',
-  reason: 'no course codes in query',
-  candidateCount: 0,
-};
+const PREREQ_DORMANT = seam('prereq', 'dormant', 0, 'no course codes in query');
+
+/** A client method the mock cannot honor without the HTTP backend. */
+function unavailable(message: string, status?: number): () => Promise<never> {
+  return async () => {
+    throw Object.assign(new Error(message), status === undefined ? {} : { status });
+  };
+}
+
+const ARTIFACTS =
+  'Native artifact storage and export require the backend API. Switch VITE_API_MODE=http after the artifact routes are available.';
+const CONVERSATIONS = 'Saved conversations require the HTTP backend; the mock client does not persist transcripts.';
+const GAPS =
+  'Human retrieval-gap review requires the private HTTP backend; the mock client does not store gap observations.';
+const CONNECTIONS = 'Local connection settings are not enabled by this mock backend.';
+const RECORDS = 'Academic records require the HTTP backend.';
+const AUDITS = 'Program audits require the HTTP backend.';
+const PRIVACY = 'Privacy export requires the HTTP backend.';
 
 export class MockClient implements AdvisorClient {
-  async listCollections(): Promise<CollectionDoc[]> {
-    throw new Error('Collections are unavailable in mock mode.');
-  }
-  private artifactUnavailable(): never {
-    throw new Error(
-      'Native artifact storage and export require the backend API. Switch VITE_API_MODE=http after the artifact routes are available.',
-    );
-  }
-  private conversationUnavailable(): never {
-    throw new Error('Saved conversations require the HTTP backend; the mock client does not persist transcripts.');
-  }
   async query(req: QueryRequest): Promise<QueryResponse> {
     const wait = latency();
     const q = normalize(req.query);
@@ -175,153 +212,11 @@ export class MockClient implements AdvisorClient {
     return MOCK_SOURCES;
   }
 
-  async reindexSource(): Promise<SourceDoc> {
-    throw new Error('Source reindexing requires the HTTP backend; the mock client does not change stored indexes.');
-  }
-
-  async listConversations() {
-    return this.conversationUnavailable();
-  }
-  async createConversation() {
-    return this.conversationUnavailable();
-  }
-  async getConversation() {
-    return this.conversationUnavailable();
-  }
-  async sendConversationTurn() {
-    return this.conversationUnavailable();
-  }
-  async startConversationTurnStream() {
-    return this.conversationUnavailable();
-  }
-  async getConversationTurnEvents() {
-    return this.conversationUnavailable();
-  }
-  async abandonConversationTurn() {
-    return this.conversationUnavailable();
-  }
-  async listConversationSummaries() {
-    return this.conversationUnavailable();
-  }
-  async inspectConversationMemory() {
-    return this.conversationUnavailable();
-  }
-  async resetConversationMemory() {
-    return this.conversationUnavailable();
-  }
-  async exportSummary() {
-    return this.conversationUnavailable();
-  }
-  private decisionUnavailable(): never {
-    throw new Error(
-      'Native decisions require an evaluated backend connection; the mock client does not submit or persist decisions.',
-    );
-  }
-  async submitDecision(_request: NativeDecisionRequest) {
-    return this.decisionUnavailable();
-  }
-  async getDecision() {
-    return this.decisionUnavailable();
-  }
-  async abandonDecision() {
-    return this.decisionUnavailable();
-  }
-  private gapUnavailable(): never {
-    throw new Error(
-      'Human retrieval-gap review requires the private HTTP backend; the mock client does not store gap observations.',
-    );
-  }
-  async listGaps() {
-    return this.gapUnavailable();
-  }
-  async resolveGap(_id: string, _request: ResolveGapRequest) {
-    return this.gapUnavailable();
-  }
-
   async uploadSource(_file: File): Promise<SourceDoc> {
     await sleep(300);
     throw new Error('Upload requires the backend ingest pipeline, which is not connected yet.');
   }
 
-  async createArtifact() {
-    return this.artifactUnavailable();
-  }
-  async importArtifact() {
-    return this.artifactUnavailable();
-  }
-  async getArtifact() {
-    return this.artifactUnavailable();
-  }
-  async saveArtifactRevision() {
-    return this.artifactUnavailable();
-  }
-  async previewArtifact() {
-    return this.artifactUnavailable();
-  }
-  async downloadArtifact() {
-    return this.artifactUnavailable();
-  }
-  async downloadOriginalArtifact() {
-    return this.artifactUnavailable();
-  }
-  async createArtifactRun() {
-    return this.artifactUnavailable();
-  }
-  async getArtifactRunLimits() {
-    return this.artifactUnavailable();
-  }
-  async getArtifactRun() {
-    return this.artifactUnavailable();
-  }
-  async listArtifactRunEvents() {
-    return this.artifactUnavailable();
-  }
-  async cancelArtifactRun() {
-    return this.artifactUnavailable();
-  }
-  async listArtifactBatches() {
-    return this.artifactUnavailable();
-  }
-  async createArtifactBatch() {
-    return this.artifactUnavailable();
-  }
-  async getArtifactBatch() {
-    return this.artifactUnavailable();
-  }
-  async pollArtifactBatch() {
-    return this.artifactUnavailable();
-  }
-  async cancelArtifactBatch() {
-    return this.artifactUnavailable();
-  }
-  private localAdminUnavailable(): never {
-    const error = new Error('Local connection settings are not enabled by this mock backend.') as Error & {
-      status: number;
-    };
-    error.status = 404;
-    throw error;
-  }
-  async listConnectionProfiles() {
-    return this.localAdminUnavailable();
-  }
-  async createConnectionProfile() {
-    return this.localAdminUnavailable();
-  }
-  async updateConnectionProfile() {
-    return this.localAdminUnavailable();
-  }
-  async replaceConnectionSecret() {
-    return this.localAdminUnavailable();
-  }
-  async clearConnectionSecret() {
-    return this.localAdminUnavailable();
-  }
-  async deleteConnectionProfile() {
-    return this.localAdminUnavailable();
-  }
-  async diagnoseConnection() {
-    return this.localAdminUnavailable();
-  }
   async getSession(): Promise<AuthSession> {
     return { mode: 'development', authenticated: true, workspaceKey: 'mock-local', displayName: 'Local development' };
   }
@@ -331,112 +226,114 @@ export class MockClient implements AdvisorClient {
   async logout(): Promise<void> {
     /* The mock has no authenticated identity or cookie. */
   }
-  async listArtifacts(): Promise<NativeArtifactSummary[]> {
-    return [];
-  }
-  async getAcademicRecord() {
-    return this.recordUnavailable();
-  }
-  async upsertAcademicAttempt() {
-    return this.recordUnavailable();
-  }
-  async previewAcademicImport() {
-    return this.recordUnavailable();
-  }
-  async updateAcademicImport() {
-    return this.recordUnavailable();
-  }
-  async commitAcademicImport() {
-    return this.recordUnavailable();
-  }
-  async getAcademicRecordRevision() {
-    return this.recordUnavailable();
-  }
-  async listAuditablePrograms() {
-    return this.auditUnavailable();
-  }
-  async listProgramAudits() {
-    return this.auditUnavailable();
-  }
-  async runProgramAudit() {
-    return this.auditUnavailable();
-  }
-  async getProgramAudit() {
-    return this.auditUnavailable();
-  }
-  async exportProgramAudit() {
-    return this.auditUnavailable();
-  }
-  async listProgramComparisons() {
-    return this.auditUnavailable();
-  }
-  async createProgramComparison() {
-    return this.auditUnavailable();
-  }
-  async getProgramComparison() {
-    return this.auditUnavailable();
-  }
-  async submitResponseFeedback() {
-    return this.auditUnavailable();
-  }
-  async listPrivacyExports() {
-    return this.privacyUnavailable();
-  }
-  async createPrivacyExport() {
-    return this.privacyUnavailable();
-  }
-  async downloadPrivacyExport() {
-    return this.privacyUnavailable();
-  }
-  private privacyUnavailable(): never {
-    throw new Error('Privacy export requires the HTTP backend.');
-  }
-  private recordUnavailable(): never {
-    throw new Error('Academic records require the HTTP backend.');
-  }
-  private auditUnavailable(): never {
-    throw new Error('Program audits require the HTTP backend.');
-  }
   beginLogin(): void {
     /* The mock deliberately stays in local development mode. */
   }
+  async listArtifacts(): Promise<NativeArtifactSummary[]> {
+    return [];
+  }
+
+  listCollections = unavailable('Collections are unavailable in mock mode.');
+  reindexSource = unavailable(
+    'Source reindexing requires the HTTP backend; the mock client does not change stored indexes.',
+  );
+
+  listConversations = unavailable(CONVERSATIONS);
+  createConversation = unavailable(CONVERSATIONS);
+  getConversation = unavailable(CONVERSATIONS);
+  startConversationTurnStream = unavailable(CONVERSATIONS);
+  getConversationTurnEvents = unavailable(CONVERSATIONS);
+  abandonConversationTurn = unavailable(CONVERSATIONS);
+  inspectConversationMemory = unavailable(CONVERSATIONS);
+  resetConversationMemory = unavailable(CONVERSATIONS);
+  exportSummary = unavailable(CONVERSATIONS);
+
+  listGaps = unavailable(GAPS);
+  resolveGap = unavailable(GAPS);
+
+  createArtifact = unavailable(ARTIFACTS);
+  importArtifact = unavailable(ARTIFACTS);
+  getArtifact = unavailable(ARTIFACTS);
+  saveArtifactRevision = unavailable(ARTIFACTS);
+  previewArtifact = unavailable(ARTIFACTS);
+  downloadArtifact = unavailable(ARTIFACTS);
+  downloadOriginalArtifact = unavailable(ARTIFACTS);
+  createArtifactRun = unavailable(ARTIFACTS);
+  getArtifactRunLimits = unavailable(ARTIFACTS);
+  getArtifactRun = unavailable(ARTIFACTS);
+  listArtifactRunEvents = unavailable(ARTIFACTS);
+  cancelArtifactRun = unavailable(ARTIFACTS);
+  listArtifactBatches = unavailable(ARTIFACTS);
+  createArtifactBatch = unavailable(ARTIFACTS);
+  getArtifactBatch = unavailable(ARTIFACTS);
+  pollArtifactBatch = unavailable(ARTIFACTS);
+  cancelArtifactBatch = unavailable(ARTIFACTS);
+
+  listConnectionProfiles = unavailable(CONNECTIONS, 404);
+  createConnectionProfile = unavailable(CONNECTIONS, 404);
+  updateConnectionProfile = unavailable(CONNECTIONS, 404);
+  replaceConnectionSecret = unavailable(CONNECTIONS, 404);
+  clearConnectionSecret = unavailable(CONNECTIONS, 404);
+  deleteConnectionProfile = unavailable(CONNECTIONS, 404);
+  diagnoseConnection = unavailable(CONNECTIONS, 404);
+
+  getAcademicRecord = unavailable(RECORDS);
+  upsertAcademicAttempt = unavailable(RECORDS);
+  previewAcademicImport = unavailable(RECORDS);
+  updateAcademicImport = unavailable(RECORDS);
+  commitAcademicImport = unavailable(RECORDS);
+  getAcademicRecordRevision = unavailable(RECORDS);
+
+  listAuditablePrograms = unavailable(AUDITS);
+  listProgramAudits = unavailable(AUDITS);
+  runProgramAudit = unavailable(AUDITS);
+  getProgramAudit = unavailable(AUDITS);
+  exportProgramAudit = unavailable(AUDITS);
+  listProgramComparisons = unavailable(AUDITS);
+  createProgramComparison = unavailable(AUDITS);
+  submitResponseFeedback = unavailable(AUDITS);
+
+  listPrivacyExports = unavailable(PRIVACY);
+  createPrivacyExport = unavailable(PRIVACY);
+  downloadPrivacyExport = unavailable(PRIVACY);
 }
 
 function noSelectedSourceResponse(query: string, wait: number): QueryResponse {
-  const trace = buildTrace({
+  return refusal(
     query,
-    seams: [
-      { name: 'keyword', enabled: true, state: 'dormant', reason: 'no sources selected', candidateCount: 0 },
-      { name: 'embed', enabled: true, state: 'dormant', reason: 'no sources selected', candidateCount: 0 },
-      { name: 'prereq', enabled: true, state: 'dormant', reason: 'no sources selected', candidateCount: 0 },
+    wait,
+    'No sources were selected for this question. Select one or more indexed sources and try again.',
+    [
+      seam('keyword', 'dormant', 0, 'no sources selected'),
+      seam('embed', 'dormant', 0, 'no sources selected'),
+      seam('prereq', 'dormant', 0, 'no sources selected'),
     ],
-    contributions: [],
-    contextChunkIds: [],
-    answer: '',
-    latencyMs: Math.round(wait / 2),
-    warnings: ['No sources were selected; retrieval and generation were skipped.'],
-  });
-  return {
-    type: 'refusal',
-    reason: 'No sources were selected for this question. Select one or more indexed sources and try again.',
-    trace,
-  };
+    ['No sources were selected; retrieval and generation were skipped.'],
+  );
+}
+
+function refusalResponse(query: string, wait: number): QueryResponse {
+  return refusal(
+    query,
+    wait,
+    'No relevant material found in the uploaded docs for this question.',
+    [seam('keyword', 'active', 0), PREREQ_DORMANT, seam('embed', 'active', 0)],
+    [
+      'fusion: zero grounded candidates after union; refusal rule applied (invariant 4)',
+      'model was not called; generative stage skipped for zero-candidate queries',
+    ],
+  );
 }
 
 function groundedResponse(query: string, wait: number): QueryResponse {
-  const answer =
-    'A **basis** is a set of vectors that is both *linearly independent* and *spanning*: ' +
-    'no vector in the set is a linear combination of the others, and every vector in the ' +
-    'space can be written as a combination of the basis vectors.\n\n' +
-    'An inner product gives you a notion of angle and length, which is what makes orthogonality ' +
-    'and the Gram–Schmidt procedure possible.';
-  const trace = buildTrace({
-    query,
-    seams: [
-      { name: 'keyword', enabled: true, state: 'active', candidateCount: 6 },
-      PREREQ_DORMANT,
-      { name: 'embed', enabled: true, state: 'active', candidateCount: 5 },
-    ],
+  return answerResponse(query, wait, {
+    answer:
+      'A **basis** is a set of vectors that is both *linearly independent* and *spanning*: ' +
+      'no vector in the set is a linear combination of the others, and every vector in the ' +
+      'space can be written as a combination of the basis vectors.\n\n' +
+      'An inner product gives you a notion of angle and length, which is what makes orthogonality ' +
+      'and the Gram–Schmidt procedure possible.',
+    seams: [seam('keyword', 'active', 6), PREREQ_DORMANT, seam('embed', 'active', 5)],
     contributions: [
       contribution('chk-la-03', ['keyword', 'embed'], 1.0, 1),
       contribution('chk-la-02', ['keyword', 'embed'], 0.82, 2),
@@ -444,35 +341,18 @@ function groundedResponse(query: string, wait: number): QueryResponse {
       contribution('chk-ob-03', ['keyword'], 0.44, 4),
     ],
     contextChunkIds: ['chk-la-03', 'chk-la-02', 'chk-la-05'],
-    answer,
-    latencyMs: wait,
+    citationChunkIds: ['chk-la-03', 'chk-la-02', 'chk-la-05'],
   });
-  return {
-    type: 'answer',
-    answer,
-    citations: [citation('chk-la-03'), citation('chk-la-02'), citation('chk-la-05')],
-    trace,
-  };
 }
 
 function embeddingResponse(query: string, wait: number): QueryResponse {
-  const answer =
-    "The semantic angle here is eigenstructure: an eigenvector's direction is unchanged by the " +
-    'linear map, and spectral decomposition factors a diagonalizable matrix into PDP⁻¹.\n\n' +
-    'Note that several of these chunks were surfaced by embedding similarity rather than keyword ' +
-    'match, so the phrasing in the source may not mirror your question.';
-  const trace = buildTrace({
-    query,
-    seams: [
-      { name: 'keyword', enabled: true, state: 'active', candidateCount: 1 },
-      PREREQ_DORMANT,
-      {
-        name: 'embed',
-        enabled: true,
-        state: 'active',
-        candidateCount: 12,
-      },
-    ],
+  return answerResponse(query, wait, {
+    answer:
+      "The semantic angle here is eigenstructure: an eigenvector's direction is unchanged by the " +
+      'linear map, and spectral decomposition factors a diagonalizable matrix into PDP⁻¹.\n\n' +
+      'Note that several of these chunks were surfaced by embedding similarity rather than keyword ' +
+      'match, so the phrasing in the source may not mirror your question.',
+    seams: [seam('keyword', 'active', 1), PREREQ_DORMANT, seam('embed', 'active', 12)],
     contributions: [
       contribution('chk-la-07', ['embed', 'keyword'], 0.94, 1),
       contribution('chk-la-05', ['embed'], 0.88, 2),
@@ -482,38 +362,21 @@ function embeddingResponse(query: string, wait: number): QueryResponse {
       contribution('chk-safe-02', ['embed'], 0.41, 6),
     ],
     contextChunkIds: ['chk-la-07', 'chk-la-05', 'chk-la-03', 'chk-la-02', 'chk-ob-04', 'chk-safe-02'],
-    answer,
-    latencyMs: wait,
+    citationChunkIds: ['chk-la-07', 'chk-la-05', 'chk-ob-04', 'chk-safe-02'],
     warnings: [
       'embedding_only_quota applied: 6 embedding-only candidates survived, quota is 4',
       'keyword seam matched 1 chunk; embedding expansion bounded by quota',
     ],
   });
-  return {
-    type: 'answer',
-    answer,
-    citations: [citation('chk-la-07'), citation('chk-la-05'), citation('chk-ob-04'), citation('chk-safe-02')],
-    trace,
-  };
 }
 
 function prereqResponse(query: string, wait: number): QueryResponse {
-  const answer =
-    'Before the material on inner products you will want the vector-space fundamentals: closure ' +
-    'under addition and scalar multiplication, the span/independence distinction, and what a basis is. ' +
-    'Spectral decomposition builds directly on eigenvectors, so treat that as downstream of this topic.';
-  const trace = buildTrace({
-    query,
-    seams: [
-      { name: 'keyword', enabled: true, state: 'active', candidateCount: 3 },
-      {
-        name: 'prereq',
-        enabled: true,
-        state: 'active',
-        candidateCount: 2,
-      },
-      { name: 'embed', enabled: true, state: 'active', candidateCount: 3 },
-    ],
+  return answerResponse(query, wait, {
+    answer:
+      'Before the material on inner products you will want the vector-space fundamentals: closure ' +
+      'under addition and scalar multiplication, the span/independence distinction, and what a basis is. ' +
+      'Spectral decomposition builds directly on eigenvectors, so treat that as downstream of this topic.',
+    seams: [seam('keyword', 'active', 3), seam('prereq', 'active', 2), seam('embed', 'active', 3)],
     contributions: [
       contribution('chk-la-02', ['keyword', 'prereq'], 0.91, 1),
       contribution('chk-la-03', ['prereq'], 0.73, 2),
@@ -521,70 +384,27 @@ function prereqResponse(query: string, wait: number): QueryResponse {
       contribution('chk-la-07', ['embed'], 0.46, 4),
     ],
     contextChunkIds: ['chk-la-02', 'chk-la-03', 'chk-la-05', 'chk-la-07'],
-    answer,
-    latencyMs: wait,
+    citationChunkIds: ['chk-la-02', 'chk-la-03', 'chk-la-05', 'chk-la-07'],
     warnings: [
       'prereq seam: matched 1 course; upstream expansion returned 2 chunks',
       'prereq decay = 0.8 applied: prerequisite chunks cannot outrank the course itself',
     ],
   });
-  return {
-    type: 'answer',
-    answer,
-    citations: [citation('chk-la-02'), citation('chk-la-03'), citation('chk-la-05'), citation('chk-la-07')],
-    trace,
-  };
 }
 
 function defaultResponse(query: string, wait: number): QueryResponse {
-  const answer =
-    'Based on the program documents: you are assigned a faculty advisor in the first week, and the ' +
-    'matching form is due Friday of week two. Lab access requires completing the safety orientation ' +
-    'and passing the checkout quiz at 90% or higher.';
-  const trace = buildTrace({
-    query,
-    seams: [
-      { name: 'keyword', enabled: true, state: 'active', candidateCount: 2 },
-      PREREQ_DORMANT,
-      { name: 'embed', enabled: true, state: 'active', candidateCount: 3 },
-    ],
+  return answerResponse(query, wait, {
+    answer:
+      'Based on the program documents: you are assigned a faculty advisor in the first week, and the ' +
+      'matching form is due Friday of week two. Lab access requires completing the safety orientation ' +
+      'and passing the checkout quiz at 90% or higher.',
+    seams: [seam('keyword', 'active', 2), PREREQ_DORMANT, seam('embed', 'active', 3)],
     contributions: [
       contribution('chk-ob-03', ['keyword', 'embed'], 0.87, 1),
       contribution('chk-ob-04', ['keyword'], 0.66, 2),
       contribution('chk-safe-01', ['embed'], 0.49, 3),
     ],
     contextChunkIds: ['chk-ob-03', 'chk-ob-04', 'chk-safe-01'],
-    answer,
-    latencyMs: wait,
+    citationChunkIds: ['chk-ob-03', 'chk-ob-04', 'chk-safe-01'],
   });
-  return {
-    type: 'answer',
-    answer,
-    citations: [citation('chk-ob-03'), citation('chk-ob-04'), citation('chk-safe-01')],
-    trace,
-  };
-}
-
-function refusalResponse(query: string, wait: number): QueryResponse {
-  const trace = buildTrace({
-    query,
-    seams: [
-      { name: 'keyword', enabled: true, state: 'active', candidateCount: 0 },
-      PREREQ_DORMANT,
-      { name: 'embed', enabled: true, state: 'active', candidateCount: 0 },
-    ],
-    contributions: [],
-    contextChunkIds: [],
-    answer: '',
-    latencyMs: Math.round(wait / 2),
-    warnings: [
-      'fusion: zero grounded candidates after union; refusal rule applied (invariant 4)',
-      'model was not called; generative stage skipped for zero-candidate queries',
-    ],
-  });
-  return {
-    type: 'refusal',
-    reason: 'No relevant material found in the uploaded docs for this question.',
-    trace,
-  };
 }

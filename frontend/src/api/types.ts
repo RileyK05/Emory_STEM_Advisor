@@ -68,47 +68,6 @@ export interface Citation {
   chunkId: string;
 }
 
-// --- Answer artifacts (generation layer; see docs/architecture.md) ---
-// The model emits a validated structured spec per kind; the frontend renders
-// each kind with a fixed component. Kinds are a trust ladder: the model's
-// output is always data, never executable code.
-
-export type ArtifactKind = 'markdown' | 'table' | 'chart' | 'diagram' | 'html';
-
-/** Grounding carried by content-bearing artifact elements. Elements without
- *  backing chunks are rejected at the contract check, same as text claims. */
-export interface ArtifactElementRef {
-  chunkIds: string[];
-  conceptId?: string;
-  evidenceLevel: 'direct' | 'derived' | 'hypothesis';
-}
-
-export interface TableSpec {
-  columns: { key: string; label: string }[];
-  rows: Record<string, string | number>[];
-}
-
-/** Declarative chart spec (Vega-Lite or equivalent): data + mark + encoding. No code. */
-export interface ChartSpec {
-  mark: string;
-  data: Record<string, string | number>[];
-  encoding: Record<string, unknown>;
-}
-
-export interface DiagramSpec {
-  nodes: ({ id: string; label: string } & ArtifactElementRef)[];
-  edges: ({ from: string; to: string; relation: string } & ArtifactElementRef)[];
-}
-
-export interface Artifact {
-  artifactId: string;
-  kind: ArtifactKind;
-  title: string;
-  /** Per-kind validated spec. Rendered by one fixed component per kind. */
-  spec: string | TableSpec | ChartSpec | DiagramSpec;
-  provenance: { traceId: string; modelId: string; promptVersion: string };
-}
-
 export interface QueryRequest {
   query: string;
   collectionId?: string;
@@ -156,8 +115,7 @@ export interface SubgraphView {
   edges: TopicGraphEdge[];
 }
 
-// Native authoring artifacts are immutable revisions; this contract is separate
-// from the grounded answer-artifact union above.
+// Native authoring artifacts are immutable revisions.
 export type NativeArtifactKind = 'document' | 'workbook' | 'html';
 export type WorkbookCellStyle = {
   bold?: boolean;
@@ -525,7 +483,6 @@ export type QueryResponse =
       type: 'answer';
       answer: string;
       citations: Citation[];
-      artifacts?: Artifact[];
       trace: RetrievalTrace;
       claims?: ParagraphClaimReviewUnit[];
       research?: ResearchDecisionInfo | null;
@@ -644,12 +601,6 @@ export interface ConversationResetResponse {
 }
 
 export type NativeDecisionState = 'pending' | 'completed' | 'refused' | 'invalid' | 'failed' | 'unknown' | 'abandoned';
-export interface NativeDecisionRequest {
-  decisionId: string;
-  task: string;
-  predicate: string;
-  input: string | Record<string, unknown>;
-}
 export interface NativeDecision {
   decisionId: string;
   state: NativeDecisionState;
@@ -713,13 +664,6 @@ export interface ConversationTurnRequest {
   studentCohort?: string | null;
 }
 
-export interface ConversationHistoryResponse {
-  type: 'history';
-  answer: string;
-  turnReferences: number[];
-  conversationId: string;
-  sequence: number;
-}
 export interface ConversationTerminalResponse {
   type: 'failed' | 'abandoned';
   reason: string;
@@ -727,10 +671,6 @@ export interface ConversationTerminalResponse {
   conversationId: string;
   sequence: number;
 }
-export type ConversationTurnResponse =
-  | (QueryResponse & { conversationId: string; sequence: number })
-  | ConversationHistoryResponse
-  | ConversationTerminalResponse;
 
 export interface ConversationStreamStartResponse {
   conversationId: string;
@@ -789,7 +729,6 @@ export interface AdvisorClient {
   listConversations(): Promise<ConversationSummary[]>;
   createConversation(request: CreateConversationRequest): Promise<ConversationSummary>;
   getConversation(id: string, after?: number, limit?: number): Promise<ConversationRecord>;
-  sendConversationTurn(id: string, request: ConversationTurnRequest): Promise<ConversationTurnResponse>;
   startConversationTurnStream(id: string, request: ConversationTurnRequest): Promise<ConversationStreamStartResponse>;
   getConversationTurnEvents(
     id: string,
@@ -798,13 +737,9 @@ export interface AdvisorClient {
     limit?: number,
   ): Promise<ConversationStreamEventsResponse>;
   abandonConversationTurn(id: string, requestId: string): Promise<ConversationTerminalResponse>;
-  listConversationSummaries(id: string): Promise<ConversationSummaryCheckpoint[]>;
   inspectConversationMemory(id: string): Promise<ConversationMemoryInspection>;
   resetConversationMemory(id: string): Promise<ConversationResetResponse>;
   exportSummary(id: string, request?: ExportSummaryRequest): Promise<NativeArtifactRecord>;
-  submitDecision(request: NativeDecisionRequest): Promise<NativeDecision>;
-  getDecision(id: string): Promise<NativeDecision>;
-  abandonDecision(id: string): Promise<NativeDecision>;
   listGaps(collectionId?: string): Promise<GapListResponse>;
   resolveGap(id: string, request: ResolveGapRequest): Promise<RetrievalGap>;
   listSources(collection?: string): Promise<SourceDoc[]>;
@@ -872,7 +807,6 @@ export interface AdvisorClient {
   exportProgramAudit(auditId: string): Promise<DegreeAuditDetailResponse>;
   listProgramComparisons(): Promise<ProgramComparisonSummary[]>;
   createProgramComparison(body: ProgramComparisonCreateRequest): Promise<ProgramComparisonResponse>;
-  getProgramComparison(comparisonId: string): Promise<ProgramComparisonResponse>;
   submitResponseFeedback(body: ResponseFeedbackRequest): Promise<ResponseFeedbackResponse>;
   listPrivacyExports(): Promise<PrivacyExportResponse[]>;
   createPrivacyExport(): Promise<PrivacyExportResponse>;

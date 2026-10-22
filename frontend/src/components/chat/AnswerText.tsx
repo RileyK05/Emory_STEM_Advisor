@@ -30,7 +30,7 @@ function linkMarkers(text: string, count: number) {
 }
 
 /** Turn numbered citation markers outside code into links the renderer shows as footnote buttons. */
-export function withCitationLinks(markdown: string, count: number): string {
+function withCitationLinks(markdown: string, count: number): string {
   if (count === 0) return markdown;
   let fence: string | null = null;
   return markdown

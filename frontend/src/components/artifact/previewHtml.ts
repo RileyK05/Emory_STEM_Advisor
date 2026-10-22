@@ -23,7 +23,7 @@ const DROPPED_ATTRIBUTES = [
 ];
 
 /** Strip active content and navigation from untrusted HTML; the preview is static by design. */
-export function sanitizePreviewHtml(html: string) {
+function sanitizePreviewHtml(html: string) {
   const parsed = new DOMParser().parseFromString(html, 'text/html');
   parsed.querySelectorAll(DROPPED_ELEMENTS).forEach((node) => node.remove());
   for (const element of parsed.body.querySelectorAll('*')) {

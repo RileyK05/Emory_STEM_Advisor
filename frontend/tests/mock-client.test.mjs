@@ -23,11 +23,3 @@ test('mock scoped answer never includes passages from deselected sources', async
   const excluded = await client.query({ query: 'What is a vector basis?', sourceIds: ['src-safety'] });
   assert.equal(excluded.type, 'refusal');
 });
-
-test('mock stays explicitly unavailable instead of inventing persistence it does not have', async () => {
-  const client = new mock.MockClient();
-  await assert.rejects(() => client.reindexSource('source-1', 2), /does not change stored indexes/);
-  await assert.rejects(() => client.listConversations(), /mock client does not persist transcripts/);
-  await assert.rejects(() => client.listGaps(), /mock client does not store gap observations/);
-  await assert.rejects(() => client.resolveGap('gap-1', { expectedRevision: 1, sourceIds: ['source-1'], note: '' }), /mock client does not store gap observations/);
-});

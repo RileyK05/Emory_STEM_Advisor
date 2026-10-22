@@ -15,7 +15,7 @@ const POLL_MS = 1200;
 const FINISHED = ['succeeded', 'failed', 'cancelled'];
 
 /** An artifact that belongs to a chat; `revisionId` is the exact version the chat produced or last saved. */
-export interface ArtifactLink {
+interface ArtifactLink {
   artifactId: string;
   revisionId?: string;
   kind: NativeArtifactKind;

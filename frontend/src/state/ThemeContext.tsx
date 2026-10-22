@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react';
 
 /** Light is Swoop (Emory blue, gold, white); dark is Dooley (black and white). */
-export type Theme = 'light' | 'dark';
+type Theme = 'light' | 'dark';
 
 const THEME_STORAGE_KEY = 'advisor-theme';
 

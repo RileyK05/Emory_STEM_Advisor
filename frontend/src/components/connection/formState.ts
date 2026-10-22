@@ -31,7 +31,7 @@ export const SCOPES: ConnectionDataScope[] = ['institutional_corpus', 'user_supp
 export type ProfileFormState = ConnectionProfileWrite & { secret: string };
 
 /** Providers that may only serve the decision role (backend `DECISION_PROVIDERS`). */
-export const DECISION_PROVIDERS: ConnectionProvider[] = ['openai-decisions', 'cloudflare-clef'];
+const DECISION_PROVIDERS: ConnectionProvider[] = ['openai-decisions', 'cloudflare-clef'];
 
 export function blankForm(): ProfileFormState {
   return {

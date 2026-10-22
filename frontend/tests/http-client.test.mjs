@@ -10,7 +10,7 @@ const js = ts.transpileModule(source.replace('import.meta.env.VITE_API_BASE_URL'
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const moduleUrl = 'data:text/javascript;base64,' + Buffer.from(js).toString('base64');
-const { HttpClient, ApiError } = await import(moduleUrl);
+const { HttpClient, ApiError, setDebugSessionToken } = await import(moduleUrl);
 
 async function withStubbedFetch(handler, body) {
   const oldFetch = globalThis.fetch;
@@ -53,6 +53,28 @@ test('upload sends multipart data without overriding its boundary', async () => 
   });
 });
 
+test('caller headers merge with the debug session, and FormData keeps the browser boundary', async () => {
+  const sent = [];
+  const handler = async (_input, init) => {
+    sent.push(new Headers(init.headers));
+    return Response.json({});
+  };
+  await withStubbedFetch(handler, async () => {
+    setDebugSessionToken('debug-1');
+    try {
+      await new HttpClient().downloadPrivacyExport('export-1', 'once-token');
+      await new HttpClient().importArtifact(new File(['x'], 'notes.docx'));
+    } finally {
+      setDebugSessionToken(null);
+    }
+  });
+  assert.equal(sent[0].get('X-Export-Token'), 'once-token');
+  assert.equal(sent[0].get('X-Debug-Session'), 'debug-1');
+  assert.equal(sent[0].get('Content-Type'), 'application/json');
+  assert.equal(sent[1].get('X-Debug-Session'), 'debug-1');
+  assert.equal(sent[1].get('Content-Type'), null);
+});
+
 test('recommendations encode the topic and API failures expose FastAPI detail', async () => {
   let url;
   const handler = async (input) => {
@@ -91,94 +113,6 @@ test('a proxy 5xx with the backend stopped reports the unreachable message', asy
   await withStubbedFetch(handler, async () => {
     await assert.rejects(() => new HttpClient().getSession(), /Could not reach the backend API/);
   });
-});
-
-test('support grant request, approval, and revoke use the admin grant routes', async () => {
-  const calls = [];
-  const handler = async (input, init) => {
-    calls.push({ input: String(input), method: init?.method ?? 'GET', body: init?.body });
-    if (String(input).endsWith('/approve')) {
-      return Response.json({
-        requestId: 'req-1',
-        requesterUserId: 'admin-2',
-        actorUserId: 'admin-1',
-        targetWorkspaceKey: 'ws-student',
-        resourceType: 'conversation',
-        resourceId: 'conv-1',
-        allowedActions: ['read'],
-        reason: 'Investigating ticket 1234',
-        expiresAt: '2026-12-01T17:00:00Z',
-        status: 'approved',
-        revision: 2,
-        grantId: 'grant-1',
-        createdAt: '2026-10-19T12:00:00Z',
-        updatedAt: '2026-10-19T12:01:00Z',
-      });
-    }
-    if (String(input).endsWith('/revoke')) {
-      return Response.json({
-        grantId: 'grant-1',
-        grantType: 'support_access',
-        actorUserId: 'admin-1',
-        targetWorkspaceKey: 'ws-student',
-        resourceType: 'conversation',
-        resourceId: 'conv-1',
-        allowedActions: ['read'],
-        reason: 'Investigating ticket 1234',
-        approvedByUserId: 'admin-2',
-        expiresAt: '2026-12-01T17:00:00Z',
-        createdAt: '2026-10-19T12:00:00Z',
-        revokedAt: '2026-10-19T12:05:00Z',
-      });
-    }
-    if (init?.method === 'POST') {
-      return Response.json(
-        {
-          requestId: 'req-1',
-          requesterUserId: 'admin-1',
-          actorUserId: 'admin-1',
-          targetWorkspaceKey: 'ws-student',
-          resourceType: 'conversation',
-          resourceId: 'conv-1',
-          allowedActions: ['read'],
-          reason: 'Investigating ticket 1234',
-          expiresAt: '2026-12-01T17:00:00Z',
-          status: 'pending',
-          revision: 1,
-          createdAt: '2026-10-19T12:00:00Z',
-          updatedAt: '2026-10-19T12:00:00Z',
-        },
-        { status: 201 },
-      );
-    }
-    return Response.json([]);
-  };
-  await withStubbedFetch(handler, async () => {
-    const client = new HttpClient();
-    assert.deepEqual(await client.listSupportGrantRequests(), []);
-    const created = await client.createSupportGrantRequest({
-      targetWorkspaceKey: 'ws-student',
-      resourceType: 'conversation',
-      resourceId: 'conv-1',
-      reason: 'Investigating ticket 1234',
-      expiresAt: '2026-12-01T17:00:00Z',
-    });
-    assert.equal(created.status, 'pending');
-    const approved = await client.approveSupportGrantRequest('req-1', { expectedRevision: 1 });
-    assert.equal(approved.grantId, 'grant-1');
-    const revoked = await client.revokeResourceGrant('grant-1');
-    assert.equal(revoked.revokedAt, '2026-10-19T12:05:00Z');
-  });
-  assert.deepEqual(
-    calls.map((call) => [call.method, call.input]),
-    [
-      ['GET', '/api/admin/grant-requests'],
-      ['POST', '/api/admin/grant-requests'],
-      ['POST', '/api/admin/grant-requests/req-1/approve'],
-      ['POST', '/api/admin/grants/grant-1/revoke'],
-    ],
-  );
-  assert.equal(JSON.parse(calls[2].body).expectedRevision, 1);
 });
 
 test('an application 5xx with a body keeps the backend detail', async () => {
@@ -260,7 +194,7 @@ test('reindex posts the expected index revision and decodes the authoritative re
   });
 });
 
-test('conversation requests preserve source-scope omission, CAS sequence, and fixed request identity', async () => {
+test('conversation requests use owner-scoped routes and an explicit abandon', async () => {
   const calls = [];
   const summary = {
     conversationId: 'conv-1',
@@ -277,14 +211,6 @@ test('conversation requests preserve source-scope omission, CAS sequence, and fi
     if (url === '/api/conversations') return Response.json([summary]);
     if (url.includes('/abandon'))
       return Response.json({ type: 'abandoned', reason: 'Abandoned', conversationId: 'conv-1', sequence: 3 });
-    if (url.includes('/turns'))
-      return Response.json({
-        type: 'history',
-        answer: 'Turn 1 (user):\nBasis?',
-        turnReferences: [1],
-        conversationId: 'conv-1',
-        sequence: 2,
-      });
     return Response.json({ ...summary, lastSequence: 1, turns: [] });
   };
   await withStubbedFetch(handler, async () => {
@@ -292,56 +218,12 @@ test('conversation requests preserve source-scope omission, CAS sequence, and fi
     assert.deepEqual(await client.listConversations(), [summary]);
     await client.createConversation({ title: 'Basis' });
     await client.getConversation('conv-1', 4, 25);
-    const result = await client.sendConversationTurn('conv-1', {
-      query: 'Follow up',
-      requestId: 'request-uuid',
-      expectedSequence: 1,
-      mode: 'advising',
-    });
     await client.abandonConversationTurn('conv-1', 'request-uuid');
     assert.equal(calls[0].url, '/api/conversations');
     assert.deepEqual(JSON.parse(calls[1].init.body), { title: 'Basis' });
     assert.equal(calls[2].url, '/api/conversations/conv-1?after=4&limit=25');
-    assert.equal(calls[3].url, '/api/conversations/conv-1/turns');
-    assert.deepEqual(JSON.parse(calls[3].init.body), {
-      query: 'Follow up',
-      requestId: 'request-uuid',
-      expectedSequence: 1,
-      mode: 'advising',
-    });
+    assert.equal(calls[3].url, '/api/conversations/conv-1/turns/request-uuid/abandon');
     assert.equal(calls[3].init.credentials, 'same-origin');
-    assert.deepEqual(result.turnReferences, [1]);
-    assert.equal(calls[4].url, '/api/conversations/conv-1/turns/request-uuid/abandon');
-  });
-});
-
-test('summary listing is a storage-only owner-scoped GET', async () => {
-  let captured;
-  const checkpoint = {
-    summaryId: 'summary-1',
-    conversationId: 'conv/1',
-    state: 'completed',
-    expectedSequence: 8,
-    candidateCoveredThrough: 4,
-    coveredThrough: 4,
-    fingerprint: 'a'.repeat(64),
-    text: 'Saved checkpoint',
-    referenceMetadata: [],
-    failureCode: null,
-    profileId: 'profile-1',
-    profileRevision: 2,
-    createdAt: '2026-10-01T00:00:00Z',
-    updatedAt: '2026-10-01T00:00:00Z',
-  };
-  const handler = async (input, init) => {
-    captured = { url: String(input), init };
-    return Response.json([checkpoint]);
-  };
-  await withStubbedFetch(handler, async () => {
-    assert.deepEqual(await new HttpClient().listConversationSummaries('conv/1'), [checkpoint]);
-    assert.equal(captured.url, '/api/conversations/conv%2F1/summaries');
-    assert.equal(captured.init.method, undefined);
-    assert.equal(captured.init.credentials, 'same-origin');
   });
 });
 

@@ -18,7 +18,7 @@ export interface Attachment extends ArtifactRevisionReference {
   kind: NativeArtifactKind;
 }
 
-export interface UserEntry {
+interface UserEntry {
   key: string;
   role: 'user';
   text: string;

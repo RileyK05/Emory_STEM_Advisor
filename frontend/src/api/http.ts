@@ -28,22 +28,14 @@ import type {
   ConversationRecord,
   CreateConversationRequest,
   ConversationTurnRequest,
-  ConversationTurnResponse,
   ConversationStreamStartResponse,
   ConversationStreamEventsResponse,
   ConversationTerminalResponse,
-  ConversationSummaryCheckpoint,
   ConversationMemoryInspection,
   ConversationResetResponse,
-  NativeDecisionRequest,
-  NativeDecision,
   GapListResponse,
   ResolveGapRequest,
   RetrievalGap,
-  ResourceGrant,
-  SupportGrantRequest,
-  SupportGrantRequestCreate,
-  SupportGrantRequestDecision,
   AcademicRecordAttemptItem,
   AcademicRecordAttemptUpsertRequest,
   AcademicRecordDetailResponse,
@@ -67,7 +59,7 @@ import type {
 } from './types';
 
 /** Base URL of the backend. Defaults to the Vite dev proxy path. */
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '';
 
 // Set only by the Debug bundle. The Main bundle never sets it, so ordinary
 // users never send an override header even though they share this module.
@@ -122,15 +114,16 @@ async function fetchOrThrow(
   init: RequestInit,
   unreachableMessage: string,
   errorPrefix: string,
+  debugToken: string | null = debugSessionToken,
 ): Promise<Response> {
   let response: Response;
   try {
-    response = await fetch(`${BASE_URL}${path}`, init);
+    response = await fetch(`${API_BASE_URL}${path}`, init);
   } catch {
     throw new Error(unreachableMessage);
   }
   if (!response.ok) {
-    if (response.status === 401 && !debugSessionToken && !path.startsWith('/api/auth/'))
+    if (response.status === 401 && !debugToken && !path.startsWith('/api/auth/'))
       window.dispatchEvent(new Event('advisor-session-invalid'));
     // A 5xx with an empty body is the dev proxy failing to reach a stopped API,
     // not an application error. Report it as unreachable rather than a
@@ -141,23 +134,43 @@ async function fetchOrThrow(
   return response;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetchOrThrow(
+/** Sends a same-origin API request. Caller headers are merged with the JSON
+ *  content type (omitted for FormData so the browser sets the boundary) and
+ *  the debug session header. `debugToken` defaults to the token the Debug
+ *  bundle set; pass one explicitly (or null for none) to override it. */
+async function send(path: string, init: RequestInit, debugToken: string | null): Promise<Response> {
+  const headers = new Headers(init.headers);
+  if (!(init.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  if (debugToken && !headers.has('X-Debug-Session')) headers.set('X-Debug-Session', debugToken);
+  return fetchOrThrow(
     path,
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(debugSessionToken ? { 'X-Debug-Session': debugSessionToken } : {}),
-        ...(init?.headers ?? {}),
-      },
-      credentials: 'same-origin',
-      ...init,
-    },
+    { credentials: 'same-origin', ...init, headers },
     'Could not reach the backend API. Is it running, and is VITE_API_MODE=http?',
     'API request failed',
+    debugToken,
   );
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+}
+
+async function body<T>(response: Response): Promise<T> {
+  return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+}
+
+export async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  debugToken: string | null = debugSessionToken,
+): Promise<T> {
+  return body<T>(await send(path, init, debugToken));
+}
+
+/** Like `request`, but also returns the response headers (e.g. a paging cursor). */
+export async function requestWithHeaders<T>(
+  path: string,
+  init: RequestInit = {},
+  debugToken: string | null = debugSessionToken,
+): Promise<{ data: T; headers: Headers }> {
+  const response = await send(path, init, debugToken);
+  return { data: await body<T>(response), headers: response.headers };
 }
 
 export class HttpClient implements AdvisorClient {
@@ -194,13 +207,6 @@ export class HttpClient implements AdvisorClient {
     return request<ConversationRecord>(`/api/conversations/${encodeURIComponent(id)}?${params}`);
   }
 
-  async sendConversationTurn(id: string, body: ConversationTurnRequest): Promise<ConversationTurnResponse> {
-    return request<ConversationTurnResponse>(`/api/conversations/${encodeURIComponent(id)}/turns`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
-
   async startConversationTurnStream(
     id: string,
     body: ConversationTurnRequest,
@@ -230,10 +236,6 @@ export class HttpClient implements AdvisorClient {
     );
   }
 
-  async listConversationSummaries(id: string): Promise<ConversationSummaryCheckpoint[]> {
-    return request<ConversationSummaryCheckpoint[]>(`/api/conversations/${encodeURIComponent(id)}/summaries`);
-  }
-
   async inspectConversationMemory(id: string): Promise<ConversationMemoryInspection> {
     return request<ConversationMemoryInspection>(`/api/conversations/${encodeURIComponent(id)}/memory`);
   }
@@ -249,18 +251,6 @@ export class HttpClient implements AdvisorClient {
       method: 'POST',
       body: JSON.stringify(body ?? {}),
     });
-  }
-
-  async submitDecision(body: NativeDecisionRequest): Promise<NativeDecision> {
-    return request<NativeDecision>('/api/decisions', { method: 'POST', body: JSON.stringify(body) });
-  }
-
-  async getDecision(id: string): Promise<NativeDecision> {
-    return request<NativeDecision>(`/api/decisions/${encodeURIComponent(id)}`);
-  }
-
-  async abandonDecision(id: string): Promise<NativeDecision> {
-    return request<NativeDecision>(`/api/decisions/${encodeURIComponent(id)}/abandon`, { method: 'POST' });
   }
 
   async listGaps(collectionId?: string): Promise<GapListResponse> {
@@ -309,7 +299,7 @@ export class HttpClient implements AdvisorClient {
   async importArtifact(file: File): Promise<NativeArtifactRecord> {
     const form = new FormData();
     form.append('file', file);
-    return request<NativeArtifactRecord>('/api/artifacts/import', { method: 'POST', body: form, headers: {} });
+    return request<NativeArtifactRecord>('/api/artifacts/import', { method: 'POST', body: form });
   }
 
   async getArtifact(id: string, revisionId?: string): Promise<NativeArtifactRecord> {
@@ -452,26 +442,6 @@ export class HttpClient implements AdvisorClient {
   async listArtifacts(): Promise<NativeArtifactSummary[]> {
     return request<NativeArtifactSummary[]>('/api/artifacts');
   }
-  async listSupportGrantRequests(): Promise<SupportGrantRequest[]> {
-    return request<SupportGrantRequest[]>('/api/admin/grant-requests');
-  }
-  async createSupportGrantRequest(body: SupportGrantRequestCreate): Promise<SupportGrantRequest> {
-    return request<SupportGrantRequest>('/api/admin/grant-requests', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
-  async approveSupportGrantRequest(requestId: string, body: SupportGrantRequestDecision): Promise<SupportGrantRequest> {
-    return request<SupportGrantRequest>(`/api/admin/grant-requests/${encodeURIComponent(requestId)}/approve`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
-  async revokeResourceGrant(grantId: string): Promise<ResourceGrant> {
-    return request<ResourceGrant>(`/api/admin/grants/${encodeURIComponent(grantId)}/revoke`, {
-      method: 'POST',
-    });
-  }
   async getAcademicRecord(): Promise<AcademicRecordDetailResponse> {
     return request<AcademicRecordDetailResponse>('/api/academic-record');
   }
@@ -537,9 +507,6 @@ export class HttpClient implements AdvisorClient {
       method: 'POST',
       body: JSON.stringify(body),
     });
-  }
-  async getProgramComparison(comparisonId: string): Promise<ProgramComparisonResponse> {
-    return request<ProgramComparisonResponse>(`/api/comparisons/${encodeURIComponent(comparisonId)}`);
   }
   async submitResponseFeedback(body: ResponseFeedbackRequest): Promise<ResponseFeedbackResponse> {
     return request<ResponseFeedbackResponse>('/api/feedback', {

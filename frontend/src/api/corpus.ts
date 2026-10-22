@@ -1,6 +1,6 @@
 import type { SourceDoc } from './types';
 
-export interface MockChunk {
+interface MockChunk {
   chunkId: string;
   sourceId: string;
   sourceName: string;
@@ -15,7 +15,7 @@ export const MOCK_SOURCES: SourceDoc[] = [
   { id: 'src-syllabus', name: 'STEM Program Syllabus', locatorType: 'section', status: 'parsed', chunkCount: 0 },
 ];
 
-export const MOCK_CHUNKS: Record<string, MockChunk> = {
+const MOCK_CHUNKS: Record<string, MockChunk> = {
   'chk-ob-03': {
     chunkId: 'chk-ob-03',
     sourceId: 'src-onboarding',

@@ -20,7 +20,7 @@ import { DocumentPlanEditor, PlanLimitsEditor, WorkbookPlanEditor } from './Plan
 import type { StartRunInput } from './useArtifactWorkspace';
 import { emptyWorkbook } from './workbook';
 
-export type NewArtifactTab = 'draft' | 'blank' | 'import';
+type NewArtifactTab = 'draft' | 'blank' | 'import';
 
 export interface NewArtifactRequest {
   /** Changes on every open so the form starts fresh. */

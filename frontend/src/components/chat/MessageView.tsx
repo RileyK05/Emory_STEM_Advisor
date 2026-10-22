@@ -11,7 +11,7 @@ import type { AssistantEntry, ChatEntry, StreamPreview } from './model';
 
 const MAKE_KINDS: NativeArtifactKind[] = ['document', 'workbook', 'html'];
 
-export function Dots() {
+function Dots() {
   return (
     <span className="dots" aria-hidden>
       <span />

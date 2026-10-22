@@ -25,7 +25,7 @@ export interface SheetDraft {
 }
 
 /** Everything the plan form collects. */
-export interface PlanDraft {
+interface PlanDraft {
   kind: 'document' | 'workbook';
   title: string;
   sections: DocSectionDraft[];
