@@ -316,15 +316,3 @@ class ConversationTurnExecutor:
         }).fetchone()
         if fence_violation(row, workspace_key) is not None:
             raise SafeJobError("operation_fence", "The answer operation no longer satisfies its publication budget.")
-
-
-def build_default_conversation_executor(settings, config, *, connect):
-    """Construct model and embedding seams through the shared runtime builder."""
-    from app.runtime import build_runtime
-
-    runtime = build_runtime(settings, config=config, skip_provider_when_routing=True)
-    return ConversationTurnExecutor(
-        settings=settings, config=config, embedder=runtime.embedder, provider=runtime.provider,
-        connection_profiles=runtime.connection_profiles,
-        connection_runtime=runtime.connection_runtime, connect=connect,
-    )

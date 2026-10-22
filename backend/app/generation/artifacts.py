@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
@@ -437,14 +438,16 @@ def build_artifact_handlers(settings, config, embedder, provider, connect: Calla
     return {kind: handler for kind in SPEC_TYPES}
 
 
-class WorkerHandlers(dict):
+@dataclass(frozen=True)
+class WorkerHandlers:
     """Artifact handlers by kind, plus the executor for saved conversation turns."""
 
-    conversation_executor = None
+    artifacts: dict
+    conversation: object
 
 
-def default_handlers(settings):
-    """The native worker's default handler factory; providers stay behind factories."""
+def build_worker_handlers(settings) -> WorkerHandlers:
+    """The job worker's handlers; providers stay behind their factories."""
     from app.conversations.worker import ConversationTurnExecutor
     from app.db.connection import connector
     from app.runtime import build_runtime
@@ -454,16 +457,17 @@ def default_handlers(settings):
     # A provider that fails to build settles generation jobs through the safe handler
     # error path instead of disabling the whole worker queue.
     runtime = build_runtime(settings, skip_provider_when_routing=True)
-    connect_factory = connector(settings)
-    handlers = WorkerHandlers(build_artifact_handlers(
-        settings, runtime.config, runtime.embedder, runtime.provider, connect_factory,
+    artifacts = build_artifact_handlers(
+        settings, runtime.config, runtime.embedder, runtime.provider, connector(settings),
         profiles=runtime.connection_profiles, runtime=runtime.connection_runtime,
-    ))
-    # The run queue also carries saved conversation turns. Sharing this runtime's
-    # model and embedder means default local deployments load one copy of large weights.
-    handlers.conversation_executor = ConversationTurnExecutor(
+    )
+    # Saved conversation turns share this runtime's model and embedder (one copy of
+    # large local weights) but borrow from their own pool, so long turns cannot
+    # starve job leasing on the control pool.
+    conversation = ConversationTurnExecutor(
         settings=settings, config=runtime.config, embedder=runtime.embedder,
         provider=runtime.provider, connection_profiles=runtime.connection_profiles,
-        connection_runtime=runtime.connection_runtime, connect=connect_factory,
+        connection_runtime=runtime.connection_runtime,
+        connect=connector(settings, pool_name="conversation_execution"),
     )
-    return handlers
+    return WorkerHandlers(artifacts=artifacts, conversation=conversation)

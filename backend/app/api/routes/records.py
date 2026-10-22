@@ -25,14 +25,11 @@ from app.api.schemas import (
 from app.auth.dependencies import get_principal
 from app.auth.models import Principal
 from app.records.service import AcademicRecordService
+from app.util.json import iso
 
 router = APIRouter(prefix="/api/academic-record", tags=["academic-record"])
 Conn = Annotated[object, Depends(deps.get_conn)]
 CurrentPrincipal = Annotated[Principal, Depends(get_principal)]
-
-
-def _iso(dt) -> str | None:
-    return dt.isoformat() if dt else None
 
 
 def _serialize_record(r: dict) -> AcademicRecordSummary:
@@ -40,8 +37,8 @@ def _serialize_record(r: dict) -> AcademicRecordSummary:
         recordId=r["record_id"],
         workspaceKey=r["workspace_key"],
         recordRevision=r["record_revision"],
-        createdAt=_iso(r["created_at"]),
-        updatedAt=_iso(r["updated_at"]),
+        createdAt=iso(r["created_at"]),
+        updatedAt=iso(r["updated_at"]),
     )
 
 
@@ -63,10 +60,10 @@ def _serialize_attempt(a: dict) -> AcademicRecordAttemptItem:
         isVerified=bool(a["is_verified"]),
         verificationMethod=a.get("verification_method"),
         verifiedByUserId=a.get("verified_by_user_id"),
-        verifiedAt=_iso(a.get("verified_at")),
+        verifiedAt=iso(a.get("verified_at")),
         verificationNotes=a.get("verification_notes"),
-        createdAt=_iso(a["created_at"]),
-        updatedAt=_iso(a["updated_at"]),
+        createdAt=iso(a["created_at"]),
+        updatedAt=iso(a["updated_at"]),
     )
 
 
@@ -79,7 +76,7 @@ def _serialize_event(e: dict) -> AcademicRecordVerificationEventItem:
         actorUserId=e.get("actor_user_id"),
         actorRole=e["actor_role"],
         details=e.get("details") or {},
-        createdAt=_iso(e["created_at"]),
+        createdAt=iso(e["created_at"]),
     )
 
 
@@ -193,8 +190,8 @@ def _batch_response(batch: dict) -> AcademicRecordImportBatchResponse:
         duplicateCandidates=batch.get("duplicate_candidates") or [],
         previewDigest=batch.get("preview_digest"),
         rowDecisions=list(batch.get("row_decisions") or []),
-        createdAt=_iso(batch["created_at"]),
-        committedAt=_iso(batch.get("committed_at")),
+        createdAt=iso(batch["created_at"]),
+        committedAt=iso(batch.get("committed_at")),
     )
 
 

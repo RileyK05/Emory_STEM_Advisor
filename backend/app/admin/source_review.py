@@ -1,4 +1,3 @@
-import json
 import logging
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -8,12 +7,9 @@ from psycopg.types.json import Jsonb
 
 from app.db import queries
 from app.ingest.provenance import ProvenanceError, validate_curator_proposal
+from app.util.json import loose_jsonb
 
 logger = logging.getLogger(__name__)
-
-
-def _clean_json_param(data: dict) -> Jsonb:
-    return Jsonb(data, dumps=lambda o: json.dumps(o, default=str))
 
 
 class SourceReviewService:
@@ -149,7 +145,7 @@ class SourceReviewService:
                 "proposal_id": proposal_id,
                 "metadata_revision": current_revision,
                 "actor_user_id": actor_user_id,
-                "details": _clean_json_param({
+                "details": loose_jsonb({
                     "proposal_id": str(proposal_id),
                     "category": validated["source_category"],
                     "title": validated["title"],
@@ -275,7 +271,7 @@ class SourceReviewService:
                 "proposal_id": proposal_id,
                 "metadata_revision": new_revision,
                 "actor_user_id": reviewer_user_id,
-                "details": _clean_json_param({
+                "details": loose_jsonb({
                     "proposal_id": str(proposal_id),
                     "old_revision": current_revision,
                     "new_revision": new_revision,
@@ -291,7 +287,7 @@ class SourceReviewService:
                 "outbox_id": uuid4(),
                 "source_id": source_id,
                 "event_type": "source_provenance_updated",
-                "payload": _clean_json_param({
+                "payload": loose_jsonb({
                     "source_id": str(source_id),
                     "old_revision": current_revision,
                     "new_revision": new_revision,
@@ -349,7 +345,7 @@ class SourceReviewService:
                 "proposal_id": proposal_id,
                 "metadata_revision": current_revision,
                 "actor_user_id": reviewer_user_id,
-                "details": _clean_json_param({
+                "details": loose_jsonb({
                     "proposal_id": str(proposal_id),
                     "rejection_reason": reason,
                 }),
@@ -422,7 +418,7 @@ class SourceReviewService:
                 "proposal_id": None,
                 "metadata_revision": new_revision,
                 "actor_user_id": actor_user_id,
-                "details": _clean_json_param({
+                "details": loose_jsonb({
                     "action": action,
                     "target_status": target_status,
                     "notes": notes,
@@ -437,7 +433,7 @@ class SourceReviewService:
                 "outbox_id": uuid4(),
                 "source_id": source_id,
                 "event_type": f"source_{target_status}",
-                "payload": _clean_json_param({
+                "payload": loose_jsonb({
                     "source_id": str(source_id),
                     "old_revision": current_revision,
                     "new_revision": new_revision,

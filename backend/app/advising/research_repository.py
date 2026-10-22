@@ -29,6 +29,7 @@ from uuid import UUID
 
 from app.db import queries
 from app.util.digest import json_digest
+from app.util.json import iso
 
 SCOPE_FORMAT_VERSION = "2"
 DOCUMENT_PAGE_BYTES = 8_000
@@ -200,15 +201,11 @@ def _kind(row) -> str:
     return "user_supplied" if row["workspace_key"] is not None else "unclassified"
 
 
-def _iso(value) -> str | None:
-    return value.isoformat() if value is not None else None
-
-
 def _pin(row) -> SourcePin:
     return SourcePin(row["source_id"], row["index_revision"], row["filename"],
                      row["content_type"], row["origin_key"], _kind(row), row["publisher"],
-                     row["source_url"], row["edition"], _iso(row["published_at"]),
-                     _iso(row["acquired_at"]), row["geography"], row["occupation_id"],
+                     row["source_url"], row["edition"], iso(row["published_at"]),
+                     iso(row["acquired_at"]), row["geography"], row["occupation_id"],
                      title=row["title"], institution=row["institution"],
                      issuing_unit=row["issuing_unit"], document_roles=row["document_roles"] or (),
                      applicability=row["applicability"] or {},

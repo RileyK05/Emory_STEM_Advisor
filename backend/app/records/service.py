@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from psycopg.types.json import Jsonb
 
 from app.auth.capabilities import Capability, check_workspace_access, require_capability
 from app.auth.models import Principal
@@ -21,12 +19,9 @@ from app.records.importer import (
     parse_csv_content,
 )
 from app.util.digest import json_digest
+from app.util.json import loose_jsonb
 
 logger = logging.getLogger(__name__)
-
-
-def _clean_json(data: Any) -> Jsonb:
-    return Jsonb(data, dumps=lambda o: json.dumps(o, default=str))
 
 
 def _attempt_snapshot(row: dict[str, Any]) -> dict[str, Any]:
@@ -63,7 +58,7 @@ def _store_revision(conn, record_id) -> None:
     conn.execute(queries.get("insert_academic_record_revision"), {
         "record_id": record_id,
         "revision": record["record_revision"],
-        "attempts": _clean_json([_attempt_snapshot(dict(row)) for row in attempts]),
+        "attempts": loose_jsonb([_attempt_snapshot(dict(row)) for row in attempts]),
     })
 
 
@@ -217,7 +212,7 @@ class AcademicRecordService:
                         "event_type": "verification_invalidated",
                         "actor_user_id": actor.user_id,
                         "actor_role": actor.role,
-                        "details": _clean_json({
+                        "details": loose_jsonb({
                             "reason": "attempt_edited",
                             "previous_grade": existing["grade"],
                             "previous_earned_credits": float(existing["earned_credits"]),
@@ -252,7 +247,7 @@ class AcademicRecordService:
                     "event_type": "attempt_updated",
                     "actor_user_id": actor.user_id,
                     "actor_role": actor.role,
-                    "details": _clean_json({"course_code": course_code, "term": term}),
+                    "details": loose_jsonb({"course_code": course_code, "term": term}),
                 },
             )
             conn.execute(queries.get("bump_record_revision"), {"record_id": record_id})
@@ -295,7 +290,7 @@ class AcademicRecordService:
                 "event_type": "attempt_created",
                 "actor_user_id": actor.user_id,
                 "actor_role": actor.role,
-                "details": _clean_json({"course_code": course_code, "term": term}),
+                "details": loose_jsonb({"course_code": course_code, "term": term}),
             },
         )
         conn.execute(queries.get("bump_record_revision"), {"record_id": record_id})
@@ -338,7 +333,7 @@ class AcademicRecordService:
                 "event_type": "attempt_deleted",
                 "actor_user_id": actor.user_id,
                 "actor_role": actor.role,
-                "details": _clean_json({
+                "details": loose_jsonb({
                     "deleted_attempt_id": str(attempt_id),
                     "course_code": existing["submitted_course_code"],
                     "term": existing["term"],
@@ -394,11 +389,11 @@ class AcademicRecordService:
                 "status": "preview",
                 "filename": filename,
                 "raw_content": raw_content,
-                "parsed_rows": _clean_json(parsed_rows),
-                "row_errors": _clean_json(row_errors),
-                "duplicate_candidates": _clean_json(duplicate_candidates),
+                "parsed_rows": loose_jsonb(parsed_rows),
+                "row_errors": loose_jsonb(row_errors),
+                "duplicate_candidates": loose_jsonb(duplicate_candidates),
                 "preview_digest": _import_digest(parsed_rows, decisions),
-                "row_decisions": _clean_json(decisions),
+                "row_decisions": loose_jsonb(decisions),
             },
         ).fetchone()
 
@@ -498,7 +493,7 @@ class AcademicRecordService:
                 "event_type": "batch_committed",
                 "actor_user_id": actor.user_id,
                 "actor_role": actor.role,
-                "details": _clean_json({
+                "details": loose_jsonb({
                     "batch_id": str(batch_id),
                     "filename": batch["filename"],
                     "attempts_imported": committed_count,
@@ -585,8 +580,8 @@ class AcademicRecordService:
             current[index] = "select"
         updated = conn.execute(queries.get("update_import_batch_preview"), {
             "batch_id": batch_id,
-            "parsed_rows": _clean_json(rows),
-            "row_decisions": _clean_json(current),
+            "parsed_rows": loose_jsonb(rows),
+            "row_decisions": loose_jsonb(current),
             "preview_digest": _import_digest(rows, current),
         }).fetchone()
         return dict(updated)
@@ -658,7 +653,7 @@ class AcademicRecordService:
                 "event_type": "attempt_verified",
                 "actor_user_id": actor.user_id,
                 "actor_role": actor.role,
-                "details": _clean_json({
+                "details": loose_jsonb({
                     "method": verification_method,
                     "notes": verification_notes,
                 }),

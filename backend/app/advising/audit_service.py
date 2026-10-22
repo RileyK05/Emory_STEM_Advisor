@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from psycopg.types.json import Jsonb
 
 from app.advising.audit_engine import DeterministicAuditEngine
 from app.auth.capabilities import check_workspace_access
@@ -17,12 +15,9 @@ from app.config import load_settings
 from app.db import queries
 from app.programs.rules import RuleValidationError
 from app.records.service import AcademicRecordService
+from app.util.json import loose_jsonb
 
 logger = logging.getLogger(__name__)
-
-
-def _clean_json(data: Any) -> Jsonb:
-    return Jsonb(data, dumps=lambda o: json.dumps(o, default=str))
 
 
 class DegreeAuditService:
@@ -111,9 +106,9 @@ class DegreeAuditService:
                 "completed_credits": result.completed_credits,
                 "in_progress_credits": result.in_progress_credits,
                 "unverified_credits": result.unverified_credits,
-                "results_summary": _clean_json(result.results_summary),
-                "blockers": _clean_json(result.blockers),
-                "assumptions": _clean_json(result.assumptions),
+                "results_summary": loose_jsonb(result.results_summary),
+                "blockers": loose_jsonb(result.blockers),
+                "assumptions": loose_jsonb(result.assumptions),
             },
         ).fetchone()
 
@@ -131,7 +126,7 @@ class DegreeAuditService:
                     "node_type": ev.node_type,
                     "title": ev.title,
                     "status": ev.status,
-                    "allocated_attempt_ids": _clean_json(ev.allocated_attempt_ids),
+                    "allocated_attempt_ids": loose_jsonb(ev.allocated_attempt_ids),
                     "allocated_credits": ev.allocated_credits,
                     "required_count": ev.required_count,
                     "satisfied_count": ev.satisfied_count,

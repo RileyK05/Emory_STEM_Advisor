@@ -21,14 +21,11 @@ from app.api.schemas import (
 from app.auth.dependencies import get_principal
 from app.auth.models import Principal
 from app.gaps.feedback import FeedbackService
+from app.util.json import iso
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 Conn = Annotated[object, Depends(deps.get_conn)]
 CurrentPrincipal = Annotated[Principal, Depends(get_principal)]
-
-
-def _iso(value) -> str:
-    return value.isoformat()
 
 
 def _feedback(row: dict) -> ResponseFeedbackResponse:
@@ -41,7 +38,7 @@ def _feedback(row: dict) -> ResponseFeedbackResponse:
         reasonCode=row["reason_code"],
         comment=row["comment"],
         currentVotes=row["current_votes"],
-        createdAt=_iso(row["created_at"]),
+        createdAt=iso(row["created_at"]),
     )
 
 
@@ -86,7 +83,7 @@ def list_feedback_triage(conn: Conn, principal: CurrentPrincipal):
             voteRevision=row["revision"],
             vote=row["vote"],
             gapId=row["gap_id"],
-            createdAt=_iso(row["created_at"]),
+            createdAt=iso(row["created_at"]),
         )
         for row in rows
     ]
@@ -139,7 +136,7 @@ def promote_eval_candidate(
         sourceIndexRevision=row["source_index_revision"],
         promotionState=row["promotion_state"],
         reviewState=row["review_state"],
-        createdAt=_iso(row["created_at"]),
+        createdAt=iso(row["created_at"]),
     )
 
 
@@ -154,5 +151,5 @@ def create_eval_candidate(body: EvalCandidateCreateRequest, conn: Conn, principa
         redactedPrompt=row["redacted_prompt"],
         redactedExpected=row["redacted_expected"],
         sourceFeedbackId=row["source_feedback_id"],
-        createdAt=_iso(row["created_at"]),
+        createdAt=iso(row["created_at"]),
     )

@@ -18,14 +18,11 @@ from app.api.schemas import (
 )
 from app.auth.dependencies import get_principal
 from app.auth.models import Principal
+from app.util.json import iso
 
 router = APIRouter(prefix="/api/audits", tags=["audits"])
 Conn = Annotated[object, Depends(deps.get_conn)]
 CurrentPrincipal = Annotated[Principal, Depends(get_principal)]
-
-
-def _iso(dt) -> str | None:
-    return dt.isoformat() if dt else None
 
 
 def _serialize_audit(a: dict) -> DegreeAuditRecordItem:
@@ -47,7 +44,7 @@ def _serialize_audit(a: dict) -> DegreeAuditRecordItem:
         assumptions=a.get("assumptions") or [],
         programTitle=a.get("program_title"),
         programKind=a.get("program_kind"),
-        createdAt=_iso(a["created_at"]),
+        createdAt=iso(a["created_at"]),
     )
 
 
@@ -76,7 +73,7 @@ def _serialize_evaluation(e: dict) -> DegreeAuditRuleEvaluationItem:
         satisfiedCount=e.get("satisfied_count"),
         unresolvedReason=e.get("unresolved_reason"),
         rawPosition=e.get("raw_position"),
-        createdAt=_iso(e["created_at"]),
+        createdAt=iso(e["created_at"]),
     )
 
 

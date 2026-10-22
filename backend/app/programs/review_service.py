@@ -6,13 +6,11 @@ Enforces zero-LLM deterministic extraction, exact source binding validation,
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from psycopg.types.json import Jsonb
 
 from app.db import queries
 from app.programs.rules import (
@@ -21,12 +19,9 @@ from app.programs.rules import (
     generate_default_rules_tree,
     validate_rules_tree,
 )
+from app.util.json import loose_jsonb
 
 logger = logging.getLogger(__name__)
-
-
-def _clean_json(data: dict) -> Jsonb:
-    return Jsonb(data, dumps=lambda o: json.dumps(o, default=str))
 
 
 def _evidence_changed(program):
@@ -165,9 +160,9 @@ class ProgramReviewService:
             "source_sha256": program["source_sha256"],
             "release_version": next_version,
             "status": "draft",
-            "rules_tree": _clean_json(validated_tree),
+            "rules_tree": loose_jsonb(validated_tree),
             "rules_digest": rules_digest,
-            "coverage_summary": _clean_json(coverage_summary),
+            "coverage_summary": loose_jsonb(coverage_summary),
             "created_by_user_id": created_by_user_id,
             "notes": notes,
             "bound_program_digest": program["parsed_content_digest"],

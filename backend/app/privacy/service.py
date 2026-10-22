@@ -14,6 +14,7 @@ from psycopg.types.json import Jsonb
 from app.conversations.store import ConversationStore
 from app.db import queries
 from app.privacy.fence import require_live_workspace
+from app.util.json import iso
 from app.util.localpath import io_path
 
 _DELETE_STEPS = (
@@ -50,10 +51,6 @@ _DELETE_STEPS = (
 )
 
 
-def _iso(dt: datetime | None) -> str | None:
-    return dt.isoformat() if dt else None
-
-
 def _json_dumps(obj: Any) -> str:
     return json.dumps(obj, default=str)
 
@@ -64,7 +61,7 @@ def _plain_row(row) -> dict[str, Any]:
         if isinstance(value, UUID):
             item[key] = str(value)
         elif isinstance(value, datetime):
-            item[key] = _iso(value)
+            item[key] = iso(value)
     return item
 
 
@@ -446,8 +443,8 @@ class PrivacyService:
         viewed = dict(row)
         viewed["exportId"] = str(viewed["export_id"])
         viewed["workspaceKey"] = viewed["workspace_key"]
-        viewed["expiresAt"] = _iso(viewed["expires_at"])
-        viewed["createdAt"] = _iso(viewed["created_at"])
+        viewed["expiresAt"] = iso(viewed["expires_at"])
+        viewed["createdAt"] = iso(viewed["created_at"])
         if include_token:
             viewed["downloadToken"] = viewed["download_token"]
         else:
@@ -463,8 +460,8 @@ class PrivacyService:
         viewed["deletionId"] = str(viewed["deletion_id"])
         viewed["workspaceKey"] = viewed["workspace_key"]
         viewed["deletedCounts"] = counts
-        viewed["createdAt"] = _iso(viewed["created_at"])
-        viewed["finishedAt"] = _iso(viewed.get("finished_at"))
+        viewed["createdAt"] = iso(viewed["created_at"])
+        viewed["finishedAt"] = iso(viewed.get("finished_at"))
         viewed["message"] = (
             "All workspace-owned conversations, artifacts, and private data have been deleted. "
             "Tombstones have been recorded to prevent replay or restore."

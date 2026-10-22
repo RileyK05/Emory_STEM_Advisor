@@ -82,6 +82,7 @@ from app.db import queries
 from app.ingest.evidence import preserve_indexed_source_evidence
 from app.pricing import PricingService
 from app.programs.review_service import ProgramReviewService
+from app.util.json import iso
 
 router = APIRouter(prefix="/api/admin", tags=["institutional admin"])
 Conn = Annotated[object, Depends(deps.get_conn)]
@@ -124,10 +125,6 @@ def _parse_timestamp(value: str, field: str) -> datetime:
         raise HTTPException(422, f"{field} must be an ISO timestamp") from exc
 
 
-def _iso(value):
-    return value.isoformat() if value is not None else None
-
-
 def _user(row) -> AdminUser:
     return AdminUser(
         userId=row["user_id"], issuer=row["issuer"], subject=row["subject"],
@@ -135,8 +132,8 @@ def _user(row) -> AdminUser:
         email=row["email"], role=row["role"], status=row["status"],
         conversationCount=row.get("conversation_count", 0),
         activeSessions=row.get("active_sessions", 0),
-        createdAt=_iso(row["created_at"]), updatedAt=_iso(row["updated_at"]),
-        lastSeenAt=_iso(row["last_seen_at"]),
+        createdAt=iso(row["created_at"]), updatedAt=iso(row["updated_at"]),
+        lastSeenAt=iso(row["last_seen_at"]),
     )
 
 
@@ -146,7 +143,7 @@ def _conversation(row) -> AdminConversation:
         title=row["title"], lastSequence=row["last_sequence"],
         pendingRequestId=row["pending_request_id"],
         turnCount=row.get("turn_count", 0), summaryCount=row.get("summary_count", 0),
-        createdAt=_iso(row["created_at"]), updatedAt=_iso(row["updated_at"]),
+        createdAt=iso(row["created_at"]), updatedAt=iso(row["updated_at"]),
     )
 
 
@@ -179,8 +176,8 @@ def user(user_id: UUID, conn: Conn, principal: Admin):
 def user_sessions(user_id: UUID, conn: Conn, principal: Admin):
     rows = AdminStore(conn, principal).user_sessions(user_id)
     return [AdminUserSession(
-        createdAt=_iso(row["created_at"]), expiresAt=_iso(row["expires_at"]),
-        revokedAt=_iso(row["revoked_at"]),
+        createdAt=iso(row["created_at"]), expiresAt=iso(row["expires_at"]),
+        revokedAt=iso(row["revoked_at"]),
     ) for row in rows]
 
 
@@ -224,7 +221,7 @@ def audit(
         auditId=row["audit_id"], actorUserId=row["actor_user_id"],
         actorWorkspace=row["actor_workspace"], action=row["action"],
         targetType=row["target_type"], targetId=row["target_id"],
-        detail=row["detail"], createdAt=_iso(row["created_at"]),
+        detail=row["detail"], createdAt=iso(row["created_at"]),
         actorEmail=row["actor_email"], actorDisplayName=row["actor_display_name"],
     ) for row in rows]
 
@@ -295,8 +292,8 @@ def _job(row) -> AdminJob:
         jobId=row["job_id"], kind=row["kind"], scopeKey=row["scope_key"],
         status=row["status"], attemptCount=row["attempt_count"],
         maxAttempts=row["max_attempts"], cancelRequested=row["cancel_requested"],
-        error=row["error"], createdAt=_iso(row["created_at"]),
-        updatedAt=_iso(row["updated_at"]), finishedAt=_iso(row["finished_at"]),
+        error=row["error"], createdAt=iso(row["created_at"]),
+        updatedAt=iso(row["updated_at"]), finishedAt=iso(row["finished_at"]),
     )
 
 
@@ -321,8 +318,8 @@ def sources(conn: Conn, principal: Admin, workspace: str = "",
         sourceId=row["source_id"], collectionId=row["collection_id"],
         filename=row["filename"], contentType=row["content_type"], status=row["status"],
         workspaceKey=row["workspace_key"], indexRevision=row["index_revision"],
-        isCurrent=row["is_current"], createdAt=_iso(row["created_at"]),
-        updatedAt=_iso(row["updated_at"]),
+        isCurrent=row["is_current"], createdAt=iso(row["created_at"]),
+        updatedAt=iso(row["updated_at"]),
     ) for row in rows]
 
 
@@ -341,14 +338,14 @@ def artifacts(conn: Conn, principal: Admin, limit: int = Query(100, ge=1, le=500
         artifactId=row["artifact_id"], workspaceKey=row["workspace_key"],
         kind=row["kind"], headRevisionId=row["head_revision_id"],
         originalFilename=row["original_filename"], revisionCount=row["revision_count"],
-        createdAt=_iso(row["created_at"]),
+        createdAt=iso(row["created_at"]),
     ) for row in rows]
 
 
 def _collection(row) -> AdminCollection:
     return AdminCollection(
         collectionId=row["collection_id"], name=row["name"],
-        sourceCount=row["source_count"], createdAt=_iso(row["created_at"]),
+        sourceCount=row["source_count"], createdAt=iso(row["created_at"]),
     )
 
 
@@ -455,9 +452,9 @@ def _grant(row) -> ResourceGrant:
         allowedActions=row["allowed_actions"],
         reason=row["reason"],
         approvedByUserId=row["approved_by_user_id"],
-        expiresAt=_iso(row["expires_at"]),
-        createdAt=_iso(row["created_at"]),
-        revokedAt=_iso(row.get("revoked_at")),
+        expiresAt=iso(row["expires_at"]),
+        createdAt=iso(row["created_at"]),
+        revokedAt=iso(row.get("revoked_at")),
         revokedByUserId=row.get("revoked_by_user_id"),
         actorEmail=row.get("actor_email"),
         actorDisplayName=row.get("actor_display_name"),
@@ -522,15 +519,15 @@ def _support_request(row) -> SupportGrantRequest:
         resourceId=row.get("resource_id"),
         allowedActions=row["allowed_actions"],
         reason=row["reason"],
-        expiresAt=_iso(row["expires_at"]),
+        expiresAt=iso(row["expires_at"]),
         status=row["status"],
         revision=row["revision"],
         decisionNote=row.get("decision_note"),
         decidedByUserId=row.get("decided_by_user_id"),
-        decidedAt=_iso(row.get("decided_at")),
+        decidedAt=iso(row.get("decided_at")),
         grantId=row.get("grant_id"),
-        createdAt=_iso(row["created_at"]),
-        updatedAt=_iso(row["updated_at"]),
+        createdAt=iso(row["created_at"]),
+        updatedAt=iso(row["updated_at"]),
         actorEmail=row.get("actor_email"),
         actorDisplayName=row.get("actor_display_name"),
     )
@@ -676,8 +673,8 @@ def _proposal(row: dict) -> SourceReviewProposal:
         edition=row.get("edition"),
         geography=row.get("geography"),
         occupationId=row.get("occupation_id"),
-        publishedAt=_iso(row.get("published_at")),
-        acquiredAt=_iso(row.get("acquired_at")),
+        publishedAt=iso(row.get("published_at")),
+        acquiredAt=iso(row.get("acquired_at")),
         attribution=row.get("attribution"),
         title=row.get("title"),
         institution=row.get("institution"),
@@ -690,9 +687,9 @@ def _proposal(row: dict) -> SourceReviewProposal:
         reviewNotes=row.get("review_notes"),
         rejectionReason=row.get("rejection_reason"),
         reviewedByUserId=row.get("reviewed_by_user_id"),
-        reviewedAt=_iso(row.get("reviewed_at")),
-        createdAt=_iso(row["created_at"]),
-        updatedAt=_iso(row["updated_at"]),
+        reviewedAt=iso(row.get("reviewed_at")),
+        createdAt=iso(row["created_at"]),
+        updatedAt=iso(row["updated_at"]),
     )
 
 
@@ -705,7 +702,7 @@ def _lifecycle_event(row: dict) -> SourceLifecycleEvent:
         metadataRevision=row["metadata_revision"],
         actorUserId=row.get("actor_user_id"),
         details=row.get("details") or {},
-        createdAt=_iso(row["created_at"]),
+        createdAt=iso(row["created_at"]),
     )
 
 
@@ -724,8 +721,8 @@ def get_source_review_detail(source_id: UUID, conn: Conn, _principal: Admin) -> 
         "indexRevision": source_row["index_revision"],
         "isCurrent": source_row["is_current"],
         "originKey": source_row.get("origin_key"),
-        "createdAt": _iso(source_row["created_at"]),
-        "updatedAt": _iso(source_row["updated_at"]),
+        "createdAt": iso(source_row["created_at"]),
+        "updatedAt": iso(source_row["updated_at"]),
         "sourceCategory": source_row.get("source_category"),
         "classificationOrigin": source_row.get("classification_origin"),
         "publisher": source_row.get("publisher"),
@@ -733,8 +730,8 @@ def get_source_review_detail(source_id: UUID, conn: Conn, _principal: Admin) -> 
         "edition": source_row.get("edition"),
         "geography": source_row.get("geography"),
         "occupationId": source_row.get("occupation_id"),
-        "publishedAt": _iso(source_row.get("published_at")),
-        "acquiredAt": _iso(source_row.get("acquired_at")),
+        "publishedAt": iso(source_row.get("published_at")),
+        "acquiredAt": iso(source_row.get("acquired_at")),
         "attribution": source_row.get("attribution"),
         "title": source_row.get("title"),
         "institution": source_row.get("institution"),
@@ -903,10 +900,10 @@ def _rule_release_summary(row: dict) -> ProgramRuleReleaseSummary:
         coverageSummary=row.get("coverage_summary") or {},
         createdByUserId=row.get("created_by_user_id"),
         approvedByUserId=row.get("approved_by_user_id"),
-        approvedAt=_iso(row.get("approved_at")),
+        approvedAt=iso(row.get("approved_at")),
         notes=row.get("notes"),
-        createdAt=_iso(row["created_at"]),
-        updatedAt=_iso(row["updated_at"]),
+        createdAt=iso(row["created_at"]),
+        updatedAt=iso(row["updated_at"]),
     )
 
 
@@ -925,10 +922,10 @@ def _rule_release_detail(row: dict) -> ProgramRuleReleaseDetail:
         coverageSummary=row.get("coverage_summary") or {},
         createdByUserId=row.get("created_by_user_id"),
         approvedByUserId=row.get("approved_by_user_id"),
-        approvedAt=_iso(row.get("approved_at")),
+        approvedAt=iso(row.get("approved_at")),
         notes=row.get("notes"),
-        createdAt=_iso(row["created_at"]),
-        updatedAt=_iso(row["updated_at"]),
+        createdAt=iso(row["created_at"]),
+        updatedAt=iso(row["updated_at"]),
     )
 
 
@@ -951,7 +948,7 @@ def get_program_inspection(program_id: UUID, conn: Conn, _principal: Admin) -> P
         "sourceSha256": raw_prog.get("source_sha256"),
         "originKey": raw_prog.get("origin_key"),
         "bindingStatus": raw_prog["binding_status"],
-        "boundAt": _iso(raw_prog.get("bound_at")),
+        "boundAt": iso(raw_prog.get("bound_at")),
         "currentRuleReleaseId": str(raw_prog["current_rule_release_id"]) if raw_prog.get("current_rule_release_id") else None,
         "degree": raw_prog.get("degree"),
         "hours": raw_prog.get("hours"),
@@ -1204,9 +1201,9 @@ def _admin_course_change(row: dict) -> AdminCourseChange:
         actorUserId=row.get("actor_user_id"),
         publishedByUserId=row.get("published_by_user_id"),
         conflictNote=row.get("conflict_note"),
-        createdAt=_iso(row["created_at"]),
-        updatedAt=_iso(row["updated_at"]),
-        publishedAt=_iso(row.get("published_at")),
+        createdAt=iso(row["created_at"]),
+        updatedAt=iso(row["updated_at"]),
+        publishedAt=iso(row.get("published_at")),
     )
 
 
@@ -1337,7 +1334,7 @@ def list_course_conflicts(
             changeKind=row["change_kind"],
             status=row["status"],
             conflictNote=row.get("conflict_note"),
-            createdAt=_iso(row["created_at"]),
+            createdAt=iso(row["created_at"]),
         )
         for row in rows
     ]

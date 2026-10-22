@@ -9,11 +9,7 @@ from fastapi import HTTPException
 
 from app.config import Settings, load_settings
 from app.db import queries
-
-
-def _iso(dt: datetime | None) -> str | None:
-    return dt.isoformat() if dt else None
-
+from app.util.json import iso
 
 DEFAULT_FLAGS = [
     ("query_planning", "Plan multi-step retrieval queries", "QUERY_PLANNING_ENABLED", True),
@@ -200,8 +196,8 @@ class FeatureFlagService:
             d["killSwitchActive"] = d["kill_switch_active"]
             d["killReason"] = d["kill_reason"]
             d["overridesCount"] = d["overrides_count"]
-            d["createdAt"] = _iso(d["created_at"])
-            d["updatedAt"] = _iso(d["updated_at"])
+            d["createdAt"] = iso(d["created_at"])
+            d["updatedAt"] = iso(d["updated_at"])
             out.append(d)
         return out
 
@@ -219,7 +215,7 @@ class FeatureFlagService:
             d["scopeType"] = d["scope_type"]
             d["scopeId"] = d["scope_id"]
             d["actorUserId"] = str(d["actor_user_id"]) if d["actor_user_id"] else None
-            d["updatedAt"] = _iso(d["updated_at"])
+            d["updatedAt"] = iso(d["updated_at"])
             out.append(d)
         return out
 
@@ -277,7 +273,7 @@ class FeatureFlagService:
         d["scopeType"] = d["scope_type"]
         d["scopeId"] = d["scope_id"]
         d["actorUserId"] = str(d["actor_user_id"]) if d["actor_user_id"] else None
-        d["updatedAt"] = _iso(d["updated_at"])
+        d["updatedAt"] = iso(d["updated_at"])
         return d
 
     @staticmethod
@@ -329,7 +325,7 @@ class FeatureFlagService:
         d["killSwitchActive"] = d["kill_switch_active"]
         d["killReason"] = d["kill_reason"]
         d["overridesCount"] = len(FeatureFlagService.list_overrides(conn, flag_name))
-        d["updatedAt"] = _iso(d["updated_at"])
+        d["updatedAt"] = iso(d["updated_at"])
         return d
 
     @staticmethod
@@ -349,7 +345,7 @@ class FeatureFlagService:
             "cohort_name": cohort_name, "limit": limit, "offset": offset}).fetchall()
         return [{"userId": row["user_id"], "displayName": row["display_name"],
                  "email": row["email"], "role": row["role"],
-                 "assignedAt": _iso(row["created_at"])} for row in rows]
+                 "assignedAt": iso(row["created_at"])} for row in rows]
 
     @staticmethod
     def assign_cohort(conn, user_id: UUID, cohort_name: str, assigned_by: UUID | None = None,

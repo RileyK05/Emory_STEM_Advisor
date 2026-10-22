@@ -17,14 +17,11 @@ from app.api.schemas import (
 )
 from app.auth.dependencies import get_principal
 from app.auth.models import Principal
+from app.util.json import iso
 
 router = APIRouter(prefix="/api/comparisons", tags=["comparisons"])
 Conn = Annotated[object, Depends(deps.get_conn)]
 CurrentPrincipal = Annotated[Principal, Depends(get_principal)]
-
-
-def _iso(dt) -> str | None:
-    return dt.isoformat() if dt else None
 
 
 def _member(row: dict) -> ProgramComparisonMember:
@@ -54,7 +51,7 @@ def _detail(data: dict) -> ProgramComparisonResponse:
         coverageComparable=data["coverage_comparable"],
         rankingBlockedReason=data["ranking_blocked_reason"],
         members=[_member(row) for row in data["members"]],
-        createdAt=_iso(data["created_at"]),
+        createdAt=iso(data["created_at"]),
     )
 
 
@@ -96,7 +93,7 @@ def list_comparisons(
             creditSavings=None if row["credit_savings"] is None else float(row["credit_savings"]),
             coverageComparable=row["coverage_comparable"],
             rankingBlockedReason=row["ranking_blocked_reason"],
-            createdAt=_iso(row["created_at"]),
+            createdAt=iso(row["created_at"]),
         )
         for row in rows
     ]

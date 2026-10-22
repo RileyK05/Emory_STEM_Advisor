@@ -17,6 +17,7 @@ from app.api.schemas import (
 )
 from app.auth.dependencies import get_admin_principal
 from app.auth.models import Principal
+from app.util.json import iso
 
 router = APIRouter(prefix="/api/admin/prompts", tags=["prompt registry"])
 Conn = Annotated[object, Depends(deps.get_conn)]
@@ -32,10 +33,6 @@ def _admin(request: Request,
 Admin = Annotated[Principal, Depends(_admin)]
 
 
-def _iso(value) -> str:
-    return value.isoformat()
-
-
 def _version(row: dict) -> PromptVersionResponse:
     return PromptVersionResponse(
         versionId=row["version_id"],
@@ -43,7 +40,7 @@ def _version(row: dict) -> PromptVersionResponse:
         templateText=row["template_text"],
         contentDigest=row["content_digest"],
         reviewState=row["review_state"],
-        createdAt=_iso(row["created_at"]),
+        createdAt=iso(row["created_at"]),
     )
 
 
@@ -75,7 +72,7 @@ def put_fixture(body: PromptFixtureCreateRequest, conn: Conn, principal: Admin):
         suiteName=row["suite_name"],
         fixtureDigest=row["fixture_digest"],
         present=row["present"],
-        createdAt=_iso(row["created_at"]),
+        createdAt=iso(row["created_at"]),
     )
 
 
@@ -90,5 +87,5 @@ def promote_prompt(version_id: UUID, body: PromptPromotionRequest, conn: Conn, p
         suiteName=row["suite_name"],
         fixtureDigest=row["fixture_digest"],
         status=row["status"],
-        createdAt=_iso(row["created_at"]),
+        createdAt=iso(row["created_at"]),
     )

@@ -58,7 +58,6 @@ services:
       DEFAULT_COLLECTION: ${DEFAULT_COLLECTION:-default}
       LLM_PROVIDER: ${LLM_PROVIDER:-hf-local}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-granite}
-      RUN_HANDLER_FACTORY: app.generation.artifacts:default_handlers
     command: ["python", "-m", "scripts.worker"]
     volumes:
       - ./backend:/workspace/backend

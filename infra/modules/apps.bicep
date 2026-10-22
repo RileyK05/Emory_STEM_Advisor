@@ -244,12 +244,7 @@ var commonEnv = [
   }
 ]
 
-var workerEnv = concat(commonEnv, [
-  {
-    name: 'RUN_HANDLER_FACTORY'
-    value: 'app.generation.artifacts:default_handlers'
-  }
-])
+var workerEnv = commonEnv
 
 var migrateEnv = [
   {

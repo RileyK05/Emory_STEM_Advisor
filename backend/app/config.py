@@ -44,6 +44,24 @@ def _int(name: str, default: int) -> int:
     return int(os.environ.get(name, default))
 
 
+def _float(name: str, default: float) -> float:
+    return float(os.environ.get(name, default))
+
+
+def _bool(name: str, default: bool) -> bool:
+    """Only "true" (any case) is true; any other set value is false."""
+    return os.environ.get(name, "true" if default else "false").lower() == "true"
+
+
+def _optional(name: str) -> str | None:
+    """The variable's value, with unset and empty both meaning None."""
+    return os.environ.get(name) or None
+
+
+def _csv(name: str) -> tuple[str, ...]:
+    return tuple(v.strip() for v in os.environ.get(name, "").split(",") if v.strip())
+
+
 @dataclass(frozen=True)
 class Settings:
     # Selected local/native provider; native model and key are configured below.
@@ -92,7 +110,7 @@ class Settings:
     admin_panel_enabled: bool = True
     debug_panel_enabled: bool = True
     debug_session_ttl_seconds: int = 28800
-    run_handler_factory: str = "app.generation.artifacts:default_handlers"
+
     operation_timeout_seconds: float = 120.0
     operation_max_calls: int = 2
     operation_token_budget: int = 16_000
@@ -388,24 +406,23 @@ def load_settings() -> Settings:
             "EMBEDDING_MODEL_ID", "ibm-granite/granite-embedding-125m-english"
         ),
         embedding_max_tokens=_int("EMBEDDING_MAX_TOKENS", 512),
-        database_url=os.environ.get("DATABASE_URL") or None,
+        database_url=_optional("DATABASE_URL"),
         default_collection=os.environ.get("DEFAULT_COLLECTION", "default"),
         data_dir=data_dir,
-        llm_model_id=os.environ.get("LLM_MODEL_ID") or None,
+        llm_model_id=_optional("LLM_MODEL_ID"),
         llm_api_key=os.environ.get("LLM_API_KEY") or (os.environ.get(key_variable) if key_variable else None),
-        llm_base_url=os.environ.get("LLM_BASE_URL") or None,
+        llm_base_url=_optional("LLM_BASE_URL"),
         upload_max_bytes=_int("UPLOAD_MAX_BYTES", 20 * 1024 * 1024),
         embedding_device=os.environ.get("EMBEDDING_DEVICE", "cpu"),
         request_max_bytes=_int("REQUEST_MAX_BYTES", 21 * 1024 * 1024),
         readiness_timeout_seconds=_int("READINESS_TIMEOUT_SECONDS", 3),
-        profile_encryption_key=os.environ.get("PROFILE_ENCRYPTION_KEY") or None,
-        llm_timeout_seconds=float(os.environ.get("LLM_TIMEOUT_SECONDS", "60")),
+        profile_encryption_key=_optional("PROFILE_ENCRYPTION_KEY"),
+        llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 60),
         llm_max_output_tokens=_int("LLM_MAX_OUTPUT_TOKENS", 1024),
-        routing_enabled=os.environ.get("ROUTING_ENABLED", "false").lower() == "true",
-        routing_eval_suite_hash=os.environ.get("ROUTING_EVAL_SUITE_HASH") or None,
-        admin_api_enabled=os.environ.get("ADMIN_API_ENABLED", "false").lower() == "true",
-        run_handler_factory=os.environ.get("RUN_HANDLER_FACTORY", "app.generation.artifacts:default_handlers"),
-        operation_timeout_seconds=float(os.environ.get("OPERATION_TIMEOUT_SECONDS", "120")),
+        routing_enabled=_bool("ROUTING_ENABLED", False),
+        routing_eval_suite_hash=_optional("ROUTING_EVAL_SUITE_HASH"),
+        admin_api_enabled=_bool("ADMIN_API_ENABLED", False),
+        operation_timeout_seconds=_float("OPERATION_TIMEOUT_SECONDS", 120),
         operation_max_calls=_int("OPERATION_MAX_CALLS", 2),
         operation_token_budget=_int("OPERATION_TOKEN_BUDGET", 16_000),
         conversation_context_max_bytes=_int(
@@ -413,77 +430,64 @@ def load_settings() -> Settings:
         llm_context_window_tokens=context_window,
         # The local 4k model cannot afford a handoff prompt by default; cloud
         # deployments opt in (the Azure Bicep sets this true).
-        conversation_compaction_enabled=os.environ.get(
-            "CONVERSATION_COMPACTION_ENABLED",
-            "false" if provider == "hf-local" else "true",
-        ).lower() == "true",
-        conversation_compaction_threshold=float(
-            os.environ.get("CONVERSATION_COMPACTION_THRESHOLD", "0.5")),
+        conversation_compaction_enabled=_bool("CONVERSATION_COMPACTION_ENABLED", provider != "hf-local"),
+        conversation_compaction_threshold=_float("CONVERSATION_COMPACTION_THRESHOLD", 0.5),
         conversation_compaction_keep_turns=_int("CONVERSATION_COMPACTION_KEEP_TURNS", 4),
         conversation_compaction_max_output_tokens=compaction_output,
-        conversation_compaction_timeout_seconds=float(
-            os.environ.get("CONVERSATION_COMPACTION_TIMEOUT_SECONDS", "180")),
+        conversation_compaction_timeout_seconds=_float("CONVERSATION_COMPACTION_TIMEOUT_SECONDS", 180),
         conversation_compaction_token_budget=compaction_budget,
         conversation_token_estimate_bytes=bytes_per_token,
-        batch_operation_timeout_seconds=float(os.environ.get("BATCH_OPERATION_TIMEOUT_SECONDS", "172800")),
-        visual_artifact_review_enabled=os.environ.get(
-            "VISUAL_ARTIFACT_REVIEW_ENABLED", "false").lower() == "true",
+        batch_operation_timeout_seconds=_float("BATCH_OPERATION_TIMEOUT_SECONDS", 172800),
+        visual_artifact_review_enabled=_bool("VISUAL_ARTIFACT_REVIEW_ENABLED", False),
         screenshot_renderer=os.environ.get("SCREENSHOT_RENDERER", "disabled"),
         screenshot_timeout_seconds=_int("SCREENSHOT_TIMEOUT_SECONDS", 30),
         screenshot_width=_int("SCREENSHOT_WIDTH", 1280),
         screenshot_height=_int("SCREENSHOT_HEIGHT", 800),
         screenshot_max_bytes=_int("SCREENSHOT_MAX_BYTES", 8 * 1024 * 1024),
         llm_sampling_policy=os.environ.get("LLM_SAMPLING_POLICY", "greedy"),
-        llm_reasoning_effort=os.environ.get("LLM_REASONING_EFFORT") or None,
-        llm_compatible_thinking=os.environ.get("LLM_COMPATIBLE_THINKING") or None,
-        llm_compatible_cache_key=os.environ.get("LLM_COMPATIBLE_CACHE_KEY", "false").lower() == "true",
+        llm_reasoning_effort=_optional("LLM_REASONING_EFFORT"),
+        llm_compatible_thinking=_optional("LLM_COMPATIBLE_THINKING"),
+        llm_compatible_cache_key=_bool("LLM_COMPATIBLE_CACHE_KEY", False),
         auth_mode=os.environ.get("AUTH_MODE", "development"),
-        auth_server_key=os.environ.get("AUTH_SERVER_KEY") or None,
-        oidc_issuer=os.environ.get("OIDC_ISSUER") or None,
-        oidc_client_id=os.environ.get("OIDC_CLIENT_ID") or None,
-        oidc_client_secret=os.environ.get("OIDC_CLIENT_SECRET") or None,
-        oidc_redirect_uri=os.environ.get("OIDC_REDIRECT_URI") or None,
-        auth_membership_claim=os.environ.get("AUTH_MEMBERSHIP_CLAIM") or None,
-        auth_membership_values=tuple(v.strip() for v in os.environ.get("AUTH_MEMBERSHIP_VALUES", "").split(",") if v.strip()),
-        auth_verified_email_domains=tuple(v.strip() for v in os.environ.get("AUTH_VERIFIED_EMAIL_DOMAINS", "").split(",") if v.strip()),
-        admin_bootstrap_emails=tuple(
-            v.strip().lower() for v in os.environ.get("ADMIN_BOOTSTRAP_EMAILS", "").split(",")
-            if v.strip()),
-        admin_bootstrap_subjects=tuple(
-            v.strip() for v in os.environ.get("ADMIN_BOOTSTRAP_SUBJECTS", "").split(",")
-            if v.strip()),
-        admin_panel_enabled=os.environ.get("ADMIN_PANEL_ENABLED", "true").lower() == "true",
-        debug_panel_enabled=os.environ.get("DEBUG_PANEL_ENABLED", "true").lower() == "true",
+        auth_server_key=_optional("AUTH_SERVER_KEY"),
+        oidc_issuer=_optional("OIDC_ISSUER"),
+        oidc_client_id=_optional("OIDC_CLIENT_ID"),
+        oidc_client_secret=_optional("OIDC_CLIENT_SECRET"),
+        oidc_redirect_uri=_optional("OIDC_REDIRECT_URI"),
+        auth_membership_claim=_optional("AUTH_MEMBERSHIP_CLAIM"),
+        auth_membership_values=_csv("AUTH_MEMBERSHIP_VALUES"),
+        auth_verified_email_domains=_csv("AUTH_VERIFIED_EMAIL_DOMAINS"),
+        admin_bootstrap_emails=tuple(v.lower() for v in _csv("ADMIN_BOOTSTRAP_EMAILS")),
+        admin_bootstrap_subjects=_csv("ADMIN_BOOTSTRAP_SUBJECTS"),
+        admin_panel_enabled=_bool("ADMIN_PANEL_ENABLED", True),
+        debug_panel_enabled=_bool("DEBUG_PANEL_ENABLED", True),
         debug_session_ttl_seconds=_int("DEBUG_SESSION_TTL_SECONDS", 28800),
         auth_session_ttl_seconds=_int("AUTH_SESSION_TTL_SECONDS", 28800),
         auth_transaction_ttl_seconds=_int("AUTH_TRANSACTION_TTL_SECONDS", 300),
-        tools_enabled=os.environ.get("TOOLS_ENABLED", "false").lower() == "true",
-        answer_citation_repair_enabled=os.environ.get(
-            "ANSWER_CITATION_REPAIR_ENABLED", "false").lower() == "true",
+        tools_enabled=_bool("TOOLS_ENABLED", False),
+        answer_citation_repair_enabled=_bool("ANSWER_CITATION_REPAIR_ENABLED", False),
         tool_max_calls=_int("TOOL_MAX_CALLS", 4),
-        query_planning_enabled=os.environ.get("QUERY_PLANNING_ENABLED", "false").lower() == "true",
+        query_planning_enabled=_bool("QUERY_PLANNING_ENABLED", False),
         query_planning_token_budget=_int("QUERY_PLANNING_TOKEN_BUDGET", 300_000),
-        advising_research_enabled=os.environ.get(
-            "ADVISING_RESEARCH_ENABLED", "false").lower() == "true",
+        advising_research_enabled=_bool("ADVISING_RESEARCH_ENABLED", False),
         research_max_calls=_int("RESEARCH_MAX_CALLS", 12),
         research_max_tool_calls=_int("RESEARCH_MAX_TOOL_CALLS", 24),
-        research_operation_timeout_seconds=float(
-            os.environ.get("RESEARCH_OPERATION_TIMEOUT_SECONDS", "240")),
+        research_operation_timeout_seconds=_float("RESEARCH_OPERATION_TIMEOUT_SECONDS", 240),
         research_operation_token_budget=_int("RESEARCH_OPERATION_TOKEN_BUDGET", 640_000),
         research_max_prompt_bytes=_int("RESEARCH_MAX_PROMPT_BYTES", 48_000),
         research_max_output_tokens=_int("RESEARCH_MAX_OUTPUT_TOKENS", 4096),
         audit_max_search_states=_int("AUDIT_MAX_SEARCH_STATES", 50_000),
-        office_enabled=os.environ.get("OFFICE_ENABLED", "false").lower() == "true",
-        sandbox_remote_url=os.environ.get("SANDBOX_REMOTE_URL") or None,
-        sandbox_bearer_token=os.environ.get("SANDBOX_BEARER_TOKEN") or None,
+        office_enabled=_bool("OFFICE_ENABLED", False),
+        sandbox_remote_url=_optional("SANDBOX_REMOTE_URL"),
+        sandbox_bearer_token=_optional("SANDBOX_BEARER_TOKEN"),
         sandbox_office_image=os.environ.get("SANDBOX_OFFICE_IMAGE", "emory-sandbox-office:7.4.7-v1"),
         sandbox_screenshot_image=os.environ.get(
             "SANDBOX_SCREENSHOT_IMAGE", "emory-sandbox-browser:1.50.0-v1"),
-        office_timeout_seconds=float(os.environ.get("OFFICE_TIMEOUT_SECONDS", "60")),
+        office_timeout_seconds=_float("OFFICE_TIMEOUT_SECONDS", 60),
         office_max_input_bytes=_int("OFFICE_MAX_INPUT_BYTES", 16 * 1024 * 1024),
         office_max_output_bytes=_int("OFFICE_MAX_OUTPUT_BYTES", 32 * 1024 * 1024),
         db_pool_max_size=_int("DB_POOL_MAX_SIZE", 20),
-        db_pool_timeout_seconds=float(os.environ.get("DB_POOL_TIMEOUT_SECONDS", "10")),
+        db_pool_timeout_seconds=_float("DB_POOL_TIMEOUT_SECONDS", 10),
         db_statement_timeout_ms=_int("DB_STATEMENT_TIMEOUT_MS", 30_000),
         db_idle_transaction_timeout_ms=_int("DB_IDLE_TRANSACTION_TIMEOUT_MS", 60_000),
         http_threadpool_tokens=_int("HTTP_THREADPOOL_TOKENS", 40),

@@ -9,10 +9,7 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 
 from app.db import queries
-
-
-def _iso(dt: datetime | None) -> str | None:
-    return dt.isoformat() if dt else None
+from app.util.json import iso
 
 
 @dataclass
@@ -410,8 +407,8 @@ class QuotaService:
             d["tokensPerDay"] = d["tokens_per_day"]
             d["spendUsdPerDay"] = d["spend_usd_per_day"]
             d["maxActiveJobs"] = d["max_active_jobs"]
-            d["createdAt"] = _iso(d["created_at"])
-            d["updatedAt"] = _iso(d["updated_at"])
+            d["createdAt"] = iso(d["created_at"])
+            d["updatedAt"] = iso(d["updated_at"])
             out.append(d)
         return out
 
@@ -466,7 +463,7 @@ class QuotaService:
         d["tokensPerDay"] = d["tokens_per_day"]
         d["spendUsdPerDay"] = d["spend_usd_per_day"]
         d["maxActiveJobs"] = d["max_active_jobs"]
-        d["createdAt"] = _iso(d["created_at"])
-        d["updatedAt"] = _iso(d["updated_at"])
+        d["createdAt"] = iso(d["created_at"])
+        d["updatedAt"] = iso(d["updated_at"])
         return d
 
