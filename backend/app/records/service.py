@@ -62,6 +62,21 @@ def _store_revision(conn, record_id) -> None:
     })
 
 
+def _bump_revision(conn, record_id) -> None:
+    """Advance the record revision and snapshot it."""
+    conn.execute(queries.get("bump_record_revision"), {"record_id": record_id})
+    _store_revision(conn, record_id)
+
+
+def _record_event(conn, record_id, attempt_id, event_type: str, actor: Principal,
+                  details: dict) -> None:
+    conn.execute(queries.get("insert_academic_record_verification_event"), {
+        "event_id": uuid4(), "record_id": record_id, "attempt_id": attempt_id,
+        "event_type": event_type, "actor_user_id": actor.user_id, "actor_role": actor.role,
+        "details": loose_jsonb(details),
+    })
+
+
 def _selected_import_rows(parsed_rows: list, decisions: list) -> list:
     selected = []
     for index, row in enumerate(parsed_rows):
@@ -148,7 +163,7 @@ class AcademicRecordService:
         record = cls.get_or_create_record(conn, workspace_key, lock=True)
         record_id = record["record_id"]
 
-        raw_code = attempt_data.get("submitted_course_code") or attempt_data.get("submittedCourseCode")
+        raw_code = attempt_data.get("submittedCourseCode")
         if not raw_code:
             raise HTTPException(422, "submitted course code is required")
         course_code = normalize_course_code(str(raw_code))
@@ -160,142 +175,69 @@ class AcademicRecordService:
         if not course_code or not term:
             raise HTTPException(422, "course code and term must not be blank")
 
-        attempted_credits = float(
-            attempt_data.get("attempted_credits", attempt_data.get("attemptedCredits", 3.0))
-        )
+        attempted_credits = float(attempt_data.get("attemptedCredits", 3.0))
         if attempted_credits < 0.0 or attempted_credits > 30.0:
             raise HTTPException(422, "attempted credits out of reasonable range")
 
-        explicit_earned = attempt_data.get("earned_credits", attempt_data.get("earnedCredits"))
-        explicit_status = attempt_data.get("status")
+        explicit_earned = attempt_data.get("earnedCredits")
         grade = attempt_data.get("grade")
-
         try:
             status, earned_credits = infer_status_and_credits(
                 grade=grade,
                 attempted_credits=attempted_credits,
-                explicit_status=explicit_status,
+                explicit_status=attempt_data.get("status"),
                 explicit_earned_credits=float(explicit_earned) if explicit_earned is not None else None,
             )
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
-        institution = attempt_data.get("institution") or "Emory University"
-        course_title = attempt_data.get("course_title", attempt_data.get("courseTitle"))
-        resolved_course_code = normalize_course_code(
-            attempt_data.get("resolved_course_code") or attempt_data.get("resolvedCourseCode")
-            or course_code)
+        fields = {
+            "institution": attempt_data.get("institution") or "Emory University",
+            "submitted_course_code": course_code,
+            "resolved_course_code": normalize_course_code(
+                attempt_data.get("resolvedCourseCode") or course_code),
+            "course_title": attempt_data.get("courseTitle"),
+            "term": term,
+            "attempted_credits": attempted_credits,
+            "earned_credits": earned_credits,
+            "grade": grade.strip().upper() if grade else None,
+            "status": status,
+            "provenance": "student_manual",
+        }
+        summary = {"course_code": course_code, "term": term}
 
-        attempt_id_raw = attempt_data.get("attempt_id") or attempt_data.get("attemptId")
-
-        if attempt_id_raw:
-            attempt_id = UUID(str(attempt_id_raw))
+        if attempt_data.get("attemptId"):
+            attempt_id = UUID(str(attempt_data["attemptId"]))
             existing = conn.execute(
                 queries.get("get_academic_record_attempt_by_id"),
                 {"attempt_id": attempt_id},
             ).fetchone()
             if not existing or existing["record_id"] != record_id:
                 raise HTTPException(404, "attempt not found on this record")
-
-            # Invalidate verification if existing attempt was verified
             if existing["is_verified"]:
-                conn.execute(
-                    queries.get("invalidate_attempt_verification"),
-                    {"attempt_id": attempt_id},
-                )
-                conn.execute(
-                    queries.get("insert_academic_record_verification_event"),
-                    {
-                        "event_id": uuid4(),
-                        "record_id": record_id,
-                        "attempt_id": attempt_id,
-                        "event_type": "verification_invalidated",
-                        "actor_user_id": actor.user_id,
-                        "actor_role": actor.role,
-                        "details": loose_jsonb({
-                            "reason": "attempt_edited",
-                            "previous_grade": existing["grade"],
-                            "previous_earned_credits": float(existing["earned_credits"]),
-                        }),
-                    },
-                )
-
-            provenance = "student_manual"
-            updated = conn.execute(
-                queries.get("update_academic_record_attempt"),
-                {
-                    "attempt_id": attempt_id,
-                    "institution": institution,
-                    "submitted_course_code": course_code,
-                    "resolved_course_code": resolved_course_code,
-                    "course_title": course_title,
-                    "term": term,
-                    "attempted_credits": attempted_credits,
-                    "earned_credits": earned_credits,
-                    "grade": grade.strip().upper() if grade else None,
-                    "status": status,
-                    "provenance": provenance,
-                },
-            ).fetchone()
-
-            conn.execute(
-                queries.get("insert_academic_record_verification_event"),
-                {
-                    "event_id": uuid4(),
-                    "record_id": record_id,
-                    "attempt_id": attempt_id,
-                    "event_type": "attempt_updated",
-                    "actor_user_id": actor.user_id,
-                    "actor_role": actor.role,
-                    "details": loose_jsonb({"course_code": course_code, "term": term}),
-                },
-            )
-            conn.execute(queries.get("bump_record_revision"), {"record_id": record_id})
-            _store_revision(conn, record_id)
-            return dict(updated)
-
-        # New attempt
-        attempt_id = uuid4()
-        provenance = "student_manual"
-        inserted = conn.execute(
-            queries.get("insert_academic_record_attempt"),
-            {
-                "attempt_id": attempt_id,
-                "record_id": record_id,
-                "workspace_key": workspace_key,
-                "institution": institution,
-                "submitted_course_code": course_code,
-                "resolved_course_code": resolved_course_code,
-                "course_title": course_title,
-                "term": term,
-                "attempted_credits": attempted_credits,
-                "earned_credits": earned_credits,
-                "grade": grade.strip().upper() if grade else None,
-                "status": status,
-                "provenance": provenance,
-                "is_verified": False,
-                "verification_method": None,
-                "verified_by_user_id": None,
-                "verified_at": None,
-                "verification_notes": None,
-            },
-        ).fetchone()
-
-        conn.execute(
-            queries.get("insert_academic_record_verification_event"),
-            {
-                "event_id": uuid4(),
-                "record_id": record_id,
-                "attempt_id": attempt_id,
-                "event_type": "attempt_created",
-                "actor_user_id": actor.user_id,
-                "actor_role": actor.role,
-                "details": loose_jsonb({"course_code": course_code, "term": term}),
-            },
-        )
-        conn.execute(queries.get("bump_record_revision"), {"record_id": record_id})
-        _store_revision(conn, record_id)
-        return dict(inserted)
+                # Editing a verified attempt withdraws its verification.
+                conn.execute(queries.get("invalidate_attempt_verification"),
+                             {"attempt_id": attempt_id})
+                _record_event(conn, record_id, attempt_id, "verification_invalidated", actor, {
+                    "reason": "attempt_edited",
+                    "previous_grade": existing["grade"],
+                    "previous_earned_credits": float(existing["earned_credits"]),
+                })
+            row = conn.execute(queries.get("update_academic_record_attempt"),
+                               {"attempt_id": attempt_id, **fields}).fetchone()
+            event_type = "attempt_updated"
+        else:
+            attempt_id = uuid4()
+            row = conn.execute(queries.get("insert_academic_record_attempt"), {
+                "attempt_id": attempt_id, "record_id": record_id,
+                "workspace_key": workspace_key, **fields,
+                "is_verified": False, "verification_method": None,
+                "verified_by_user_id": None, "verified_at": None, "verification_notes": None,
+            }).fetchone()
+            event_type = "attempt_created"
+        _record_event(conn, record_id, attempt_id, event_type, actor, summary)
+        _bump_revision(conn, record_id)
+        return dict(row)
 
     @classmethod
     def delete_attempt(
@@ -324,24 +266,12 @@ class AcademicRecordService:
             queries.get("delete_academic_record_attempt"),
             {"attempt_id": attempt_id},
         )
-        conn.execute(
-            queries.get("insert_academic_record_verification_event"),
-            {
-                "event_id": uuid4(),
-                "record_id": record_id,
-                "attempt_id": None,
-                "event_type": "attempt_deleted",
-                "actor_user_id": actor.user_id,
-                "actor_role": actor.role,
-                "details": loose_jsonb({
-                    "deleted_attempt_id": str(attempt_id),
-                    "course_code": existing["submitted_course_code"],
-                    "term": existing["term"],
-                }),
-            },
-        )
-        conn.execute(queries.get("bump_record_revision"), {"record_id": record_id})
-        _store_revision(conn, record_id)
+        _record_event(conn, record_id, None, "attempt_deleted", actor, {
+            "deleted_attempt_id": str(attempt_id),
+            "course_code": existing["submitted_course_code"],
+            "term": existing["term"],
+        })
+        _bump_revision(conn, record_id)
 
     @classmethod
     def create_import_preview(
@@ -484,22 +414,11 @@ class AcademicRecordService:
             {"batch_id": batch_id, "status": "committed", "committed_count": committed_count},
         )
         _store_revision(conn, record_id)
-        conn.execute(
-            queries.get("insert_academic_record_verification_event"),
-            {
-                "event_id": uuid4(),
-                "record_id": record_id,
-                "attempt_id": None,
-                "event_type": "batch_committed",
-                "actor_user_id": actor.user_id,
-                "actor_role": actor.role,
-                "details": loose_jsonb({
-                    "batch_id": str(batch_id),
-                    "filename": batch["filename"],
-                    "attempts_imported": committed_count,
-                }),
-            },
-        )
+        _record_event(conn, record_id, None, "batch_committed", actor, {
+            "batch_id": str(batch_id),
+            "filename": batch["filename"],
+            "attempts_imported": committed_count,
+        })
 
         return {
             "batchId": batch_id,
@@ -644,21 +563,9 @@ class AcademicRecordService:
             },
         ).fetchone()
 
-        conn.execute(
-            queries.get("insert_academic_record_verification_event"),
-            {
-                "event_id": uuid4(),
-                "record_id": record_id,
-                "attempt_id": attempt_id,
-                "event_type": "attempt_verified",
-                "actor_user_id": actor.user_id,
-                "actor_role": actor.role,
-                "details": loose_jsonb({
-                    "method": verification_method,
-                    "notes": verification_notes,
-                }),
-            },
-        )
-        conn.execute(queries.get("bump_record_revision"), {"record_id": record_id})
-        _store_revision(conn, record_id)
+        _record_event(conn, record_id, attempt_id, "attempt_verified", actor, {
+            "method": verification_method,
+            "notes": verification_notes,
+        })
+        _bump_revision(conn, record_id)
         return dict(verified)
