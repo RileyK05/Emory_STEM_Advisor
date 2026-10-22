@@ -2,6 +2,12 @@
 
 
 
+import pytest
+
+from app.config import load_settings
+from app.db import queries
+from app.db.bootstrap import prepare_database
+from app.db.collections import UnknownCollection, resolve_collection
 from tests.fakes import FakeProvider
 from tests.helpers import api_client, collection_name, ingest_text
 
@@ -130,3 +136,22 @@ def test_metrics_are_loopback_only_and_report_pool_and_queue_state(db, collectio
     disabled.state.override_conn = db
     hidden = TestClient(disabled, client=("127.0.0.1", 1234), base_url="http://127.0.0.1")
     assert hidden.get("/metrics").status_code == 404
+
+
+def test_bootstrap_creates_default_collection_once(db):
+    prepare_database(db, "serving-default")
+    first = db.execute(queries.get("get_collection_by_name"), {"name": "serving-default"}).fetchone()
+    db.commit()
+    prepare_database(db, "serving-default")
+    second = db.execute(queries.get("get_collection_by_name"), {"name": "serving-default"}).fetchone()
+    assert first["collection_id"] == second["collection_id"]
+
+
+def test_named_collection_resolves(db, collection):
+    name = collection_name(db, collection)
+    assert resolve_collection(db, load_settings(), name) == (collection, name)
+
+
+def test_unknown_collection_is_a_domain_error_that_job_routes_map_as_invalid_input(db, collection):
+    with pytest.raises(UnknownCollection, match="no-such-collection"):
+        resolve_collection(db, load_settings(), "no-such-collection")

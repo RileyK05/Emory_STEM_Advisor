@@ -12,6 +12,7 @@ from app.ingest.extract import UnsupportedContentType
 from app.ingest.pipeline import ingest_file
 from app.retrieval.config import load_retrieval_config
 from tests.fakes import FakeEmbedder, whitespace_tokens
+from tests.fixtures.pdf import make_pdf
 
 _MODEL = "fake-model"
 
@@ -141,3 +142,22 @@ def test_verified_provenance_publishes_with_the_indexed_version(db, collection, 
     assert changed["metadata_revision"] == revision + 1
     assert changed["applicability_status"] == "historical"
     assert changed["content_hash"] == row["content_hash"]
+
+
+_MODEL = "fake-model"
+
+
+@pytest.mark.parametrize("pages, expected", [
+    (["First page", "", "Third page"], ["page 2:"]),  # an empty page warns and still indexes
+    (["Only page", "Second page"], []),
+])
+def test_pdf_warnings_persist_with_the_index(db, collection, tmp_path, pages, expected):
+    path = tmp_path / "doc.pdf"
+    path.write_bytes(make_pdf(pages))
+    source_id = _ingest(db, collection, path, "application/pdf")
+    row = db.execute("SELECT status, warnings FROM sources WHERE source_id = %(s)s",
+                     {"s": source_id}).fetchone()
+    assert row["status"] == "indexed"
+    assert [prefix for prefix in expected
+            if not any(prefix in warning for warning in row["warnings"])] == []
+    assert bool(row["warnings"]) == bool(expected)
