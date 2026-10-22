@@ -60,12 +60,6 @@ FROM sources WHERE workspace_key IS NULL AND status = 'indexed'
   AND content_type = 'text/markdown' AND origin_key IS NULL
 ORDER BY created_at, source_id;
 
--- name: schema_data_tables
-SELECT c.relname AS table_name
-FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE n.nspname = 'public' AND c.relkind = 'r' AND c.relname <> 'schema_migrations'
-ORDER BY c.relname;
-
 -- name: schema_prepare_fingerprints
 CREATE OR REPLACE FUNCTION pg_temp.table_fingerprints()
 RETURNS TABLE(table_name text, row_count bigint, fingerprint text)

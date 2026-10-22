@@ -41,14 +41,6 @@ SELECT program_id, collection_id, title, kind,
 FROM programs
 WHERE program_id = %(program_id)s;
 
--- name: list_programs_with_binding
-SELECT program_id, title, kind,
-       source_id, source_index_revision, source_sha256, origin_key,
-       parsed_content_digest, binding_status, bound_at
-FROM programs
-WHERE collection_id = %(collection_id)s AND is_active
-ORDER BY kind, title;
-
 -- Ordered supporting chunks for one parsed requirement item. chunk_id and
 -- locator_id deliberately carry no foreign key: the evidence must survive
 -- reindexing and source removal, like citation and excerpt snapshots.

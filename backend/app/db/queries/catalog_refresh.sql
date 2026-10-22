@@ -39,13 +39,6 @@ SELECT batch_id, collection_id, edition_key, status, base_revision, staged_revis
 FROM catalog_refresh_batches
 WHERE batch_id = %(batch_id)s;
 
--- name: list_catalog_refresh_batches
-SELECT batch_id, collection_id, edition_key, status, base_revision, staged_revision,
-       compatible, staged_edition_id, created_at
-FROM catalog_refresh_batches
-WHERE collection_id = %(collection_id)s
-ORDER BY created_at DESC, batch_id;
-
 -- name: cancel_catalog_refresh_batch
 UPDATE catalog_refresh_batches
 SET status = 'cancelled', cancelled_at = now()

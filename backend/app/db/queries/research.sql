@@ -213,11 +213,6 @@ VALUES (%(run_id)s, %(evidence_id)s, %(snapshot)s, %(digest)s)
 ON CONFLICT (run_id, evidence_id) DO NOTHING
 RETURNING run_id, evidence_id;
 
--- name: get_research_evidence
-SELECT run_id, evidence_id, snapshot, digest, created_at
-FROM research_evidence
-WHERE run_id = %(run_id)s AND evidence_id = %(evidence_id)s;
-
 -- name: list_research_evidence
 SELECT run_id, evidence_id, snapshot, digest, created_at
 FROM research_evidence
@@ -228,13 +223,6 @@ ORDER BY created_at, evidence_id;
 INSERT INTO research_decisions (run_id, response_id, render_version, decision, digest)
 VALUES (%(run_id)s, %(response_id)s, %(render_version)s, %(decision)s, %(digest)s)
 RETURNING run_id, render_version;
-
--- name: list_research_decisions
-SELECT run_id, response_id, render_version, decision, digest, created_at
-FROM research_decisions
-WHERE run_id = %(run_id)s
-ORDER BY created_at;
-
 
 -- Scoped reads (research_repository). Every read is limited to the run's pinned
 -- source manifest by the caller passing that manifest's source IDs; the WHERE
@@ -327,7 +315,6 @@ WHERE c.source_id = %(source_id)s
   AND c.chunk_index >= %(from_chunk)s
 ORDER BY c.chunk_index
 LIMIT %(limit)s;
-
 
 -- Research store transactions (research_store).
 

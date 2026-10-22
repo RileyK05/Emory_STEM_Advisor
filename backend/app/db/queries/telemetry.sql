@@ -30,13 +30,6 @@ ORDER BY (CASE WHEN model_id = %(model_id)s THEN 0 ELSE 1 END), effective_from D
          created_at DESC, schedule_id DESC
 LIMIT 1;
 
--- name: update_model_call_cost
-UPDATE model_calls
-SET schedule_id = %(schedule_id)s,
-    estimated_cost = %(estimated_cost)s,
-    cost_status = %(cost_status)s
-WHERE model_call_id = %(model_call_id)s;
-
 -- name: telemetry_usage_summary
 SELECT
     count(*) AS total_calls,
@@ -155,4 +148,3 @@ AND (%(provider)s = '' OR m.provider = %(provider)s)
 GROUP BY m.operation_id
 ORDER BY total_calls DESC
 LIMIT %(limit)s;
-

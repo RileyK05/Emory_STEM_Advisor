@@ -9,6 +9,3 @@ INSERT INTO debug_experiments (
 )
 RETURNING experiment_id, workspace_key, source_conversation_id, source_request_id, snapshot,
           state, created_at;
-
--- name: count_debug_experiments
-SELECT count(*) AS experiments FROM debug_experiments;

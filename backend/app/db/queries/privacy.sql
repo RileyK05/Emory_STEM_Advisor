@@ -8,13 +8,6 @@ INSERT INTO privacy_exports (
 -- name: lock_workspace_privacy
 SELECT pg_advisory_xact_lock(hashtextextended('privacy:' || %(workspace_key)s, 0));
 
--- name: update_privacy_export
-UPDATE privacy_exports
-SET status = %(status)s, manifest = %(manifest)s, download_token = %(download_token)s,
-    finished_at = %(finished_at)s, error = %(error)s
-WHERE export_id = %(export_id)s
-RETURNING *;
-
 -- name: get_privacy_export
 SELECT * FROM privacy_exports
 WHERE export_id = %(export_id)s;
@@ -201,4 +194,3 @@ WHERE scope_type = 'workspace' AND scope_id = %(workspace_key)s;
 
 -- name: delete_workspace_operations
 DELETE FROM operations WHERE workspace_key = %(workspace_key)s;
-

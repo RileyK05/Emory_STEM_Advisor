@@ -101,9 +101,3 @@ INSERT INTO program_rule_reviews (
 ) VALUES (
     %(review_id)s, %(release_id)s, %(reviewer_user_id)s, %(action)s, %(review_notes)s
 ) RETURNING *;
-
--- name: list_program_rule_reviews
-SELECT * FROM program_rule_reviews
-WHERE release_id = %(release_id)s
-ORDER BY created_at DESC;
-

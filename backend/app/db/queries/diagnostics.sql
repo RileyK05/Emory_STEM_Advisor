@@ -30,11 +30,6 @@ WHERE s.collection_id = %(collection_id)s
 SELECT run_id, operation_id, status, stop_reason FROM research_runs
 WHERE workspace_key = %(workspace_key)s ORDER BY created_at DESC LIMIT 5;
 
--- name: diagnostic_research_tool_results
-SELECT call_id, tool_id, status, result_json FROM tool_executions
-WHERE operation_id = %(operation_id)s AND workspace_key = %(workspace_key)s
-ORDER BY created_at;
-
 -- name: diagnostic_keyword_weighted
 SELECT c.chunk_id, c.source_id, c.chunk_index,
        ts_rank_cd(c.search_vector, to_tsquery('english', %(q)s), 32)

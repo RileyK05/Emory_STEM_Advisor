@@ -102,22 +102,6 @@ WHERE (%(action)s = '' OR a.action = %(action)s)
 ORDER BY a.created_at DESC, a.audit_id DESC
 LIMIT %(limit)s;
 
--- name: admin_count_audit_filtered
-SELECT count(*) AS total
-FROM admin_audit a
-LEFT JOIN app_users u ON u.user_id = a.actor_user_id
-WHERE (%(action)s = '' OR a.action = %(action)s)
-  AND (%(target_type)s = '' OR a.target_type = %(target_type)s)
-  AND (%(target_id)s = '' OR a.target_id = %(target_id)s)
-  AND (%(actor)s = ''
-       OR a.actor_workspace = %(actor)s
-       OR (%(actor_user_id)s::uuid IS NOT NULL AND a.actor_user_id = %(actor_user_id)s::uuid)
-       OR lower(coalesce(u.email, '')) LIKE %(actor_like)s
-       OR lower(coalesce(u.display_name, '')) LIKE %(actor_like)s)
-  AND (%(since)s::timestamptz IS NULL OR a.created_at >= %(since)s::timestamptz)
-  AND (%(until)s::timestamptz IS NULL OR a.created_at <= %(until)s::timestamptz);
-
-
 -- name: admin_list_conversations
 SELECT c.conversation_id, c.workspace_key, c.title, c.last_sequence,
        c.pending_request_id, c.created_at, c.updated_at,
@@ -158,7 +142,6 @@ FROM sources
 WHERE (%(workspace)s = '' OR workspace_key = %(workspace)s)
 ORDER BY created_at DESC
 LIMIT %(limit)s OFFSET %(offset)s;
-
 
 -- name: admin_list_user_sessions
 SELECT created_at, expires_at, revoked_at

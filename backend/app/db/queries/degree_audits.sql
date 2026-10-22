@@ -43,12 +43,6 @@ WHERE p.is_active
   AND coalesce(provenance.metadata_revision, 0) = release.source_metadata_revision
 ORDER BY p.title, p.program_id;
 
--- name: mark_degree_audit_stale
-UPDATE public.degree_audits
-SET is_stale = true
-WHERE audit_id = %(audit_id)s
-RETURNING audit_id, is_stale;
-
 -- name: insert_audit_rule_evaluation
 INSERT INTO public.audit_rule_evaluations (
     evaluation_id, audit_id, node_id, parent_node_id, node_type, title,
@@ -70,4 +64,3 @@ SELECT evaluation_id, audit_id, node_id, parent_node_id, node_type, title,
 FROM public.audit_rule_evaluations
 WHERE audit_id = %(audit_id)s
 ORDER BY raw_position ASC NULLS LAST, node_id ASC;
-

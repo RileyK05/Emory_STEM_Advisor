@@ -29,11 +29,6 @@ INSERT INTO eval_candidates (candidate_id, redacted_prompt, redacted_expected, s
 VALUES (%(candidate_id)s, %(redacted_prompt)s, %(redacted_expected)s, %(source_feedback_id)s)
 RETURNING candidate_id, redacted_prompt, redacted_expected, source_feedback_id, created_at;
 
--- name: get_eval_candidate
-SELECT candidate_id, redacted_prompt, redacted_expected, source_feedback_id, created_at
-FROM eval_candidates
-WHERE candidate_id = %(candidate_id)s;
-
 -- name: get_response_feedback_for_update
 SELECT feedback_id, workspace_key, response_id, revision, vote, reason_code, comment,
        issue_type, triage_status, triage_revision, is_current, created_at
