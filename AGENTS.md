@@ -1,194 +1,82 @@
 # AGENTS.md
 
-RAG advisor (Python backend + React frontend). The data layer is built
-(keyword, embeddings, prerequisite graph, similarity graph; fusion, traces,
-eval runner). An HTTP API serves retrieval, grounded answer generation,
-sources, and recommendations; the frontend runs on a mock client by default
-and has a real `HttpClient`. An optional research advisor (migrations 037–040,
-`ADVISING_RESEARCH_ENABLED`) compares programs and documents under a pinned
-source scope and returns a typed, evidence-linked decision. `docs/architecture.md`
-is the single design doc and the contract that new code and the frontend API
-types must match. It
-folds in the Stacks provenance notes and an appendix of prior-system failure
-modes; there is no separate build plan.
+RAG advisor for Emory STEM students: a Python backend (FastAPI, Postgres +
+pgvector) and a React frontend. `docs/architecture.md` is the design contract
+that new code and the frontend API types must match; `docs/plans/` holds active
+plans and `docs/audit/` the review status.
 
 ## Layout / entrypoints
 
-- `backend/app/` — Python package.
-  - `llm/`, `embeddings/` — provider seams. Each has `base.py` (Protocol),
-    `factory.py` (the only place concrete providers are imported or
-    instantiated), with local and native API implementations. Never import a
-    concrete provider outside its factory.
-  - `db/` — `connection.py` (the only place psycopg connects: `connect()`, plus
-    `connector(settings)`, the pooled factory the API and worker use; set
-    `DB_POOL_MAX_SIZE=0` to disable pooling), the migration
-    runner, and the named-query loader. Fresh installs apply `db/baseline/032_schema.sql`.
-    `db/legacy_migrations/001`–`032` is the immutable upgrade archive for existing
-    databases/backups. Future numbered changes start at `db/migrations/033_*.sql`;
-    the migration directory head is `072_course_lifecycle.sql`. Never edit an applied file or
-    the baseline. Every
-    SQL statement is a `-- name:` block in `db/queries/*.sql`; no inline SQL in
-    app code.
-  - `ingest/` — extract, normalize, locators, chunk, embed (`pipeline.py`),
-    verified source provenance (`provenance.py`), and the deterministic preparation
-    of explicitly reviewed advising documents (`advising_documents.py`).
-  - `atlas/` — course atlas records, the deterministic requisites parser, the
-    importer, and `catalog.py` (Coursedog catalog page -> atlas record).
-  - `advising/` — read-only, citation-scoped atlas/topic snapshots, the pure
-    deterministic prerequisite/corequisite sequence planner, mention comparison
-    (`comparison.py`), the scoped catalog reader (`catalog.py`), source/applicability
-    notices (`applicability.py`), the deterministic program-rule audit engine and
-    service (`audit_engine.py`, `audit_service.py`), and program comparison
-    (`comparison_service.py`). The research advisor's persisted data layer
-    (`research_repository.py` pins an immutable source/program manifest;
-    `research_store.py` records runs, steps, evidence and decisions;
-    `research_types.py` holds the bounded types). Missing evidence, alternatives
-    and conditions produce blockers. Never infer graph facts with a model; an
-    audit is a named program/cohort result, not a whole-degree or semester claim.
-  - `programs/` — program requirements: the official catalog PDF split per
-    program (`catalog_pdf.py`), department pages converted to Markdown
-    (`pages.py`, ingested as ordinary documents), the deterministic parser
-    (`requirements.py`) that keeps each requirement line raw and reads off course
-    codes and explicit "choose N" counts into `programs` / `program_items` /
-    `program_course_mentions` (migration 031), and the exact-identity binder
-    (`binding.py`, `importer.py`) that ties each program to the source revision it
-    was parsed from. `rules.py` and `review_service.py` hold the reviewed
-    executable rule releases and approval workflow. Never feeds the prerequisite
-    graph; no model.
-  - `retrieval/` — config loader, seams (`keyword`, `embed`, `prereq`),
-    fusion, trace, `retrieve()`, eval runner, and the scoped catalog
-    `directory` that opt-in query planning (`generation/query_plan.py`,
-    `QUERY_PLANNING_ENABLED`) reads before retrieval.
-  - `generation/` — assembles the grounded answer prompt and maps the model's
-    inline citations back to chunks, plus the research loop
-    (`research_controller.py`, `research_tools.py`, `research_final.py`), factual
-    claim units (`claims.py`), and opt-in query planning (`query_plan.py`). Calls
-    the provider seam; never imports a concrete provider.
-  - `api/` — FastAPI app factory, shared dependencies, serializers, and
-    request/response schemas (mirroring
-    `frontend/src/api/types.ts`). Route modules live in `api/routes/`, grouped
-    by feature (`corpus`, `artifacts`, `conversations`, `connections`, and so on).
-    JSON routes declare a `response_model` from `schemas.py`; those models are
-    `extra="allow"` and routes use `response_model_exclude_unset=True`, so a
-    handler's omitted keys stay omitted and unknown keys pass through. Model
-    names match the TypeScript interfaces, and `tests/test_contract_drift.py`
-    fails when their field sets diverge. Routes that return files, redirects,
-    or a hand-built `JSONResponse` (headers) have no model. The API
-    process and the job worker both build their provider, embedder, retrieval
-    config, and connection runtime through `app/runtime.build_runtime` (the only
-    caller of the provider and embedder factories outside scripts); `create_app`
-    stores the result on `app.state`.
-  - `auth/` — server-side sessions and OIDC login; `get_principal` is the one
-    authentication dependency, with the student/advisor/admin/auditor capability
-    matrix and scoped support grants (`capabilities.py`, `grants.py`). The job
-    worker purges expired login rows and long-revoked sessions hourly
-    (`auth/housekeeping.py`). `connections/` — encrypted provider connection
-    profiles, evaluated routing selection, and the profile runtime.
-  - `admin/` — institutional user/role store, audited admin reads and destructive
-    actions (conversation delete, job cancel, empty-collection CRUD), source
-    review/lifecycle, catalog-refresh batches, prompt versions, the invalidation
-    consumer, and the admin API's data layer. `debug/` — the allowlisted runtime
-    override registry, scoped admin debug sessions, and request-scoped
-    application of those overrides. Neither exposes secrets, auth, database, or
-    routing credentials.
-  - `jobs/` — persistent job store and worker runtime, the dependent artifact
-    run plans, and provider (batch) tracking. `operations/` — persisted
-    token/call/time budgets shared across a logical generation operation.
-  - `conversations/` — private persisted conversations, the streaming turn
-    worker, and debug experiment records (`experiments.py`). `gaps/` —
-    human-reviewed retrieval gaps and feedback triage (`feedback.py`).
-  - `records/` — revisioned academic records, deterministic CSV import, and
-    staff verification. Student-provided or imported facts stay unverified until
-    an authorized institutional action. `privacy/` — owner-scoped exports,
-    expiring downloads, deletion, and retention handling. `quotas/` — per-student
-    query/token/spend reservations and settlements.
-  - `flags/` — cohort/workspace feature policy with environment ceilings.
-    `pricing/` — dated model price schedules and cost/cache accounting.
-    `observability/` — loopback metrics and alert evaluation.
-    `storage/` — local/dual storage seam and object metadata; a remote Blob
-    provider is still a deployment gate.
-  - `artifacts/` — native document/workbook/HTML specs, immutable revisions,
-    import/export (Markdown, DOCX, XLSX), and opt-in HTML visual review
-    (`visual_review.py`: request a bounded screenshot from the dedicated
-    browser sandbox, send it to a vision-capable profile, apply one validated
-    correction). `tools/` — allowlisted typed model
-    tools and their execution ledger. `sandbox/` — disposable isolated
-    execution (Docker/gVisor runner, remote worker, Office conversion).
-  - `ops/` — readiness probe and `backup.py` (checksummed database plus
-    original-file backup/restore). `util/` — shared low-level helpers
-    (`digest.json_digest`/`canonical_json_bytes`, `workspace` key rule).
-  - `simgraph/` — department topic graph: fixed department membership, within-department
-    clustering, human nudges, goal exploration, containment tree view. No lateral
-    course similarity links. `configs/departments.toml` configures fixed membership.
-- `backend/configs/` — `retrieval.toml` (versioned tunables; unknown keys are
-  errors), `routing.toml` (task-to-model-role routing signals),
-  `simgraph_nudges.toml` (hand-written cluster nudges), and
-  `programs.toml` (hand-picked department requirement pages),
-  `advising_sources.toml` (the reviewed allowlist for the local advising-upload
-  pilot; unlisted files are excluded), and `catalog-directory.md` (the supplied
-  discovery directory for LLM planning; not citable evidence).
-- `backend/scripts/` — `scrape_catalog`, `scrape_programs`, `import_programs`,
-  `ingest`, `import_atlas`, `build_simgraph`, `eval_retrieval`, `serve`,
-  `worker` (background jobs), `migrate`, `backup`, `rotate_profile_key`,
-  `schema_baseline` (disposable schema parity check), `restore_consolidated`
-  (verified backup into a new embedded baseline database),
-  `reconcile_source_origins` (explicit legacy program versions), and
-  `prepare_advising_documents` (prepare the reviewed advising-upload pilot;
-  `--check` validates the registry) (run with
-  `python -m scripts.<name>` from `backend/`). They use `DATABASE_URL`, or an
-  embedded `pgserver` database under `DATA_DIR/pgserver` when it is unset.
-  `scripts/smoke/` holds explicit model/service smoke checks, invoked as
-  `python -m scripts.smoke.<name>`. `scripts/manual/` holds one-off probes and
-  compatibility audits. These can load real models or use the network; never
-  add them to the test suite. Print diagnostics in the terminal; do not create status
-  reports or saved test output unless the user requests them.
-- `backend/tests/` — fast tests. They never load models or touch the network
-  (use `tests/fakes.py`; shared helpers such as `ingest_text` and `api_client`
-  are in `tests/helpers.py`). Any test that requests `db`, `collection`,
-  `migrated_dsn` or `pg_dsn` is auto-marked `db` and runs against a real
-  Postgres: a temporary `pgserver` instance, or `TEST_DATABASE_URL` if set. A
-  skipped DB test is a failure. `DATA_DIR` is pointed at a temp dir for the
-  session. The `db` fixture cleans only the tables a test wrote to (a `DELETE`
-  with foreign keys off; it falls back to `TRUNCATE` without superuser), so
-  persistent-store tests using fresh connections through `migrated_dsn` must
-  also request the `db` fixture so their committed rows are cleaned up. Tests
-  that change the schema or migration history use `isolated_database` in
-  `test_db_migrate.py`, never the shared session database.
-  Real HTTP transports are blocked in pytest; inject a mock transport instead.
-- `frontend/src/api/` — `types.ts` mirrors the architecture doc; `client.ts`
-  is the single factory the app uses. `VITE_API_MODE` selects `mock` (default)
-  or `http`; `HttpClient` implements the workspace-scoped HTTP contract.
-- `frontend/src/admin/` and `frontend/src/debug/` — separate Vite entry bundles
-  for the Admin and Debug surfaces; they share `SessionGate`, `Shell`, and the
-  API client with Main but are not shipped in its entry. `src/app/SessionGate.tsx`
-  is the shared authentication gate. The Admin bundle manages users/roles,
-  audited inspection, support grants, source/program review, catalog-refresh
-  batches, flags/cohorts, feedback triage, prompt promotion, experiments,
-  privacy, and telemetry; the Debug bundle owns an expiring scoped override
-  session and its test chat.
-- `frontend/src/components/` — one chat with artifacts made from it. `shell/`
-  is the layout (top bar, sidebar, dialogs, the mascot theme switch: Swoop =
-  light Emory blue/gold, Dooley = dark black/white). `chat/` has a single
-  `ChatController` with two engines: `useSavedChat` (HTTP conversations,
-  streamed turns, never replayed) and `useDemoChat` (mock, stateless query,
-  nothing saved). `artifact/` is the side panel, editor canvas, and generation
-  dialogs; which chat an artifact belongs to is kept in browser storage plus the
-  artifacts a message referenced. `source/` is the sources and explore dialogs;
-  `batch`, `gap`, and `connection` render inside the Tools dialog; `records/`,
-  `audits/`, `feedback/`, and `privacy/` hold the student workflows added with
-  the completion plan. Pure helpers in `artifact/*.ts` are unit-tested directly.
+- `backend/app/` — the Python package. Rules that span packages:
+  - `llm/`, `embeddings/` — provider seams: `base.py` (Protocol) and `factory.py`,
+    the only place concrete providers are imported or instantiated. The API and
+    the job worker build providers, embedder, retrieval config and connection
+    runtime through `app/runtime.build_runtime`.
+  - `db/` — `connection.py` is the only place psycopg connects (`connect()`, and
+    `connector(settings)`, the pooled factory; `DB_POOL_MAX_SIZE=0` disables
+    pooling). Fresh installs apply `db/baseline/032_schema.sql`;
+    `db/legacy_migrations/` is the immutable upgrade archive; numbered changes
+    live in `db/migrations/` and the highest number there is the head. Never edit
+    the baseline or an applied migration. Every SQL statement is a `-- name:`
+    block in `db/queries/*.sql`; no inline SQL in app code.
+  - `api/` — app factory, dependencies (`deps.py`: connections, admin-panel
+    gates), routes grouped by feature in `api/routes/`, and `schemas.py`, which
+    mirrors `frontend/src/api/types.ts`. JSON routes declare a `response_model`
+    (`extra="allow"`, `response_model_exclude_unset=True`); model names match the
+    TypeScript interfaces and `tests/test_contract_drift.py` fails when their
+    field sets diverge.
+  - Deterministic data: `atlas/` (course records, the requisites parser,
+    importer, `course_writer.course_uuid`), `programs/` (catalog PDF split, page
+    conversion, requirement parser, exact-source binding, reviewed rule
+    releases), `advising/` (citation-scoped snapshots, the sequence planner,
+    program audit engine, comparisons, research advisor data layer),
+    `simgraph/` (fixed departments → learned topics → courses; no lateral
+    course links). None of these call a model.
+  - Generation: `retrieval/` (seams, fusion, traces, eval runner, catalog
+    directory), `generation/` (grounded answers and citation mapping, the
+    research loop, query planning, claim review), `tools/`, `operations/`
+    (shared token/call/time budgets), `jobs/` (job store, worker runtime,
+    dependent runs, provider batches), `conversations/`, `artifacts/`,
+    `sandbox/` (isolated Office/HTML execution on a separate worker).
+  - Accounts and governance: `auth/` (`get_principal` is the one authentication
+    dependency; capabilities and support grants), `connections/` (encrypted
+    provider profiles, evaluated routing), `admin/`, `debug/` (allowlisted,
+    expiring overrides), `records/`, `privacy/`, `quotas/`, `flags/`,
+    `pricing/` (price schedules; `record_model_call` writes every model_calls
+    row), `gaps/`, `observability/`, `ops/` (readiness, backup).
+  - `storage/` — local/blob/dual-read storage seam and `storage_objects`
+    queries. Deliberately not wired in yet: groundwork for Azure hosting.
+- `backend/configs/` — `retrieval.toml` (unknown keys are errors),
+  `routing.toml`, `simgraph_nudges.toml` and `departments.toml` (hand-written),
+  `programs.toml`, `advising_sources.toml` (the reviewed upload allowlist), and
+  `catalog-directory.md` (planning directory; not citable evidence).
+- `backend/scripts/` — run as `python -m scripts.<name>` from `backend/`; they
+  use `DATABASE_URL`, or an embedded `pgserver` under `DATA_DIR/pgserver`.
+  `scripts/smoke/` (real models/services) and `scripts/manual/` (reusable
+  diagnostics) may load models or use the network; never add them to the test
+  suite. Print diagnostics in the terminal; do not create status reports or saved
+  test output unless the user requests them.
+- `backend/tests/` — fast tests that never load models or touch the network.
+  Shared fakes are in `tests/fakes.py` and helpers (`ingest_text`, `api_client`,
+  `create_user`, `lenient_config`) in `tests/helpers.py`. Any test requesting
+  `db`, `collection`, `migrated_dsn` or `pg_dsn` runs against a real Postgres (a
+  temporary `pgserver`, or `TEST_DATABASE_URL`); a skipped DB test is a failure.
+  The `db` fixture cleans only the tables a test wrote to, so tests using fresh
+  connections through `migrated_dsn` must also request `db`. Tests that change
+  the schema or migration history use `isolated_database` in
+  `test_db_migrate.py`. Real HTTP transports are blocked; inject a mock transport.
+- `frontend/src/` — `api/` (`types.ts` mirrors the contract, `client.ts` is the
+  single factory; `VITE_API_MODE` selects `mock` (default) or `http`), `admin/`
+  and `debug/` (separate Vite entry bundles sharing `SessionGate`, `Shell` and
+  the API client), `components/` (one chat with artifacts made from it;
+  `shell/` holds the Swoop = light Emory blue/gold, Dooley = dark black/white
+  theme switch), `lib/` (shared hooks such as `useAsyncAction`, `useLoad`).
   `frontend/tests/fixtures/` holds the offline real-API browser test server.
-- `data/` — gitignored: raw uploads, the dev database, atlas files
-  (`data/atlas/*.jsonl`), eval set (`data/eval/retrieval.jsonl`).
+- `data/` — gitignored: uploads, the dev database, atlas files, eval sets,
+  personal review notes.
 - `sandbox/` and `compose.yaml` — worker/sandbox images and the local compose
-  stack (see `sandbox/WORKER.md`).
-- `infra/` and `deploy/` — the Azure base: Bicep for Container Apps, PostgreSQL
-  Flexible Server + pgvector, storage, Key Vault and monitoring; production
-  API/worker/migrate and nginx images; and the two-phase
-  `deploy/azure/deploy.sh` (see `infra/README.md`). Public ingress, Azure Files
-  for `DATA_DIR`, and the existing OIDC adapter are deliberate base limitations.
-- `docs/` — `architecture.md` (the one design contract), `plans/` (requested
-  implementation handoffs), and `audit/` (existing review findings).
+  stack (see `sandbox/WORKER.md`). `infra/` and `deploy/` — the Azure base
+  (see `infra/README.md`).
 
 ## Hard rule: the prerequisite graph is deterministic
 
@@ -235,10 +123,13 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.import_atlas --collection NAME FILE
 ../.venv/Scripts/python -m scripts.reconcile_atlas               # prepare Atlas-primary JSONL from verified saved captures
 ../.venv/Scripts/python -m scripts.reconcile_atlas --publish     # publish Atlas-primary records; retains labeled catalog fallbacks
+../.venv/Scripts/python -m scripts.ingest_offerings --captures DIR --career NAME --collection NAME [--publish]   # term offerings
 ../.venv/Scripts/python -m scripts.build_simgraph --collection NAME [--nudges FILE]
 ../.venv/Scripts/python -m scripts.prepare_advising_documents           # reviewed uploads -> data/staging/
 ../.venv/Scripts/python -m scripts.eval_retrieval [--cases FILE]
 ../.venv/Scripts/python -m scripts.serve                 # HTTP API on :8000
+../.venv/Scripts/python -m scripts.worker                # background jobs and saved conversation turns
+../.venv/Scripts/python -m scripts.load_test --scenario query --requests 200 --concurrency 20   # fake-model load harness
 ../.venv/Scripts/python -m scripts.schema_baseline       # baseline == legacy final schema, disposable DBs
 ../.venv/Scripts/python -m scripts.restore_consolidated BACKUP --data-dir NEW_DIRECTORY
 ../.venv/Scripts/python -m scripts.smoke.local_model    # slow, downloads weights
@@ -256,7 +147,8 @@ Frontend (from `frontend/`):
 npm run dev         # Vite dev server
 npm run typecheck   # tsc --noEmit
 npm run build       # tsc --noEmit && vite build — type errors fail the build
-npm test            # offline client and Chromium behavior checks
+npm run test:unit   # source-level client and artifact-module suites (seconds)
+npm test            # test:unit, then a browser-test build and the Chromium checks
 npm run test:integration # real API/Postgres/Chromium, offline fake models
 npm run format:check    # Prettier over src/**/*.{ts,tsx}; `npm run format` fixes
 ```
@@ -291,8 +183,9 @@ npm run format:check    # Prettier over src/**/*.{ts,tsx}; `npm run format` fixe
   dependencies accept 4.38.2. Do not change either without re-validating.
   Granite loads only a fixed, trusted module assembly and safetensors weights;
   never restore generic model-authored module loading.
-- All env config is in `backend/app/config.py`; nothing model-specific is
-  hardcoded. Defaults: `LLM_PROVIDER=hf-local` (MiniCPM-2B-128k),
+- All backend env config is in `backend/app/config.py` (the separate sandbox
+  host reads its own `SANDBOX_*` variables in `sandbox/host_app.py`); nothing
+  model-specific is hardcoded. Defaults: `LLM_PROVIDER=hf-local` (MiniCPM-2B-128k),
   `EMBEDDING_PROVIDER=granite` (`granite-embedding-125m-english`, 512-token
   ceiling), `DATABASE_URL` unset (embedded `pgserver`), `DATA_DIR=data/`.
   Embedders default to CPU and L2-normalize output.

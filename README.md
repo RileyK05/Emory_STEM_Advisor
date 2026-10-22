@@ -37,7 +37,14 @@ Use the Vite origin (http://localhost:5173) to reach the API through its proxy. 
 
 The backend image runs as root with `--reload` on 0.0.0.0 as development scaffolding only. Do not deploy it as-is; a production image must run as a non-root user without the reloader.
 
-The Docker stack is development scaffolding and has not been exercised on this machine. The backend dependency resolver and installed-environment `pip check` pass with `sentence-transformers==3.0.1` and the MiniCPM-required `transformers==4.38.2`. The guarded Granite loader was revalidated against the previous embedding baseline with identical CPU vectors, ranking, and token boundaries. A fresh Docker build and Linux runtime checks remain required.
+`transformers==4.38.2` and `sentence-transformers==3.0.1` are pinned on purpose (see AGENTS.md); a fresh Docker build and Linux runtime check are still pending.
+
+## Run without Docker
+
+From the repository root, with the project venv active, `python dev.py` starts the
+worker, the Vite dev server and the API (embedded Postgres when `DATABASE_URL` is
+unset), and points the frontend at the API by writing `frontend/.env.local`.
+Ctrl-C stops all three and shuts Postgres down cleanly.
 
 The image is intended to install CPU-only PyTorch without downloading model weights during build; the first model-backed request may download them. Configure provider settings through a root `.env` copied from [.env.example](.env.example). Never commit keys or credentials.
 
@@ -95,7 +102,7 @@ development convenience and is not the deployed path.
 
 Fresh databases apply [032_schema.sql](backend/app/db/baseline/032_schema.sql)
 once, followed by the post-baseline
-[migrations](backend/app/db/migrations/) (`033`–`069`).
+[migrations](backend/app/db/migrations/) (`033` onward).
 Existing databases and backups keep their original migration history and upgrade
 through the byte-preserved [legacy archive](backend/app/db/legacy_migrations/),
 then the same post-baseline migrations. Neither path requires resetting the database.
@@ -122,7 +129,7 @@ The repository does not commit catalog, program, or eval data. From `backend/`,
 the following rebuilds the same corpus a teammate can verify against:
 
 ```powershell
-python -m scripts.migrate                                   # reaches migration 069
+python -m scripts.migrate                                   # applies every pending migration
 python -m scripts.scrape_programs --skip-departments       # catalog PDF -> data/programs/catalog/
 python -m scripts.ingest --collection NAME --origin-manifest ../data/programs/ingest-manifest.json ../data/programs/catalog/*
 python -m scripts.import_programs --collection NAME        # after ingest: binds programs to their sources
