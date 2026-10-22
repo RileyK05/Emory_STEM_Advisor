@@ -1,15 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { listFeedbackTriage, promoteEvalCandidate, recordFeedbackTriage } from '../api/backoffice';
 import type { EvalCandidatePromotionResponse, FeedbackTriageListItem, FeedbackTriageResponse } from '../api/types';
-import { errorMessage } from '../lib/errors';
+import { useAsyncAction } from '../lib/useAsyncAction';
+import { useLoad } from '../lib/useLoad';
 
 type IssueType = 'missing_evidence' | 'provider' | 'explanation' | 'privacy' | 'ui';
 
 export function FeedbackTriagePanel() {
   const [items, setItems] = useState<FeedbackTriageListItem[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(true);
   const [feedbackId, setFeedbackId] = useState('');
   const [issueType, setIssueType] = useState<IssueType>('missing_evidence');
   const [note, setNote] = useState('');
@@ -25,29 +23,19 @@ export function FeedbackTriagePanel() {
   const [candidate, setCandidate] = useState<EvalCandidatePromotionResponse | null>(null);
   const [lastAction, setLastAction] = useState<'load' | 'record' | 'promote'>('load');
 
-  const load = async () => {
+  const action = useAsyncAction();
+  const { error, notice, setNotice, run } = action;
+  const { loading, reload } = useLoad(listFeedbackTriage, [], { onLoad: setItems, setError: action.setError });
+  const busy = action.busy || loading;
+
+  const load = () => {
     setLastAction('load');
-    setBusy(true);
-    setError(null);
-    try {
-      setItems(await listFeedbackTriage());
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    return reload();
   };
 
-  useEffect(() => {
-    void load();
-  }, []);
-
-  const record = async () => {
+  const record = () => {
     setLastAction('record');
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+    return run(async () => {
       const row = await recordFeedbackTriage({
         feedbackId: feedbackId.trim(),
         issueType,
@@ -62,35 +50,29 @@ export function FeedbackTriagePanel() {
       setTriage(row);
       setExpectedTriageRevision(String(row.triageRevision));
       setNotice('Feedback triage recorded.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   const promote = async () => {
     if (!triage) return;
     setLastAction('promote');
-    setBusy(true);
-    setError(null);
-    try {
-      const row = await promoteEvalCandidate({
-        feedbackId: triage.feedbackId,
-        redactedPrompt: redactedPrompt.trim(),
-        redactedExpected: redactedExpected.trim(),
-        sourceId: sourceId.trim(),
-        traceId: traceId.trim(),
-        collectionId: collectionId.trim(),
-        reReview: false,
-      });
-      setCandidate(row);
-      setNotice('Redacted eval candidate saved.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    await run(
+      async () => {
+        setCandidate(
+          await promoteEvalCandidate({
+            feedbackId: triage.feedbackId,
+            redactedPrompt: redactedPrompt.trim(),
+            redactedExpected: redactedExpected.trim(),
+            sourceId: sourceId.trim(),
+            traceId: traceId.trim(),
+            collectionId: collectionId.trim(),
+            reReview: false,
+          }),
+        );
+        setNotice('Redacted eval candidate saved.');
+      },
+      { keepNotice: true },
+    );
   };
 
   return (

@@ -1,62 +1,46 @@
 import { useEffect, useState } from 'react';
 import { getClient } from '../../api/client';
 import type { PrivacyExportDownloadResponse, PrivacyExportResponse } from '../../api/types';
-import { errorMessage } from '../../lib/errors';
+import { useAsyncAction } from '../../lib/useAsyncAction';
 
 export function PrivacyPanel() {
   const [exports, setExports] = useState<PrivacyExportResponse[] | null>(null);
   const [created, setCreated] = useState<PrivacyExportResponse | null>(null);
   const [download, setDownload] = useState<PrivacyExportDownloadResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, run } = useAsyncAction();
   const [lastAction, setLastAction] = useState<'load' | 'create' | 'download'>('load');
 
-  const load = async () => {
+  const load = () => {
     setLastAction('load');
-    setBusy(true);
-    setError(null);
-    setExports(null);
-    try {
-      setExports(await getClient().listPrivacyExports());
-    } catch (cause) {
-      setError(errorMessage(cause));
-      setExports([]);
-    } finally {
-      setBusy(false);
-    }
+    return run(async () => {
+      setExports(null);
+      try {
+        setExports(await getClient().listPrivacyExports());
+      } catch (cause) {
+        setExports([]);
+        throw cause;
+      }
+    });
   };
 
   useEffect(() => {
     void load();
   }, []);
 
-  const create = async () => {
+  const create = () => {
     setLastAction('create');
-    setBusy(true);
-    setError(null);
-    try {
+    return run(async () => {
       const row = await getClient().createPrivacyExport();
       setCreated(row);
       setExports((current) => [row, ...(current ?? []).filter((item) => item.exportId !== row.exportId)]);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   const saveDownload = async () => {
     if (!created?.downloadToken) return;
+    const { exportId, downloadToken } = created;
     setLastAction('download');
-    setBusy(true);
-    setError(null);
-    try {
-      setDownload(await getClient().downloadPrivacyExport(created.exportId, created.downloadToken));
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    await run(async () => setDownload(await getClient().downloadPrivacyExport(exportId, downloadToken)));
   };
 
   const retry = () => {

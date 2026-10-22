@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { getClient } from '../../api/client';
 import type { AuditableProgramItem, ProgramComparisonResponse, ProgramComparisonSummary } from '../../api/types';
-import { errorMessage } from '../../lib/errors';
+import { useAsyncAction } from '../../lib/useAsyncAction';
+import { useLoad } from '../../lib/useLoad';
 
 export function ProgramComparisonPanel() {
   const [programs, setPrograms] = useState<AuditableProgramItem[]>([]);
@@ -10,43 +11,22 @@ export function ProgramComparisonPanel() {
   const [secondId, setSecondId] = useState('');
   const [overlayCourse, setOverlayCourse] = useState('');
   const [detail, setDetail] = useState<ProgramComparisonResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const requestSeq = useRef(0);
+  const { busy, error, notice, setError, setNotice, run } = useAsyncAction();
 
-  const load = useCallback(async () => {
-    const seq = ++requestSeq.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const [programRows, comparisons] = await Promise.all([
-        getClient().listAuditablePrograms(),
-        getClient().listProgramComparisons(),
-      ]);
-      if (seq !== requestSeq.current) return;
-      setPrograms(programRows);
-      setSaved(comparisons);
-    } catch (cause) {
-      if (seq === requestSeq.current) setError(errorMessage(cause));
-    } finally {
-      if (seq === requestSeq.current) setLoading(false);
-    }
-  }, []);
+  const { loading, reload: load } = useLoad(
+    () => Promise.all([getClient().listAuditablePrograms(), getClient().listProgramComparisons()]),
+    [],
+    {
+      onLoad: ([programRows, comparisons]) => {
+        setPrograms(programRows);
+        setSaved(comparisons);
+      },
+      setError,
+    },
+  );
 
-  useEffect(() => {
-    void load();
-    return () => {
-      requestSeq.current += 1;
-    };
-  }, [load]);
-
-  const compare = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+  const compare = () =>
+    run(async () => {
       const row = await getClient().createProgramComparison({
         programIds: [firstId, secondId],
         addCourseCodes: overlayCourse.trim() ? [overlayCourse.trim()] : [],
@@ -54,12 +34,7 @@ export function ProgramComparisonPanel() {
       setDetail(row);
       setNotice('Program comparison saved.');
       await load();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   return (
     <section className="stack">

@@ -1,4 +1,5 @@
 import type { RetrievalGap, SourceDoc } from '../../api/types';
+import { formatTimestamp } from '../../lib/format';
 import { MAX_ATTESTED_SOURCES } from './useGapResolution';
 import type { GapDraft } from './useGapResolution';
 
@@ -72,7 +73,7 @@ export function GapItem({
               </p>
               <p>Sources: {gap.resolution.sourceIds.join(', ')}</p>
               {gap.resolution.note && <p>Reviewer note: {gap.resolution.note}</p>}
-              <p>Recorded {new Date(gap.resolution.resolvedAt).toLocaleString()}.</p>
+              <p>Recorded {formatTimestamp(gap.resolution.resolvedAt)}.</p>
             </div>
           ) : (
             <>

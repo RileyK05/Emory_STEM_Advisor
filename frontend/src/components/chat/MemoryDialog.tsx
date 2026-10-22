@@ -3,6 +3,7 @@ import { getClient } from '../../api/client';
 import type { ConversationMemoryInspection, ConversationSummaryCheckpoint } from '../../api/types';
 import { AlertIcon, CheckIcon } from '../icons';
 import { Dialog } from '../shell/Dialog';
+import { formatTimestamp } from '../../lib/format';
 
 interface Props {
   open: boolean;
@@ -184,9 +185,7 @@ export function MemoryDialog({ open, onClose, conversationId, onResetSuccess }: 
                   <span className="muted" style={{ display: 'block', marginBottom: '2px' }}>
                     Context Reset At
                   </span>
-                  <strong>
-                    {data.contextResetAt ? new Date(data.contextResetAt).toLocaleString() : 'Never reset'}
-                  </strong>
+                  <strong>{formatTimestamp(data.contextResetAt, 'Never reset')}</strong>
                 </div>
                 <div>
                   <span className="muted" style={{ display: 'block', marginBottom: '2px' }}>

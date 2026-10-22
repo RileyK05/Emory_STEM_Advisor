@@ -1,22 +1,17 @@
 import { useState } from 'react';
 import { startDebugExperiment } from '../api/backoffice';
 import type { DebugExperimentResponse } from '../api/types';
-import { errorMessage } from '../lib/errors';
+import { useAsyncAction } from '../lib/useAsyncAction';
 
 export function ExperimentPanel() {
   const [conversationId, setConversationId] = useState('');
   const [requestId, setRequestId] = useState('');
   const [query, setQuery] = useState('');
   const [experiment, setExperiment] = useState<DebugExperimentResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, notice, setNotice, run } = useAsyncAction();
 
-  const start = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+  const start = () =>
+    run(async () => {
       const row = await startDebugExperiment({
         conversationId: conversationId.trim(),
         requestId: requestId.trim(),
@@ -24,12 +19,7 @@ export function ExperimentPanel() {
       });
       setExperiment(row);
       setNotice('Debug experiment recorded.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   return (
     <section className="stack">

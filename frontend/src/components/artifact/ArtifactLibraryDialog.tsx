@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { getClient } from '../../api/client';
 import type { NativeArtifactSummary } from '../../api/types';
 import { errorMessage } from '../../lib/errors';
+import { useAsyncAction } from '../../lib/useAsyncAction';
 import { Dialog } from '../shell/Dialog';
 import { KIND_LABEL, KindIcon, RefreshIcon } from '../icons';
 
@@ -14,8 +15,7 @@ interface Props {
 
 function LibraryList({ onClose, onOpen }: Omit<Props, 'open'>) {
   const [items, setItems] = useState<NativeArtifactSummary[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, setError, run } = useAsyncAction();
 
   const refresh = async () => {
     setError(null);
@@ -29,18 +29,11 @@ function LibraryList({ onClose, onOpen }: Omit<Props, 'open'>) {
     void refresh();
   }, []);
 
-  const open = async (artifactId: string) => {
-    setBusy(true);
-    setError(null);
-    try {
+  const open = (artifactId: string) =>
+    run(async () => {
       await onOpen(artifactId);
       onClose();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   return (
     <div className="stack">

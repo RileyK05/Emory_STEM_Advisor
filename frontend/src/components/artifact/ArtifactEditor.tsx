@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getClient } from '../../api/client';
 import type { ArtifactPreview, DocumentSpec, NativeArtifactRecord, WorkbookSpec } from '../../api/types';
 import { useAsyncAction } from '../../lib/useAsyncAction';
+import { useIdempotencyKey } from '../../lib/useIdempotencyKey';
 import { useDismiss } from '../../lib/useDismiss';
 import { BackIcon, ChatIcon, CloseIcon, DownloadIcon, KIND_LABEL, KindIcon, SparkIcon } from '../icons';
 import { DocumentEditor } from './DocumentEditor';
@@ -105,8 +106,7 @@ export function ArtifactEditor({ record, onRecord, onBack, onClose, onAskChanges
   const [view, setView] = useState<'edit' | 'preview'>('edit');
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
   const { busy, error, notice, setNotice, run } = useAsyncAction();
-  // A retried save with an unchanged payload reuses its draft id so the server can dedupe it.
-  const draftIdRef = useRef<{ fingerprint: string; id: string } | null>(null);
+  const draftId = useIdempotencyKey();
 
   // Opening, saving, or reloading a record discards the preview and any per-revision editor state.
   useEffect(() => {
@@ -135,16 +135,12 @@ export function ArtifactEditor({ record, onRecord, onBack, onClose, onAskChanges
 
   /** Save the open artifact as a new revision; returns the saved record, or null if nothing changed. */
   const saveCurrent = async (current: NativeArtifactRecord): Promise<NativeArtifactRecord | null> => {
-    const saveWithId = async (payload: Record<string, unknown>) => {
-      const fingerprint = JSON.stringify({ artifactId: current.artifactId, parent: current.revisionId, payload });
-      if (!draftIdRef.current || draftIdRef.current.fingerprint !== fingerprint)
-        draftIdRef.current = { fingerprint, id: crypto.randomUUID() };
-      return getClient().saveArtifactRevision(current.artifactId, {
+    const saveWithId = (payload: Record<string, unknown>) =>
+      getClient().saveArtifactRevision(current.artifactId, {
         expectedParentRevisionId: current.revisionId,
         ...payload,
-        draftId: draftIdRef.current.id,
+        draftId: draftId.keyFor({ artifactId: current.artifactId, parent: current.revisionId, payload }),
       });
-    };
     if (current.spec.kind === 'workbook') {
       const operations = workbookEditOperations(current.spec, cellDrafts);
       if (!operations.length && !titleChanged) return null;
@@ -178,7 +174,7 @@ export function ArtifactEditor({ record, onRecord, onBack, onClose, onAskChanges
       const editedBlocks = edited?.changed.size ?? 0;
       const next = await saveCurrent(record);
       if (!next) return;
-      draftIdRef.current = null;
+      draftId.reset();
       onRecord(next);
       setNotice(
         editedBlocks

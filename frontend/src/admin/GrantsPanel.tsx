@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { GrantResourceType, ResourceGrant, SupportGrantRequest } from '../api/types';
 import {
   approveSupportGrantRequest,
@@ -8,7 +8,8 @@ import {
   revokeResourceGrant,
   updateSupportGrantRequest,
 } from '../api/backoffice';
-import { errorMessage } from '../lib/errors';
+import { useAsyncAction } from '../lib/useAsyncAction';
+import { useLoad } from '../lib/useLoad';
 
 const EMPTY_FORM = {
   targetWorkspaceKey: '',
@@ -24,34 +25,14 @@ export function GrantsPanel() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [requestId, setRequestId] = useState('');
   const [revision, setRevision] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const requestSeq = useRef(0);
-
-  const load = useCallback(async () => {
-    const seq = ++requestSeq.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const [requestRows, grantRows] = await Promise.all([listSupportGrantRequests(), listResourceGrants()]);
-      if (seq !== requestSeq.current) return;
+  const { busy, error, notice, setError, setNotice, run } = useAsyncAction();
+  const { loading, reload: load } = useLoad(() => Promise.all([listSupportGrantRequests(), listResourceGrants()]), [], {
+    onLoad: ([requestRows, grantRows]) => {
       setRequests(requestRows);
       setGrants(grantRows);
-    } catch (cause) {
-      if (seq === requestSeq.current) setError(errorMessage(cause));
-    } finally {
-      if (seq === requestSeq.current) setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-    return () => {
-      requestSeq.current += 1;
-    };
-  }, [load]);
+    },
+    setError,
+  });
 
   const payload = () => ({
     targetWorkspaceKey: form.targetWorkspaceKey.trim(),
@@ -61,11 +42,8 @@ export function GrantsPanel() {
     expiresAt: new Date(form.expiresAt).toISOString(),
   });
 
-  const submitRequest = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+  const submitRequest = () =>
+    run(async () => {
       const row =
         requestId && revision != null
           ? await updateSupportGrantRequest(requestId, { ...payload(), expectedRevision: revision })
@@ -74,44 +52,24 @@ export function GrantsPanel() {
       setRevision(row.revision);
       setNotice(row.status === 'pending' ? 'Support grant request saved.' : 'Support grant request updated.');
       await load();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   const approve = async () => {
     if (!requestId || revision == null) return;
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+    await run(async () => {
       const row = await approveSupportGrantRequest(requestId, { expectedRevision: revision });
       setRevision(row.revision);
       setNotice('Support grant approved.');
       await load();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
-  const revoke = async (grantId: string) => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+  const revoke = (grantId: string) =>
+    run(async () => {
       await revokeResourceGrant(grantId);
       setNotice('Support grant revoked.');
       await load();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   const disabled = busy || loading;
   const activeGrants = grants.filter((grant) => !grant.revokedAt);

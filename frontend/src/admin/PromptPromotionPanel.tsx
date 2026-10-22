@@ -6,7 +6,7 @@ import {
   savePromptFixture,
 } from '../api/backoffice';
 import type { PromptPromotionResponse, PromptVersionResponse } from '../api/types';
-import { errorMessage } from '../lib/errors';
+import { useAsyncAction } from '../lib/useAsyncAction';
 
 export function PromptPromotionPanel() {
   const [name, setName] = useState('');
@@ -15,66 +15,44 @@ export function PromptPromotionPanel() {
   const [fixtureText, setFixtureText] = useState('');
   const [version, setVersion] = useState<PromptVersionResponse | null>(null);
   const [promotion, setPromotion] = useState<PromptPromotionResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, notice, setNotice, run } = useAsyncAction();
 
-  const save = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+  const save = () =>
+    run(async () => {
       const row = await registerPromptVersion({ name: name.trim(), templateText });
       setVersion(row);
       setNotice('Prompt version saved.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   const approve = async () => {
     if (!version) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const row = await approvePromptVersion(version.versionId);
-      setVersion(row);
-      setNotice('Prompt review approved.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    await run(
+      async () => {
+        setVersion(await approvePromptVersion(version.versionId));
+        setNotice('Prompt review approved.');
+      },
+      { keepNotice: true },
+    );
   };
 
-  const fixture = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await savePromptFixture({ suiteName: suiteName.trim(), fixtureText });
-      setNotice('Eval fixture saved.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const fixture = () =>
+    run(
+      async () => {
+        await savePromptFixture({ suiteName: suiteName.trim(), fixtureText });
+        setNotice('Eval fixture saved.');
+      },
+      { keepNotice: true },
+    );
 
   const promote = async () => {
     if (!version) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const row = await promotePromptVersion(version.versionId, { suiteName: suiteName.trim() });
-      setPromotion(row);
-      setNotice('Prompt promotion published.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    await run(
+      async () => {
+        setPromotion(await promotePromptVersion(version.versionId, { suiteName: suiteName.trim() }));
+        setNotice('Prompt promotion published.');
+      },
+      { keepNotice: true },
+    );
   };
 
   return (

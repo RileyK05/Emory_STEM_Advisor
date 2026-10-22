@@ -13,7 +13,9 @@ import { AppProvider } from '../state/AppContext';
 import { Shell } from '../components/shell/Shell';
 import { TopBar } from '../components/shell/TopBar';
 import { SessionGate } from '../app/SessionGate';
-import { errorMessage } from '../lib/errors';
+import { formatTimestamp } from '../lib/format';
+import { useAsyncAction } from '../lib/useAsyncAction';
+import { useLoad } from '../lib/useLoad';
 
 const TOKEN_KEY = 'advisor-debug-session';
 
@@ -186,8 +188,8 @@ function DebugSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
   const [settingsValues, setSettingsValues] = useState<Values>({});
   const [retrievalValues, setRetrievalValues] = useState<Values>({});
   const [prompt, setPrompt] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(true);
+  const action = useAsyncAction();
+  const { error, run } = action;
 
   const applySession = useCallback((next: DebugSettingsResponse, value: DebugSession) => {
     const start = initialValues(next, value);
@@ -198,27 +200,15 @@ function DebugSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
     setPrompt(start.prompt);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    setBusy(true);
-    setError(null);
-    bootDebug()
-      .then((boot) => {
-        if (cancelled) return;
-        setDebugSessionToken(boot.token);
-        setToken(boot.token);
-        applySession(boot.registry, boot.session);
-      })
-      .catch((cause) => {
-        if (!cancelled) setError(errorMessage(cause));
-      })
-      .finally(() => {
-        if (!cancelled) setBusy(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [applySession]);
+  const { loading } = useLoad(bootDebug, [], {
+    onLoad: (boot) => {
+      setDebugSessionToken(boot.token);
+      setToken(boot.token);
+      applySession(boot.registry, boot.session);
+    },
+    setError: action.setError,
+  });
+  const busy = action.busy || loading;
 
   useEffect(() => () => setDebugSessionToken(null), []);
 
@@ -255,9 +245,7 @@ function DebugSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
 
   const save = async () => {
     if (!registry || !token) return;
-    setBusy(true);
-    setError(null);
-    try {
+    await run(async () => {
       const updated = await updateDebugSession(token, {
         overrides: {
           settings: changed(registry.settings, settingsValues),
@@ -266,43 +254,25 @@ function DebugSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
         systemPrompt: prompt === registry.defaultSystemPrompt ? null : prompt,
       });
       applySession(registry, updated);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   const reset = async () => {
     if (!registry || !token) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await updateDebugSession(token, { overrides: {}, systemPrompt: null });
-      applySession(registry, updated);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    await run(async () =>
+      applySession(registry, await updateDebugSession(token, { overrides: {}, systemPrompt: null })),
+    );
   };
 
-  const renew = async () => {
-    setBusy(true);
-    setError(null);
-    try {
+  const renew = () =>
+    run(async () => {
       if (token) await deleteDebugSession(token).catch(() => undefined);
       const created = await createDebugSession({ overrides: {}, systemPrompt: null });
       window.sessionStorage.setItem(TOKEN_KEY, created.token);
       setDebugSessionToken(created.token);
       setToken(created.token);
       if (registry) applySession(registry, created);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   if (tab === 'chat') {
     return (
@@ -382,7 +352,7 @@ function DebugSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
               values={retrievalValues}
               onChange={(name, value) => setRetrievalValues((current) => ({ ...current, [name]: value }))}
             />
-            {info && <p className="debug-hint">Session expires {new Date(info.expiresAt).toLocaleString()}.</p>}
+            {info && <p className="debug-hint">Session expires {formatTimestamp(info.expiresAt)}.</p>}
           </>
         )}
       </main>

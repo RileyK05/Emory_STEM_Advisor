@@ -6,19 +6,22 @@ interface LoadOptions<T> {
   onLoad: (value: T) => void;
   /** Error state the load clears on start and sets on failure (often shared with useAsyncAction). */
   setError: (message: string | null) => void;
+  /** While false, loads are skipped entirely (no loading state, no error reset). Defaults to true. */
+  enabled?: boolean;
 }
 
 /** Loads on mount and whenever `deps` change. Each call supersedes the previous one,
  *  so a slow earlier response can never overwrite a newer one. `reload` re-runs it. */
 export function useLoad<T>(load: () => Promise<T>, deps: DependencyList, options: LoadOptions<T>) {
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(options.enabled !== false);
   const seq = useRef(0);
   const latest = useRef({ load, ...options });
   latest.current = { load, ...options };
 
   const reload = useCallback(async () => {
-    const id = ++seq.current;
     const current = latest.current;
+    if (current.enabled === false) return;
+    const id = ++seq.current;
     setLoading(true);
     current.setError(null);
     try {
@@ -36,7 +39,7 @@ export function useLoad<T>(load: () => Promise<T>, deps: DependencyList, options
     return () => {
       seq.current += 1;
     };
-  }, [reload, ...deps]);
+  }, [reload, options.enabled, ...deps]);
 
   return { loading, reload };
 }

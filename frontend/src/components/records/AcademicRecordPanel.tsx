@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { getClient } from '../../api/client';
 import type { AcademicRecordAttemptItem, AcademicRecordImportBatchResponse } from '../../api/types';
-import { errorMessage } from '../../lib/errors';
+import { useAsyncAction } from '../../lib/useAsyncAction';
+import { useLoad } from '../../lib/useLoad';
 
 export function AcademicRecordPanel() {
   const [attempts, setAttempts] = useState<AcademicRecordAttemptItem[]>([]);
@@ -13,41 +14,19 @@ export function AcademicRecordPanel() {
   const [batch, setBatch] = useState<AcademicRecordImportBatchResponse | null>(null);
   const [rowGrade, setRowGrade] = useState('');
   const [historical, setHistorical] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const requestSeq = useRef(0);
+  const { busy, error, notice, setError, setNotice, run } = useAsyncAction();
   const importDirty = batch !== null && rowGrade !== String(batch.parsedRows?.[0]?.grade ?? '');
 
-  const load = useCallback(async () => {
-    const seq = ++requestSeq.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const row = await getClient().getAcademicRecord();
-      if (seq !== requestSeq.current) return;
+  const { loading, reload: load } = useLoad(() => getClient().getAcademicRecord(), [], {
+    onLoad: (row) => {
       setAttempts(row.attempts ?? []);
       setRevision(row.record.recordRevision);
-    } catch (cause) {
-      if (seq === requestSeq.current) setError(errorMessage(cause));
-    } finally {
-      if (seq === requestSeq.current) setLoading(false);
-    }
-  }, []);
+    },
+    setError,
+  });
 
-  useEffect(() => {
-    void load();
-    return () => {
-      requestSeq.current += 1;
-    };
-  }, [load]);
-
-  const saveAttempt = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+  const saveAttempt = () =>
+    run(async () => {
       await getClient().upsertAcademicAttempt({
         submittedCourseCode: course.trim(),
         term: term.trim(),
@@ -56,81 +35,63 @@ export function AcademicRecordPanel() {
       });
       setNotice('Course attempt saved.');
       await load();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
-  const preview = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const row = await getClient().previewAcademicImport({
-        filename: 'courses.csv',
-        rawContent: csv,
-        expectedRecordRevision: revision,
-      });
-      setBatch(row);
-      setRowGrade(String(row.parsedRows?.[0]?.grade ?? ''));
-      setNotice('Import preview ready.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const preview = () =>
+    run(
+      async () => {
+        const row = await getClient().previewAcademicImport({
+          filename: 'courses.csv',
+          rawContent: csv,
+          expectedRecordRevision: revision,
+        });
+        setBatch(row);
+        setRowGrade(String(row.parsedRows?.[0]?.grade ?? ''));
+        setNotice('Import preview ready.');
+      },
+      { keepNotice: true },
+    );
 
   const saveRows = async () => {
     if (!batch) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await getClient().updateAcademicImport(batch.batchId, {
-        expectedRecordRevision: revision,
-        corrections: [{ rowIndex: 0, grade: rowGrade }],
-      });
-      setBatch(updated);
-      setNotice('Import rows saved.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    await run(
+      async () => {
+        const updated = await getClient().updateAcademicImport(batch.batchId, {
+          expectedRecordRevision: revision,
+          corrections: [{ rowIndex: 0, grade: rowGrade }],
+        });
+        setBatch(updated);
+        setNotice('Import rows saved.');
+      },
+      { keepNotice: true },
+    );
   };
 
   const commit = async () => {
-    if (!batch?.previewDigest || importDirty) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await getClient().commitAcademicImport(batch.batchId, {
-        expectedRecordRevision: revision,
-        previewDigest: batch.previewDigest,
-      });
-      setNotice(`Import committed ${result.attemptsImported} attempt.`);
-      await load();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    const previewDigest = batch?.previewDigest;
+    if (!batch || !previewDigest || importDirty) return;
+    await run(
+      async () => {
+        const result = await getClient().commitAcademicImport(batch.batchId, {
+          expectedRecordRevision: revision,
+          previewDigest,
+        });
+        setNotice(`Import committed ${result.attemptsImported} attempt.`);
+        await load();
+      },
+      { keepNotice: true },
+    );
   };
 
-  const showPrior = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const prior = await getClient().getAcademicRecordRevision(Math.max(1, revision - 1));
-      const grades = (prior.attempts ?? []).map((row) => `${row.submittedCourseCode} ${row.grade ?? ''}`).join(', ');
-      setHistorical(grades || 'No attempts in that revision.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+  const showPrior = () =>
+    run(
+      async () => {
+        const prior = await getClient().getAcademicRecordRevision(Math.max(1, revision - 1));
+        const grades = (prior.attempts ?? []).map((row) => `${row.submittedCourseCode} ${row.grade ?? ''}`).join(', ');
+        setHistorical(grades || 'No attempts in that revision.');
+      },
+      { keepNotice: true },
+    );
 
   return (
     <section className="stack" aria-label="Academic record">

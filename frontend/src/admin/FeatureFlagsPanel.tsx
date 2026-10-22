@@ -13,6 +13,7 @@ import {
   setAdminFlagOverride,
 } from '../api/backoffice';
 import { errorMessage } from '../lib/errors';
+import { useAsyncAction } from '../lib/useAsyncAction';
 
 export function FeatureFlagsPanel() {
   const [flags, setFlags] = useState<FeatureFlagSummary[]>([]);
@@ -30,10 +31,8 @@ export function FeatureFlagsPanel() {
   const [userQuery, setUserQuery] = useState('');
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [userId, setUserId] = useState('');
-  const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const { busy, error, notice, setError, setNotice, run } = useAsyncAction();
   const requestId = useRef(0);
 
   const load = useCallback(async () => {
@@ -66,20 +65,22 @@ export function FeatureFlagsPanel() {
     };
   }, [load]);
 
-  const mutate = async (action: () => Promise<unknown>, message: string) => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+  const mutate = (action: () => Promise<unknown>, message: string) =>
+    run(async () => {
       await action();
       await load();
       setNotice(message);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
+
+  const searchUsers = () =>
+    run(
+      async () => {
+        setUsers(await listAdminUsers({ query: userQuery.trim(), limit: 50 }));
+        setUserId('');
+      },
+      { keepNotice: true },
+    );
+
   const flag = flags.find((row) => row.flagName === selected);
   const target = scopeType === 'global' ? '*' : scopeId.trim();
   const existing = overrides.find((row) => row.scopeType === scopeType && row.scopeId === target);
@@ -299,15 +300,7 @@ export function FeatureFlagsPanel() {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          setBusy(true);
-          setError(null);
-          void listAdminUsers({ query: userQuery.trim(), limit: 50 })
-            .then((rows) => {
-              setUsers(rows);
-              setUserId('');
-            })
-            .catch((cause) => setError(errorMessage(cause)))
-            .finally(() => setBusy(false));
+          void searchUsers();
         }}
       >
         <label>

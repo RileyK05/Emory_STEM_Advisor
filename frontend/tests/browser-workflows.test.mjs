@@ -243,13 +243,21 @@ test.after(async () => {
   await Promise.all(tempFiles.map((file) => unlink(file).catch(() => {})));
 });
 
+/** Routes that answer after a short pause so their loading states can be observed. */
+const SLOW_ROUTES = new Set([
+  'GET /api/academic-record',
+  'GET /api/comparisons',
+  'GET /api/feedback/triage',
+  'GET /api/audits',
+  'GET /api/admin/grant-requests',
+  'GET /api/admin/sources/src-1/review',
+]);
+
 async function setupPage({
   entry = '/',
-  failFirstRunPoll = false,
   importedRecord = null,
   connectionAdmin = false,
   initialSession = null,
-  failFirstSessionCheck = false,
   initialArtifacts = [],
   initialConversations = [],
   initialConversationRecords = [],
@@ -260,34 +268,19 @@ async function setupPage({
   unauthenticatedOnSources = false,
   initialGaps = [],
   gapConflictOnce = false,
-  runConflictOnce = false,
   pinnedRunRevision = false,
   saveDelayMs = 0,
   conversationCreateDelayMs = 0,
   initialAdminUsers = null,
   initialAdminCollections = null,
-  failLastAdminOnce = false,
   debugSessionExpired = false,
   sessionStorageEntries = null,
   effectiveFlags = { memory_inspector: true, advising_summary_export: true },
-  flagConflictOnce = false,
-  grantFailOnce = false,
-  grantConflictOnce = false,
-  reviewFailOnce = false,
-  reviewConflictOnce = false,
-  recordFailOnce = false,
-  recordConflictOnce = false,
-  auditFailOnce = false,
-  comparisonFailOnce = false,
-  refreshConflictOnce = false,
-  feedbackConflictOnce = false,
-  triageFailOnce = false,
-  triageConflictOnce = false,
-  experimentConflictOnce = false,
-  privacyFailOnce = false,
   sameNameCitation = false,
   conversationListDelayMs = 0,
   seedConnectionProfiles = [],
+  /** 'METHOD /api/path' -> [status, detail]: that request fails once with the given status. */
+  faults = {},
 } = {}) {
   const context = await browser.newContext();
   if (sessionStorageEntries) {
@@ -305,7 +298,6 @@ async function setupPage({
   const capturedQueries = [];
   const capturedRevisions = [];
   const capturedRuns = [];
-  let runPollFailures = failFirstRunPoll ? 1 : 0;
   const capturedConnectionWrites = [];
   const capturedReindexes = [];
   const capturedApiRequests = [];
@@ -314,20 +306,9 @@ async function setupPage({
   const capturedDebugPatches = [];
   const adminUsersList = structuredClone(initialAdminUsers ?? defaultAdminUsers);
   const adminCollectionsList = structuredClone(initialAdminCollections ?? defaultAdminCollections);
-  let failLastAdmin = failLastAdminOnce;
-  let policyConflict = flagConflictOnce;
-  let grantListFailures = grantFailOnce ? 1 : 0;
-  let grantUpdateConflict = grantConflictOnce;
+  const pendingFaults = new Map(Object.entries(faults));
   let grantRequests = [];
   let grantRows = [];
-  let reviewFailures = reviewFailOnce ? 1 : 0;
-  let reviewConflict = reviewConflictOnce;
-  let recordFailures = recordFailOnce ? 1 : 0;
-  let recordRowConflict = recordConflictOnce;
-  let auditFailures = auditFailOnce ? 1 : 0;
-  let comparisonFailures = comparisonFailOnce ? 1 : 0;
-  let comparisonConflict = comparisonFailOnce;
-  let refreshConflict = refreshConflictOnce;
   let refreshPublished = {
     editionId: 'edition-1',
     revision: 1,
@@ -338,11 +319,6 @@ async function setupPage({
   };
   let refreshEdition = null;
   let refreshStaged = false;
-  let feedbackConflict = feedbackConflictOnce;
-  let triageFailures = triageFailOnce ? 1 : 0;
-  let triageConflict = triageConflictOnce;
-  let experimentConflict = experimentConflictOnce;
-  let privacyFailures = privacyFailOnce ? 1 : 0;
   let privacyRelease = null;
   let privacyReleasedEarly = false;
   page.releaseNextPrivacyList = () => {
@@ -365,21 +341,18 @@ async function setupPage({
   let recordRevision = 1;
   let recordAttempts = [];
   let importDigest = 'd'.repeat(64);
-  const reviewSource =
-    reviewFailOnce || reviewConflictOnce
-      ? {
-          sourceId: 'src-1',
-          collectionId: 'col-1',
-          filename: 'handbook.md',
-          contentType: 'text/markdown',
-          status: 'indexed',
-          workspaceKey: null,
-          indexRevision: 1,
-          isCurrent: true,
-          createdAt: '2026-10-19T12:00:00Z',
-          updatedAt: '2026-10-19T12:00:00Z',
-        }
-      : null;
+  const reviewSource = {
+    sourceId: 'src-1',
+    collectionId: 'col-1',
+    filename: 'handbook.md',
+    contentType: 'text/markdown',
+    status: 'indexed',
+    workspaceKey: null,
+    indexRevision: 1,
+    isCurrent: true,
+    createdAt: '2026-10-19T12:00:00Z',
+    updatedAt: '2026-10-19T12:00:00Z',
+  };
   let policyRevision = 1;
   let policyFlags = [
     {
@@ -409,7 +382,6 @@ async function setupPage({
     workspaceKey: 'browser-test',
     displayName: 'Local development',
   };
-  let sessionFailures = failFirstSessionCheck ? 1 : 0;
   let sourcesRequested = 0;
   const artifactSummaries = [...initialArtifacts];
   let workbookHead = structuredClone(workbookRecord);
@@ -440,18 +412,29 @@ async function setupPage({
   const gapRows = structuredClone(initialGaps);
   const capturedGapResolutions = [];
   let failGapConflict = gapConflictOnce;
-  let failRunConflict = runConflictOnce;
   await page.route('**/api/**', async (route) => {
     const req = route.request();
     const apiUrl = new URL(req.url());
     capturedApiRequests.push({ method: req.method(), url: req.url(), path: apiUrl.pathname, headers: req.headers() });
+    const routeKey = `${req.method()} ${apiUrl.pathname}`;
+    if (SLOW_ROUTES.has(routeKey)) await new Promise((resolve) => setTimeout(resolve, 300));
+    if (routeKey === 'GET /api/privacy/exports') {
+      if (privacyReleasedEarly) {
+        privacyReleasedEarly = false;
+      } else {
+        await new Promise((resolve) => {
+          privacyRelease = resolve;
+        });
+      }
+    }
+    const fault = pendingFaults.get(routeKey);
+    if (fault) {
+      pendingFaults.delete(routeKey);
+      const [status, detail] = fault;
+      return route.fulfill({ status, json: { detail } });
+    }
     if (apiUrl.pathname === '/api/flags/effective') return route.fulfill({ json: { flags: effectiveFlags } });
     if (apiUrl.pathname === '/api/academic-record' && req.method() === 'GET') {
-      if (recordFailOnce || recordConflictOnce) await new Promise((resolve) => setTimeout(resolve, 300));
-      if (recordFailures > 0) {
-        recordFailures -= 1;
-        return route.fulfill({ status: 500, json: { detail: 'Record list failed.' } });
-      }
       return route.fulfill({
         json: {
           record: {
@@ -505,13 +488,6 @@ async function setupPage({
       });
     }
     if (apiUrl.pathname === '/api/academic-record/imports/batch-1/rows' && req.method() === 'POST') {
-      if (recordRowConflict) {
-        recordRowConflict = false;
-        return route.fulfill({
-          status: 409,
-          json: { detail: 'record revision conflict: expected revision does not match current record' },
-        });
-      }
       const body = req.postDataJSON();
       importDigest = 'e'.repeat(64);
       return route.fulfill({
@@ -577,18 +553,9 @@ async function setupPage({
       });
     }
     if (apiUrl.pathname === '/api/comparisons' && req.method() === 'GET') {
-      if (comparisonFailOnce) await new Promise((resolve) => setTimeout(resolve, 300));
-      if (comparisonFailures > 0) {
-        comparisonFailures -= 1;
-        return route.fulfill({ status: 500, json: { detail: 'Program comparison list failed.' } });
-      }
       return route.fulfill({ json: comparisons });
     }
     if (apiUrl.pathname === '/api/comparisons' && req.method() === 'POST') {
-      if (comparisonConflict) {
-        comparisonConflict = false;
-        return route.fulfill({ status: 409, json: { detail: 'comparison revision conflict' } });
-      }
       const row = {
         comparisonId: 'comparison-1',
         workspaceKey: 'student-ws',
@@ -632,10 +599,6 @@ async function setupPage({
         });
       }
       if (apiUrl.pathname === '/api/admin/catalog-refresh' && req.method() === 'POST') {
-        if (refreshConflict) {
-          refreshConflict = false;
-          return route.fulfill({ status: 409, json: { detail: 'catalog refresh conflict' } });
-        }
         refreshEdition = edition(refreshPublished.revision + 1, req.postDataJSON().editionKey, false);
         refreshStaged = true;
         return route.fulfill({ status: 201, json: batchFor('staging') });
@@ -651,20 +614,7 @@ async function setupPage({
         return route.fulfill({ json: { ...batchFor('published'), currentEdition: refreshPublished } });
       }
     }
-    if (apiUrl.pathname === '/api/privacy/exports' && req.method() === 'GET') {
-      if (privacyReleasedEarly) {
-        privacyReleasedEarly = false;
-      } else {
-        await new Promise((resolve) => {
-          privacyRelease = resolve;
-        });
-      }
-      if (privacyFailures > 0) {
-        privacyFailures -= 1;
-        return route.fulfill({ status: 500, json: { detail: 'Privacy export list failed.' } });
-      }
-      return route.fulfill({ json: [] });
-    }
+    if (apiUrl.pathname === '/api/privacy/exports' && req.method() === 'GET') return route.fulfill({ json: [] });
     if (apiUrl.pathname === '/api/privacy/exports' && req.method() === 'POST') {
       return route.fulfill({
         status: 201,
@@ -699,10 +649,6 @@ async function setupPage({
     }
     if (apiUrl.pathname === '/api/feedback' && req.method() === 'POST') {
       const body = req.postDataJSON();
-      if (feedbackConflict) {
-        feedbackConflict = false;
-        return route.fulfill({ status: 409, json: { detail: 'feedback conflict' } });
-      }
       const revision = body.vote === 'down' ? 2 : 1;
       return route.fulfill({
         json: {
@@ -719,18 +665,9 @@ async function setupPage({
       });
     }
     if (apiUrl.pathname === '/api/feedback/triage' && req.method() === 'GET') {
-      if (triageFailOnce) await new Promise((resolve) => setTimeout(resolve, 300));
-      if (triageFailures > 0) {
-        triageFailures -= 1;
-        return route.fulfill({ status: 500, json: { detail: 'Feedback triage list failed.' } });
-      }
       return route.fulfill({ json: [] });
     }
     if (apiUrl.pathname === '/api/feedback/triage' && req.method() === 'POST') {
-      if (triageConflict) {
-        triageConflict = false;
-        return route.fulfill({ status: 409, json: { detail: 'feedback revision changed; refresh before triage' } });
-      }
       const body = req.postDataJSON();
       return route.fulfill({
         json: {
@@ -759,10 +696,6 @@ async function setupPage({
       });
     }
     if (apiUrl.pathname === '/api/debug/experiments' && req.method() === 'POST') {
-      if (experimentConflict) {
-        experimentConflict = false;
-        return route.fulfill({ status: 409, json: { detail: 'unknown prior provider outcome is not replayed' } });
-      }
       const body = req.postDataJSON();
       return route.fulfill({
         json: {
@@ -829,11 +762,6 @@ async function setupPage({
       });
     }
     if (apiUrl.pathname === '/api/audits' && req.method() === 'GET') {
-      if (auditFailOnce) await new Promise((resolve) => setTimeout(resolve, 300));
-      if (auditFailures > 0) {
-        auditFailures -= 1;
-        return route.fulfill({ status: 500, json: { detail: 'Program audit list failed.' } });
-      }
       auditListReads += 1;
       if (auditListReads === 3) {
         programAudits = programAudits.map((audit) => ({ ...audit, isStale: true }));
@@ -927,10 +855,6 @@ async function setupPage({
     if (apiUrl.pathname === '/api/admin/flags/memory_inspector/overrides') {
       if (req.method() === 'GET') return route.fulfill({ json: policyOverrides });
       const body = req.postDataJSON();
-      if (policyConflict) {
-        policyConflict = false;
-        return route.fulfill({ status: 409, json: { detail: 'Policy changed; refresh and review.' } });
-      }
       const row = {
         ...body,
         flagName: 'memory_inspector',
@@ -947,11 +871,6 @@ async function setupPage({
       return route.fulfill({ status: 204 });
     }
     if (apiUrl.pathname === '/api/admin/grant-requests' && req.method() === 'GET') {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      if (grantListFailures > 0) {
-        grantListFailures -= 1;
-        return route.fulfill({ status: 500, json: { detail: 'Grant list failed.' } });
-      }
       const status = apiUrl.searchParams.get('status');
       return route.fulfill({ json: status ? grantRequests.filter((row) => row.status === status) : grantRequests });
     }
@@ -984,13 +903,6 @@ async function setupPage({
     const grantRequestMatch = /^\/api\/admin\/grant-requests\/([^/]+)$/.exec(apiUrl.pathname);
     if (grantRequestMatch && req.method() === 'PATCH') {
       const body = req.postDataJSON();
-      if (grantUpdateConflict) {
-        grantUpdateConflict = false;
-        return route.fulfill({
-          status: 409,
-          json: { detail: 'support grant request changed; refresh and review the pending request' },
-        });
-      }
       const current = grantRequests.find((row) => row.requestId === decodeURIComponent(grantRequestMatch[1]));
       const row = {
         ...current,
@@ -1067,10 +979,6 @@ async function setupPage({
       return route.fulfill({ status: 204 });
     }
     if (apiUrl.pathname === '/api/session' && req.method() === 'GET') {
-      if (sessionFailures > 0) {
-        sessionFailures--;
-        return route.fulfill({ status: 503, json: { detail: 'session temporarily unavailable' } });
-      }
       return route.fulfill({ json: currentSession, headers: { 'Cache-Control': 'no-store' } });
     }
     if (apiUrl.pathname === '/api/auth/logout' && req.method() === 'POST') {
@@ -1537,7 +1445,8 @@ async function setupPage({
       if (!user) return route.fulfill({ status: 404, json: { detail: 'User not found' } });
       const activeAdmins = adminUsersList.filter((u) => u.role === 'admin' && u.status === 'active');
       if (
-        (failLastAdmin || (user.role === 'admin' && (body.role === 'student' || body.status === 'disabled'))) &&
+        user.role === 'admin' &&
+        (body.role === 'student' || body.status === 'disabled') &&
         activeAdmins.length <= 1
       ) {
         return route.fulfill({ status: 400, json: { detail: 'Cannot remove the last active admin.' } });
@@ -1637,14 +1546,9 @@ async function setupPage({
     }
     if (apiUrl.pathname === '/api/admin/jobs' && req.method() === 'GET') return route.fulfill({ json: [] });
     if (apiUrl.pathname === '/api/admin/sources' && req.method() === 'GET') {
-      return route.fulfill({ json: reviewSource ? [reviewSource] : [] });
+      return route.fulfill({ json: [reviewSource] });
     }
     if (apiUrl.pathname === '/api/admin/sources/src-1/review' && req.method() === 'GET') {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      if (reviewFailures > 0) {
-        reviewFailures -= 1;
-        return route.fulfill({ status: 500, json: { detail: 'Source review failed.' } });
-      }
       return route.fulfill({
         json: {
           source: {
@@ -1667,10 +1571,6 @@ async function setupPage({
       });
     }
     if (apiUrl.pathname === '/api/admin/sources/src-1/proposals' && req.method() === 'POST') {
-      if (reviewConflict) {
-        reviewConflict = false;
-        return route.fulfill({ status: 409, json: { detail: 'metadata revision mismatch: expected 1, currently 2' } });
-      }
       return route.fulfill({
         status: 201,
         json: {
@@ -2031,17 +1931,9 @@ async function setupPage({
       return route.fulfill({ json: { maxCalls: 4, totalTokenBudget: 6000, perCallOutputCap: 2048 } });
     if (apiUrl.pathname === '/api/runs' && req.method() === 'POST') {
       capturedRuns.push(req.postDataJSON());
-      if (failRunConflict) {
-        failRunConflict = false;
-        return route.fulfill({ status: 409, json: { detail: 'artifact head changed' } });
-      }
       return route.fulfill({ json: { runId: 'run-1', state: 'queued' } });
     }
     if (apiUrl.pathname === '/api/runs/run-1' && req.method() === 'GET') {
-      if (runPollFailures > 0) {
-        runPollFailures--;
-        return route.fulfill({ status: 503, json: { detail: 'temporary job status outage' } });
-      }
       return route.fulfill({
         json: {
           runId: 'run-1',
@@ -3158,10 +3050,12 @@ test('impossible dependent quotas are rejected locally and preserve the generati
 });
 
 test('stale artifact generation retains prompt and plan and waits for explicit head reload and resubmission', async () => {
-  const { context, page, capturedRuns } = await setupPage({
+  const { context, page, capturedApiRequests } = await setupPage({
     initialArtifacts: [{ artifactId: 'artifact-wb', revisionId: 'wb-r1', kind: 'workbook', title: 'Metrics' }],
-    runConflictOnce: true,
+    faults: { 'POST /api/runs': [409, 'artifact head changed'] },
   });
+  const runSubmissions = () =>
+    capturedApiRequests.filter((request) => request.method === 'POST' && request.path === '/api/runs').length;
   try {
     await openSidebar(page, 'All artifacts');
     await page
@@ -3172,19 +3066,21 @@ test('stale artifact generation retains prompt and plan and waits for explicit h
     await page.getByLabel('What should change?').fill('Refresh the metrics workbook.');
     await page.getByRole('button', { name: 'Make these changes' }).click();
     await page.getByRole('alert').getByText('Metrics changed since you opened it.').waitFor();
-    assert.equal(capturedRuns.length, 1);
+    assert.equal(runSubmissions(), 1);
     assert.equal(await page.getByLabel('What should change?').inputValue(), 'Refresh the metrics workbook.');
     await page.getByRole('button', { name: 'Load latest version' }).click();
     await page.getByRole('alert').waitFor({ state: 'detached' });
     assert.equal(await page.getByLabel('What should change?').inputValue(), 'Refresh the metrics workbook.');
-    assert.equal(capturedRuns.length, 1, 'head reload does not resubmit the generation job');
+    assert.equal(runSubmissions(), 1, 'head reload does not resubmit the generation job');
   } finally {
     await context.close();
   }
 });
 
 test('generation polling recovers after a temporary HTTP failure', async () => {
-  const { context, page, capturedRuns } = await setupPage({ failFirstRunPoll: true });
+  const { context, page, capturedRuns } = await setupPage({
+    faults: { 'GET /api/runs/run-1': [503, 'temporary job status outage'] },
+  });
   try {
     await createMenu(page, 'New document');
     await page.getByLabel('What should it contain?').fill('Draft a worksheet about derivatives.');
@@ -3495,7 +3391,9 @@ test('authenticated OIDC logout clears the workspace before reloading the sessio
 });
 
 test('session check errors show a retry and recover without a blank workspace', async () => {
-  const { context, page } = await setupPage({ failFirstSessionCheck: true });
+  const { context, page } = await setupPage({
+    faults: { 'GET /api/session': [503, 'session temporarily unavailable'] },
+  });
   try {
     await page.getByRole('alert').getByText('session temporarily unavailable').waitFor();
     await page.getByRole('button', { name: 'Retry session check' }).click();
@@ -3649,7 +3547,6 @@ test('admin cannot demote or remove the last active admin and sees rejection ban
   const { context, page } = await setupPage({
     entry: '/admin.html',
     initialSession: adminSession,
-    failLastAdminOnce: true,
   });
   try {
     await page.getByRole('tab', { name: 'Users' }).click();
@@ -4017,8 +3914,13 @@ test('admin requests, updates, approves, and revokes a support grant with visibl
   const { context, page } = await setupPage({
     entry: '/admin.html',
     initialSession: session,
-    grantFailOnce: true,
-    grantConflictOnce: true,
+    faults: {
+      'GET /api/admin/grant-requests': [500, 'Grant list failed.'],
+      'PATCH /api/admin/grant-requests/req-1': [
+        409,
+        'support grant request changed; refresh and review the pending request',
+      ],
+    },
   });
   try {
     await page.getByRole('tab', { name: 'Support grants', exact: true }).click();
@@ -4078,8 +3980,10 @@ test('admin reviews a source and publishes a program release with visible failur
   const { context, page } = await setupPage({
     entry: '/admin.html',
     initialSession: session,
-    reviewFailOnce: true,
-    reviewConflictOnce: true,
+    faults: {
+      'GET /api/admin/sources/src-1/review': [500, 'Source review failed.'],
+      'POST /api/admin/sources/src-1/proposals': [409, 'metadata revision mismatch: expected 1, currently 2'],
+    },
   });
   try {
     await page.getByRole('tab', { name: 'Sources', exact: true }).click();
@@ -4135,8 +4039,13 @@ test('student keeps a record draft, commits one reviewed import, and reads an ol
   const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
   const { context, page } = await setupPage({
     initialSession: session,
-    recordFailOnce: true,
-    recordConflictOnce: true,
+    faults: {
+      'GET /api/academic-record': [500, 'Record list failed.'],
+      'POST /api/academic-record/imports/batch-1/rows': [
+        409,
+        'record revision conflict: expected revision does not match current record',
+      ],
+    },
   });
   try {
     await openTool(page, 'Academic record');
@@ -4186,7 +4095,7 @@ test('student runs a program audit, keeps it after a stale recompute, and export
   const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
   const { context, page } = await setupPage({
     initialSession: session,
-    auditFailOnce: true,
+    faults: { 'GET /api/audits': [500, 'Program audit list failed.'] },
   });
   try {
     await openTool(page, 'Program audit');
@@ -4220,7 +4129,10 @@ test('student compares programs without treating mention overlap as saved credit
   const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
   const { context, page } = await setupPage({
     initialSession: session,
-    comparisonFailOnce: true,
+    faults: {
+      'GET /api/comparisons': [500, 'Program comparison list failed.'],
+      'POST /api/comparisons': [409, 'comparison revision conflict'],
+    },
   });
   try {
     await openTool(page, 'Program comparison');
@@ -4249,7 +4161,7 @@ test('admin stages, cancels, and publishes a catalog edition', async () => {
   const { context, page } = await setupPage({
     entry: '/admin.html',
     initialSession: session,
-    refreshConflictOnce: true,
+    faults: { 'POST /api/admin/catalog-refresh': [409, 'catalog refresh conflict'] },
   });
   try {
     await page.getByRole('tab', { name: 'Catalog refresh' }).click();
@@ -4288,7 +4200,7 @@ test('student replaces a feedback vote without adding another current vote', asy
   const responseId = '11111111-1111-4111-8111-111111111111';
   const { context, page } = await setupPage({
     initialSession: session,
-    feedbackConflictOnce: true,
+    faults: { 'POST /api/feedback': [409, 'feedback conflict'] },
   });
   try {
     await openTool(page, 'Response feedback');
@@ -4315,7 +4227,7 @@ test('admin reviews rollout conflicts, manages overrides and cohort members, and
   const { context, page, capturedApiRequests } = await setupPage({
     entry: '/admin.html',
     initialSession: session,
-    flagConflictOnce: true,
+    faults: { 'POST /api/admin/flags/memory_inspector/overrides': [409, 'Policy changed; refresh and review.'] },
   });
   try {
     await page.getByRole('tab', { name: 'Feature Rollouts' }).click();
@@ -4361,8 +4273,10 @@ test('admin triages missing evidence and saves a redacted candidate', async () =
   const { context, page } = await setupPage({
     entry: '/admin.html',
     initialSession: session,
-    triageFailOnce: true,
-    triageConflictOnce: true,
+    faults: {
+      'GET /api/feedback/triage': [500, 'Feedback triage list failed.'],
+      'POST /api/feedback/triage': [409, 'feedback revision changed; refresh before triage'],
+    },
   });
   try {
     await page.getByRole('tab', { name: 'Feedback triage' }).click();
@@ -4407,7 +4321,7 @@ test('admin records an experiment that is not the student conversation', async (
   const { context, page } = await setupPage({
     entry: '/admin.html',
     initialSession: session,
-    experimentConflictOnce: true,
+    faults: { 'POST /api/debug/experiments': [409, 'unknown prior provider outcome is not replayed'] },
   });
   try {
     await page.getByRole('tab', { name: 'Experiments' }).click();
@@ -4463,7 +4377,7 @@ test('student exports private data without leaving the download token on screen'
   const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
   const { context, page } = await setupPage({
     initialSession: session,
-    privacyFailOnce: true,
+    faults: { 'GET /api/privacy/exports': [500, 'Privacy export list failed.'] },
   });
   try {
     await openTool(page, 'Privacy');

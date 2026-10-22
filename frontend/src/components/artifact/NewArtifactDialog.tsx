@@ -8,6 +8,8 @@ import type {
   NativeArtifactSpec,
 } from '../../api/types';
 import { errorMessage, statusOf } from '../../lib/errors';
+import { useAsyncAction } from '../../lib/useAsyncAction';
+import { useIdempotencyKey } from '../../lib/useIdempotencyKey';
 import { useApp } from '../../state/AppContext';
 import type { SourceScope } from '../../state/AppContext';
 import { Dialog } from '../shell/Dialog';
@@ -95,11 +97,9 @@ function DraftForm({
   const [checkpointBytes, setCheckpointBytes] = useState(4000000);
   const [limits, setLimits] = useState<ArtifactRunLimits | null>(null);
   const [limitsError, setLimitsError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useAsyncAction();
   const [conflict, setConflict] = useState(false);
-  // A retried submit with unchanged inputs reuses its idempotency key so the server can dedupe it.
-  const runKeyRef = useRef<{ fingerprint: string; id: string } | null>(null);
+  const runKey = useIdempotencyKey();
   const scope = request.scope !== undefined ? request.scope : app.scope;
   const plannable = planned && kind !== 'html';
 
@@ -118,10 +118,8 @@ function DraftForm({
     };
   }, [plannable]);
 
-  const submit = async () => {
-    setBusy(true);
-    setError(null);
-    try {
+  const submit = () =>
+    run(async () => {
       const sourceIds = grounded ? scope : null;
       if (grounded && sourceIds && sourceIds.length === 0)
         throw new Error('No sources are selected. Pick some under “Search in”, or turn off “Use my sources”.');
@@ -149,15 +147,12 @@ function DraftForm({
         ...(outputPlan ? { outputPlan } : {}),
         ...(target ? { artifactId: target.artifactId, expectedRevisionId: target.revisionId } : {}),
       };
-      const fingerprint = JSON.stringify({ kind, inputs });
-      if (!runKeyRef.current || runKeyRef.current.fingerprint !== fingerprint)
-        runKeyRef.current = { fingerprint, id: crypto.randomUUID() };
       const label = outputPlan ? title : prompt.trim().replace(/\s+/g, ' ').slice(0, 80);
       try {
         await onStartRun({
           kind,
           inputs,
-          idempotencyKey: runKeyRef.current.id,
+          idempotencyKey: runKey.keyFor({ kind, inputs }),
           label: target ? `Changes to ${target.title}` : label,
           revises: target ? { artifactId: target.artifactId, title: target.title } : undefined,
         });
@@ -165,27 +160,16 @@ function DraftForm({
         if (statusOf(cause) === 409) setConflict(true);
         throw cause;
       }
-      runKeyRef.current = null;
+      runKey.reset();
       onClose();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   const reload = async () => {
     if (!target) return;
-    setBusy(true);
-    try {
+    await run(async () => {
       setTarget(await onReloadRevise(target.artifactId));
       setConflict(false);
-      setError(null);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   return (
@@ -310,25 +294,17 @@ function BlankForm({
   const [titleEdited, setTitleEdited] = useState(false);
   const [markdown, setMarkdown] = useState('');
   const [html, setHtml] = useState('<h1>My page</h1>\n<p>Start writing here.</p>');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useAsyncAction();
 
-  const create = async () => {
-    setBusy(true);
-    setError(null);
-    try {
+  const create = () =>
+    run(async () => {
       let spec: NativeArtifactSpec;
       if (kind === 'document') spec = parseMarkdown(title, markdown);
       else if (kind === 'html') spec = { kind: 'html', title: title || BLANK_TITLES.html, html, provenance: {} };
       else spec = emptyWorkbook(title || BLANK_TITLES.workbook);
       await onCreated(await getClient().createArtifact(spec));
       onClose();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   return (
     <form
@@ -393,26 +369,19 @@ function BlankForm({
 }
 
 function ImportForm({ onClose, onCreated }: Pick<Props, 'onClose' | 'onCreated'>) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useAsyncAction();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const importFile = async (file?: File) => {
     if (!file) return;
-    setBusy(true);
-    setError(null);
-    try {
+    await run(async () => {
       const result = await getClient().importArtifact(file);
       await onCreated(
         result,
         result.original?.preserved ? `Imported ${file.name}. The original file is kept too.` : `Imported ${file.name}.`,
       );
       onClose();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    });
   };
 
   return (

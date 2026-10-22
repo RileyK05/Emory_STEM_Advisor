@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { getClient } from '../../api/client';
 import type { ResponseFeedbackResponse } from '../../api/types';
-import { errorMessage } from '../../lib/errors';
+import { useAsyncAction } from '../../lib/useAsyncAction';
 
 export function FeedbackPanel() {
   const [responseId, setResponseId] = useState('');
@@ -9,15 +9,10 @@ export function FeedbackPanel() {
   const [reasonCode, setReasonCode] = useState('');
   const [comment, setComment] = useState('');
   const [saved, setSaved] = useState<ResponseFeedbackResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const { busy, error, notice, setNotice, run } = useAsyncAction();
 
-  const submit = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
+  const submit = () =>
+    run(async () => {
       const row = await getClient().submitResponseFeedback({
         responseId: responseId.trim(),
         vote,
@@ -26,12 +21,7 @@ export function FeedbackPanel() {
       });
       setSaved(row);
       setNotice('Feedback saved.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   return (
     <section className="stack">

@@ -1,91 +1,63 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { getClient } from '../../api/client';
 import type { AuditableProgramItem, DegreeAuditDetailResponse, DegreeAuditRecordItem } from '../../api/types';
-import { errorMessage } from '../../lib/errors';
+import { useAsyncAction } from '../../lib/useAsyncAction';
+import { useLoad } from '../../lib/useLoad';
 
 export function ProgramAuditPanel() {
   const [programs, setPrograms] = useState<AuditableProgramItem[]>([]);
   const [audits, setAudits] = useState<DegreeAuditRecordItem[]>([]);
   const [programId, setProgramId] = useState('');
   const [detail, setDetail] = useState<DegreeAuditDetailResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const requestSeq = useRef(0);
+  const { busy, error, notice, setError, setNotice, run } = useAsyncAction();
 
-  const load = useCallback(async () => {
-    const seq = ++requestSeq.current;
-    setLoading(true);
-    setError(null);
-    try {
-      const [programRows, auditRows] = await Promise.all([
-        getClient().listAuditablePrograms(),
-        getClient().listProgramAudits(),
-      ]);
-      if (seq !== requestSeq.current) return;
-      setPrograms(programRows);
-      setAudits(auditRows);
-      setDetail((current) => {
-        if (!current) return current;
-        const match = auditRows.find((row) => row.auditId === current.audit.auditId);
-        if (!match) return current;
-        return {
-          ...current,
-          audit: { ...current.audit, isStale: match.isStale, overallStatus: match.overallStatus },
-        };
-      });
-    } catch (cause) {
-      if (seq === requestSeq.current) setError(errorMessage(cause));
-    } finally {
-      if (seq === requestSeq.current) setLoading(false);
-    }
-  }, []);
+  const { loading, reload: load } = useLoad(
+    () => Promise.all([getClient().listAuditablePrograms(), getClient().listProgramAudits()]),
+    [],
+    {
+      onLoad: ([programRows, auditRows]) => {
+        setPrograms(programRows);
+        setAudits(auditRows);
+        // Carry the list's fresher staleness and status into the open audit.
+        setDetail((current) => {
+          if (!current) return current;
+          const match = auditRows.find((row) => row.auditId === current.audit.auditId);
+          if (!match) return current;
+          return {
+            ...current,
+            audit: { ...current.audit, isStale: match.isStale, overallStatus: match.overallStatus },
+          };
+        });
+      },
+      setError,
+    },
+  );
 
-  useEffect(() => {
-    void load();
-    return () => {
-      requestSeq.current += 1;
-    };
-  }, [load]);
-
-  const run = async () => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const saved = await getClient().runProgramAudit({ programId });
-      setDetail(saved);
+  const runAudit = () =>
+    run(async () => {
+      setDetail(await getClient().runProgramAudit({ programId }));
       setNotice('Program audit saved.');
       await load();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   const exportAudit = async () => {
     if (!detail) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const exported = await getClient().exportProgramAudit(detail.audit.auditId);
-      setDetail((current) =>
-        current && current.audit.auditId === exported.audit.auditId
-          ? { ...current, audit: { ...current.audit, isStale: exported.audit.isStale } }
-          : current,
-      );
-      setNotice(
-        exported.audit.isStale
-          ? 'Exported program audit is stale.'
-          : 'Exported program audit matches the saved result.',
-      );
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    await run(
+      async () => {
+        const exported = await getClient().exportProgramAudit(detail.audit.auditId);
+        setDetail((current) =>
+          current && current.audit.auditId === exported.audit.auditId
+            ? { ...current, audit: { ...current.audit, isStale: exported.audit.isStale } }
+            : current,
+        );
+        setNotice(
+          exported.audit.isStale
+            ? 'Exported program audit is stale.'
+            : 'Exported program audit matches the saved result.',
+        );
+      },
+      { keepNotice: true },
+    );
   };
 
   return (
@@ -124,7 +96,7 @@ export function ProgramAuditPanel() {
           ))}
         </select>
       </label>
-      <button type="button" disabled={busy || loading || !programId} onClick={() => void run()}>
+      <button type="button" disabled={busy || loading || !programId} onClick={() => void runAudit()}>
         Run program audit
       </button>
       <button type="button" disabled={busy || loading} onClick={() => void load()}>
@@ -142,7 +114,7 @@ export function ProgramAuditPanel() {
             ))}
           </ul>
           {detail.audit.isStale && (
-            <button type="button" disabled={busy || !programId} onClick={() => void run()}>
+            <button type="button" disabled={busy || !programId} onClick={() => void runAudit()}>
               Recompute program audit
             </button>
           )}

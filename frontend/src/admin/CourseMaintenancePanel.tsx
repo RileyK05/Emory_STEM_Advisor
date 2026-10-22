@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type {
   AdminCourse,
   AdminCourseChange,
@@ -17,6 +17,8 @@ import {
   rejectCourseChange,
 } from '../api/backoffice';
 import { errorMessage } from '../lib/errors';
+import { useAsyncAction } from '../lib/useAsyncAction';
+import { useLoad } from '../lib/useLoad';
 
 const LIFECYCLES = ['', 'current', 'retired'];
 const AUTHORITIES = ['', 'atlas', 'catalog', 'admin_correction', 'admin_created'];
@@ -44,11 +46,7 @@ export function CourseMaintenancePanel() {
   const [newCode, setNewCode] = useState('');
   const [collectionId, setCollectionId] = useState<string | null>(null);
   const [collectionError, setCollectionError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-  const requestSeq = useRef(0);
+  const { busy, error, notice, setError, setNotice, run } = useAsyncAction();
 
   useEffect(() => {
     let active = true;
@@ -67,12 +65,9 @@ export function CourseMaintenancePanel() {
     };
   }, []);
 
-  const load = useCallback(async () => {
-    if (!collectionId) return;
-    const seq = ++requestSeq.current;
-    setLoading(true);
-    setError(null);
-    try {
+  const { loading, reload: load } = useLoad(
+    async () => {
+      if (!collectionId) return null;
       const rows = await listAdminCourses({
         collection_id: collectionId,
         query,
@@ -83,100 +78,76 @@ export function CourseMaintenancePanel() {
         limit: PAGE,
         offset,
       });
-      if (seq !== requestSeq.current) return;
-      setData(rows);
-      setConflicts(await listCourseConflicts(collectionId));
-    } catch (cause) {
-      if (seq === requestSeq.current) setError(errorMessage(cause));
-    } finally {
-      if (seq === requestSeq.current) setLoading(false);
-    }
-  }, [collectionId, query, subject, lifecycle, authority, campus, offset]);
+      return { rows, conflicts: await listCourseConflicts(collectionId) };
+    },
+    [collectionId, query, subject, lifecycle, authority, campus, offset],
+    {
+      enabled: collectionId !== null,
+      onLoad: (loaded) => {
+        if (!loaded) return;
+        setData(loaded.rows);
+        setConflicts(loaded.conflicts);
+      },
+      setError,
+    },
+  );
 
-  useEffect(() => {
-    void load();
-    return () => {
-      requestSeq.current += 1;
-    };
-  }, [load]);
-
-  const openCourse = async (code: string) => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    setChange(null);
-    setPreview(null);
-    setNewCourse(false);
-    try {
+  const openCourse = (code: string) =>
+    run(async () => {
+      setChange(null);
+      setPreview(null);
+      setNewCourse(false);
       const row = await getAdminCourse(code, collectionId ?? undefined);
       setDetail(row);
       setTitle(row.course.title);
       setRequisites(row.course.requisitesRaw ?? '');
       setReason('');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
-  const stage = async (kind: 'create' | 'update' | 'retire' | 'restore') => {
-    setBusy(true);
-    setError(null);
-    setNotice(null);
-    try {
-      const body = {
-        code: newCourse ? newCode : (detail?.course.code ?? ''),
-        changeKind: kind,
-        title,
-        requisitesRaw: requisites,
-        reason,
-        expectedRevision: newCourse ? 0 : (detail?.course.adminRevision ?? 0),
-      };
-      const created = await createCourseChange(body, collectionId ?? undefined);
+  const stage = (kind: 'create' | 'update' | 'retire' | 'restore') =>
+    run(async () => {
+      const created = await createCourseChange(
+        {
+          code: newCourse ? newCode : (detail?.course.code ?? ''),
+          changeKind: kind,
+          title,
+          requisitesRaw: requisites,
+          reason,
+          expectedRevision: newCourse ? 0 : (detail?.course.adminRevision ?? 0),
+        },
+        collectionId ?? undefined,
+      );
       setChange(created);
-      const staged = await previewCourseChange(created.changeId);
-      setPreview(staged);
+      setPreview(await previewCourseChange(created.changeId));
       setNotice('Draft staged. Review the preview before publishing.');
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
 
   const publish = async () => {
     if (!change) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await publishCourseChange(change.changeId);
-      setNotice('Course change published. Affected audits are marked stale.');
-      setChange(null);
-      setPreview(null);
-      if (detail) await openCourse(detail.course.code);
-      await load();
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    await run(
+      async () => {
+        await publishCourseChange(change.changeId);
+        setNotice('Course change published. Affected audits are marked stale.');
+        setChange(null);
+        setPreview(null);
+        if (detail) await openCourse(detail.course.code);
+        await load();
+      },
+      { keepNotice: true },
+    );
   };
 
   const reject = async () => {
     if (!change) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await rejectCourseChange(change.changeId, reason || 'Rejected during review.');
-      setNotice('Draft rejected.');
-      setChange(null);
-      setPreview(null);
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy(false);
-    }
+    await run(
+      async () => {
+        await rejectCourseChange(change.changeId, reason || 'Rejected during review.');
+        setNotice('Draft rejected.');
+        setChange(null);
+        setPreview(null);
+      },
+      { keepNotice: true },
+    );
   };
 
   const courses: AdminCourse[] = data?.courses ?? [];
