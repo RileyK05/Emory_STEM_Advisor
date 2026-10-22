@@ -70,7 +70,7 @@ def test_transfer_credit_tail_is_a_modifier_but_true_mixed_operators_stay_ambigu
     by_code = {row["code"]: row for row in data["courses"]}
     # EMO-028: "... or equivalent transfer credit" is a modifier, so the mixed
     # and/or is not a genuine ambiguity.
-    assert parse_requisites(by_code["CS 350"]["requisites"]).trees["prerequisite"] == AllOf((
+    assert parse_requisites(by_code["CS 350"]["requisites"]).trees["prerequisite"] == AnyOf((
         AllOf((CourseRef("CS 253"), CourseRef("CS 255"))),
         Condition("equivalent transfer credit"),
     ))

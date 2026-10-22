@@ -84,7 +84,7 @@ _PARSED = {
     "transfer credit comma or after anyof": (
         ("(BIOL 142 and BIOL 142L) or BIOL_OX 142, or equivalent transfer credit "
          "as a prerequisite"),
-        AnyOf((AnyOf((AllOf(_c("BIOL 142", "BIOL 142L")), CourseRef("BIOL_OX 142"))),
+        AnyOf((AllOf(_c("BIOL 142", "BIOL 142L")), CourseRef("BIOL_OX 142"),
                Condition("equivalent transfer credit"))),
         ["BIOL 142", "BIOL 142L", "BIOL_OX 142"]),
     "transfer credit combined prerequisite or corequisite label": (

@@ -414,16 +414,15 @@ def _parse_with_transfer_tail(segment: str) -> Req | None:
 
 def _attach_transfer_condition(tree: Req, connector: str | None) -> Req:
     condition = Condition("equivalent transfer credit")
-    if connector and connector.lower() == "or":
-        return AnyOf((tree, condition))
-    if connector and connector.lower() == "and":
-        return AllOf((tree, condition))
-    # Unmarked legacy tails retain the parser's prior conservative behavior.
-    if isinstance(tree, CourseRef):
-        return AnyOf((tree, condition))
-    if isinstance(tree, AnyOf):
-        return AnyOf((*tree.items, condition))
-    return AllOf((tree, condition))
+    connector = (connector or "").lower()
+    # Unmarked legacy tails retain the parser's prior conservative behavior:
+    # a single course or an alternative list gains the condition as one more
+    # alternative; anything else requires it.
+    if connector == "or" or (not connector and isinstance(tree, (CourseRef, AnyOf))):
+        items = tree.items if isinstance(tree, AnyOf) else (tree,)
+        return AnyOf((*items, condition))
+    items = tree.items if connector == "and" and isinstance(tree, AllOf) else (tree,)
+    return AllOf((*items, condition))
 
 
 def parse_requisites(
