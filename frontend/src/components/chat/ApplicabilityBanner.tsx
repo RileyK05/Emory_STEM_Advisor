@@ -83,7 +83,7 @@ export function ApplicabilityBanner({ notice }: ApplicabilityBannerProps) {
               {notice.sources.map((source) => (
                 <li key={source.sourceId} className="applicability-source-item">
                   <div className="source-item-header">
-                    <span className="source-name font-medium">{source.sourceName}</span>
+                    <span className="source-name">{source.sourceName}</span>
                     <div className="source-badges">
                       {source.edition && <span className="badge-status badge-info">{source.edition}</span>}
                       {source.isSuperseded ? (
@@ -103,7 +103,7 @@ export function ApplicabilityBanner({ notice }: ApplicabilityBannerProps) {
                       )}
                     </div>
                   </div>
-                  <p className="source-summary text-sm muted">{source.summary}</p>
+                  <p className="source-summary muted">{source.summary}</p>
                 </li>
               ))}
             </ul>

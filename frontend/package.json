@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "test": "npm run build -- --mode browser-test && node --test tests/browser-workflows.test.mjs tests/http-client.test.mjs tests/mock-client.test.mjs tests/artifact-modules.test.mjs",
+    "test": "npm run test:unit && npm run build -- --mode browser-test && node --test tests/browser-workflows.test.mjs",
+    "test:unit": "node --test tests/http-client.test.mjs tests/mock-client.test.mjs tests/artifact-modules.test.mjs",
     "test:integration": "npm run build -- --mode browser-test && node --test tests/live-api-integration.test.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx}\"",
     "format:check": "prettier --check \"src/**/*.{ts,tsx}\""

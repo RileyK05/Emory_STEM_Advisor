@@ -789,6 +789,46 @@ textarea.code {
   font-weight: 600;
 }
 
+.error-banner {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.source-name {
+  font-weight: 600;
+}
+
+.source-summary {
+  font-size: 13px;
+}
+
+.admin-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+.admin-stat-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.admin-stat-number {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--heading);
+}
+
+.admin-stat-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 /* ---------- welcome ---------- */
 
 .welcome {
@@ -3471,7 +3511,7 @@ button.artifact-card:not(:disabled):hover {
 
 /* Item 7: Source applicability and freshness banner */
 .callout-warning {
-  background: var(--warn-soft, rgba(234, 179, 8, 0.15));
+  background: var(--warn-soft);
   border-color: transparent;
 }
 
@@ -3499,8 +3539,8 @@ button.artifact-card:not(:disabled):hover {
   font-size: 11.5px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: var(--primary-soft, rgba(59, 130, 246, 0.15));
-  color: var(--primary);
+  background: var(--accent-soft);
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -3562,8 +3602,8 @@ button.artifact-card:not(:disabled):hover {
 }
 
 .badge-warning {
-  background: var(--warn-soft, rgba(234, 179, 8, 0.15));
-  color: var(--warn, #ca8a04);
+  background: var(--warn-soft);
+  color: var(--warn-ink);
 }
 
 .badge-danger {
