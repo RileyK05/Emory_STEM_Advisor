@@ -97,6 +97,24 @@ class GapStore:
         event_kind: str,
     ) -> dict | None:
         """Record a typed retrieval observation; successes never create work items."""
+        self.conn.commit()
+        with self.conn.transaction():
+            gap = self.record(collection_id=collection_id, query=query,
+                              source_ids=source_ids, trace_id=trace_id, event_kind=event_kind)
+        self.conn.commit()
+        return public_gap(gap) if gap is not None else None
+
+    def record(
+        self,
+        *,
+        collection_id: UUID,
+        query: str,
+        source_ids: list[UUID] | None,
+        trace_id: UUID,
+        event_kind: str,
+    ):
+        """`observe` inside the caller's transaction: the gap row, or None for an
+        unmatched success. A trace is counted once, against one gap."""
         if event_kind not in _EVENT_KINDS:
             raise ValueError("unsupported gap observation kind")
         normalized = normalize_gap_query(query)
@@ -106,44 +124,34 @@ class GapStore:
         query_key = _identity_key(
             self.workspace_key, collection_id, normalized, canonical_sources
         )
-        params = {
-            "workspace_key": self.workspace_key,
-            "collection_id": collection_id,
-            "query": query.strip(),
-            "normalized_query": normalized,
-            "query_key": query_key,
-            "scope_source_ids": canonical_sources,
-            "trace_id": trace_id,
-            "event_kind": event_kind,
-        }
-
-        self.conn.commit()
-        with self.conn.transaction():
-            try:
-                require_live_workspace(self.conn, self.workspace_key, lock=True)
-            except HTTPException as exc:
-                raise GapConflict("workspace has been deleted") from exc
-            self._authorize(collection_id, trace_id, canonical_sources)
-            if event_kind in _FAILURE_KINDS:
-                self.conn.execute(queries.get("ensure_gap_identity"), {
-                    **params, "gap_id": uuid4(),
-                })
-            gap = self.conn.execute(
-                queries.get("get_gap_identity_for_update"),
-                {"workspace_key": self.workspace_key, "collection_id": collection_id,
-                 "query_key": query_key},
-            ).fetchone()
-            if gap is None:
-                # A successful retrieval is only useful as a recurrence metric
-                # for a previously captured gap.
-                return None
-            if gap["scope_source_ids"] != canonical_sources:
-                raise GapConflict
-            updated = self._count_observation(gap, trace_id, event_kind)
-            if updated is None:
-                return public_gap(gap)  # This trace was already counted for the gap.
-        self.conn.commit()
-        return public_gap(updated)
+        try:
+            require_live_workspace(self.conn, self.workspace_key, lock=True)
+        except HTTPException as exc:
+            raise GapConflict("workspace has been deleted") from exc
+        self._authorize(collection_id, trace_id, canonical_sources)
+        if event_kind in _FAILURE_KINDS:
+            self.conn.execute(queries.get("ensure_gap_identity"), {
+                "workspace_key": self.workspace_key,
+                "collection_id": collection_id,
+                "query": query.strip(),
+                "normalized_query": normalized,
+                "query_key": query_key,
+                "scope_source_ids": canonical_sources,
+                "gap_id": uuid4(),
+            })
+        gap = self.conn.execute(
+            queries.get("get_gap_identity_for_update"),
+            {"workspace_key": self.workspace_key, "collection_id": collection_id,
+             "query_key": query_key},
+        ).fetchone()
+        if gap is None:
+            # A successful retrieval is only useful as a recurrence metric
+            # for a previously captured gap.
+            return None
+        if gap["scope_source_ids"] != canonical_sources:
+            raise GapConflict
+        updated = self._count_observation(gap, trace_id, event_kind)
+        return gap if updated is None else updated  # None: this trace was already counted.
 
     def _authorize(self, collection_id: UUID, trace_id: UUID, canonical_sources) -> None:
         """The trace must belong to the collection, and every scoped source to this workspace."""

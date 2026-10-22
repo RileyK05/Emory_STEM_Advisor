@@ -11,7 +11,7 @@ from psycopg.errors import UniqueViolation
 from app.auth.capabilities import check_workspace_access, require_operation
 from app.auth.models import Principal
 from app.db import queries
-from app.gaps.store import normalize_gap_query
+from app.gaps.store import GapConflict, GapInvalidObservation, GapStore
 from app.privacy.fence import require_live_workspace
 from app.util.digest import json_digest
 
@@ -187,53 +187,21 @@ class FeedbackService:
     def _open_gap(cls, conn, feedback, trace_id, collection_id, investigation_query) -> UUID:
         if trace_id is None or collection_id is None or not (investigation_query or "").strip():
             raise HTTPException(422, "missing evidence needs a trace, collection, and query")
-        trace = conn.execute(
-            queries.get("get_gap_trace_for_collection"),
-            {"trace_id": trace_id},
-        ).fetchone()
-        if trace is None or trace["collection_id"] != collection_id:
-            raise HTTPException(403, "trace ownership is denied")
-        normalized = normalize_gap_query(investigation_query)
-        if not normalized or len(normalized) > 20000:
-            raise HTTPException(422, "investigation query is empty")
         comment = feedback["comment"] or ""
         if comment and comment in investigation_query:
             raise HTTPException(422, "investigation query copies the student comment")
-        query_key = json_digest({
-            "workspace": feedback["workspace_key"],
-            "collection": str(collection_id),
-            "query": normalized,
-            "sourceIds": None,
-        })
-        gap_id = uuid4()
-        conn.execute(queries.get("ensure_gap_identity"), {
-            "workspace_key": feedback["workspace_key"],
-            "collection_id": collection_id,
-            "query": investigation_query.strip(),
-            "normalized_query": normalized,
-            "query_key": query_key,
-            "scope_source_ids": None,
-            "gap_id": gap_id,
-        })
-        stored = conn.execute(queries.get("get_gap_identity_for_update"), {
-            "workspace_key": feedback["workspace_key"],
-            "collection_id": collection_id,
-            "query_key": query_key,
-        }).fetchone()
-        if stored is None:
-            raise HTTPException(409, "gap investigation was not recorded")
-        conn.execute(queries.get("insert_gap_observation"), {
-            "workspace_key": feedback["workspace_key"],
-            "trace_id": trace_id,
-            "event_kind": "retrieval_refusal",
-            "gap_id": stored["gap_id"],
-        })
-        conn.execute(queries.get("increment_gap_observation"), {
-            "workspace_key": feedback["workspace_key"],
-            "gap_id": stored["gap_id"],
-            "event_kind": "retrieval_refusal",
-        })
-        return stored["gap_id"]
+        try:
+            gap = GapStore(conn, feedback["workspace_key"]).record(
+                collection_id=collection_id, query=investigation_query, source_ids=None,
+                trace_id=trace_id, event_kind="retrieval_refusal",
+            )
+        except ValueError as exc:
+            raise HTTPException(422, "investigation query is empty") from exc
+        except GapInvalidObservation as exc:
+            raise HTTPException(403, "trace ownership is denied") from exc
+        except GapConflict as exc:
+            raise HTTPException(409, str(exc) or "trace is already counted against another gap") from exc
+        return gap["gap_id"]
 
     @classmethod
     def promote_candidate(

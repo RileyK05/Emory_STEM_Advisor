@@ -209,6 +209,19 @@ def test_triage_opens_a_gap_and_stale_source_blocks_silent_promotion(db, collect
         investigation_query="Which catalog requirement line is absent?",
     )
     assert again["event_id"] == opened["event_id"]
+    # A second report about the same trace joins the gap without counting the trace twice.
+    second = FeedbackService.submit(
+        db, student.workspace_key, uuid4(), "down", "missing-evidence", None, student,
+    )
+    joined = FeedbackService.triage(
+        db, reviewer, feedback_id=second["feedback_id"], issue_type="missing_evidence",
+        to_status="reviewed", expected_revision=1, expected_triage_revision=0,
+        note=None, trace_id=trace_id, collection_id=collection,
+        investigation_query="Which catalog requirement line is absent?",
+    )
+    assert joined["gap_id"] == opened["gap_id"]
+    assert db.execute("SELECT occurrence_count FROM retrieval_gaps WHERE gap_id = %s",
+                      (opened["gap_id"],)).fetchone()["occurrence_count"] == 1
     assert db.execute("SELECT count(*) AS n FROM retrieval_gaps").fetchone()["n"] == 1
     assert db.execute("SELECT count(*) AS n FROM courses").fetchone()["n"] == courses
     assert db.execute("SELECT count(*) AS n FROM prereq_nodes").fetchone()["n"] == edges
