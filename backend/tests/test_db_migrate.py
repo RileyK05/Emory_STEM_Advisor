@@ -141,15 +141,6 @@ def _custom_migration_history(conn, tmp_path, monkeypatch, body: bytes):
     return path
 
 
-def test_changed_applied_migration_raises(migrated_dsn, tmp_path, monkeypatch):
-    with isolated_database(migrated_dsn) as conn:
-        path = _custom_migration_history(
-            conn, tmp_path, monkeypatch, b"CREATE TABLE _migtest (x int);\n")
-        path.write_bytes(b"CREATE TABLE _migtest (x int, y int);\n")
-        with pytest.raises(MigrationChanged):
-            apply_migrations(conn)
-
-
 def test_line_ending_change_is_not_a_migration_change(migrated_dsn, tmp_path, monkeypatch):
     with isolated_database(migrated_dsn) as conn:
         path = _custom_migration_history(

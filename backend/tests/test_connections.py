@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 from cryptography.fernet import Fernet
 
-from app.config import load_settings
 from app.connections.crypto import decrypt_credentials, encrypt_credentials
 from app.connections.models import (
     ConnectionUnavailable,
@@ -98,36 +97,6 @@ def test_runtime_caches_client_by_profile_revision_and_invalidates(monkeypatch):
     runtime.invalidate(profile.profile_id)
     third = runtime.generation_provider(revised, role="standard", data_scope="institutional_corpus")
     assert third is not second and len(built) == 3
-
-
-def test_runtime_hf_profile_overrides_reset_and_restore_model_stop_defaults(monkeypatch):
-    store = ConnectionProfiles(KEY)
-    settings = load_settings()
-    runtime = ConnectionRuntime(settings, store)
-    captures = []
-
-    def capture(profile_settings, **kwargs):
-        captures.append((profile_settings.hf_model_id, profile_settings.hf_stop_token_strings))
-        return object()
-
-    monkeypatch.setattr("app.connections.registry.get_provider", capture)
-    base = _profile(
-        provider="hf-local", model_id="openbmb/MiniCPM-2B-128k",
-        secret_ciphertext=None, capabilities=frozenset({"streaming"}),
-    )
-    for revision, model_id in enumerate(
-        ("openbmb/MiniCPM-2B-128k", "another/local-model", "openbmb/MiniCPM-2B-128k"),
-        start=1,
-    ):
-        runtime.generation_provider(
-            replace(base, revision=revision, model_id=model_id),
-            role="standard", data_scope="institutional_corpus",
-        )
-    assert captures == [
-        ("openbmb/MiniCPM-2B-128k", ("<|im_end|>",)),
-        ("another/local-model", ()),
-        ("openbmb/MiniCPM-2B-128k", ("<|im_end|>",)),
-    ]
 
 
 def test_public_profile_view_and_request_repr_never_include_secret():

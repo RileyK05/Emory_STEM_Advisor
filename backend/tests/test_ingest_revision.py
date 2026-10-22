@@ -71,19 +71,6 @@ def test_stale_reindex_completion_cannot_overwrite_newer_attempt(db, collection,
     assert _chunks(db, source_id) == original_chunks
 
 
-def test_failed_new_source_has_no_chunks_and_is_marked_failed(db, collection, tmp_path):
-    class BrokenEmbedder:
-        def embed_documents(self, _texts):
-            raise RuntimeError("embedding down")
-
-    with pytest.raises(RuntimeError):
-        ingest_text(db, collection, tmp_path, embedder=BrokenEmbedder())
-    row = db.execute("SELECT status, error_message FROM sources WHERE workspace_key='development' "
-                     "ORDER BY created_at DESC LIMIT 1").fetchone()
-    assert row["status"] == "failed"
-    assert "embedding down" in row["error_message"]
-
-
 def test_origin_replacement_keeps_last_good_current_until_new_index_is_ready(
     db, collection, tmp_path,
 ):

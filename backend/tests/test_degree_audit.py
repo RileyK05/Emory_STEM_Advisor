@@ -8,43 +8,8 @@ from psycopg.types.json import Jsonb
 
 from app.advising.audit_engine import DeterministicAuditEngine
 from app.advising.audit_service import DegreeAuditService
-from app.auth.models import Principal
-from app.db import queries
 from app.programs.rules import CoverageDisposition, RuleNode, RuleNodeType
-from tests.helpers import api_client
-
-
-def _create_user(db, *, role="student", status="active", workspace=None, email=None):
-    user_id = uuid4()
-    workspace_key = workspace or f"ws-{user_id}"
-    email_addr = email or f"{user_id}@emory.edu"
-    db.execute(
-        queries.get("upsert_app_user"),
-        {
-            "user_id": user_id,
-            "issuer": "https://auth.emory.edu",
-            "subject": str(user_id),
-            "workspace_key": workspace_key,
-            "display_name": f"User {user_id}",
-            "email": email_addr,
-            "bootstrap": False,
-        },
-    ).fetchone()
-    db.execute(
-        queries.get("admin_update_user"),
-        {"user_id": user_id, "role": role, "status": status},
-    )
-    db.commit()
-    return Principal(
-        workspace_key=workspace_key,
-        issuer="https://auth.emory.edu",
-        subject=str(user_id),
-        display_name=f"User {user_id}",
-        email=email_addr,
-        role=role,
-        user_id=user_id,
-        status=status,
-    )
+from tests.helpers import api_client, create_user
 
 
 @pytest.mark.parametrize("grade,status,verified,expected", [
@@ -303,8 +268,8 @@ def audit_test_data(db, collection):
 
 def test_degree_audit_service_lifecycle_and_staleness(db, collection, audit_test_data):
     prog_id, _release_id = audit_test_data
-    student = _create_user(db, role="student")
-    other_student = _create_user(db, role="student")
+    student = create_user(db, role="student")
+    other_student = create_user(db, role="student")
 
     # 1. Add attempt CS 170 to student record
     db.execute(
@@ -423,4 +388,3 @@ def test_degree_audit_http_routes(db, collection, audit_test_data):
     assert stale_detail["audit"]["overallStatus"] == stale_export["audit"]["overallStatus"]
     assert stale_export["coverageScope"] == "program_audit"
     assert all(row["programId"] != str(prog_id) for row in client.get("/api/audits/programs").json())
-

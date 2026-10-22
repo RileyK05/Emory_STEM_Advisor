@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from app.admin.catalog_refresh import CatalogRefreshService
 from app.db import queries
-from tests.test_degree_audit import _create_user
+from tests.helpers import create_user
 
 
 def _indexed_source(db, collection, *, workspace_key=None):
@@ -26,7 +26,7 @@ def _indexed_source(db, collection, *, workspace_key=None):
 
 
 def test_refresh_publishes_editions_and_cancel_keeps_the_current_one(db, collection):
-    admin = _create_user(db, role="admin")
+    admin = create_user(db, role="admin")
     with pytest.raises(HTTPException) as empty:
         CatalogRefreshService.start(db, collection, "2026", True, admin)
     assert empty.value.status_code == 409

@@ -7,14 +7,13 @@ from fastapi import HTTPException
 
 from app.db import queries
 from app.gaps.feedback import FeedbackService
-from tests.helpers import api_client
-from tests.test_degree_audit import _create_user
+from tests.helpers import api_client, create_user
 
 
 def test_vote_replacement_and_redacted_candidate(db, collection):
-    student = _create_user(db, role="student")
-    other = _create_user(db, role="student")
-    reviewer = _create_user(db, role="admin")
+    student = create_user(db, role="student")
+    other = create_user(db, role="student")
+    reviewer = create_user(db, role="admin")
     response_id = uuid4()
 
     first = FeedbackService.submit(
@@ -42,7 +41,7 @@ def test_vote_replacement_and_redacted_candidate(db, collection):
 
     from app.admin.store import AdminStore
 
-    advisor = _create_user(db, role="advisor")
+    advisor = create_user(db, role="advisor")
     AdminStore(db, reviewer).create_grant(
         grant_type="advisor_access", actor_user_id=advisor.user_id,
         target_workspace_key=student.workspace_key, resource_type="all_records",
@@ -120,9 +119,9 @@ def _trace(db, collection):
 
 
 def test_triage_opens_a_gap_and_stale_source_blocks_silent_promotion(db, collection):
-    student = _create_user(db, role="student")
-    advisor = _create_user(db, role="advisor")
-    reviewer = _create_user(db, role="admin")
+    student = create_user(db, role="student")
+    advisor = create_user(db, role="advisor")
+    reviewer = create_user(db, role="admin")
     response_id = uuid4()
     comment = "needs a source from the student"
     feedback = FeedbackService.submit(

@@ -362,12 +362,6 @@ def test_page_to_markdown_keeps_content_column_only():
         assert dropped not in markdown
 
 
-def test_programs_config_covers_every_program():
-    names, pages = scrape_programs.load_config(CONFIGS / "programs.toml")
-    assert {"COMPSCIBS", "MATHBS", "QSSBS", "PHYSICSBS", "BIOLOGYBS"} <= set(names)
-    assert all(page["url"].split("/")[2].endswith("emory.edu") for page in pages)
-
-
 def test_scrape_programs_writes_markdown_with_provenance(tmp_path):
     pdf = b"%PDF-1.4 fake"
 

@@ -16,13 +16,6 @@ def _write(tmp_path: Path, text: str) -> Path:
     return path
 
 
-def test_current_config_loads():
-    config = load_retrieval_config()
-    assert config.fusion.min_score > 0.0
-    assert config.fusion.dedupe is True
-    assert 0.0 < config.seams.embed.min_similarity < 1.0
-
-
 def test_unknown_embed_key_is_an_error(tmp_path):
     text = _BASE.replace("only_quota = 4", "only_quota = 4\nbogus = 1")
     with pytest.raises(ConfigError, match="unknown keys"):

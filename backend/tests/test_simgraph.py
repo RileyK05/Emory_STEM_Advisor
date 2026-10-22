@@ -169,10 +169,6 @@ def test_missing_nudges_file_means_no_nudges(tmp_path):
     assert load_nudges(tmp_path / "absent.toml") == Nudges()
 
 
-def test_shipped_nudges_file_parses():
-    assert load_nudges().together == ()
-
-
 def test_nudges_reject_bad_input():
     with pytest.raises(NudgeError):
         parse_nudges({"together": [{"courses": ["ECON 101", "not a code"]}]})

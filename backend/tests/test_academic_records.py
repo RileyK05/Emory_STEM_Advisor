@@ -1,14 +1,11 @@
 """Tests for academic record import, normalization, verification, and service operations (Item 1)."""
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 
 from app.admin.store import AdminStore
-from app.auth.models import Principal
-from app.db import queries
 from app.records.importer import (
     infer_status_and_credits,
     normalize_course_code,
@@ -16,40 +13,7 @@ from app.records.importer import (
     parse_csv_content,
 )
 from app.records.service import AcademicRecordService
-from tests.helpers import api_client
-
-
-def _create_user(db, *, role="student", status="active", workspace=None, email=None):
-    user_id = uuid4()
-    workspace_key = workspace or f"ws-{user_id}"
-    email_addr = email or f"{user_id}@emory.edu"
-    db.execute(
-        queries.get("upsert_app_user"),
-        {
-            "user_id": user_id,
-            "issuer": "https://auth.emory.edu",
-            "subject": str(user_id),
-            "workspace_key": workspace_key,
-            "display_name": f"User {user_id}",
-            "email": email_addr,
-            "bootstrap": False,
-        },
-    ).fetchone()
-    db.execute(
-        queries.get("admin_update_user"),
-        {"user_id": user_id, "role": role, "status": status},
-    )
-    db.commit()
-    return Principal(
-        workspace_key=workspace_key,
-        issuer="https://auth.emory.edu",
-        subject=str(user_id),
-        display_name=f"User {user_id}",
-        email=email_addr,
-        role=role,
-        user_id=user_id,
-        status=status,
-    )
+from tests.helpers import api_client, create_user
 
 
 def test_normalizer_unit_rules():
@@ -152,7 +116,7 @@ CS 224,Fall 2023,-1.0,A,Bad Credits
 
 
 def test_import_preview_defaults_duplicate_rows_to_reject(db):
-    student = _create_user(db, role="student")
+    student = create_user(db, role="student")
     record = AcademicRecordService.get_or_create_record(db, student.workspace_key)
     csv_data = """Course,Term,Credits,Grade,Title
 CS 170,Fall 2024,4.0,A,Intro to CS
@@ -170,9 +134,9 @@ MATH 111,Fall 2024,3.0,B,Calculus I
 
 
 def test_academic_record_service_lifecycle(db):
-    student = _create_user(db, role="student")
-    advisor = _create_user(db, role="advisor")
-    other_student = _create_user(db, role="student")
+    student = create_user(db, role="student")
+    advisor = create_user(db, role="advisor")
+    other_student = create_user(db, role="student")
 
     # 1. Initial record creation
     rec = AcademicRecordService.get_or_create_record(db, student.workspace_key)
@@ -218,7 +182,7 @@ def test_academic_record_service_lifecycle(db):
             db, student.workspace_key, att1["attempt_id"], "manual_staff", "Checked", advisor,
         )
     assert no_grant.value.status_code == 403
-    admin = _create_user(db, role="admin")
+    admin = create_user(db, role="admin")
     grant = AdminStore(db, admin).create_grant(
         grant_type="advisor_access", actor_user_id=advisor.user_id,
         target_workspace_key=student.workspace_key, resource_type="all_records",
@@ -287,7 +251,7 @@ def test_academic_record_service_lifecycle(db):
 
 
 def test_import_preview_and_commit_concurrency(db):
-    student = _create_user(db, role="student")
+    student = create_user(db, role="student")
     rec = AcademicRecordService.get_or_create_record(db, student.workspace_key)
     initial_rev = rec["record_revision"]
 
@@ -373,7 +337,7 @@ MATH 111,Fall 2023,3.0,B+,Calculus I
     ({"earnedCredits": float("inf")}, None),
 ])
 def test_corrected_import_rows_are_validated_before_commit(db, correction, expected):
-    student = _create_user(db)
+    student = create_user(db)
     record = AcademicRecordService.get_or_create_record(db, student.workspace_key)
     revision = record["record_revision"]
     preview = AcademicRecordService.create_import_preview(

@@ -1,11 +1,14 @@
 """Shared helpers for API and ingest-backed tests (fake provider/embedder, real Postgres)."""
 
 from dataclasses import replace
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from app.auth.models import Principal
 from app.config import load_settings
+from app.db import queries
 from app.retrieval.config import load_retrieval_config
 from tests.fakes import FakeEmbedder, FakeProvider, whitespace_tokens
 
@@ -72,3 +75,37 @@ def collection_name(db, collection):
     return db.execute(
         "SELECT name FROM collections WHERE collection_id = %(c)s", {"c": collection}
     ).fetchone()["name"]
+
+
+def create_user(db, *, role="student", status="active", workspace=None, email=None):
+    """Insert an app user with this role/status and return its Principal."""
+    user_id = uuid4()
+    workspace_key = workspace or f"ws-{user_id}"
+    email_addr = email or f"{user_id}@emory.edu"
+    db.execute(
+        queries.get("upsert_app_user"),
+        {
+            "user_id": user_id,
+            "issuer": "https://auth.emory.edu",
+            "subject": str(user_id),
+            "workspace_key": workspace_key,
+            "display_name": f"User {user_id}",
+            "email": email_addr,
+            "bootstrap": False,
+        },
+    ).fetchone()
+    db.execute(
+        queries.get("admin_update_user"),
+        {"user_id": user_id, "role": role, "status": status},
+    )
+    db.commit()
+    return Principal(
+        workspace_key=workspace_key,
+        issuer="https://auth.emory.edu",
+        subject=str(user_id),
+        display_name=f"User {user_id}",
+        email=email_addr,
+        role=role,
+        user_id=user_id,
+        status=status,
+    )

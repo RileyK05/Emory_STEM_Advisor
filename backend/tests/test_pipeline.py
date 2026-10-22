@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from psycopg import errors
 
+from app.config import load_settings
 from app.db import queries
 from app.ingest.extract import UnsupportedContentType
 from app.ingest.pipeline import ingest_file
@@ -15,39 +16,19 @@ from tests.fakes import FakeEmbedder, whitespace_tokens
 _MODEL = "fake-model"
 
 
-def _config():
-    return load_retrieval_config()
-
-
-def _embedder():
-    return FakeEmbedder(dim=8)
+def _ingest(db, collection, path, content_type, **overrides):
+    return ingest_file(db, **{
+        "collection_id": collection, "path": path, "content_type": content_type,
+        "count_tokens": whitespace_tokens, "embedder": FakeEmbedder(dim=8),
+        "embed_model": _MODEL, "config": load_retrieval_config(), **overrides,
+    })
 
 
 def test_ingest_markdown_twice_dedupes(db, collection, tmp_path):
     path = tmp_path / "doc.md"
     path.write_text("# Title\n\none two three four five\n", encoding="utf-8")
-    config = _config()
-
-    first = ingest_file(
-        db,
-        collection_id=collection,
-        path=path,
-        content_type="text/markdown",
-        count_tokens=whitespace_tokens,
-        embedder=_embedder(),
-        embed_model=_MODEL,
-        config=config,
-    )
-    second = ingest_file(
-        db,
-        collection_id=collection,
-        path=path,
-        content_type="text/markdown",
-        count_tokens=whitespace_tokens,
-        embedder=_embedder(),
-        embed_model=_MODEL,
-        config=config,
-    )
+    first = _ingest(db, collection, path, "text/markdown")
+    second = _ingest(db, collection, path, "text/markdown")
     assert first == second
 
     sources = db.execute(
@@ -68,74 +49,42 @@ def test_ingest_markdown_twice_dedupes(db, collection, tmp_path):
         })
 
 
-def test_failed_extract_records_error(db, collection, tmp_path):
-    path = tmp_path / "broken.bin"
-    path.write_bytes(b"\x00\x01\x02")
-    with pytest.raises(UnsupportedContentType):
-        ingest_file(
-            db,
-            collection_id=collection,
-            path=path,
-            content_type="application/octet-stream",
-            count_tokens=whitespace_tokens,
-            embedder=_embedder(),
-            embed_model=_MODEL,
-            config=_config(),
-        )
-    row = db.execute(
-        "SELECT status, error_message FROM sources WHERE collection_id = %(c)s",
-        {"c": collection},
-    ).fetchone()
+class _BrokenEmbedder:
+    def embed_documents(self, _texts):
+        raise RuntimeError("embedding down")
+
+
+def _broken_tokens(_text):
+    raise RuntimeError("tokenizer broke")
+
+
+@pytest.mark.parametrize("raw, content_type, overrides, error, message", [
+    (b"\x00\x01\x02", "application/octet-stream", {}, UnsupportedContentType, ""),
+    (b"alpha beta gamma\n", "text/plain", {"count_tokens": _broken_tokens}, RuntimeError,
+     "tokenizer broke"),
+    (b"alpha beta gamma\n", "text/plain", {"embedder": _BrokenEmbedder()}, RuntimeError,
+     "embedding down"),
+], ids=["extract", "chunking", "embedding"])
+def test_failed_ingest_marks_the_source_failed(db, collection, tmp_path, raw, content_type,
+                                               overrides, error, message):
+    path = tmp_path / "doc"
+    path.write_bytes(raw)
+    with pytest.raises(error):
+        _ingest(db, collection, path, content_type, **overrides)
+    row = db.execute("SELECT status, error_message FROM sources WHERE collection_id = %(c)s",
+                     {"c": collection}).fetchone()
     assert row["status"] == "failed"
-    assert row["error_message"]
-
-
-def test_failed_chunking_records_error(db, collection, tmp_path):
-    path = tmp_path / "doc.txt"
-    path.write_text("alpha beta gamma\n", encoding="utf-8")
-
-    def broken_tokens(text: str) -> int:
-        raise RuntimeError("tokenizer broke")
-
-    with pytest.raises(RuntimeError, match="tokenizer broke"):
-        ingest_file(
-            db,
-            collection_id=collection,
-            path=path,
-            content_type="text/plain",
-            count_tokens=broken_tokens,
-            embedder=_embedder(),
-            embed_model=_MODEL,
-            config=_config(),
-        )
-    row = db.execute(
-        "SELECT status, error_message FROM sources WHERE collection_id = %(c)s",
-        {"c": collection},
-    ).fetchone()
-    assert row["status"] == "failed"
-    assert "tokenizer broke" in row["error_message"]
+    assert row["error_message"] and message in row["error_message"]
 
 
 def test_raw_upload_goes_to_data_dir(db, collection, tmp_path):
-    from app.config import load_settings
-
     path = tmp_path / "doc.txt"
     path.write_text("alpha beta gamma\n", encoding="utf-8")
-    ingest_file(
-        db,
-        collection_id=collection,
-        path=path,
-        content_type="text/plain",
-        count_tokens=whitespace_tokens,
-        embedder=_embedder(),
-        embed_model=_MODEL,
-        config=_config(),
-    )
+    _ingest(db, collection, path, "text/plain")
     raw_path = db.execute(
         "SELECT raw_path FROM sources WHERE collection_id = %(c)s", {"c": collection}
     ).fetchone()["raw_path"]
-    data_dir = load_settings().data_dir.resolve()
-    assert data_dir in Path(raw_path).resolve().parents
+    assert load_settings().data_dir.resolve() in Path(raw_path).resolve().parents
 
 
 def test_verified_provenance_publishes_with_the_indexed_version(db, collection, tmp_path):

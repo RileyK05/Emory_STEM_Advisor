@@ -9,8 +9,7 @@ from psycopg.types.json import Jsonb
 from app.advising.comparison import MENTION_OVERLAP_ONLY
 from app.advising.comparison_service import ProgramComparisonService
 from app.db import queries
-from tests.helpers import api_client
-from tests.test_degree_audit import _create_user
+from tests.helpers import api_client, create_user
 
 
 def _program(db, collection, source_id, title, rules_tree):
@@ -96,8 +95,8 @@ def comparison_programs(db, collection):
 
 def test_comparison_overlay_is_not_saved_credit(db, collection, comparison_programs):
     exact_id, open_id = comparison_programs
-    student = _create_user(db, role="student")
-    other = _create_user(db, role="student")
+    student = create_user(db, role="student")
+    other = create_user(db, role="student")
     record_id = uuid4()
     db.execute(
         """

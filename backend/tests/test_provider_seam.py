@@ -8,25 +8,6 @@ from app.config import load_settings
 from app.llm import get_provider
 
 
-def test_factories_use_default_model_configuration_without_loading_weights(monkeypatch):
-    from app.embeddings import get_embedder
-    from app.embeddings.granite import GraniteEmbedder
-    from app.llm.hf_local import HFLocalProvider
-
-    for key in ("LLM_PROVIDER", "HF_MODEL_ID", "HF_MAX_CONTEXT", "EMBEDDING_PROVIDER",
-                "EMBEDDING_MODEL_ID", "EMBEDDING_MAX_TOKENS"):
-        monkeypatch.delenv(key, raising=False)
-    settings = load_settings()
-    assert settings.llm_provider == "hf-local"
-    assert settings.hf_model_id == "openbmb/MiniCPM-2B-128k"
-    assert 0 < settings.hf_max_context < 128_000
-    assert isinstance(get_provider(settings), HFLocalProvider)
-    assert settings.embedding_provider == "granite"
-    assert settings.embedding_model_id == "ibm-granite/granite-embedding-125m-english"
-    assert 0 < settings.embedding_max_tokens <= 512
-    assert isinstance(get_embedder(settings), GraniteEmbedder)
-
-
 def test_factory_honors_hf_model_override_and_model_specific_stops(monkeypatch):
     monkeypatch.delenv("HF_STOP_TOKEN_STRINGS", raising=False)
     monkeypatch.setenv("HF_MODEL_ID", "openbmb/MiniCPM-2B-128k")

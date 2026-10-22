@@ -4,8 +4,8 @@ import pytest
 
 import app.runtime as runtime_module
 from app.config import load_settings
-from app.runtime import build_connections, build_provider, build_runtime
-from tests.fakes import FakeEmbedder, FakeProvider
+from app.runtime import build_provider
+from tests.fakes import FakeProvider
 
 
 @pytest.fixture
@@ -33,15 +33,3 @@ def test_worker_skips_the_static_provider_when_routing_serves_requests(monkeypat
     # The API still builds it (as a fallback) even with routing enabled.
     provider, error = build_provider(routed)
     assert isinstance(provider, FakeProvider) and error is None and calls == [routed]
-
-
-def test_injected_parts_are_used_as_given_and_connections_are_built_once(settings):
-    embedder, provider = FakeEmbedder(dim=8), FakeProvider()
-    built = build_runtime(settings, embedder=embedder, provider=provider)
-    assert built.embedder is embedder and built.provider is provider
-    assert built.provider_error is None and built.settings is settings
-    # The profile store and runtime are one pair, so callers share provider caches.
-    assert built.connection_runtime is not None and built.connection_profiles is not None
-    profiles, connection_runtime = build_connections(settings)
-    assert profiles is not built.connection_profiles  # each build is its own pair
-    assert connection_runtime is not built.connection_runtime

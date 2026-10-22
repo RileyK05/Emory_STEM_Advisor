@@ -14,41 +14,7 @@ from app.auth.capabilities import (
 )
 from app.auth.models import Principal
 from app.conversations.store import ConversationStore
-from app.db import queries
-
-
-def _create_user(db, *, role="student", status="active", workspace=None, email=None):
-    user_id = uuid4()
-    workspace_key = workspace or f"ws-{user_id}"
-    email_addr = email or f"{user_id}@emory.edu"
-    db.execute(
-        queries.get("upsert_app_user"),
-        {
-            "user_id": user_id,
-            "issuer": "https://auth.emory.edu",
-            "subject": str(user_id),
-            "workspace_key": workspace_key,
-            "display_name": f"User {user_id}",
-            "email": email_addr,
-            "bootstrap": False,
-        },
-    ).fetchone()
-    # Update role and status
-    db.execute(
-        queries.get("admin_update_user"),
-        {"user_id": user_id, "role": role, "status": status},
-    )
-    db.commit()
-    return Principal(
-        workspace_key=workspace_key,
-        issuer="https://auth.emory.edu",
-        subject=str(user_id),
-        display_name=f"User {user_id}",
-        email=email_addr,
-        role=role,
-        user_id=user_id,
-        status=status,
-    )
+from tests.helpers import create_user
 
 
 def test_role_capability_matrix():
@@ -101,7 +67,7 @@ def test_require_capability_enforces_status_and_role():
 
 
 def test_last_admin_protection(db):
-    admin1 = _create_user(db, role="admin", status="active")
+    admin1 = create_user(db, role="admin", status="active")
     store = AdminStore(db, admin1)
     # Admin1 cannot demote self when sole admin
     with pytest.raises(HTTPException) as last_admin:
@@ -110,7 +76,7 @@ def test_last_admin_protection(db):
     assert "last active administrator" in last_admin.value.detail.lower()
 
     # Create admin2
-    admin2 = _create_user(db, role="admin", status="active")
+    admin2 = create_user(db, role="admin", status="active")
 
     # With multiple admins, admin1 trying to demote self still raises self-demote error
     with pytest.raises(HTTPException) as self_demote:
@@ -138,8 +104,8 @@ def test_last_admin_protection(db):
 
 
 def test_admin_transcript_read_requires_grant_for_cross_workspace(db):
-    student = _create_user(db, role="student", status="active")
-    admin1 = _create_user(db, role="admin", status="active")
+    student = create_user(db, role="student", status="active")
+    admin1 = create_user(db, role="admin", status="active")
 
     # Student creates conversation with turns
     conv_store = ConversationStore(db, student.workspace_key)
@@ -170,9 +136,9 @@ def test_admin_transcript_read_requires_grant_for_cross_workspace(db):
 
 
 def test_grant_lifecycle_and_expiry_revocation(db):
-    student = _create_user(db, role="student", status="active")
-    admin_approver = _create_user(db, role="admin", status="active")
-    admin_support = _create_user(db, role="admin", status="active")
+    student = create_user(db, role="student", status="active")
+    admin_approver = create_user(db, role="admin", status="active")
+    admin_support = create_user(db, role="admin", status="active")
 
     conv_store = ConversationStore(db, student.workspace_key)
     conv = conv_store.create("Student Chemistry Plan")
@@ -229,9 +195,9 @@ def test_grant_lifecycle_and_expiry_revocation(db):
 
 
 def test_grant_expired_access_denied(db):
-    student = _create_user(db, role="student", status="active")
-    approver = _create_user(db, role="admin", status="active")
-    support = _create_user(db, role="admin", status="active")
+    student = create_user(db, role="student", status="active")
+    approver = create_user(db, role="admin", status="active")
+    support = create_user(db, role="admin", status="active")
 
     conv_store = ConversationStore(db, student.workspace_key)
     conv = conv_store.create("Expired Grant Test")
@@ -270,12 +236,12 @@ def test_http_grant_scope_denies_cross_owner_reads_downloads_and_publication(
     from app.auth.dependencies import get_principal
     from tests.helpers import api_client
 
-    student = _create_user(db, role="student")
-    other = _create_user(db, role="student")
-    advisor = _create_user(db, role="advisor")
-    requester = _create_user(db, role="admin")
-    approver = _create_user(db, role="admin")
-    auditor = _create_user(db, role="auditor")
+    student = create_user(db, role="student")
+    other = create_user(db, role="student")
+    advisor = create_user(db, role="advisor")
+    requester = create_user(db, role="admin")
+    approver = create_user(db, role="admin")
+    auditor = create_user(db, role="auditor")
 
     conv_store = ConversationStore(db, student.workspace_key)
     conv = conv_store.create("Private record conversation")

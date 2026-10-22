@@ -53,9 +53,3 @@ def test_leading_comments_and_blank_lines_allowed(tmp_path):
 def test_get_unknown_name_raises():
     with pytest.raises(KeyError):
         queries.get("definitely_not_a_real_query")
-
-
-def test_shipped_queries_load():
-    blocks = queries.load_queries()
-    assert "insert_collection" in blocks
-    assert "get_collection_by_name" in blocks

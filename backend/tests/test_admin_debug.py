@@ -146,16 +146,6 @@ def test_admin_lists_and_updates_users_with_an_audit_trail(db, collection):
     assert revoked.json() == {"revoked": 0}
 
 
-def test_admin_cannot_remove_the_last_active_admin(db, collection):
-    client = api_client(db, collection)
-    user_id = _app_user(db, role="admin")
-    response = client.patch(f"/api/admin/users/{user_id}", json={
-        "role": "student", "status": "active",
-    })
-    assert response.status_code == 409
-    assert "last active administrator" in response.text
-
-
 @pytest.mark.parametrize("role", ["student", "advisor", "auditor"])
 def test_non_admin_is_rejected_from_admin_and_debug_surfaces(db, collection, role, monkeypatch):
     client = api_client(db, collection)

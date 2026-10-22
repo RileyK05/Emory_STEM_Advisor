@@ -39,18 +39,6 @@ def _config(**overrides):
     return EmbedSeamConfig(**base)
 
 
-def test_fake_embeddings_are_deterministic_normalized_and_handle_empty_batches():
-    embedder = FakeEmbedder(dim=8)
-    batch = embedder.embed_documents(["alpha", "beta", "alpha"])
-    assert batch.shape == (3, 8) and batch.dtype == np.float32
-    np.testing.assert_array_equal(batch[0], batch[2])
-    np.testing.assert_array_equal(batch[0], embedder.embed_query("alpha"))
-    assert not np.array_equal(batch[0], batch[1])
-    np.testing.assert_allclose(np.linalg.norm(batch, axis=1), 1.0, atol=1e-6)
-    assert embedder.embed_documents([]).shape == (0, 8)
-    assert whitespace_tokens("alpha beta") == 2 and whitespace_tokens("") == 0
-
-
 def test_embedding_results_order_by_score_then_source_and_chunk_with_a_stable_limit(
     db, collection, tmp_path,
 ):

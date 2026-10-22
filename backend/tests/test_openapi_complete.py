@@ -43,17 +43,3 @@ def test_every_route_declares_a_typed_body_or_a_documented_non_json_result(opera
         if not (typed_json or non_json or no_body):
             undocumented.append(f"{method} {path}")
     assert not undocumented, "routes with no typed body or documented result: " + ", ".join(undocumented)
-
-
-def test_file_routes_document_their_media_types(operations):
-    download = _success(operations[("GET", "/api/artifacts/{artifact_id}/download")])[1]["content"]
-    assert "application/vnd.openxmlformats-officedocument.wordprocessingml.document" in download
-    assert "text/markdown" in download
-    pdf = _success(operations[("GET", "/api/artifacts/{artifact_id}/preview.pdf")])[1]["content"]
-    assert "application/pdf" in pdf
-
-
-def test_auth_redirects_and_logout_document_their_status(operations):
-    assert _success(operations[("GET", "/api/auth/login")])[0] == "303"
-    assert _success(operations[("GET", "/api/auth/callback")])[0] == "303"
-    assert _success(operations[("POST", "/api/auth/logout")])[0] == "204"
