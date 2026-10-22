@@ -70,16 +70,12 @@ class RuleNode:
         if remaining[0] < 0:
             raise RuleValidationError("rule trees support at most 256 nodes")
 
-        def value(camel, snake=None, default=None):
-            return data.get(camel, data.get(snake, default) if snake else default)
-
         try:
-            node_type = RuleNodeType(value("nodeType", "node_type"))
-            disposition = CoverageDisposition(value(
-                "coverageDisposition", "coverage_disposition", "supported"))
+            node_type = RuleNodeType(data.get("nodeType"))
+            disposition = CoverageDisposition(data.get("coverageDisposition", "supported"))
         except (ValueError, TypeError) as exc:
             raise RuleValidationError("invalid nodeType or coverageDisposition") from exc
-        codes = value("courseCodes", "course_codes", [])
+        codes = data.get("courseCodes", [])
         children = data.get("children", [])
         evidence = data.get("evidence", [])
         if not all(isinstance(v, (list, tuple)) for v in (codes, children, evidence)):
@@ -93,15 +89,15 @@ class RuleNode:
                 raise RuleValidationError("invalid course code")
             normalized.append(code)
         return cls(
-            node_id=value("nodeId", "node_id", ""), node_type=node_type,
+            node_id=data.get("nodeId", ""), node_type=node_type,
             title=data.get("title", ""), description=data.get("description"),
-            section=data.get("section"), raw_position=value("rawPosition", "raw_position"),
+            section=data.get("section"), raw_position=data.get("rawPosition"),
             coverage_disposition=disposition, course_codes=tuple(normalized),
-            count=data.get("count"), min_credits=value("minCredits", "min_credits"),
-            min_grade=value("minGrade", "min_grade"),
+            count=data.get("count"), min_credits=data.get("minCredits"),
+            min_grade=data.get("minGrade"),
             children=tuple(cls.from_dict(c, _depth=_depth + 1, _remaining=remaining) for c in children),
             evidence=tuple(evidence),
-            unresolved_reason=value("unresolvedReason", "unresolved_reason"),
+            unresolved_reason=data.get("unresolvedReason"),
         )
 
 
