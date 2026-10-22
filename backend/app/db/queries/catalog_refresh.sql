@@ -55,3 +55,25 @@ UPDATE catalog_refresh_batches
 SET status = 'published', published_at = now()
 WHERE batch_id = %(batch_id)s AND status = 'staging'
 RETURNING batch_id;
+
+-- name: list_catalog_edition_source_ids
+-- The institutional sources an edition pins: current, indexed, not private uploads.
+SELECT source_id
+FROM sources
+WHERE collection_id = %(collection_id)s
+  AND workspace_key IS NULL
+  AND is_current
+  AND status = 'indexed'
+ORDER BY source_id;
+
+-- name: get_staging_catalog_refresh_batch
+SELECT batch_id
+FROM catalog_refresh_batches
+WHERE collection_id = %(collection_id)s AND status = 'staging'
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: next_catalog_edition_revision
+SELECT coalesce(max(revision), 0) + 1 AS revision
+FROM catalog_editions
+WHERE collection_id = %(collection_id)s;

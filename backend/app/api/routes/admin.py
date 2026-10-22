@@ -45,6 +45,7 @@ from app.api.schemas import (
     CatalogRefreshBatchResponse,
     CatalogRefreshPublishRequest,
     CatalogRefreshStartRequest,
+    CatalogRefreshStatusResponse,
     GrantedResultStaging,
     ModelPriceSchedule,
     ModelPriceScheduleCreate,
@@ -1086,7 +1087,9 @@ def diff_program_rule_releases(
     )
 
 
-def _edition_item(row: dict) -> CatalogEditionItem:
+def _edition_item(row: dict | None) -> CatalogEditionItem | None:
+    if row is None:
+        return None
     return CatalogEditionItem(
         editionId=row["edition_id"],
         revision=row["revision"],
@@ -1108,6 +1111,17 @@ def _refresh_batch(data: dict) -> CatalogRefreshBatchResponse:
         compatible=data["compatible"],
         currentEdition=_edition_item(data["current_edition"]),
         stagedEdition=_edition_item(data["staged_edition"]),
+    )
+
+
+@router.get("/catalog-refresh", response_model=CatalogRefreshStatusResponse)
+def catalog_refresh_status(collectionId: UUID, conn: Conn, principal: Admin):
+    _operation(principal, "sources.review")
+    data = CatalogRefreshService.current(conn, collectionId, principal)
+    conn.commit()
+    return CatalogRefreshStatusResponse(
+        currentEdition=_edition_item(data["current_edition"]),
+        staging=_refresh_batch(data["staging"]) if data["staging"] else None,
     )
 
 

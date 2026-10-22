@@ -1722,8 +1722,14 @@ export interface CatalogRefreshBatchResponse {
   baseRevision: number;
   stagedRevision: number;
   compatible: boolean;
-  currentEdition: CatalogEditionItem;
+  /** Null until the collection's first edition is published. */
+  currentEdition?: CatalogEditionItem | null;
   stagedEdition: CatalogEditionItem;
+}
+
+export interface CatalogRefreshStatusResponse {
+  currentEdition?: CatalogEditionItem | null;
+  staging?: CatalogRefreshBatchResponse | null;
 }
 
 export interface CatalogRefreshStartRequest {

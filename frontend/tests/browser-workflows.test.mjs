@@ -328,6 +328,16 @@ async function setupPage({
   let comparisonFailures = comparisonFailOnce ? 1 : 0;
   let comparisonConflict = comparisonFailOnce;
   let refreshConflict = refreshConflictOnce;
+  let refreshPublished = {
+    editionId: 'edition-1',
+    revision: 1,
+    editionKey: '2026',
+    isCurrent: true,
+    topicBuildId: 'build-1',
+    sourceIds: ['source-1'],
+  };
+  let refreshEdition = null;
+  let refreshStaged = false;
   let feedbackConflict = feedbackConflictOnce;
   let triageFailures = triageFailOnce ? 1 : 0;
   let triageConflict = triageConflictOnce;
@@ -596,38 +606,50 @@ async function setupPage({
       comparisons = [row];
       return route.fulfill({ json: row });
     }
-    if (apiUrl.pathname === '/api/admin/catalog-refresh' && req.method() === 'POST') {
-      if (refreshConflict) {
-        refreshConflict = false;
-        return route.fulfill({ status: 409, json: { detail: 'catalog refresh conflict' } });
-      }
-      return route.fulfill({
-        json: {
-          batchId: 'batch-1',
-          collectionId: 'col-1',
-          editionKey: '2027',
-          status: 'staging',
-          baseRevision: 1,
-          stagedRevision: 2,
-          compatible: true,
-          currentEdition: {
-            editionId: 'edition-1',
-            revision: 1,
-            editionKey: '2026',
-            isCurrent: true,
-            topicBuildId: 'build-1',
-            sourceIds: ['source-1'],
-          },
-          stagedEdition: {
-            editionId: 'edition-2',
-            revision: 2,
-            editionKey: '2027',
-            isCurrent: false,
-            topicBuildId: 'build-1',
-            sourceIds: ['source-1'],
-          },
-        },
+    if (apiUrl.pathname.startsWith('/api/admin/catalog-refresh')) {
+      const edition = (revision, editionKey, isCurrent) => ({
+        editionId: `edition-${revision}`,
+        revision,
+        editionKey,
+        isCurrent,
+        topicBuildId: 'build-1',
+        sourceIds: ['source-1'],
       });
+      const batchFor = (status) => ({
+        batchId: 'batch-1',
+        collectionId: 'col-1',
+        editionKey: refreshEdition.editionKey,
+        status,
+        baseRevision: refreshPublished.revision,
+        stagedRevision: refreshPublished.revision + 1,
+        compatible: true,
+        currentEdition: refreshPublished,
+        stagedEdition: refreshEdition,
+      });
+      if (req.method() === 'GET') {
+        return route.fulfill({
+          json: { currentEdition: refreshPublished, staging: refreshStaged ? batchFor('staging') : null },
+        });
+      }
+      if (apiUrl.pathname === '/api/admin/catalog-refresh' && req.method() === 'POST') {
+        if (refreshConflict) {
+          refreshConflict = false;
+          return route.fulfill({ status: 409, json: { detail: 'catalog refresh conflict' } });
+        }
+        refreshEdition = edition(refreshPublished.revision + 1, req.postDataJSON().editionKey, false);
+        refreshStaged = true;
+        return route.fulfill({ status: 201, json: batchFor('staging') });
+      }
+      if (apiUrl.pathname === '/api/admin/catalog-refresh/batch-1/cancel') {
+        refreshStaged = false;
+        return route.fulfill({ json: batchFor('cancelled') });
+      }
+      if (apiUrl.pathname === '/api/admin/catalog-refresh/batch-1/publish') {
+        assert.equal(req.postDataJSON().expectedRevision, refreshPublished.revision);
+        refreshStaged = false;
+        refreshPublished = { ...refreshEdition, isCurrent: true };
+        return route.fulfill({ json: { ...batchFor('published'), currentEdition: refreshPublished } });
+      }
     }
     if (apiUrl.pathname === '/api/privacy/exports' && req.method() === 'GET') {
       if (privacyReleasedEarly) {
@@ -803,35 +825,6 @@ async function setupPage({
           fixtureDigest: 'b'.repeat(64),
           status: 'published',
           createdAt: '2026-10-20T12:00:00Z',
-        },
-      });
-    }
-    if (apiUrl.pathname === '/api/admin/catalog-refresh/batch-1/cancel' && req.method() === 'POST') {
-      return route.fulfill({
-        json: {
-          batchId: 'batch-1',
-          collectionId: 'col-1',
-          editionKey: '2027',
-          status: 'cancelled',
-          baseRevision: 1,
-          stagedRevision: 2,
-          compatible: true,
-          currentEdition: {
-            editionId: 'edition-1',
-            revision: 1,
-            editionKey: '2026',
-            isCurrent: true,
-            topicBuildId: 'build-1',
-            sourceIds: ['source-1'],
-          },
-          stagedEdition: {
-            editionId: 'edition-2',
-            revision: 2,
-            editionKey: '2027',
-            isCurrent: false,
-            topicBuildId: 'build-1',
-            sourceIds: ['source-1'],
-          },
         },
       });
     }
@@ -4251,7 +4244,7 @@ test('student compares programs without treating mention overlap as saved credit
   }
 });
 
-test('admin cancels a catalog refresh and the published edition stays current', async () => {
+test('admin stages, cancels, and publishes a catalog edition', async () => {
   const session = { mode: 'development', authenticated: true, role: 'admin', workspaceKey: 'admin-ws' };
   const { context, page } = await setupPage({
     entry: '/admin.html',
@@ -4260,18 +4253,22 @@ test('admin cancels a catalog refresh and the published edition stays current', 
   });
   try {
     await page.getByRole('tab', { name: 'Catalog refresh' }).click();
-    await page.getByText('No catalog refresh is in progress.', { exact: true }).waitFor();
     await page.getByLabel('Collection id').fill('col-1');
+    await page.getByRole('button', { name: 'Load catalog edition', exact: true }).click();
+    await page.getByText('Published edition 2026 (revision 1, 1 sources)', { exact: true }).waitFor();
     await page.getByLabel('Edition key').fill('2027');
     await page.getByRole('button', { name: 'Stage catalog refresh', exact: true }).click();
     await page.getByRole('alert').getByText('catalog refresh conflict').waitFor();
     assert.equal(await page.getByLabel('Edition key').inputValue(), '2027');
-    await page.getByRole('button', { name: 'Retry catalog refresh', exact: true }).click();
-    await page.getByText('Refresh status staging', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Stage catalog refresh', exact: true }).click();
+    await page.getByText('Staged edition 2027 (revision 2, 1 sources)', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Cancel catalog refresh', exact: true }).click();
-    await page.getByText('Refresh status cancelled', { exact: true }).waitFor();
-    await page.getByText('Published edition 2026 revision 1 remains current', { exact: true }).waitFor();
-    await page.getByText('Topic build build-1 stays usable.', { exact: true }).waitFor();
+    await page.getByText('Catalog refresh cancelled.', { exact: true }).waitFor();
+    await page.getByText('Published edition 2026 (revision 1, 1 sources)', { exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Stage catalog refresh', exact: true }).click();
+    await page.getByRole('button', { name: 'Publish catalog edition', exact: true }).click();
+    await page.getByText('Catalog edition published.', { exact: true }).waitFor();
+    await page.getByText('Published edition 2027 (revision 2, 1 sources)', { exact: true }).waitFor();
   } finally {
     await context.close();
   }

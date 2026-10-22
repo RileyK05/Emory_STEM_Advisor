@@ -37,6 +37,7 @@ import type {
   CohortMember,
   CatalogRefreshBatchResponse,
   CatalogRefreshStartRequest,
+  CatalogRefreshStatusResponse,
   CohortAssignmentResponse,
   FeedbackTriageListItem,
   FeedbackTriageRequest,
@@ -494,6 +495,17 @@ export function startCatalogRefresh(body: CatalogRefreshStartRequest): Promise<C
 
 export function cancelCatalogRefresh(batchId: string): Promise<CatalogRefreshBatchResponse> {
   return request(`/api/admin/catalog-refresh/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' });
+}
+
+export function getCatalogRefreshStatus(collectionId: string): Promise<CatalogRefreshStatusResponse> {
+  return request(`/api/admin/catalog-refresh?${new URLSearchParams({ collectionId })}`);
+}
+
+export function publishCatalogRefresh(batchId: string, expectedRevision: number): Promise<CatalogRefreshBatchResponse> {
+  return request(`/api/admin/catalog-refresh/${encodeURIComponent(batchId)}/publish`, {
+    method: 'POST',
+    body: JSON.stringify({ expectedRevision }),
+  });
 }
 
 export function listFeedbackTriage(): Promise<FeedbackTriageListItem[]> {

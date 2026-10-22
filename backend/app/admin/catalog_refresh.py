@@ -1,4 +1,9 @@
-"""Staged catalog refresh. Cancel leaves the published edition and topic build in place."""
+"""Staged catalog refresh.
+
+An edition pins the collection's current institutional sources and topic build
+at staging time. Publishing makes it current; cancelling leaves the published
+edition and its topic build in place. The first refresh publishes revision 1.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,9 @@ from app.auth.models import Principal
 from app.db import queries
 
 
-def _edition(row) -> dict[str, Any]:
+def _edition(row) -> dict[str, Any] | None:
+    if row is None:
+        return None
     return {
         "edition_id": row["edition_id"],
         "revision": row["revision"],
@@ -58,24 +65,52 @@ class CatalogRefreshService:
         require_operation(actor, "sources.review")
 
     @classmethod
+    def current(cls, conn, collection_id: UUID, actor: Principal) -> dict[str, Any]:
+        """The published edition and the refresh still staging, if any."""
+        cls._reviewer(actor)
+        edition = conn.execute(
+            queries.get("get_current_catalog_edition"), {"collection_id": collection_id},
+        ).fetchone()
+        staging = conn.execute(
+            queries.get("get_staging_catalog_refresh_batch"), {"collection_id": collection_id},
+        ).fetchone()
+        return {
+            "current_edition": _edition(edition),
+            "staging": _detail(conn, staging["batch_id"]) if staging else None,
+        }
+
+    @classmethod
     def start(cls, conn, collection_id: UUID, edition_key: str, compatible: bool, actor: Principal):
         cls._reviewer(actor)
         current = conn.execute(
             queries.get("lock_current_catalog_edition"),
             {"collection_id": collection_id},
         ).fetchone()
-        if not current:
-            raise HTTPException(409, "no published catalog edition")
+        base_revision = current["revision"] if current else 0
+        source_ids = [row["source_id"] for row in conn.execute(
+            queries.get("list_catalog_edition_source_ids"), {"collection_id": collection_id},
+        ).fetchall()]
+        if not source_ids:
+            raise HTTPException(409, "the collection has no indexed catalog sources to publish")
+        build = conn.execute(
+            queries.get("get_current_build"), {"collection_id": collection_id},
+        ).fetchone()
+        if conn.execute(queries.get("get_staging_catalog_refresh_batch"),
+                        {"collection_id": collection_id}).fetchone():
+            raise HTTPException(409, "a catalog refresh is already staging")
+        revision = conn.execute(
+            queries.get("next_catalog_edition_revision"), {"collection_id": collection_id},
+        ).fetchone()["revision"]
         staged_id = uuid4()
         conn.execute(
             queries.get("insert_catalog_edition"),
             {
                 "edition_id": staged_id,
                 "collection_id": collection_id,
-                "revision": current["revision"] + 1,
+                "revision": revision,
                 "edition_key": edition_key,
-                "source_ids": list(current["source_ids"] or []),
-                "topic_build_id": current["topic_build_id"],
+                "source_ids": source_ids,
+                "topic_build_id": build["build_id"] if build else None,
                 "is_current": False,
             },
         )
@@ -86,8 +121,8 @@ class CatalogRefreshService:
                 "batch_id": batch_id,
                 "collection_id": collection_id,
                 "edition_key": edition_key,
-                "base_revision": current["revision"],
-                "staged_revision": current["revision"] + 1,
+                "base_revision": base_revision,
+                "staged_revision": revision,
                 "staged_manifest": Jsonb({"compatible": compatible, "editionKey": edition_key}),
                 "compatible": compatible,
                 "staged_edition_id": staged_id,
@@ -131,7 +166,8 @@ class CatalogRefreshService:
             queries.get("lock_current_catalog_edition"),
             {"collection_id": batch["collection_id"]},
         ).fetchone()
-        if not current or current["revision"] != expected_revision or batch["base_revision"] != expected_revision:
+        current_revision = current["revision"] if current else 0
+        if current_revision != expected_revision or batch["base_revision"] != expected_revision:
             raise HTTPException(409, "published catalog revision changed")
         published = conn.execute(
             queries.get("publish_catalog_refresh_batch"),

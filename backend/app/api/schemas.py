@@ -1384,8 +1384,13 @@ class CatalogRefreshBatchResponse(_WireModel):
     baseRevision: int
     stagedRevision: int
     compatible: bool
-    currentEdition: CatalogEditionItem
+    currentEdition: CatalogEditionItem | None = None
     stagedEdition: CatalogEditionItem
+
+
+class CatalogRefreshStatusResponse(_WireModel):
+    currentEdition: CatalogEditionItem | None = None
+    staging: CatalogRefreshBatchResponse | None = None
 
 
 class CatalogRefreshStartRequest(BaseModel):
