@@ -76,7 +76,6 @@ from app.api.schemas import (
     SupportGrantRequestUpdate,
     TelemetryUsageResponse,
 )
-from app.auth.dependencies import get_admin_principal, get_auditor_or_admin_principal
 from app.auth.models import Principal
 from app.db import queries
 from app.ingest.evidence import preserve_indexed_source_evidence
@@ -88,24 +87,10 @@ router = APIRouter(prefix="/api/admin", tags=["institutional admin"])
 Conn = Annotated[object, Depends(deps.get_conn)]
 
 
-def _admin(request: Request,
-           principal: Annotated[Principal, Depends(get_admin_principal)]) -> Principal:
-    if not request.app.state.settings.admin_panel_enabled:
-        raise HTTPException(404, "institutional administration is disabled")
-    return principal
 
 
-def _auditor_or_admin(
-    request: Request,
-    principal: Annotated[Principal, Depends(get_auditor_or_admin_principal)],
-) -> Principal:
-    if not request.app.state.settings.admin_panel_enabled:
-        raise HTTPException(404, "institutional administration is disabled")
-    return principal
-
-
-Admin = Annotated[Principal, Depends(_admin)]
-AuditorOrAdmin = Annotated[Principal, Depends(_auditor_or_admin)]
+Admin = deps.PanelAdmin
+AuditorOrAdmin = deps.PanelAuditorOrAdmin
 
 
 def _operation(principal: Principal, operation: str) -> None:

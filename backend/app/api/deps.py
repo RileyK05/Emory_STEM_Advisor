@@ -1,11 +1,14 @@
 """FastAPI dependency wiring. Concrete providers are built here, once."""
 
 from collections.abc import Iterator
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from psycopg_pool import PoolTimeout
 
+from app.auth.dependencies import get_admin_principal, get_auditor_or_admin_principal
+from app.auth.models import Principal
 from app.config import Settings
 from app.db.bootstrap import prepare_database
 from app.db.collections import UnknownCollection
@@ -118,3 +121,27 @@ def resolve_collection(conn, settings: Settings, name: str | None) -> tuple[UUID
         return lookup_collection(conn, settings, name)
     except UnknownCollection as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
+
+
+def _admin_panel_enabled(request: Request, principal: Principal) -> Principal:
+    if not request.app.state.settings.admin_panel_enabled:
+        raise HTTPException(404, "institutional administration is disabled")
+    return principal
+
+
+def panel_admin(request: Request,
+                principal: Annotated[Principal, Depends(get_admin_principal)]) -> Principal:
+    """An active admin, while the institutional admin surface is enabled."""
+    return _admin_panel_enabled(request, principal)
+
+
+def panel_auditor_or_admin(
+    request: Request,
+    principal: Annotated[Principal, Depends(get_auditor_or_admin_principal)],
+) -> Principal:
+    """An active auditor or admin, while the institutional admin surface is enabled."""
+    return _admin_panel_enabled(request, principal)
+
+
+PanelAdmin = Annotated[Principal, Depends(panel_admin)]
+PanelAuditorOrAdmin = Annotated[Principal, Depends(panel_auditor_or_admin)]

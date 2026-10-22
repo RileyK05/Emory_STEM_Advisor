@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends
 
 from app.admin.prompt_registry import PromptRegistry
 from app.api import deps
@@ -15,22 +15,14 @@ from app.api.schemas import (
     PromptVersionCreateRequest,
     PromptVersionResponse,
 )
-from app.auth.dependencies import get_admin_principal
-from app.auth.models import Principal
 from app.util.json import iso
 
 router = APIRouter(prefix="/api/admin/prompts", tags=["prompt registry"])
 Conn = Annotated[object, Depends(deps.get_conn)]
 
 
-def _admin(request: Request,
-           principal: Annotated[Principal, Depends(get_admin_principal)]) -> Principal:
-    if not request.app.state.settings.admin_panel_enabled:
-        raise HTTPException(404, "institutional administration is disabled")
-    return principal
 
-
-Admin = Annotated[Principal, Depends(_admin)]
+Admin = deps.PanelAdmin
 
 
 def _version(row: dict) -> PromptVersionResponse:

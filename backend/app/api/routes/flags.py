@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from psycopg.types.json import Jsonb
 
 from app.api import deps
@@ -18,7 +18,7 @@ from app.api.schemas import (
     FeatureFlagOverrideRequest,
     FeatureFlagSummary,
 )
-from app.auth.dependencies import get_admin_principal, get_auditor_or_admin_principal, get_principal
+from app.auth.dependencies import get_principal
 from app.auth.models import Principal
 from app.db import queries
 from app.flags.service import FeatureFlagService
@@ -27,26 +27,10 @@ router = APIRouter(tags=["feature flags"])
 Conn = Annotated[object, Depends(deps.get_conn)]
 
 
-def _admin(
-    request: Request,
-    principal: Annotated[Principal, Depends(get_admin_principal)],
-) -> Principal:
-    if not request.app.state.settings.admin_panel_enabled:
-        raise HTTPException(404, "institutional administration is disabled")
-    return principal
 
 
-def _auditor_or_admin(
-    request: Request,
-    principal: Annotated[Principal, Depends(get_auditor_or_admin_principal)],
-) -> Principal:
-    if not request.app.state.settings.admin_panel_enabled:
-        raise HTTPException(404, "institutional administration is disabled")
-    return principal
-
-
-Admin = Annotated[Principal, Depends(_admin)]
-AuditorOrAdmin = Annotated[Principal, Depends(_auditor_or_admin)]
+Admin = deps.PanelAdmin
+AuditorOrAdmin = deps.PanelAuditorOrAdmin
 
 
 @router.get(
