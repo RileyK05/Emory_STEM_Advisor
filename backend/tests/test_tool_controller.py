@@ -335,3 +335,16 @@ def test_usage_aggregation_does_not_treat_missing_counts_as_zero():
     incomplete = Usage(3, 1, source="provider")
     object.__setattr__(incomplete, "completion_tokens", None)
     assert _aggregate_usage([incomplete]).source == "unknown"
+
+
+@pytest.mark.parametrize("cached, expected", [
+    ((2, 5), 7),       # every round reported its cache hits
+    ((2, None), None),  # one round did not: price the whole prompt as uncached
+])
+def test_usage_aggregation_keeps_cached_prompt_tokens(cached, expected):
+    usage = _aggregate_usage([
+        Usage(10, 1, source="provider", cached_prompt_tokens=cached[0]),
+        Usage(20, 3, source="provider", cached_prompt_tokens=cached[1]),
+    ])
+    assert (usage.prompt_tokens, usage.total_tokens, usage.cached_prompt_tokens) == (
+        30, 34, expected)

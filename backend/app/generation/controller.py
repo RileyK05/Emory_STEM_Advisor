@@ -292,9 +292,14 @@ def _aggregate_usage(usages: list[Usage]) -> Usage:
     if not usages or any(u.source != "provider" or u.prompt_tokens is None
                          or u.completion_tokens is None for u in usages):
         return Usage(source="unknown")
-    prompt = sum(u.prompt_tokens or 0 for u in usages)
-    completion = sum(u.completion_tokens or 0 for u in usages)
-    return Usage(prompt, completion, source="provider")
+    prompt = sum(u.prompt_tokens for u in usages)
+    completion = sum(u.completion_tokens for u in usages)
+    # Cached tokens are known only if every round reported them; otherwise the
+    # whole prompt is priced as uncached.
+    cached = (None if any(u.cached_prompt_tokens is None for u in usages)
+              else sum(u.cached_prompt_tokens for u in usages))
+    return Usage(prompt, completion, prompt + completion, source="provider",
+                 cached_prompt_tokens=cached)
 
 
 def _progress(callback, event: str, call: ToolCall) -> None:

@@ -96,6 +96,7 @@ class GeneratedAnswer:
     warnings: tuple[str, ...]
     usage_source: str = "unknown"
     model_id: str | None = None
+    cached_prompt_tokens: int | None = None
 
 
 class GenerationRejected(ValueError):
@@ -299,6 +300,7 @@ def answer_from_context(
         prompt_tokens=result.usage.prompt_tokens,
         completion_tokens=result.usage.completion_tokens, warnings=(),
         usage_source=result.usage.source, model_id=result.model,
+        cached_prompt_tokens=result.usage.cached_prompt_tokens,
     )
     _reject_unusable(result, text, answer)
     try:
@@ -322,11 +324,7 @@ def answer_from_context(
                 answer,
                 recoverable_integrity=True,
             )
-    return GeneratedAnswer(
-        text=text, citations=citations, system_prompt=prompt, user_prompt=user_prompt,
-        prompt_tokens=answer.prompt_tokens, completion_tokens=answer.completion_tokens,
-        warnings=(), usage_source=answer.usage_source, model_id=answer.model_id,
-    )
+    return replace(answer, citations=citations)
 
 
 def _reject_unusable(result: GenerationResult, text: str, answer: GeneratedAnswer) -> None:

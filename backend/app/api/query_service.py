@@ -80,7 +80,7 @@ def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) ->
             created_at=datetime.now(UTC),
             prompt_tokens=answer.prompt_tokens,
             completion_tokens=answer.completion_tokens,
-            cached_prompt_tokens=None,
+            cached_prompt_tokens=answer.cached_prompt_tokens,
             usage_source=answer.usage_source,
         )
         if cost is not None:
