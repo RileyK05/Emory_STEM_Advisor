@@ -144,6 +144,7 @@ def chunk(
     count_tokens: Callable[[str], int],
     target_tokens: int,
     overlap_tokens: int,
+    max_chunks: int | None = None,
 ) -> list[ChunkSpan]:
     # Unit spans are measured when split and again when packed (and on every
     # overlap restart); the count of identical text is deterministic, so reuse it.
@@ -174,4 +175,6 @@ def chunk(
                     token_count=count_tokens(text[s:e]),
                 )
             )
+            if max_chunks is not None and len(chunks) > max_chunks:
+                raise ValueError("source exceeds the upload chunk limit")
     return chunks

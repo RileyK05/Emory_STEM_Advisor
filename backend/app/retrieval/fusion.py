@@ -198,9 +198,19 @@ def fuse(
     order = sorted(by_source, key=lambda s: (-weights[s], str(s)))
     source_slot = {source: index + 1 for index, source in enumerate(order)}
 
-    selected = _select_with_soft_source_cap(
-        by_source, normalized, meta, cited_set_size, order
-    )
+    # Exact named-program evidence is a bounded evidence unit. Reserve its
+    # actual bound chunks before source diversity can strand a continuation.
+    # Ordinary topical queries retain the established diversity allocation.
+    targeted = {c.chunk_id for result in results for c in result.candidates
+                if c.program_evidence and c.chunk_id in normalized}
+    selected = sorted(targeted, key=lambda cid: _candidate_key(cid, normalized, meta))[:cited_set_size]
+    remaining_sources = {source: [cid for cid in ids if cid not in selected]
+                         for source, ids in by_source.items()}
+    remaining_sources = {source: ids for source, ids in remaining_sources.items() if ids}
+    selected.extend(_select_with_soft_source_cap(
+        remaining_sources, normalized, meta, cited_set_size - len(selected),
+        [source for source in order if source in remaining_sources],
+    ))
 
     selected.sort(
         key=lambda cid: (

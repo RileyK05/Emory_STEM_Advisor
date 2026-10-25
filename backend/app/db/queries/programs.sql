@@ -81,6 +81,14 @@ FROM programs
 WHERE collection_id = %(collection_id)s AND is_active
 ORDER BY title;
 
+-- name: list_advising_course_subjects
+SELECT DISTINCT split_part(code, ' ', 1) AS subject
+FROM courses WHERE collection_id = %(collection_id)s
+UNION
+SELECT DISTINCT split_part(m.target_code, ' ', 1) AS subject
+FROM program_course_mentions m JOIN programs p ON p.program_id = m.program_id
+WHERE p.collection_id = %(collection_id)s AND p.is_active;
+
 -- name: list_program_items
 SELECT i.position, i.section, i.text, i.choose,
        coalesce(array_agg(m.target_code ORDER BY m.target_code)

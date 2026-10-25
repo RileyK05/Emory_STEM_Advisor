@@ -6,9 +6,11 @@ Postgres shutdown. No real embedding model is loaded.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import tempfile
+import time
 from dataclasses import replace
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -28,7 +30,11 @@ from app.db.migrate import apply_migrations
 from app.generation.research_tools import ResearchSession, StateInput
 from app.ingest.pipeline import ingest_file
 from app.llm import get_provider
+from app.programs.catalog_pdf import CatalogSection
+from app.programs.importer import import_programs
+from app.programs.requirements import parse_program, to_record
 from app.retrieval.config import load_retrieval_config
+from scripts.scrape_programs import render_section
 from scripts.smoke.live_advising import RecordingProvider
 from tests.fakes import FakeEmbedder, whitespace_tokens
 
@@ -61,6 +67,7 @@ def _seed(conn, settings, config, embedder, *, report, source_id=None):
 
 
 def _probe(conn, settings, config, embedder, provider, conversation, *, case, question, sources=None):
+    sources = None if sources is None else [str(source) for source in sources]
     conversations = ConversationStore(conn, "development")
     rows = conversations.context(conversation, max_bytes=12000, archive=True)
     sequence = conversations.get(conversation)["last_sequence"]
@@ -69,6 +76,7 @@ def _probe(conn, settings, config, embedder, provider, conversation, *, case, qu
         "effective": {"collectionId": settings.default_collection, "sourceIds": sources}})
     provider.case_id = case
     before = len(provider.calls)
+    started = time.perf_counter()
     try:
         response = query_response(QueryRequest(query=question, collectionId=settings.default_collection,
             sourceIds=sources), conn, settings, config, embedder, provider,
@@ -80,6 +88,8 @@ def _probe(conn, settings, config, embedder, provider, conversation, *, case, qu
         print(json.dumps({"case": case, "answer": response.answer,
             "citations": [c.chunkId for c in response.citations], "outcome": response.research.outcome,
             "calls": len(provider.calls) - before, "tools": tools,
+            "seconds": round(time.perf_counter() - started, 3),
+            "completeness": response.research.completeness,
             "notebook_saved": run.state is not None}), flush=True)
         return response, tools, run
     except HTTPException as exc:
@@ -97,7 +107,8 @@ def main():
     parser.add_argument("--token-budget", type=int, default=400000)
     parser.add_argument("--timeout", type=float, default=90)
     parser.add_argument("--case", action="append", choices=["recover-older-evidence",
-        "recover-long-student-report", "empty-source-fence"])
+        "recover-long-student-report", "empty-source-fence", "read-policy-tail",
+        "read-all-requirements"])
     args = parser.parse_args()
     settings = load_settings()
     if not 1 <= args.max_calls <= 30 or not 1000 <= args.token_budget <= 1000000 or not 0 < args.timeout <= 180:
@@ -181,6 +192,69 @@ def main():
                         case="empty-source-fence", sources=[], question="With no sources selected, can you verify the fixture catalog prerequisite for CS 224? Explain the scope limit without using old source facts as current evidence.")
                     passed.append(bool(response and not response.citations
                         and not any(b.kind == "fact" for b in response.research.blocks)))
+                if "read-policy-tail" in selected:
+                    path = scratch / "synthetic-grading-policy.md"
+                    filler = "This section describes library-room scheduling only and establishes no grading or degree rule. "
+                    path.write_text("# Synthetic grading policy for fixture testing only\n\n"
+                        + "\n\n".join(f"## Administrative section {n}\n\n{filler * 4}" for n in range(1, 40))
+                        + "\n\n## Final operative grading rules\n\n"
+                        "The S/U maximum is 17 credit hours. The grading-basis deadline is the 41st class day. "
+                        "The ordinary 4+1 double-counting cap is 5 credits. Exactly one extra S/U credit may count "
+                        "only with written board approval; it is never automatic.\n", encoding="utf-8")
+                    policy = ingest_file(conn, collection_id=collection, path=path,
+                        content_type="text/markdown", count_tokens=whitespace_tokens,
+                        embedder=embedder, embed_model=settings.embedding_model_id, config=config)
+                    conversation, _ = _seed(conn, settings, config, embedder,
+                        report="Investigate the synthetic grading policy, including its final operative section.")
+                    response, tools, _ = _probe(conn, settings, config, embedder, provider, conversation,
+                        case="read-policy-tail", sources=[policy], question=
+                        "In this SYNTHETIC fixture only, read the grading-policy document through its final operative "
+                        "section. State the S/U maximum, grading-basis deadline, ordinary 4+1 cap, and final "
+                        "approval exception. Do not substitute real Emory policy or stop at an unread-section gap.")
+                    answer = response.answer.casefold() if response else ""
+                    passed.append(bool(response and all(term in answer for term in
+                        ("17", "41", "5", "written", "board"))))
+                if "read-all-requirements" in selected:
+                    title = "Fixture Systems (Minor)"
+                    body = (title + "\nDEGREE AWARDED N/A\nHOURS TO COMPLETE 38\n"
+                        "COURSES REQUIRED 38\nDEPARTMENT CONTACT Computer Science\nRequirements\n"
+                        + "\n".join(f"- CS {n}: Synthetic requirement item {n - 900}; one credit."
+                                    for n in range(901, 939)))
+                    path = scratch / "fixture-systems-minor.md"
+                    path.write_text(render_section(CatalogSection(title, body, 1, 2),
+                        catalog="Synthetic Fixture Catalog", catalog_id="SMOKE-ONLY"),
+                        encoding="utf-8", newline="\n")
+                    origin = "smoke:fixture:systems-minor"
+                    source = ingest_file(conn, collection_id=collection, path=path,
+                        content_type="text/markdown", count_tokens=whitespace_tokens,
+                        embedder=embedder, embed_model=settings.embedding_model_id,
+                        config=config, origin_key=origin)
+                    record = to_record(parse_program(title, body), catalog="Synthetic Fixture Catalog",
+                        source_url="https://example.test/fixture", first_page=1, last_page=2)
+                    record["source"] = {"origin_key": origin,
+                        "content_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "catalog_id": "SMOKE-ONLY"}
+                    manifest = scratch / "fixture-programs.jsonl"
+                    manifest.write_text(json.dumps(record) + "\n", encoding="utf-8")
+                    counts = import_programs(conn, collection_id=collection, path=manifest)
+                    if counts.get("bound") != 1:
+                        raise RuntimeError("synthetic program did not bind to its fixture source")
+                    conversation, _ = _seed(conn, settings, config, embedder,
+                        report="Read every requirement of the synthetic Fixture Systems minor.")
+                    response, tools, _ = _probe(conn, settings, config, embedder, provider, conversation,
+                        case="read-all-requirements", sources=[source], question=
+                        "In this SYNTHETIC fixture only, read ALL 38 requirement items for Fixture Systems (Minor). "
+                        "Follow every next-page cursor until nothing is unread. List every required CS course code "
+                        "in order; do not call an eight-item page the entire checklist, and do not stop early "
+                        "with an unread-requirements caveat. Do not infer registration eligibility.")
+                    answer = response.answer if response else ""
+                    final_context = json.loads(provider.calls[-1]["messages"][1]["content"])
+                    progress = final_context.get("program_read_progress", [])
+                    complete_reads = bool(progress) and all(
+                        p["read_items"] == p["total_items"] and not p["next_cursor"] for p in progress)
+                    print(json.dumps({"case": "read-all-requirements", "program_read_progress": progress}), flush=True)
+                    passed.append(bool(response and complete_reads
+                                       and all(str(n) in answer for n in range(901, 939))))
         finally:
             close_pools()
             server.cleanup()
@@ -188,7 +262,8 @@ def main():
                 os.environ.pop("DATA_DIR", None)
             else:
                 os.environ["DATA_DIR"] = previous_data_dir
-    print(json.dumps({"passed": passed, "provider_calls": len(provider.calls)}), flush=True)
+    print(json.dumps({"passed": passed, "provider_calls": len(provider.calls),
+                     "accounted_tokens": provider.tokens}), flush=True)
     if not all(passed) or len(passed) != len(set(selected)):
         raise SystemExit(1)
 

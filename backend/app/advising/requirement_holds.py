@@ -11,7 +11,10 @@ from typing import Any, Literal, TypedDict, cast
 from uuid import UUID, uuid4
 
 from app.atlas.records import normalize_code
+from app.config import load_settings
 from app.db import queries
+from app.util.atomic import write_bytes_atomic
+from app.util.localpath import io_path
 
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 _ATLAS_TYPE = "application/x-course-atlas+jsonl"
@@ -69,6 +72,23 @@ def _verify_capture_file(path_value: str, expected_hash: str) -> str:
     return str(capture.resolve(strict=True))
 
 
+def _preserve_capture(path_value: str, expected_hash: str) -> str:
+    """Keep curator evidence in the content-addressed, backed-up raw store."""
+    raw = Path(path_value).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != expected_hash:
+        raise ValueError("evidence capture changed before it could be preserved")
+    root = load_settings().data_dir / "raw" / "holds"
+    root.mkdir(parents=True, exist_ok=True)
+    target = io_path(root / expected_hash)
+    if target.is_symlink():
+        raise ValueError("saved hold evidence must not be a symbolic link")
+    if not target.exists():
+        write_bytes_atomic(target, raw)
+    if hashlib.sha256(target.read_bytes()).hexdigest() != expected_hash:
+        raise ValueError("saved hold evidence failed integrity validation")
+    return str((root / expected_hash).resolve())
+
+
 def _master(conn, source_id: UUID, expected_hash: str, course_code: str) -> Mapping[str, Any]:
     source = conn.execute(queries.get("get_requirement_hold_master"), {
         "source_id": source_id,
@@ -102,8 +122,8 @@ def apply_requirement_hold(
 ) -> RequirementHold:
     """Hold one exact master course after validating both its source hash and identity.
 
-    Capture evidence may remain a local immutable file pointer until it is
-    published. If published offering evidence is supplied, its exact indexed
+    Capture evidence is copied to DATA_DIR/raw/holds before saving its pointer.
+    If published offering evidence is supplied, its exact indexed
     revision and capture-set hash are required and checked before the hold saves.
     The validation and insert share one transaction; when called inside an
     existing transaction the connection uses a savepoint.
@@ -153,6 +173,7 @@ def apply_requirement_hold(
         }).fetchone()
         if active is not None:
             raise ValueError("an active hold already exists for this source and course")
+        capture_path = _preserve_capture(capture_path, capture_hash)
         row = conn.execute(queries.get("insert_atlas_requirement_hold"), {
             "hold_id": uuid4(), "source_id": source_id, "course_code": code,
             "master_file_hash": master_hash, "conflict_reason": conflict_reason.strip(),

@@ -67,6 +67,22 @@ def test_compatible_extensions_are_explicit_and_factory_scoped(thinking, cache_k
     sdk.close()
 
 
+@pytest.mark.parametrize("choices", [[], None])
+def test_compatible_empty_choices_are_a_provider_failure_with_usage(choices):
+    body = {"id": "chat-empty", "object": "chat.completion", "created": 1,
+            "model": "test", "choices": choices,
+            "usage": {"prompt_tokens": 4, "completion_tokens": 0, "total_tokens": 4}}
+    sdk = OpenAI(api_key="test", base_url="https://mock/v1",
+                 http_client=httpx2.Client(transport=httpx2.MockTransport(
+                     lambda request: _openai_response(body, request=request))))
+    try:
+        with pytest.raises(ProviderError, match="no choices") as failure:
+            OpenAICompatibleProvider(sdk, "test").generate(GenerationRequest([]))
+        assert failure.value.usage.prompt_tokens == 4
+    finally:
+        sdk.close()
+
+
 def _response(body, *, headers=None, request=None):
     return httpx.Response(200, json=body, headers=headers or {}, request=request or httpx.Request("POST", "https://mock"))
 

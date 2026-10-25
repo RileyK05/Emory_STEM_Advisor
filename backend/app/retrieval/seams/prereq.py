@@ -24,7 +24,7 @@ from app.retrieval.types import Candidate, SeamResult
 # SUBJECT_ALIASES so the seam does not go dormant on a spelled-out subject
 # (EMO-015).
 _TAIL = r"\d{2,4}(?:[A-Z][A-Z0-9]{0,7}|[a-z][A-Z]?)?"
-_SUBJECT_RE = re.compile(rf"\b([A-Za-z][A-Za-z0-9]{{0,10}}[A-Za-z](?:_OX)?)\s?({_TAIL})\b")
+_SUBJECT_RE = re.compile(rf"\b([A-Za-z][A-Za-z0-9]{{0,10}}[A-Za-z](?:_OX)?)\s*({_TAIL})\b")
 _NUMBER_RE = re.compile(rf"\b({_TAIL})\b")
 _CARRY_SEP = re.compile(r"\s*(?:(?:,|/|and|or)\s*)*")
 _CONJUNCTIONS = frozenset({"and", "or"})
@@ -58,7 +58,7 @@ def _find_codes(query: str) -> list[tuple[int, int, str | None, str]]:
     return matches
 
 
-def _codes(query: str) -> list[str]:
+def course_codes_in_query(query: str) -> list[str]:
     codes: list[str] = []
     last_subject: str | None = None
     previous_end = -1
@@ -97,7 +97,7 @@ def prereq_seam(
             name="prereq", enabled=True, state="dormant", reason="explicitly empty source scope"
         )
 
-    codes = _codes(query)
+    codes = course_codes_in_query(query)
     if not codes:
         return SeamResult(
             name="prereq", enabled=True, state="dormant", reason="no course codes in query"

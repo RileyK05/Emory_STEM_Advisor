@@ -298,7 +298,8 @@ def _tool_answer_provider(conn, body, outcome, operation, settings, provider, se
         on_progress=lambda event, payload: on_progress({"stage": event, **payload}),
         on_provisional_text=on_provisional_text,
         on_provisional_reset=on_provisional_reset,
-        final_repair=(lambda result: citation_repair_hint(result, outcome.chunks))
+        final_repair=(lambda result: citation_repair_hint(
+            result, outcome.chunks, query=body.query, history_context=history_context))
         if settings.answer_citation_repair_enabled else None,
         required_tool_names=frozenset({"advisor_plan_course_sequence"})
         if _requests_course_sequence(body.query) else frozenset(),
@@ -524,9 +525,14 @@ def query_response(
         conn.commit()
         system_prompt, prompt_version = promoted or (None, PROMPT_VERSION)
 
+    course_subjects = {row["subject"] for row in conn.execute(
+        queries.get("list_advising_course_subjects"), {"collection_id": collection_id},
+    ).fetchall()}
+    conn.commit()
+
     def generate_answer():
         return answer_from_context(
-            outcome.chunks, body.query, provider=answer_provider,
+            outcome.chunks, retrieval_query or body.query, provider=answer_provider,
             max_new_tokens=(settings.hf_max_new_tokens if settings.llm_provider == "hf-local"
                             else settings.llm_max_output_tokens),
             timeout_seconds=settings.llm_timeout_seconds,
@@ -542,6 +548,7 @@ def query_response(
             before_provider_call=lambda: release_borrow(conn),
             system_prompt=system_prompt,
             prompt_version=prompt_version,
+            course_subjects=course_subjects,
         )
 
     try:

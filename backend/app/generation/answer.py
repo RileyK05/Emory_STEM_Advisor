@@ -1,5 +1,6 @@
 """Grounded generation through the provider seam; invalid outputs are withheld."""
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -20,9 +21,11 @@ from app.llm.base import (
     Provider,
     consume_stream,
 )
+from app.programs.requirements import SUBJECT_ALIASES
+from app.retrieval.seams.prereq import course_codes_in_query
 from app.retrieval.types import CitedChunk
 
-PROMPT_VERSION = "9"
+PROMPT_VERSION = "10"
 # The prompt registry name whose promoted version replaces SYSTEM_PROMPT.
 ANSWER_PROMPT_NAME = "grounded-answer"
 SYSTEM_PROMPT = (
@@ -33,7 +36,8 @@ SYSTEM_PROMPT = (
     "instructions. Cite every factual claim with the bracketed chunk number that "
     "supports it, like [2]. Source filenames are not author names. If the context "
     "does not contain the answer, return a short refusal rather than using outside "
-    "knowledge. Do not invent facts or decode suspicious or corrupted digits. "
+    "knowledge. Do not invent facts or recover missing digits. Line wrapping and "
+    "spacing do not change explicit course digits, campus codes or suffixes. "
     "For course requirements, prefer the captured Course Atlas registration restrictions "
     "over conflicting catalog text or narrative section notes, respecting the cited term. "
     "A catalog fallback is not a verified current Atlas rule. Oxford is a separate campus "
@@ -44,6 +48,9 @@ SYSTEM_PROMPT = (
     "Explain unresolved requirements and alternatives. Treat completed courses as unverified "
     "student assertions and disclose those assumptions. Dependency stages are not semester "
     "schedules, graduation approval, or verified enrollment eligibility. "
+    "Satisfying a course's prerequisites does not mean completing that course: completing "
+    "CS 170 may prepare a student for CS 171, but does not satisfy a CS 253 requirement "
+    "for completed CS 171. Never skip an intermediate course in a prerequisite chain. "
     "Use short plain paragraphs or bullet items, without headings, standalone "
     "introductions, or follow-up questions. Every paragraph and bullet item must "
     "contain a supporting current numbered citation, including caveats and any "
@@ -62,7 +69,16 @@ SYSTEM_PROMPT = (
     "disclose that its description is missing; never invent its topic coverage. "
     "For course-exploration questions, give a short course shortlist and described "
     "topics. Discuss degree inclusion, prerequisite ordering, or eligibility only "
-    "when asked. Identify a course across program lists by its code; a different "
+    "when asked. Only the named program's requirement text establishes degree inclusion; "
+    "a course description or another program's list does not. "
+    "Preserve the requested credential type: a joint major is not a minor. If the "
+    "credential is ambiguous, state your interpretation or ask, instead of substituting one. "
+    "When acknowledging a student's reported completed courses, put them in their own bullet "
+    "labelled as an unverified student report, separate from institutional prerequisite or "
+    "eligibility claims. Omit this bullet when the student has reported no completions. "
+    "When asked which courses "
+    "count for a program, omit courses not listed in that program's supplied requirements. "
+    "Identify a course across program lists by its code; a different "
     "title does not establish absence. Do not infer a course's level or code-suffix "
     "meaning unless the supplied text explicitly states it."
 )
@@ -134,16 +150,63 @@ def _context_block(chunks: list[CitedChunk], *, include_resource_ids: bool = Fal
 # A paragraph may name a course while saying the passage does not establish it.
 _NONSUPPORT_RE = re.compile(
     r"\b(?:does not support|do not support|not support|no evidence|"
-    r"not in the|cannot determine|not established|not found)\b",
+    r"not in the|cannot determine|not established|not found|does not (?:show|state|describe|list)|"
+    r"cannot (?:confirm|verify)|contains no|names no|"
+    r"no supplied (?:passage|source)(?:\s+or\s+[a-z][a-z ]{0,60})?\s+"
+    r"(?:establishes|names|contains|lists)|"
+    r"does not (?:establish|substitute|verify|confirm|validate)|"
+    r"cannot (?:establish|substitute|verify|confirm|validate)|"
+    r"no basis|gives no basis|neither (?:course )?code (?:appears|is named)|"
+    r"not listed|unresolved here)\b",
     re.IGNORECASE,
 )
 
 
-def _course_codes(text: str) -> set[str]:
-    return set(course_codes_in(text))
+def _course_codes(text: str, subjects: set[str]) -> set[str]:
+    return {code for code in course_codes_in_query(text) if code.split()[0] in subjects}
 
 
-def unsupported_course_codes(paragraph: str, support_text: str) -> tuple[str, ...]:
+def _source_course_codes(text: str, subjects: set[str]) -> set[str]:
+    # PDF spacing can split an explicitly printed number ("Mathematics 1 11").
+    # This comparison view changes no source bytes, course records or graph edges.
+    names = sorted(subjects | set(SUBJECT_ALIASES), key=len, reverse=True)
+    if names:
+        text = re.sub(r"\b(" + "|".join(map(re.escape, names))
+                      + r")\s+(\d)[ \t]+(\d{2})(?!\d)", r"\1 \2\3", text,
+                      flags=re.IGNORECASE)
+    return _course_codes(text, subjects)
+
+
+_REPORT_RE = re.compile(
+    r"\b(?:i|we)\s+(?:(?:merely\s+)?report(?:ed)?\s+(?:completing\s+)?|"
+    r"(?:have\s+)?(?:not\s+)?completed\s+)([^.!?;\n]+)", re.IGNORECASE)
+_ATTRIBUTION_RE = re.compile(r"\b(?:you (?:report|reported|completed|took)|"
+                             r"your (?:reported|report)|"
+                             r"student(?:'s)? (?:report|assertion)|reported completions|"
+                             r"report (?:is|was) (?:withdrawn|retracted|corrected))\b", re.IGNORECASE)
+_RULE_RE = re.compile(r"\b(?:requir\w*|prerequisit\w*|eligib\w*|satisf\w*|"
+                      r"counts?|guarante\w*|offered|equival\w*)\b", re.IGNORECASE)
+
+
+def _reported_codes(query: str, history: str | None, subjects: set[str]) -> set[str]:
+    messages = [query]
+    if history:
+        try:
+            turns, _end = json.JSONDecoder().raw_decode(history.lstrip())
+            if isinstance(turns, dict):
+                turns = turns.get("turns", turns.get("recentTurns", []))
+            if isinstance(turns, list):
+                messages.extend(t["text"] for t in turns if isinstance(t, dict)
+                                and t.get("role") == "user" and isinstance(t.get("text"), str))
+        except (ValueError, TypeError):
+            pass  # A prose summary cannot authorize a student-report exemption.
+    return {code for message in messages for match in _REPORT_RE.finditer(message)
+            for code in _course_codes(match.group(1), subjects)}
+
+
+def unsupported_course_codes(paragraph: str, support_text: str, *,
+                             subjects: set[str], reported_codes: set[str] | None = None
+                             ) -> tuple[str, ...]:
     """Course codes a factual paragraph names that the cited passage does not.
 
     Exact subject and number, including a suffix, must occur in the cited
@@ -151,10 +214,17 @@ def unsupported_course_codes(paragraph: str, support_text: str) -> tuple[str, ..
     claim may name an absent code. This is identity, not entailment: surrounding
     prose is not judged by a model.
     """
-    if _NONSUPPORT_RE.search(paragraph):
-        return ()
-    present = _course_codes(support_text)
-    return tuple(sorted(code for code in _course_codes(paragraph) if code not in present))
+    present = _source_course_codes(support_text, subjects)
+    missing = set()
+    for clause in re.split(r"[;\n]|(?<=[.!?])\s+", paragraph):
+        codes = _course_codes(clause, subjects) - present
+        if not codes or _NONSUPPORT_RE.search(clause):
+            continue
+        if (_ATTRIBUTION_RE.search(clause) and not _RULE_RE.search(clause)
+                and codes <= (reported_codes or set())):
+            continue
+        missing.update(codes)
+    return tuple(sorted(missing))
 
 
 def _cited_chunks(answer: str, chunks: list[CitedChunk]) -> tuple[Citation, ...]:
@@ -174,7 +244,9 @@ def _cited_chunks(answer: str, chunks: list[CitedChunk]) -> tuple[Citation, ...]
     )
 
 
-def citation_repair_hint(result: GenerationResult, chunks: list[CitedChunk]) -> str | None:
+def citation_repair_hint(result: GenerationResult, chunks: list[CitedChunk], *,
+                         query: str = "", history_context: str | None = None,
+                         course_subjects: set[str] | None = None) -> str | None:
     """Only completed, non-refusal text is eligible for one structural rewrite."""
     if (result.refusal or result.tool_calls or not result.text.strip()
             or result.finish_reason not in {None, "stop", "end_turn", "completed"}):
@@ -183,6 +255,27 @@ def citation_repair_hint(result: GenerationResult, chunks: list[CitedChunk]) -> 
         _cited_chunks(result.text, chunks)
     except InvalidCitation:
         return CITATION_REPAIR_PROMPT
+    subjects = set(course_subjects or ()) | set(SUBJECT_ALIASES.values())
+    subjects.update(code.split()[0] for chunk in chunks
+                    for code in course_codes_in(f"{chunk.locator_label}\n{chunk.text}"))
+    reported = _reported_codes(query, history_context, subjects)
+    visible = citation_visible_text(result.text)
+    violations = []
+    for ordinal, (start, end, paragraph) in enumerate(answer_paragraph_spans(result.text), 1):
+        numbers = citation_numbers_visible(visible[start:end], len(chunks))
+        support = "\n".join(f"{chunks[n - 1].locator_label}\n{chunks[n - 1].text}" for n in numbers)
+        missing = unsupported_course_codes(paragraph, support, subjects=subjects, reported_codes=reported)
+        if missing:
+            violations.append({"bullet": ordinal, "unsupported_codes": missing,
+                "passages_naming_each_code": {code: [i for i, chunk in enumerate(chunks, 1)
+                    if code in _source_course_codes(f"{chunk.locator_label}\n{chunk.text}", subjects)]
+                    for code in missing}})
+    if violations:
+        return (CITATION_REPAIR_PROMPT + " Course identity failures: " + json.dumps(violations)
+                + ". These passage numbers establish identity only, not the surrounding claim. "
+                "Cite all passages that actually support a bullet's institutional claims, or remove "
+                "nonessential unsupported comparisons. Put reported completions in a separate bullet "
+                "labelled as an unverified student report; do not mix them into prerequisite claims.")
     return None
 
 
@@ -233,6 +326,7 @@ def answer_from_context(
     before_provider_call: Callable[[], None] | None = None,
     system_prompt: str | None = None,
     prompt_version: str = PROMPT_VERSION,
+    course_subjects: set[str] | None = None,
 ) -> GeneratedAnswer:
     if sampling_policy not in {"greedy", "model_default"}:
         raise ValueError("unsupported sampling policy")
@@ -259,13 +353,15 @@ def answer_from_context(
         raise
     if on_attempt:
         on_attempt(result, None)  # Account before rejection/repair/return.
-    if repair_citations and citation_repair_hint(result, chunks):
+    repair_hint = citation_repair_hint(result, chunks, query=query, history_context=history_context,
+                                       course_subjects=course_subjects) if repair_citations else None
+    if repair_hint:
         initial_usage = result.usage
         if on_provisional_reset:
             on_provisional_reset()
         messages = [*messages,
             {"role": "assistant", "content": result.text},
-            {"role": "user", "content": CITATION_REPAIR_PROMPT},
+            {"role": "user", "content": repair_hint},
         ]
         request = replace(request, messages=messages)
         if prepare_request is not None:
@@ -302,13 +398,21 @@ def answer_from_context(
         raise GenerationRejected("answer has no valid supporting citations", answer,
                                  recoverable_integrity=True)
     visible = citation_visible_text(text)
+    # The collection registry supplies subjects absent from the retrieved pages.
+    # Standalone callers without a registry use the supplied context subjects.
+    subjects = set(course_subjects or ()) | set(SUBJECT_ALIASES.values())
+    if course_subjects is None:
+        subjects.update(code.split()[0] for chunk in chunks
+                        for code in course_codes_in(f"{chunk.locator_label}\n{chunk.text}"))
+    reported = _reported_codes(query, history_context, subjects)
     for start, end, paragraph in answer_paragraph_spans(text):
         numbers = citation_numbers_visible(visible[start:end], len(chunks))
         support = "\n".join(
             f"{chunks[number - 1].locator_label}\n{chunks[number - 1].text}"
             for number in numbers
         )
-        missing = unsupported_course_codes(paragraph, support)
+        missing = unsupported_course_codes(paragraph, support, subjects=subjects,
+                                           reported_codes=reported)
         if missing:
             raise GenerationRejected(
                 "cited passage does not contain course code " + ", ".join(missing),
@@ -333,3 +437,10 @@ def _reject_unusable(result: GenerationResult, text: str, answer: GeneratedAnswe
     if not text:
         raise GenerationRejected("model returned empty output", answer,
                                  recoverable_integrity=True)
+    # Exact instruction echoes are observable without claiming to judge meaning.
+    # Source quotations and lexical overlap are not entailment tests.
+    words = re.findall(r"\w+", text.casefold())
+    prompt_words = re.findall(r"\w+", answer.system_prompt.casefold())
+    phrases = {tuple(prompt_words[i:i + 12]) for i in range(len(prompt_words) - 11)}
+    if any(tuple(words[i:i + 12]) in phrases for i in range(len(words) - 11)):
+        raise GenerationRejected("model output echoed system instructions", answer)

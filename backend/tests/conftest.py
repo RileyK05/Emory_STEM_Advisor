@@ -98,6 +98,7 @@ def _isolated_data_dir():
 def pg_dsn() -> str:
     explicit = os.environ.get("TEST_DATABASE_URL")
     if explicit:
+        _validate_test_database(explicit, os.environ.get("DATABASE_URL"))
         try:
             yield explicit
         finally:
@@ -126,6 +127,17 @@ def pg_dsn() -> str:
         close_pools()
         server.cleanup()
         _remove_session_directory(pgdata, root=cleanup_root, prefix="pgserver_pytest_")
+
+
+def _validate_test_database(test_dsn: str, app_dsn: str | None = None) -> None:
+    """Reject unsafe external targets before migrations or destructive cleanup."""
+    from psycopg.conninfo import conninfo_to_dict
+
+    database = conninfo_to_dict(test_dsn).get("dbname", "")
+    if not database.endswith("_test"):
+        raise RuntimeError("TEST_DATABASE_URL must explicitly name a disposable database ending in _test")
+    if app_dsn and database == conninfo_to_dict(app_dsn).get("dbname"):
+        raise RuntimeError("TEST_DATABASE_URL must use a different database from DATABASE_URL")
 
 
 @pytest.fixture(scope="session")

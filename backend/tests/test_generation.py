@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.generation.answer import GenerationRejected, answer_from_context
+from app.generation.answer import SYSTEM_PROMPT, GenerationRejected, answer_from_context
 from app.generation.citations import InvalidCitation, citation_numbers
 from app.generation.claims import review_units
 from app.llm.base import GenerationResult, ProviderError, StreamEvent, Usage
@@ -126,31 +126,95 @@ def test_course_code_must_appear_in_the_cited_passage():
         assert accepted.citations
         with pytest.raises(GenerationRejected, match=code):
             answer_from_context(context, "question", provider=FakeProvider(
-                f"{code} is described in the passage [1]."))
+                f"{code} is described in the passage [1]."), course_subjects={code.split()[0]})
     # Calendar and section labels are not fabricated course identities.
     answer_from_context(context, "question", provider=FakeProvider(
         "In Spring 2027, section 12 uses the stated description [1]."))
     # Naming a code while saying the passage does not establish it stays allowed.
-    absent = answer_from_context(context, "question", provider=FakeProvider(
-        "The passage does not support CS 301 [1]."
-    ))
-    assert "CS 301" in absent.text
+    for denial in ("The passage does not support CS 301 [1].",
+                   "The supplied context names no CS 301 course [1].",
+                   "No supplied passage establishes a CS 301 prerequisite [1].",
+                   "No supplied source establishes that CS 301 satisfies the requirement [1].",
+                   "Completing CS 301 does not substitute for the stated prerequisite [1].",
+                   "The passage does not establish CS 301 as a prerequisite [1].",
+                   "The supplied context does not verify that CS 301 can be taken directly [1].",
+                   "The supplied context gives no basis to treat CS 301 as satisfying the requirement [1].",
+                   "Neither course code appears in the supplied passages, so CS 301 is unverified [1].",
+                   "No supplied source names CS 301, so it remains unverified [1].",
+                   "No supplied passage or executed tool result establishes a CS 301 rule [1].",
+                   "The context does not list CS 301 among these requirements [1]."):
+        absent = answer_from_context(context, "question", provider=FakeProvider(denial))
+        assert "CS 301" in absent.text
+    for prose in ("ACROSS 15", "TOTALS 43", "AS 300", "NO 400", "WITH 61",
+                  "REACH 24", "ROUGHLY 12", "THOSE 60", "LEAST 54", "OFFERS 20",
+                  "INCLUDE 220", "PLUS 150L", "THAT 141", "AN 11", "EITHER 311"):
+        answer_from_context(context, "question", provider=FakeProvider(f"{prose} [1]."),
+                            course_subjects={"CS", "ITAL"})
+    shorthand = [CitedChunk(uuid4(), uuid4(), 0, "program.md", "Requirements",
+                           "Chemistry 150, 202Z, 203, 204; Physics 152 and 444W.",
+                           ("keyword",), 1.0, 1, 1)]
+    answer_from_context(shorthand, "question", provider=FakeProvider(
+        "CHEM 202Z and PHYS 444W appear in the requirements [1]."),
+        course_subjects={"CHEM", "PHYS"})
+    # A code elsewhere in context or the question does not support this citation.
+    with pytest.raises(GenerationRejected, match="CHEM 202Z"):
+        answer_from_context([*context, *shorthand], "What about CHEM 202Z?",
+                            provider=FakeProvider("CHEM 202Z is required [1]."),
+                            course_subjects={"CHEM"})
+    for source, draft in [
+        ("Mathematics 1 11, 112, 211, and 212.", "MATH 111, 112, 211 and 212 are listed [1]."),
+        ("QTM \n398, 496, 497, and 499 may not be used.", "QTM 398, 496, 497, and 499 are excluded [1]."),
+    ]:
+        spaced = [CitedChunk(uuid4(), uuid4(), 0, "program.pdf", "Requirements", source,
+                            ("keyword",), 1., 1, 1)]
+        assert answer_from_context(spaced, "What is listed?", provider=FakeProvider(draft)).citations
+    report = "Your report of completing CHEM 203 and MATH 211 is unverified [1]."
+    query = "I report completing CHEM 203 and MATH 211. What is in the source?"
+    assert answer_from_context(context, query, provider=FakeProvider(report)).citations
+    assert answer_from_context(context, query, provider=FakeProvider(
+        "Unverified student report: you completed CHEM 203 and MATH 211 [1].",
+    )).citations
+    for draft in (
+        "CHEM 203 is required [1].",
+        "Your reported CHEM 203 satisfies the requirement [1].",
+        "Your report of completing CHEM 203 is unverified; MATH 211 is required [1].",
+        "No evidence supports CHEM 203. MATH 211 is required [1].",
+    ):
+        with pytest.raises(GenerationRejected):
+            answer_from_context(context, query, provider=FakeProvider(draft))
+    for role in ("user", "assistant"):
+        import json
+
+        history = json.dumps([{"role": role, "text": query}]) + "\nExact referenced artifact revisions:\n[]"
+        if role == "user":
+            assert answer_from_context(context, "Continue", history_context=history,
+                                       provider=FakeProvider(report)).citations
+            assert answer_from_context(context, "Correction: I did not complete CHEM 203.",
+                history_context=history, provider=FakeProvider(
+                    "The earlier CHEM 203 report is withdrawn and not used as completed [1].")).citations
+        else:
+            with pytest.raises(GenerationRejected):
+                answer_from_context(context, "Continue", history_context=history,
+                                    provider=FakeProvider(report))
 
 
-def test_single_rewrite_is_accounted_and_still_validated():
+@pytest.mark.parametrize("initial", ["Uncited introduction.\n\nFact [1].",
+                                    "CS 999 is required [1]."])
+def test_single_rewrite_is_accounted_and_still_validated(initial):
     class RewriteProvider:
         def __init__(self):
             self.requests = []
 
         def generate(self, request):
             self.requests.append(request)
-            text = "Uncited introduction.\n\nFact [1]." if len(self.requests) == 1 else "Fact [1]."
+            text = initial if len(self.requests) == 1 else "Fact [1]."
             return GenerationResult(text, finish_reason="stop", usage=Usage(10, 5, source="provider"))
 
     provider = RewriteProvider()
     accounts, reservations, resets = [], [], []
     answer = answer_from_context(chunks(1), "question", provider=provider,
-        repair_citations=True, prepare_request=lambda r: reservations.append(r) or r,
+        repair_citations=True, course_subjects={"CS"},
+        prepare_request=lambda r: reservations.append(r) or r,
         on_attempt=lambda r, e: accounts.append((r, e)),
         on_provisional_reset=lambda: resets.append(True))
     assert answer.text == "Fact [1]."
@@ -212,7 +276,9 @@ def test_code_fence_is_masked_globally_for_paragraph_coverage_and_review():
     assert [unit.citation_numbers for unit in units] == [(1,), (), (), (), (1,)]
 
 
-@pytest.mark.parametrize("text", ["", "Uncited fact.", "Fact [9].", "Fact [3-1].", "Fact [12)."])
+@pytest.mark.parametrize("text", ["", "Uncited fact.", "Fact [9].", "Fact [3-1].", "Fact [12).",
+                                  SYSTEM_PROMPT + " [1].",
+                                  " ".join(SYSTEM_PROMPT.split()[25:45]) + " [1]."])
 def test_invalid_output_is_withheld_without_fabricated_sources(text):
     attempts = []
     with pytest.raises(GenerationRejected) as err:

@@ -46,7 +46,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "7"
+RESEARCH_TOOLS_VERSION = "8"
 
 
 class SearchInput(ToolInputModel):
@@ -153,6 +153,23 @@ def _discovery_words(text):
     }
 
 
+def _query_snippet(text: str, query: str, limit: int = 400) -> str:
+    """Show the query-dense part of a long passage, not always its opening."""
+    words = {word for word in re.findall(r"\w+", query.casefold()) if len(word) > 2}
+    if not words or len(text) <= limit:
+        return text[:limit]
+    lower = text.casefold()
+    best_start, best_score = 0, -1
+    for start in range(0, len(text) - limit + 1, 80):
+        window = lower[start:start + limit]
+        score = sum(1 for word in words if word in window)
+        if score > best_score:
+            best_start, best_score = start, score
+    snippet = text[best_start:best_start + limit]
+    return (("…" if best_start else "") + snippet
+            + ("…" if best_start + limit < len(text) else ""))
+
+
 def _document_matches(sources, query):
     """Rank scoped metadata as discovery leads; matches establish no facts."""
     words = _discovery_words(query)
@@ -254,6 +271,7 @@ class ResearchSession:
         self.program_positions = {}
         self.program_sizes = {}
         self.program_cursors = {}
+        self.pending_policy_read: str | None = None
         self.actions = []
         self.checks: dict[str, dict] = {}
         self.unavailable_preparation_check_ids: set[str] = set()
@@ -437,9 +455,11 @@ class ResearchSession:
         ]}, next_cursor=cursor)
 
     def search(self, value, _scope):
+        policy_kinds = {"institutional_policy", "institutional_catalog",
+                        "institutional_department", "institutional_publication"}
         sources = [s.source_id for s in self.scope.sources.values() if
-                   value.kind not in {"policy", "career_reference"} or s.source_kind == (
-                       "institutional_policy" if value.kind == "policy" else "career_reference")]
+                   (value.kind != "policy" or s.source_kind in policy_kinds)
+                   and (value.kind != "career_reference" or s.source_kind == "career_reference")]
         verify_sources(self.conn, self.scope, sources)
         self.conn.commit()
         outcome = retrieve(self.conn, collection_id=self.scope.collection_id, query=value.query,
@@ -481,17 +501,31 @@ class ResearchSession:
                                   "code": row["code"], "title": row["title"],
                                   **_source_metadata(self.scope.sources[row["source_id"]], compact=True)})
         if value.kind not in {"course", "program"}:
-            snippets = {chunk.source_id: chunk.text[:400] for chunk in reversed(chunks)}
+            lexical = next((run.candidates for run in outcome.trace.seams if run.name == "keyword"), [])
+            lexical_rank = {candidate.chunk_id: i for i, candidate in enumerate(lexical)}
+            section_chunks = sorted(chunks, key=lambda c: lexical_rank.get(c.chunk_id, len(lexical)))
+            snippets: dict[Any, str] = {}
+            for chunk in section_chunks:
+                snippets.setdefault(chunk.source_id, _query_snippet(chunk.text, value.query))
             seen = set()
             matches = _document_matches((self.scope.sources[s] for s in sources), value.query)
-            for pin in [*matches, *(self.scope.sources[c.source_id] for c in chunks)]:
+            exact_names = [pin for pin in matches if pin.filename.casefold() in value.query.casefold()
+                           or pin.title and pin.title.casefold() in value.query.casefold()]
+            grounded = [self.scope.sources[c.source_id] for c in section_chunks
+                        if c.chunk_id in lexical_rank]
+            for pin in [*exact_names, *grounded, *matches,
+                        *(self.scope.sources[c.source_id] for c in chunks)]:
                 if pin.source_id in seen:
                     continue
                 seen.add(pin.source_id)
                 metadata = _source_metadata(pin, compact=True)
                 leads.append({"kind": "document", "_identity": pin.source_id,
                               "title": metadata.get("source_title") or metadata["filename"], **metadata,
-                              "snippet": snippets.get(pin.source_id, ""), "discovery_only": True})
+                              "snippet": snippets.get(pin.source_id, ""), "discovery_only": True,
+                              "matching_sections": [{
+                                  "handle": self.handle("section", (chunk.source_id, chunk.chunk_index)),
+                                  "title": chunk.locator_label,
+                              } for chunk in section_chunks if chunk.source_id == pin.source_id][:4]})
         if value.kind == "any":
             # Every discovery kind gets room on the first page. Otherwise a broad
             # program match can hide the admissions or checklist document entirely.
@@ -500,12 +534,37 @@ class ResearchSession:
             leads = [lead for row in zip_longest(*groups) for lead in row if lead is not None]
         self.conn.commit()
         page, cursor = self.page(leads, value, 12, "search")
+        self.pending_policy_read = None
         for lead in page:
-            lead["handle"] = self.handle(lead["kind"], lead.pop("_identity"))
+            identity = lead.pop("_identity")
+            lead["handle"] = self.handle(lead["kind"], identity)
+            if lead["kind"] == "document" and lead.get("matching_sections"):
+                # Keep the lead on the matching section. The document-start
+                # handle is returned by the read itself, after the model has
+                # seen what the section contains.
+                lead["handle"] = lead["matching_sections"][0]["handle"]
+                lead["read_scope"] = "matching_section"
+                if value.kind == "policy" and self.pending_policy_read is None:
+                    self.pending_policy_read = lead["handle"]
+        requirement_documents = []
+        if value.kind == "program":
+            # A verified checklist need not have a parsed program projection.
+            # Keep it discoverable when a program-only search misses that record.
+            eligible = (self.scope.sources[s] for s in sources
+                        if self.scope.sources[s].source_kind in policy_kinds
+                        and {"requirements", "checklist"} & set(self.scope.sources[s].document_roles))
+            for pin in _document_matches(eligible, value.query)[:3]:
+                matching = next((c for c in chunks if c.source_id == pin.source_id), None)
+                handle = (self.handle("section", (pin.source_id, matching.chunk_index)) if matching
+                          else self.handle("document", pin.source_id))
+                requirement_documents.append({"handle": handle, "kind": "document",
+                    **_source_metadata(pin, compact=True), "discovery_only": True})
         self.store.record_action(self.run.run_id, action_kind="search", details={
-            "query": value.query, "kind": value.kind, "leads": page},
+            "query": value.query, "kind": value.kind, "leads": page,
+            "requirement_documents": requirement_documents},
             child_trace_id=outcome.trace.trace_id)
-        return ResearchResult(data={"leads": page, "discovery_only": True}, next_cursor=cursor)
+        return ResearchResult(data={"leads": page, "requirement_documents": requirement_documents,
+                                    "discovery_only": True}, next_cursor=cursor)
 
     def _lead_chunks(self, chunks):
         from app.advising.research_repository import exact_chunks
@@ -521,7 +580,13 @@ class ResearchSession:
         pid = self.resolve(value.handle, "program")
         read = read_program(self.conn, self.scope, pid)
         self.conn.commit()
-        items, cursor = self.page(list(read.items), value, 8, "program")
+        try:
+            items, cursor = self.page(list(read.items), value, 8, "program")
+        except NotInScope:
+            raise InvalidResearchRecord([
+                ("This cursor belongs to a different program handle. Use the handle "
+                 "returned with that cursor; cursors cannot be transferred.")
+            ]) from None
         chunks = {c.chunk_id: c for supported in [*read.fields.values(), *(i.line for i in items)]
                   for c, _start, _end in supported.support}
         ids = self.acquire(list(chunks.values()), refs=(value.handle,), action="read_program")
@@ -581,17 +646,24 @@ class ResearchSession:
         offset = self.offset(value.cursor, key) if value.cursor else start
         page = read_document(self.conn, self.scope, source, from_chunk=offset)
         self.conn.commit()
+        if value.handle == self.pending_policy_read:
+            self.pending_policy_read = None
         ids = self.acquire(page.chunks, complete=not page.incomplete, action="read_document")
         cursor = None
         if page.next_chunk is not None:
             cursor = "c_" + uuid5(self.run.run_id, f"{key}:{page.next_chunk}").hex
             self.cursors[cursor] = (key, page.next_chunk)
+        limits = list(page.limitations)
+        if offset:
+            limits.append(f"This read starts at chunk {offset}; preceding chunks are not part of this read.")
         return ResearchResult(status="incomplete" if page.incomplete else "ok", data={
             **_source_metadata(page.source), "title": page.source.title or page.source.filename,
+            "read_from_chunk": offset, "earlier_chunks_unread_by_this_read": bool(offset),
+            "beginning_handle": self.handle("section", (source, 0)),
             "evidence_ids": ids,
             "sections": [{"handle": self.handle("section", (source, s.first_chunk)),
                           "title": s.label, "chunk_count": s.chunk_count} for s in page.sections[:80]]},
-            next_cursor=cursor, limitations=list(page.limitations))
+            next_cursor=cursor, limitations=limits)
 
     def compare(self, value, _scope):
         if any(h not in self.program_reads for h in value.handles):

@@ -423,11 +423,17 @@ def test_restore_verifier_rejects_path_traversal_before_writing_outside_stage(tm
     assert not (tmp_path / "escape").exists()
 
 
-def test_restore_verifier_rejects_corrupted_payload_checksum(tmp_path):
+@pytest.mark.parametrize("corruption", ["checksum", "crc", "not_zip"])
+def test_restore_verifier_rejects_corrupted_payload_checksum(tmp_path, corruption):
     archive = tmp_path / "bad-checksum.zip"
     _write_test_archive(
         archive, file_path="files/raw/collection/source", payload=b"tampered",
         declared_hash="0" * 64,
     )
-    with pytest.raises(BackupError, match="failed checksum"):
+    if corruption == "crc":
+        archive.write_bytes(archive.read_bytes().replace(b"tampered", b"broken!!"))
+    elif corruption == "not_zip":
+        archive.write_bytes(b"not a zip archive")
+    message = "failed checksum" if corruption == "checksum" else "invalid"
+    with pytest.raises(BackupError, match=message):
         _load_and_verify(archive, tmp_path / "stage")

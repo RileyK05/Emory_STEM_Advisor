@@ -7,10 +7,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class QueryRequest(BaseModel):
-    query: str = Field(min_length=1, max_length=20000)
-    collectionId: str | None = None
+    query: str = Field(min_length=1, max_length=8000)
+    collectionId: str | None = Field(default=None, max_length=200)
     sourceIds: list[UUID] | None = Field(default=None, max_length=500)
-    studentCohort: str | None = None
+    studentCohort: str | None = Field(default=None, max_length=200)
 
     @field_validator("query")
     @classmethod
@@ -211,9 +211,10 @@ class ArtifactRevisionReference(_WireModel):
 
 
 class ExportSummaryRequest(_WireModel):
-    title: str | None = None
-    throughSequence: int | None = None
-    artifactReferences: list[ArtifactRevisionReference] = Field(default_factory=list)
+    title: str | None = Field(default=None, max_length=500)
+    throughSequence: int | None = Field(default=None, ge=0, le=2_147_483_647)
+    artifactReferences: list[ArtifactRevisionReference] = Field(
+        default_factory=list, max_length=100)
 
 
 _RunState = Literal["queued", "running", "succeeded", "failed", "cancelled"]
@@ -460,7 +461,7 @@ class ConversationTurnResponse(_WireModel):
 class AuthSession(_WireModel):
     mode: Literal["development", "oidc"]
     authenticated: bool
-    workspaceKey: str | None = None
+    workspaceKey: str | None = Field(default=None, max_length=200)
     displayName: str | None = None
     email: str | None = None
     role: Literal["student", "advisor", "admin", "auditor"] | None = None
@@ -614,7 +615,7 @@ class PrivacyExportDownloadResponse(_WireModel):
 
 
 class PrivacyDeletionRequest(BaseModel):
-    confirmation: str
+    confirmation: str = Field(max_length=200)
     reason: str = Field(default="user_request", max_length=500)
 
 
@@ -690,7 +691,7 @@ class AdminSource(_WireModel):
     filename: str
     contentType: str
     status: str
-    workspaceKey: str | None = None
+    workspaceKey: str | None = Field(default=None, max_length=200)
     indexRevision: int
     isCurrent: bool
     createdAt: str
@@ -1218,20 +1219,20 @@ class AcademicRecordAttemptUpsertRequest(BaseModel):
     grade: str | None = None
     status: str | None = None
     provenance: str = "student_manual"
-    workspaceKey: str | None = None
+    workspaceKey: str | None = Field(default=None, max_length=200)
 
 
 class AcademicRecordVerifyAttemptRequest(BaseModel):
     method: Literal["manual_staff", "official_transcript", "sis_feed"] = "manual_staff"
     notes: str | None = None
-    workspaceKey: str | None = None
+    workspaceKey: str | None = Field(default=None, max_length=200)
 
 
 class AcademicRecordImportPreviewRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=255)
-    rawContent: str = Field(min_length=1)
-    expectedRecordRevision: int = Field(ge=1)
-    workspaceKey: str | None = None
+    rawContent: str = Field(min_length=1, max_length=2_000_000)
+    expectedRecordRevision: int = Field(ge=1, le=2_147_483_647)
+    workspaceKey: str | None = Field(default=None, max_length=200)
 
 
 class AcademicRecordImportBatchResponse(_WireModel):
@@ -1262,16 +1263,16 @@ class AcademicRecordImportCorrection(BaseModel):
 
 
 class AcademicRecordImportUpdateRequest(BaseModel):
-    expectedRecordRevision: int = Field(ge=1)
+    expectedRecordRevision: int = Field(ge=1, le=2_147_483_647)
     decisions: list[Literal["select", "reject"]] | None = None
     corrections: list[AcademicRecordImportCorrection] = Field(default_factory=list)
-    workspaceKey: str | None = None
+    workspaceKey: str | None = Field(default=None, max_length=200)
 
 
 class AcademicRecordImportCommitRequest(BaseModel):
-    expectedRecordRevision: int = Field(ge=1)
+    expectedRecordRevision: int = Field(ge=1, le=2_147_483_647)
     previewDigest: str = Field(min_length=64, max_length=64)
-    workspaceKey: str | None = None
+    workspaceKey: str | None = Field(default=None, max_length=200)
 
 
 class AcademicRecordRevisionResponse(_WireModel):
@@ -1342,7 +1343,7 @@ class AuditableProgramItem(_WireModel):
 
 class DegreeAuditRunRequest(BaseModel):
     programId: UUID
-    workspaceKey: str | None = None
+    workspaceKey: str | None = Field(default=None, max_length=200)
 
 
 class ProgramComparisonMember(_WireModel):
@@ -1388,7 +1389,7 @@ class ProgramComparisonCreateRequest(BaseModel):
     programIds: list[UUID]
     addCourseCodes: list[str] = Field(default_factory=list)
     removeCourseCodes: list[str] = Field(default_factory=list)
-    workspaceKey: str | None = None
+    workspaceKey: str | None = Field(default=None, max_length=200)
 
 
 class CatalogEditionItem(_WireModel):
@@ -1433,7 +1434,7 @@ class ResponseFeedbackRequest(BaseModel):
     vote: Literal["up", "down"]
     reasonCode: str = Field(min_length=1, max_length=80)
     comment: str | None = Field(default=None, max_length=2000)
-    workspaceKey: str | None = None
+    workspaceKey: str | None = Field(default=None, max_length=200)
 
 
 class ResponseFeedbackResponse(_WireModel):

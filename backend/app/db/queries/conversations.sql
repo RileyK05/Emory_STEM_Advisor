@@ -130,3 +130,6 @@ WHERE t.conversation_id = %(conversation_id)s
         AND (%(through_sequence)s::integer IS NULL OR assistant.sequence <= %(through_sequence)s)
   )
 ORDER BY t.sequence ASC;
+
+-- name: count_conversations_for_workspace
+SELECT count(*) AS count FROM conversations WHERE workspace_key = %(workspace_key)s;

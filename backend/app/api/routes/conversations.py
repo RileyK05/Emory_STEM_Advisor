@@ -21,9 +21,11 @@ from app.api.schemas import (
     NativeArtifactRecord,
     QueryRequest,
 )
+from app.api.serialize import public_payload
 from app.artifacts.storage import ArtifactStore
 from app.atlas.records import course_codes_in
-from app.auth.dependencies import get_workspace_key
+from app.auth.dependencies import get_principal, get_workspace_key
+from app.auth.models import Principal
 from app.connections.models import (
     ConnectionUnavailable,
     CredentialUnreadable,
@@ -49,6 +51,7 @@ from app.jobs.types import JobStatus
 router = APIRouter(prefix="/api/conversations")
 Conn = Annotated[object, Depends(deps.get_conn)]
 Workspace = Annotated[str, Depends(get_workspace_key)]
+PrincipalDep = Annotated[Principal, Depends(get_principal)]
 Debug = Annotated[AppliedDebug | None, Depends(get_debug)]
 
 
@@ -66,7 +69,7 @@ class ArtifactReference(BaseModel):
 class ConversationQuery(QueryRequest):
     model_config = ConfigDict(extra="forbid")
     requestId: UUID
-    expectedSequence: int = Field(ge=0, strict=True)
+    expectedSequence: int = Field(ge=0, le=2_147_483_647, strict=True)
     mode: Literal["advising", "history"] = "advising"
     artifactReferences: list[ArtifactReference] = Field(default_factory=list, max_length=20)
 
@@ -84,9 +87,10 @@ def listing(conn: Conn, workspace: Workspace):
 
 
 @router.get("/{conversation_id}", response_model=ConversationRecord)
-def get(conversation_id: UUID, conn: Conn, workspace: Workspace,
+def get(conversation_id: UUID, conn: Conn, workspace: Workspace, principal: PrincipalDep,
         after: int = Query(default=0, ge=0), limit: int = Query(default=200, ge=1, le=200)):
-    return ConversationStore(conn, workspace).turns(conversation_id, after=after, limit=limit)
+    return public_payload(
+        ConversationStore(conn, workspace).turns(conversation_id, after=after, limit=limit), principal)
 
 
 @router.post(
@@ -130,7 +134,8 @@ def _job_store(request: Request) -> JobStore:
 
 @router.post("/{conversation_id}/turns/{request_id}/abandon",
              response_model=ConversationTurnResponse, response_model_exclude_unset=True)
-def abandon(conversation_id: UUID, request_id: UUID, request: Request, conn: Conn, workspace: Workspace):
+def abandon(conversation_id: UUID, request_id: UUID, request: Request, conn: Conn, workspace: Workspace,
+            principal: PrincipalDep):
     store = ConversationStore(conn, workspace)
     prior = store.request_for_owner(conversation_id, request_id)
     result = store.abandon(conversation_id, request_id)
@@ -147,7 +152,7 @@ def abandon(conversation_id: UUID, request_id: UUID, request: Request, conn: Con
             _job_store(request).cancel(prior["job_id"])
         except JobNotFound:
             pass
-    return result
+    return public_payload(result, principal)
 
 
 _MAX_FOLLOW_UP_CODES = 8
@@ -170,12 +175,16 @@ _TOPIC_NOUN_RE = re.compile(
     r"program|programs|bs|ba|bba|track|tracks|concentration|certificate|prerequisite|"
     r"prerequisites|prereq|prereqs|curriculum|sequence|gpa|credit|credits|semester|honors)\b",
     re.IGNORECASE)
+_TOPIC_SWITCH_RE = re.compile(
+    r"^\s*(?:new topic|switch(?:ing)? topics?|on another topic|i mean)\b", re.IGNORECASE)
 # Case-insensitive on purpose: a typed follow-up may use lower-case codes.
 
 
 def _looks_like_bare_follow_up(query: str) -> bool:
     stripped = (query or "").strip()
     if not stripped:
+        return False
+    if _TOPIC_SWITCH_RE.match(stripped):
         return False
     if _FOLLOW_UP_START_RE.match(stripped) or _ANAPHORA_RE.search(stripped):
         return True
@@ -459,12 +468,12 @@ def stream_events(conversation_id: UUID, request_id: UUID, conn: Conn, workspace
 @router.post("/{conversation_id}/turns", response_model=ConversationTurnResponse,
              response_model_exclude_unset=True)
 def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
-         conn: Conn, workspace: Workspace, debug: Debug):
+         conn: Conn, workspace: Workspace, debug: Debug, principal: PrincipalDep):
     store = ConversationStore(conn, workspace)
     snapshot = {"request": body.model_dump(mode="json", exclude_unset=True), "query": body.query}
     replay = store.replay(conversation_id, body.requestId, snapshot)
     if replay is not None:
-        return replay
+        return public_payload(replay, principal)
     settings = deps.execution_settings(
         request, conn, workspace, debug.settings if debug is not None else None)
     config = debug.config if debug is not None else request.app.state.config
@@ -515,7 +524,7 @@ def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
         }
     replay = store.begin(conversation_id, body.requestId, body.expectedSequence, snapshot)
     if replay is not None:
-        return replay
+        return public_payload(replay, principal)
     def check_current():
         current = store.get(conversation_id)
         conn.commit()
@@ -555,4 +564,4 @@ def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
             "statusCode": 503,
         }, state="failed")
         raise HTTPException(503, "conversation request failed; saved turns were retained") from None
-    return store.finish(conversation_id, body.requestId, result)
+    return public_payload(store.finish(conversation_id, body.requestId, result), principal)

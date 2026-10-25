@@ -59,7 +59,8 @@ dimension guard in SQL and at write. Traces keep per-chunk seam attribution.
 Eval cases reference (source, exact locator label), never chunk IDs; "page 1"
 must not match "page 12"; seams and fusion are compared at the same k. Uploaded
 text is fenced as untrusted data in every prompt. The keyword seam tokenizes to
-`[a-z0-9]+` with OR semantics. Fusion normalizes every seam higher-is-better.
+`[a-z0-9]+` with OR semantics, preserving the fixed S/U search alias as the
+indexed `satisfactory/unsatisfactory` compound. Fusion normalizes every seam higher-is-better.
 Whole topic groups are returned for exploration; no lateral similarity links.
 
 **Adapt.**
@@ -489,6 +490,17 @@ flowchart LR
 first index marks the source `failed`; a failed replacement preserves the prior
 `indexed` status and rows, with an actionable replacement error.
 
+Private uploads bound extracted characters (`UPLOAD_MAX_EXTRACTED_CHARS`,
+2,000,000), each tokenizer input (`UPLOAD_MAX_SEGMENT_CHARS`, 16,384), and emitted
+chunks (`UPLOAD_MAX_CHUNKS`, 2,048). A cooperative chunking deadline
+(`UPLOAD_INDEX_TIMEOUT_SECONDS`, 60 seconds) is checked before tokenization.
+These failures use the same revision-fenced failed-index path. The deadline
+does not interrupt an extraction or embedding call already running; process-level
+ingestion isolation and stale-upload recovery remain future work. Shared operator
+imports retain their existing limits. Uploads with PDF magic require a PDF
+filename; duplicate bytes retain their stable source ID and report the existing
+filename in an upload-response warning when the name differs.
+
 ### Pipeline (`app/ingest/pipeline.py`)
 
 `ingest_file(conn, *, collection_id, path, content_type, count_tokens,
@@ -787,7 +799,11 @@ requires the exact current master file hash and a course present in that source;
 the record retains the conflict reason and a SHA-256/local pointer to the
 captured offering evidence. It may also pin an indexed offering source revision
 and capture-set hash; the capture digest must belong to that exact set. Saved
-evidence pointers are resolved to absolute paths before persistence. The advising
+evidence is checksum-verified and copied to `DATA_DIR/raw/holds/<sha256>` before
+its absolute path is persisted, so backups include it. The
+`scripts.requirement_hold --release HOLD_ID` command records a curator's
+disposition through `--reason`, with the
+same source, course, and master-hash checks as applying a hold. The advising
 snapshot keeps the cited master text visible, marks the requirements incomplete
 and ambiguous, and omits the parser tree from verified requirements and sequence
 planning. Automatic retrieval removes active held-master chunks from the
@@ -854,6 +870,13 @@ config) -> SeamResult`:
   cannot break the query.
 - OR semantics: build `"tok1 | tok2 | ..."` and pass it as a parameter to
   `to_tsquery('english', %(q)s)`.
+- S/U queries also search the fixed `satisfactory/unsatisfactory` compound
+  PostgreSQL indexes, and numeric references retain `+` (for example, 4+1).
+  Phrase matches in locator names, filenames and verified titles, plus an
+  explicitly requested checklist role, supply bounded discovery preferences.
+  An exact program-title phrase additionally selects its actual field/item
+  evidence chunks, only from its bound current source revision. This is raw
+  source retrieval, not publication of parsed requirements as verified rules.
 - Score `ts_rank_cd(search_vector, query)`.
 - Filter: source in collection **and `sources.status = 'indexed'`**.
 - Order: `score DESC, source_id, chunk_index`; `LIMIT %(limit)s`.
@@ -1010,7 +1033,9 @@ chunk_index, seams, normalized_score, source_slot, rank`.
    keep at most `embed_only_quota` chunks whose only seam is `embed` (the best
    ones). If no grounded seam matched, no quota.
 5. **Allocate across sources with a soft cap.** Each source's weight is its
-   best score. First select one best passage from each source in descending
+   best score. First reserve exact named-program field/item evidence, bounded
+   by `cited_set_size`, so diversity cannot strand its continuation chunks.
+   Apply the ordinary allocation to the remaining slots: select one best passage from each source in descending
    weight order, up to `cited_set_size`. When every source fits, remaining
    slots go to the strongest remaining passages globally. Under a tight budget,
    a stronger sibling from a represented source may replace the weakest
@@ -1079,8 +1104,9 @@ retrieval, then makes one planning call (`app/generation/query_plan.py`):
   `retrieval.toml`; anything else is dropped and counted. The plan never
   carries SQL, source ids, URLs or authorization; application code runs every
   search in the query's scope.
-- `retrieve(..., plan=)` then assembles context in this order: the question's
-  embedding and exact-code hits (its raw OR keyword match is replaced),
+- `retrieve(..., plan=)` first reserves exact named-program bound evidence from
+  the question's keyword lookup, then assembles the question's embedding and
+  exact-code hits (other raw OR keyword matches are replaced),
   planned course descriptions read directly by code, the best passages inside
   planned documents for the question, and per-search keyword+embedding hits
   (round-robin). Repeated passages and cross-listed aliases are dropped, then
@@ -1247,7 +1273,7 @@ D5 budget check (it needs `Settings.hf_max_context`). The config diff is the
 decision record.
 
 ```toml
-version = 6
+version = 7
 
 [chunking]
 chunker_version = "2"   # 2: spans measured whole (BPE counts whitespace)
@@ -1324,11 +1350,32 @@ standalone heading, must carry its own valid current-context marker; a cited
 example or preamble cannot cover a separate uncited body. Blank-line handling
 includes CRLF and whitespace-only separators, and code masking preserves fence
 state across the whole answer before per-paragraph coverage is checked. A
-course code in a factual paragraph must occur with the same subject and number,
-including any suffix, in the cited passage or its locator; a paragraph that says
-the context does not support the claim may name an absent code. These are
+recognized course code in a factual paragraph must occur with the same subject
+and number, including any suffix, in the cited passage or its locator. Recognition
+uses the collection's course/program subject registry and deterministic subject
+aliases and number lists, so prose such as "across 15" is not a course code.
+The comparison tolerates source line wrapping and explicitly printed digits
+split by PDF spacing, without changing saved bytes or graph facts. A narrowly
+attributed student-report clause may name courses actually reported in the
+current request or exact user turns; assistant retellings and compaction
+summaries cannot grant this exemption. Institutional requirements and
+eligibility claims still need their own cited support. A clause that says
+the context does not support the claim may name an absent code; it cannot
+exempt a separate positive clause. These are
 conservative structural requirements; no model judges whether surrounding prose
 is entailed.
+
+An output that repeats twelve consecutive normalized words from its system
+instructions is withheld. This detects literal prompt echoes; semantic support,
+vacuous replies, and relevance to the current question still need separate
+quality evaluation.
+
+The existing single, budgeted citation rewrite also receives course-identity
+failures and the current passage numbers naming each code. These are discovery
+hints, never proof of the surrounding claim; the repaired output passes the
+same validation. A conversation's resolved follow-up topic reaches both
+retrieval and the answering prompt, while the saved user message remains exact.
+Explicit topic switches take precedence over pronoun-based continuation.
 
 Empty, refused, filtered, truncated, and unexecuted-tool output is also withheld.
 Usage is recorded before rejecting output. There is no all-context citation
@@ -1441,7 +1488,12 @@ Out-of-scope and unknown identifiers both raise `NotInScope`.
   summaries require issued evidence; note/task IDs are unique within each list.
   These are model work products, never source facts or prerequisite graph data.
 - **Decisions.** `research_decisions` stores structurally valid decisions
-  (limits, issued evidence only, every fact cited) with their digest.
+  (limits, issued evidence only, every fact cited) with their digest. A fact
+  block that asserts program inclusion must name only course codes present in
+  its cited evidence or in cited program requirement text; an absent code is
+  rejected rather than published as degree inclusion. An entry/starting-point
+  claim must cite the named course's record; if that record lists a prerequisite,
+  the claim is rejected unless the prerequisite is stated first.
 
 Runs are workspace-private: another workspace reads them as not found. Backups
 are a full logical dump and include these tables. An owner deletion removes
@@ -1491,6 +1543,26 @@ supplied in the next request authorize its answer. Active-order changes count as
 progress; identical cached no-ops still trigger bounded finalization. Explicit
 working-state updates retain control over their requested active order.
 
+Opened program records with a continuation cursor must finish their remaining
+pages before another discovery or final proposal while reads are affordable.
+Continuation requests advertise the current pending handle/cursor pairs and
+drop duplicate prior-page native read outputs, so a superseded cursor cannot
+invite a cached reread. A cursor presented with a different program handle
+returns recoverable, scoped feedback and cannot authorize another program.
+At the existing finish reserve, all opened programs (including factual lookups
+without candidates) with unread items force partial coverage and record exact
+read/total counts. The controller does not grant extra calls or time.
+
+Policy discovery includes policy text in institutional catalogs and department
+publications. Document search handles open their highest-ranked matching
+section; a read returns `beginning_handle` for the document start only after the
+matching section has been opened. Reads expose their starting chunk and
+explicitly identify any preceding unread material.
+Program searches also return bounded `requirement_documents` from verified
+requirements/checklist provenance, so a missing parsed program projection does
+not hide an available captured checklist. Discovery metadata never authorizes
+citations; the corresponding source still must be read.
+
 Calls reuse the existing accounting and durable tool ledger with a stable
 scope/provider/tool/prompt fingerprint. Changed arguments on a reused call ID
 fail closed. Identical read/discovery calls can reuse their result within the
@@ -1521,6 +1593,10 @@ a disclosed readiness limit. It also restores already acquired support for
 declared program and course candidates from the server's entity-to-evidence
 bindings, reserving one passage per entity before optional passages; a notebook's
 active selection cannot make a still-declared candidate's read record disappear.
+For factual lookups, finishing also restores up to four already acquired passages
+ranked by unique question-term coverage weighted for rarity within the run's
+evidence. Executed-check and candidate support retain priority. This bounded
+context selection is not an entailment check or a publication gate.
 Compaction never grants citation authority to an omitted passage, and
 model-proposed evidence IDs never acquire new passages or bypass pinned-source
 verification. A run with no scoped sources advertises only conversation reads,
@@ -1953,6 +2029,16 @@ Private generation requires evaluated profiles authorized for
 `private_workspace` and every other required scope; environment-key fallback
 is unavailable. Manual import/edit/export works without a model.
 
+Ordinary OIDC responses redact prompt bodies, retrieval seam/contribution
+diagnostics, provider details, and internal warnings/errors at the HTTP boundary.
+The trace ID and numbered cited excerpts remain available for citation display;
+uncited context slots are blanked without renumbering. Administrators and local
+development retain full diagnostics. The same rule covers saved-turn replies and
+request replays; internal immutable results retain the full trace. Invalid request
+responses omit submitted values and validator context, including credentials.
+Operational database and pool failures return a bounded 503 response; pool
+checkout checks replace dead idle connections before handing them to a caller.
+
 The browser waits for session resolution, hides signed-out data, clears memory
 on identity change/logout/401, and lists/reopens persisted scoped artifacts.
 Manual create/import cannot supply source authority. Revision saves retain
@@ -1963,10 +2049,12 @@ elements unverified.
 
 Each logical generation operation persists its first deadline, call count,
 output cap, and token planning budget. Reservations commit before provider I/O.
-Retries/tool turns share those limits; unknown usage stays reserved. Usage
-persists before validation or cancellation discards output. Prompt reservations
-are conservative byte-based estimates, not exact token counts or hard dollar
-caps; SDK inactivity timeouts cannot prove remote computation/billing stopped.
+Retries/tool turns share those limits; unknown usage stays reserved. Every
+provider call is prepared with the reservation's per-call timeout, itself capped
+by the operation's remaining seconds, so a request starts with a bounded timeout.
+Usage persists before validation or cancellation discards output. Prompt reservations are conservative byte-based estimates, not
+exact token counts or hard dollar caps; SDK inactivity timeouts cannot prove
+remote computation/billing stopped.
 
 Greedy generation sends temperature zero by default. An operator must explicitly
 select `LLM_SAMPLING_POLICY=model_default` for models without that control and
@@ -2441,7 +2529,10 @@ retire the topic graph. Corpus regeneration stays a separate verified import.
 
 Response feedback keeps one current vote per owner and response; a different
 vote replaces that row's current flag. Only the owner may submit a vote; a read
-grant cannot submit on the owner's behalf. Feedback is not tied to the original
+grant cannot submit on the owner's behalf. Submission verifies a persisted
+response's trace ownership and returns 404 for unknown or other-workspace IDs.
+The public trace ID is the vote identity; a response UUID aliases that same
+revision chain, and current vote counts are owner-scoped. Feedback is not tied to the original
 result, so it remains readable when that result or a depended-on source becomes
 stale. A reviewer with source-review authority records an issue type and a
 triage transition. Missing evidence on a negative vote opens a gap investigation

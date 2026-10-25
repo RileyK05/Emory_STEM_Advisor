@@ -163,6 +163,9 @@ def _extract_markdown(text: str, lines_per_locator: int) -> list[LocatorSpan]:
 
 _PDF_COURSE_SPLIT_RE = re.compile(r"\b([A-Z]{2,7}|[A-Z][a-z]{1,11})\s(\d{1,2})\s(\d{2})\b")
 _TITLE_SUBJECTS = set(SUBJECT_ALIASES)
+# A tiny compressed PDF can contain an enormous page tree. Bound extraction
+# before pypdf walks every page; the caller's text/byte limits apply after this.
+MAX_PDF_PAGES = 2_000
 
 
 def repair_pdf_kerning(text: str) -> str:
@@ -187,6 +190,8 @@ _repair_pdf_kerning = repair_pdf_kerning
 
 def _read_pdf(raw: bytes) -> tuple[str, list[str]]:
     reader = PdfReader(io.BytesIO(raw))
+    if len(reader.pages) > MAX_PDF_PAGES:
+        raise ValueError(f"PDF exceeds the {MAX_PDF_PAGES}-page extraction limit")
     pages = [_repair_pdf_kerning(normalize_text(page.extract_text() or ""))
              for page in reader.pages]
     return "\n\n".join(pages), pages

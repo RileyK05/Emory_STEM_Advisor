@@ -10,6 +10,7 @@ from typing import Self
 
 import psycopg
 from pgvector.psycopg import register_vector
+from psycopg.conninfo import make_conninfo
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
@@ -193,6 +194,7 @@ def _pool_for(dsn: str, max_size: int, timeout: float, pool_name: str = "default
                 pool = ConnectionPool(
                     dsn, min_size=1, max_size=max_size, timeout=timeout, open=False,
                     kwargs=kwargs, configure=_configure_pooled,
+                    check=ConnectionPool.check_connection,
                 )
                 pool.open()
                 _pools[key] = pool
@@ -244,17 +246,23 @@ def connector(settings: Settings, dsn: str | None = None, *,
     )
 
 
+def connection_dsn(conn: psycopg.Connection) -> str:
+    """A reconnectable DSN, including the credential libpq actually used."""
+    password = conn.info.password
+    return make_conninfo(conn.info.dsn, password=password) if password else conn.info.dsn
+
+
 def resolved_database_url(settings: Settings, conn: psycopg.Connection) -> str:
     """Return the runtime DSN without dropping the configured password (EMO-001).
 
     psycopg exposes ``conn.info.dsn`` without the password, so round-tripping a
     password-authenticated `DATABASE_URL` through it loses the credential and
     every pooled connection later fails with ``fe_sendauth: no password
-    supplied``. Keep the configured URL when one is set; the connection's DSN is
-    only needed for the embedded `pgserver` case, where no URL is configured and
-    the server uses trust auth.
+    supplied``. Keep the configured URL when one is set; otherwise reconstruct
+    the connection's DSN with the credential libpq used. This also supports
+    injected password-authenticated connections and embedded `pgserver`.
     """
-    return settings.database_url or conn.info.dsn
+    return settings.database_url or connection_dsn(conn)
 
 
 def pool_stats() -> list[dict[str, int | str]]:

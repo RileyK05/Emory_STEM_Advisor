@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api import create_app
 from app.config import load_settings
+from app.db.connection import connection_dsn
 from app.llm.base import GenerationResult, ToolCall, ToolResultMessage, Usage
 from tests.helpers import collection_name, lenient_config
 from tests.test_query_advising import _AdvisingProvider, _import_atlas, _PlantedAtlasEmbedder
@@ -51,7 +52,7 @@ def test_three_independent_advising_tools_fit_in_two_provider_calls(db, collecti
     provider = Provider()
     settings = replace(load_settings(), tools_enabled=True, llm_provider="openai",
                        llm_model_id="offline-advising-tools", operation_max_calls=2,
-                       database_url=db.info.dsn)
+                       database_url=connection_dsn(db))
     app = create_app(settings=settings, allow_test_client=True, config=lenient_config(),
                      embedder=_PlantedAtlasEmbedder(), provider=provider)
     app.state.override_conn = db

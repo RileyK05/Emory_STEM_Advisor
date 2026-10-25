@@ -20,6 +20,7 @@ def _json_size(value) -> int:
 _SUMMARY_EXCERPT_LIMIT = 8
 _SUMMARY_EXCERPT_CHARS = 400
 _STALE_SUMMARY_SECONDS = 300
+MAX_CONVERSATIONS_PER_WORKSPACE = 500
 
 
 def _excerpt(value) -> str | None:
@@ -92,9 +93,11 @@ def _summary_turn(item: dict) -> dict:
 
 
 class ConversationStore:
-    def __init__(self, conn, workspace_key: str):
+    def __init__(self, conn, workspace_key: str,
+                 max_conversations: int = MAX_CONVERSATIONS_PER_WORKSPACE):
         self.conn = conn
         self.workspace_key = workspace_key
+        self.max_conversations = max_conversations
 
     def _params(self, conversation_id: UUID) -> dict:
         return {"conversation_id": conversation_id, "workspace_key": self.workspace_key}
@@ -111,6 +114,12 @@ class ConversationStore:
     def create(self, title: str):
         with self.conn.transaction():
             require_live_workspace(self.conn, self.workspace_key, lock=True)
+            count = self.conn.execute(
+                queries.get("count_conversations_for_workspace"),
+                {"workspace_key": self.workspace_key},
+            ).fetchone()
+            if count is not None and count["count"] >= self.max_conversations:
+                raise HTTPException(429, "conversation limit reached")
             row = self.conn.execute(queries.get("create_conversation"), {
                 "conversation_id": uuid4(), "workspace_key": self.workspace_key, "title": title,
             }).fetchone()

@@ -12,6 +12,24 @@ from tests.fakes import FakeProvider
 from tests.helpers import api_client, collection_name
 
 
+def test_worker_maintenance_removes_expired_quota_buckets(db, migrated_dsn):
+    from dataclasses import replace
+
+    from app.config import load_settings
+    from app.db.connection import connector
+    from scripts.worker import _prune_quotas_if_due
+
+    for workspace in ("maintenance-old", "maintenance-live"):
+        QuotaService.check_and_consume(db, workspace_key=workspace)
+    db.execute("UPDATE quota_buckets SET window_start = window_start - interval '5 days' "
+               "WHERE scope_id = 'maintenance-old'")
+    db.commit()
+    settings = replace(load_settings(), database_url=migrated_dsn)
+    _prune_quotas_if_due(connector(settings), 0.0)
+    remaining = db.execute("SELECT DISTINCT scope_id FROM quota_buckets").fetchall()
+    assert {row["scope_id"] for row in remaining} == {"maintenance-live"}
+
+
 def test_minute_rate_limit_and_retry_after(db):
     ws = "ws-rate-minute"
     # Set workspace policy: 2 queries per minute

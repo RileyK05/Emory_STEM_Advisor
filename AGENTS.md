@@ -65,6 +65,11 @@ plans and `docs/audit/` the review status.
   connections through `migrated_dsn` must also request `db`. Tests that change
   the schema or migration history use `isolated_database` in
   `test_db_migrate.py`. Real HTTP transports are blocked; inject a mock transport.
+  External `TEST_DATABASE_URL` targets must explicitly end in `_test` and differ
+  from `DATABASE_URL`: cleanup clears their application data. Compose uses the
+  disposable `postgres-test` service (`--profile test`, host port 5433). Use
+  `connection_dsn(conn)` instead of `conn.info.dsn` when reconnecting, so tests
+  also work with password authentication and no `PGPASSWORD`.
 - `frontend/src/` — `api/` (`types.ts` mirrors the contract, `client.ts` is the
   single factory; `VITE_API_MODE` selects `mock` (default) or `http`), `admin/`
   and `debug/` (separate Vite entry bundles sharing `SessionGate`, `Shell` and

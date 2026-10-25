@@ -1,5 +1,13 @@
 -- Response feedback. The current vote is one row per owner and response.
 
+-- name: get_owned_feedback_response
+SELECT r.response_id, r.trace_id
+FROM responses r JOIN retrieval_traces t ON t.trace_id = r.trace_id
+WHERE (r.response_id = %(response_id)s OR r.trace_id = %(response_id)s)
+  AND t.workspace_key = %(workspace_key)s
+ORDER BY r.created_at DESC, r.response_id DESC
+LIMIT 1;
+
 -- name: get_current_response_feedback
 SELECT feedback_id, workspace_key, response_id, revision, vote, reason_code, comment, is_current, created_at
 FROM response_feedback
@@ -22,7 +30,7 @@ RETURNING feedback_id, workspace_key, response_id, revision, vote, reason_code, 
 -- name: count_current_feedback_votes
 SELECT count(*) AS votes
 FROM response_feedback
-WHERE response_id = %(response_id)s AND is_current;
+WHERE response_id = %(response_id)s AND workspace_key = %(workspace_key)s AND is_current;
 
 -- name: insert_eval_candidate
 INSERT INTO eval_candidates (candidate_id, redacted_prompt, redacted_expected, source_feedback_id)

@@ -212,6 +212,17 @@ def _planned(conn, collection_id, query, plan, embed_model, config: RetrievalCon
     runs = list(question_runs)
     sections: list[list[tuple[FusedChunk, bool]]] = [
         [(item, False) for item in top(question_runs, limits.question_slots)]]
+    # A planner's per-search/page quota must not split the exact program the
+    # question names. Keep only its bound evidence from the raw keyword run;
+    # generic raw-prompt keyword hits remain replaced by the planned searches.
+    named = _run(conn, "keyword", lambda: keyword_seam(
+        conn, collection_id, query, config.seams.keyword,
+        source_ids=source_ids, workspace_key=workspace_key))
+    exact = [candidate for candidate in named.candidates if candidate.program_evidence]
+    if exact:
+        runs.append(replace(named, candidates=exact))
+        sections.insert(0, [(FusedChunk(c.chunk_id, c.source_id, c.chunk_index,
+                                       ("keyword",), 1., 0, 0), False) for c in exact])
 
     planned_courses: list[Candidate] = []
     for code in plan.course_codes:

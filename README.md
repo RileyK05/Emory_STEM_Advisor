@@ -58,20 +58,27 @@ restart them after changing it. See the [working-space contract](docs/architectu
 
 ## Run backend checks against real Postgres
 
-Compose sets `TEST_DATABASE_URL` to its healthy Postgres service, so DB tests execute instead of being skipped:
+Tests use a disposable Postgres service, separate from the development database:
 
 ```sh
-docker compose run --build --rm backend python -m pytest
+docker compose --profile test up -d --wait postgres-test
+docker compose --profile test run --build --rm backend python -m pytest
 ```
 
-To run checks from a host Python 3.12 environment, install `backend[dev]` and start the database with `docker compose up -d postgres`. Copy `.env.example` to `.env`, then from `backend/` run:
+For host Python 3.12 checks, install `backend[dev]`, start the same test service,
+then from `backend/` run (pytest intentionally ignores `.env`):
 
 ```powershell
+$env:TEST_DATABASE_URL="postgresql://advisor:advisor@localhost:5433/advisor_test"
 ..\.venv\Scripts\python -m pytest
 ..\.venv\Scripts\python -m ruff check .
 ```
 
-The host test fixture accepts `TEST_DATABASE_URL`; the embedded `pgserver` fallback is available where its bundled Postgres can start. The Docker path avoids that fallback on Windows.
+An external `TEST_DATABASE_URL` must explicitly name a disposable database ending
+in `_test`, different from `DATABASE_URL`. Tests clear its application data.
+Without it, the fixture creates an isolated embedded `pgserver`; it never selects
+the development database. The Docker path avoids embedded startup limitations
+on Windows. Password authentication works without `PGPASSWORD`.
 
 If Windows denies access to pytest's default temporary folder, pass
 `--basetemp ../data/test-runs/pytest-<unique-run-id>` from `backend/`. Use a fresh
@@ -203,3 +210,16 @@ remain available. See the architecture for evaluated routing, operation limits,
 private OIDC preparation, and [sandbox/WORKER.md](sandbox/WORKER.md) for the
 dedicated Office/code worker. Production activation and live isolation checks
 remain separate from local scaffolding.
+
+Private OIDC generation requires evaluated connection routing. Configure an
+encrypted connection profile with every required data scope (including
+`private_workspace`), set `ROUTING_ENABLED=true` and
+`ROUTING_EVAL_SUITE_HASH`, run that evaluation, then record its actual outcome:
+`python -m scripts.record_profile_evaluation PROFILE_ID --suite-hash HASH --status passed --metrics RESULTS.json`.
+The command records an operator attestation; it does not run or verify the
+evaluation. Editing the profile requires evaluating its new revision. An
+environment API key alone cannot serve a private workspace.
+
+Deleting a workspace creates a permanent deletion tombstone and revokes its
+sessions. Signing in again with the same identity does not reopen that workspace;
+writes return 410. Re-enrollment would require a separate account-lifecycle policy.

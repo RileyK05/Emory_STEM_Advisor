@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from psycopg.types.json import Jsonb
 
 from app.db import queries
 from app.gaps.feedback import FeedbackService
@@ -14,7 +15,7 @@ def test_vote_replacement_and_redacted_candidate(db, collection):
     student = create_user(db, role="student")
     other = create_user(db, role="student")
     reviewer = create_user(db, role="admin")
-    response_id = uuid4()
+    response_id = _response(db, collection, student.workspace_key)
 
     first = FeedbackService.submit(
         db, student.workspace_key, response_id, "up", "helpful", None, student,
@@ -22,6 +23,10 @@ def test_vote_replacement_and_redacted_candidate(db, collection):
     same = FeedbackService.submit(
         db, student.workspace_key, response_id, "up", "helpful", None, student,
     )
+    alias = db.execute("SELECT response_id FROM responses WHERE trace_id = %s",
+                       (response_id,)).fetchone()["response_id"]
+    aliased = FeedbackService.submit(db, student.workspace_key, alias, "up", "helpful", None, student)
+    assert aliased["feedback_id"] == first["feedback_id"]
     changed = FeedbackService.submit(
         db, student.workspace_key, response_id, "down", "missing-evidence", "needs a source", student,
     )
@@ -30,6 +35,10 @@ def test_vote_replacement_and_redacted_candidate(db, collection):
     assert changed["revision"] == 2
     assert changed["current_votes"] == 1
     assert first["current_votes"] == 1
+    for hidden in (uuid4(), _response(db, collection, other.workspace_key)):
+        with pytest.raises(HTTPException) as missing:
+            FeedbackService.submit(db, student.workspace_key, hidden, "up", "helpful", None, student)
+        assert missing.value.status_code == 404
 
     with pytest.raises(HTTPException) as denied:
         FeedbackService.submit(
@@ -103,12 +112,12 @@ def _source(db, collection, workspace_key):
     return source_id
 
 
-def _trace(db, collection):
+def _trace(db, collection, workspace_key=None):
     trace_id = uuid4()
     db.execute(queries.get("insert_trace"), {
         "trace_id": trace_id,
         "collection_id": collection,
-        "workspace_key": None,
+        "workspace_key": workspace_key,
         "query": "Which requirement line is absent?",
         "normalized_query": "which requirement line is absent?",
         "config_version": 1,
@@ -118,11 +127,22 @@ def _trace(db, collection):
     return trace_id
 
 
+def _response(db, collection, workspace_key):
+    response_id = uuid4()
+    trace_id = _trace(db, collection, workspace_key)
+    db.execute(queries.get("insert_response"), {
+        "response_id": response_id, "trace_id": trace_id, "status": "refusal",
+        "text": "", "reason": "no relevant material", "prompt_version": "test",
+        "context_snapshot": Jsonb([]),
+    })
+    return trace_id
+
+
 def test_triage_opens_a_gap_and_stale_source_blocks_silent_promotion(db, collection):
     student = create_user(db, role="student")
     advisor = create_user(db, role="advisor")
     reviewer = create_user(db, role="admin")
-    response_id = uuid4()
+    response_id = _response(db, collection, student.workspace_key)
     comment = "needs a source from the student"
     feedback = FeedbackService.submit(
         db, student.workspace_key, response_id, "down", "missing-evidence", comment, student,
@@ -210,7 +230,8 @@ def test_triage_opens_a_gap_and_stale_source_blocks_silent_promotion(db, collect
     assert again["event_id"] == opened["event_id"]
     # A second report about the same trace joins the gap without counting the trace twice.
     second = FeedbackService.submit(
-        db, student.workspace_key, uuid4(), "down", "missing-evidence", None, student,
+        db, student.workspace_key, _response(db, collection, student.workspace_key),
+        "down", "missing-evidence", None, student,
     )
     joined = FeedbackService.triage(
         db, reviewer, feedback_id=second["feedback_id"], issue_type="missing_evidence",

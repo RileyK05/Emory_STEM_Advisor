@@ -10,7 +10,7 @@ import pytest
 from psycopg import conninfo, sql
 
 from app.db import migrate, queries
-from app.db.connection import close_pools, connect, pooled_connect
+from app.db.connection import close_pools, connect, connection_dsn, pooled_connect
 from app.db.migrate import MigrationChanged, MigrationError, apply_migrations
 from app.ops.backup import _referenced_files
 
@@ -97,7 +97,7 @@ def test_fresh_database_applies_baseline_once_and_binds_vector_on_the_same_conne
     migrated_dsn, pooled,
 ):
     with isolated_database(migrated_dsn) as plain:
-        conn = (pooled_connect(plain.info.dsn, max_size=1, timeout=5.0, pool_name="migrate-test")
+        conn = (pooled_connect(connection_dsn(plain), max_size=1, timeout=5.0, pool_name="migrate-test")
                 if pooled else plain)
         try:
             applied = apply_migrations(conn)

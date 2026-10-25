@@ -8,7 +8,13 @@ from psycopg_pool import PoolTimeout
 
 from app.config import load_settings
 from app.db import connection, queries
-from app.db.connection import PooledConnection, close_pools, connector, pooled_connect
+from app.db.connection import (
+    PooledConnection,
+    close_pools,
+    connection_dsn,
+    connector,
+    pooled_connect,
+)
 from app.llm.base import GenerationResult, ToolCall, Usage
 from tests.helpers import collection_name, ingest_text, lenient_config
 
@@ -85,6 +91,17 @@ def test_an_unfinished_transaction_never_leaks_to_the_next_borrower(dsn):
     nxt = _borrow(dsn, size=1)
     assert _count(nxt, 'pool-leak') == 0
     nxt.close()
+
+
+def test_dead_idle_connection_is_replaced_before_the_next_borrow(dsn):
+    borrowed = _borrow(dsn, size=1)
+    pid = borrowed.info.backend_pid
+    borrowed.close()
+    with connection.connect(dsn) as admin:
+        assert admin.execute("SELECT pg_terminate_backend(%s) AS stopped", (pid,)).fetchone()["stopped"]
+    with _borrow(dsn, size=1) as recovered:
+        assert recovered.execute("SELECT 1 AS one").fetchone()["one"] == 1
+        assert recovered.info.backend_pid != pid
 
 
 def test_exhausted_pool_times_out_then_recovers_when_a_connection_is_returned(dsn):
@@ -337,7 +354,7 @@ def test_tool_query_does_not_self_starve_a_one_slot_pool(dsn, db, collection, tm
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha has value 2.\n")
     db.commit()
     provider = _OneToolProvider()
-    client = _pooled_client(db.info.dsn, tools_enabled=True, llm_provider="openai",
+    client = _pooled_client(connection_dsn(db), tools_enabled=True, llm_provider="openai",
                             llm_model_id="mock-tools", provider=provider)
     response = client.post("/api/query", json={
         "query": "alpha", "collectionId": collection_name(db, collection),

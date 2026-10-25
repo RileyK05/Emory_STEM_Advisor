@@ -10,7 +10,7 @@ from app.atlas.requisites import (
     parse_requisites,
     requisite_text,
 )
-from app.retrieval.seams.prereq import _codes
+from app.retrieval.seams.prereq import course_codes_in_query
 
 
 def _c(*codes):
@@ -277,4 +277,4 @@ def test_a_course_is_never_its_own_prerequisite():
     ("M2M 401 and VM 999D1", ["M2M 401", "VM 999D1"]),
 ])
 def test_prereq_seam_finds_course_codes_in_a_query(query, codes):
-    assert _codes(query) == codes
+    assert course_codes_in_query(query) == codes

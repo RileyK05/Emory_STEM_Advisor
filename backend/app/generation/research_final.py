@@ -19,9 +19,20 @@ from app.llm.base import Usage
 from app.programs.requirements import course_mentions
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-13"
+RESEARCH_PROMPT_VERSION = "research-17"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
+_INCLUSION = re.compile(
+    r"\b(?:required|requirement|elective|counts?|sits? within|list(?:ed)?|"
+    r"program|major|minor|degree)\b", re.IGNORECASE)
+_ENTRY = re.compile(
+    r"\b(?:entry point|starting point|first course|initial course|"
+    r"begin with|start with)\b", re.IGNORECASE)
+_ENTRY_NEGATED = re.compile(
+    r"\b(?:not|never|rather than|instead of)\b[^.]{0,80}"
+    r"\b(?:entry point|starting point|first course|initial course)\b", re.IGNORECASE)
+_PREREQUISITE = re.compile(r"\b(?:prerequisite|prerequisites|requisite|requisites)\b",
+                           re.IGNORECASE)
 
 
 def _program_requirement_mentions(records, cited: set[str]) -> set[str]:
@@ -68,6 +79,38 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
     if entity_evidence is not None:
         refs = {entity for entity, ids in entity_evidence.items() if ids & cited}
     requirement_mentions = _program_requirement_mentions(records, cited)
+    for block in decision.blocks:
+        if block.kind != "fact" or not _INCLUSION.search(block.text):
+            continue
+        support = "\n".join(records[e].exact_text for e in block.evidence_ids if e in records)
+        named = set(course_mentions(block.text))
+        missing = named - set(course_mentions(support)) - _program_requirement_mentions(
+            records, set(block.evidence_ids))
+        if missing:
+            problems.append(
+                "fact block names course code(s) absent from its cited evidence: "
+                + ", ".join(sorted(missing)))
+    for block in decision.blocks:
+        if (block.kind not in {"fact", "judgment"} or not _ENTRY.search(block.text)
+                or _ENTRY_NEGATED.search(block.text)):
+            continue
+        mentions = course_mentions(block.text)
+        if not mentions:
+            continue
+        course = mentions[0]
+        support = [records[e] for e in block.evidence_ids
+                   if e in records and course in set(records[e].entity_refs)]
+        if not support:
+            problems.append(
+                f"entry/starting-point claim names {course} without citing its course record")
+        elif any(_PREREQUISITE.search(record.exact_text) for record in support):
+            prerequisite_codes = {
+                code for record in support for code in course_mentions(record.exact_text)
+            } - {course}
+            if not prerequisite_codes & set(mentions):
+                problems.append(
+                    f"entry/starting-point claim for {course} cites a record listing a prerequisite; "
+                    "state the prerequisite first")
     course_recommendations = set(decision.recommended_course_codes)
     if decision.outcome == "recommendation":
         if not decision.candidate_ids or not any(b.kind == "judgment" for b in decision.blocks):

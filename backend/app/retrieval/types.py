@@ -15,6 +15,7 @@ class Candidate:
     chunk_index: int
     seam: str
     raw_score: float
+    program_evidence: bool = False
 
 
 @dataclass(frozen=True)

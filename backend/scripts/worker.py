@@ -27,8 +27,9 @@ from app.jobs.worker import run_once
 
 def _drain_source_invalidations(connect, worker_id: str) -> None:
     """Consume leased source-invalidation rows without stopping the job loop."""
-    conn = connect()
+    conn = None
     try:
+        conn = connect()
         from app.admin.invalidation import consume_source_invalidations
 
         consume_source_invalidations(conn, worker_id)
@@ -36,18 +37,20 @@ def _drain_source_invalidations(connect, worker_id: str) -> None:
     except Exception as exc:  # noqa: BLE001 - invalidation must not stop job claims
         print(f"invalidation consumer failed: {type(exc).__name__}", file=sys.stderr)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
-def _prune_quotas_if_due(conn, next_prune: float) -> float:
+def _prune_quotas_if_due(connect_fn, next_prune: float) -> float:
     if time.monotonic() < next_prune:
         return next_prune
     try:
         from app.privacy.service import PrivacyService
         from app.quotas.service import QuotaService
 
-        QuotaService.prune_expired(conn)
-        PrivacyService.prune_expired_exports(conn)
+        with connect_fn() as conn:
+            QuotaService.prune_expired(conn)
+            PrivacyService.prune_expired_exports(conn)
     except Exception as exc:  # noqa: BLE001 - maintenance must not stop claims
         print(f"quota/privacy prune failed: {type(exc).__name__}", file=sys.stderr)
     return time.monotonic() + 3600
@@ -147,11 +150,7 @@ def main() -> None:
             while True:
                 next_purge = _purge_auth_if_due(connector(settings), next_purge)
                 _drain_source_invalidations(connector(settings), args.worker_id)
-                quota_conn = connector(settings)
-                try:
-                    next_quota_prune = _prune_quotas_if_due(quota_conn, next_quota_prune)
-                finally:
-                    quota_conn.close()
+                next_quota_prune = _prune_quotas_if_due(connector(settings), next_quota_prune)
                 try:
                     store.recover_expired(limit=100)
                 except Exception as exc:  # noqa: BLE001 - maintenance must not stop claims

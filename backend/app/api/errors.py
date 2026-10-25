@@ -33,3 +33,15 @@ async def artifact_validation(request: Request, exc: ValidationError):
         "errors": [{"type": item["type"], "loc": list(item["loc"]), "msg": item["msg"]}
                    for item in exc.errors(include_input=False, include_context=False)],
     })
+
+
+async def request_validation(request: Request, exc):
+    return JSONResponse(status_code=422, content={"detail": [
+        {"type": item["type"], "loc": list(item["loc"]), "msg": "invalid request value"}
+        for item in exc.errors()
+    ]})
+
+
+async def database_unavailable(request: Request, exc):
+    return JSONResponse(status_code=503, content={"detail": "database is temporarily unavailable"},
+                        headers={"Retry-After": "1"})

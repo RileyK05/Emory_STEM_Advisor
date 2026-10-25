@@ -161,6 +161,64 @@ def test_cited_program_requirement_is_a_mention_not_an_unread_recommendation():
     validate_final(mentioned_only, state, [record], {"e1"}, {})
 
 
+def test_fact_block_cannot_name_a_course_absent_from_its_cited_evidence():
+    from uuid import uuid4
+
+    from app.advising.research_types import EvidenceRecord, FinalDecision
+    from app.generation.research_final import DecisionRejected, validate_final
+
+    record = EvidenceRecord(
+        evidence_id="e1", source_id=str(uuid4()), source_revision=1,
+        source_kind="institutional_catalog", source_name="Data Science (BS)",
+        chunk_id=str(uuid4()), locator_label="Requirements",
+        exact_text="QTM 110 and QTM 150 are required.", text_digest="a" * 64,
+        acquired_step=1, content_completeness="complete", entity_refs=("h_prog",))
+    bad = FinalDecision(outcome="information", completeness="complete", blocks=(
+        DecisionBlock(kind="fact", text="DATASCI 350 is in the Data Science BS QTM list.",
+                      evidence_ids=("e1",)),))
+    with pytest.raises(DecisionRejected, match="DATASCI 350"):
+        validate_final(bad, None, [record], {"e1"}, {})
+    good = bad.model_copy(update={"blocks": (
+        DecisionBlock(kind="fact", text="QTM 110 is required.", evidence_ids=("e1",)),)})
+    validate_final(good, None, [record], {"e1"}, {})
+
+
+def test_entry_point_claims_need_a_read_course_without_prerequisites():
+    from uuid import uuid4
+
+    from app.advising.research_types import EvidenceRecord, FinalDecision
+    from app.generation.research_final import DecisionRejected, validate_final
+
+    def record(evidence_id, text, refs):
+        return EvidenceRecord(
+            evidence_id=evidence_id, source_id=str(uuid4()), source_revision=1,
+            source_kind="institutional_catalog", source_name="record",
+            chunk_id=str(uuid4()), locator_label="Requirements", exact_text=text,
+            text_digest="a" * 64, acquired_step=1, content_completeness="complete",
+            entity_refs=refs)
+
+    records = [
+        record("e1", "ECON 101 introduces macroeconomics.", ("ECON 101",)),
+        record("e2", "ECON 112. Prerequisite: ECON 101.", ("ECON 112",)),
+        record("e3", "CS 453. Prerequisite: CS 350.", ("CS 453",)),
+        record("e4", "ECON 112 is required.", ("h_prog",)),
+    ]
+
+    def decision(text, evidence_id):
+        return FinalDecision(outcome="information", completeness="complete", blocks=(
+            DecisionBlock(kind="fact", text=text, evidence_ids=(evidence_id,)),))
+
+    with pytest.raises(DecisionRejected, match="without citing its course record"):
+        validate_final(decision("ECON 112 is the entry point.", "e4"), None, records, {"e4"}, {})
+    with pytest.raises(DecisionRejected, match="listing a prerequisite"):
+        validate_final(decision("ECON 112 is the entry point.", "e2"), None, records, {"e2"}, {})
+    validate_final(decision("ECON 112 is the starting point after ECON 101.", "e2"),
+                   None, records, {"e2"}, {})
+    validate_final(decision("ECON 101 is the entry point.", "e1"), None, records, {"e1"}, {})
+    validate_final(decision("CS 453 is a later-stage step rather than an entry point.", "e3"),
+                   None, records, {"e3"}, {})
+
+
 @pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(9000, False), (12000, False), (48000, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
@@ -328,6 +386,47 @@ def test_terminal_json_uses_the_finish_validation_path(transport):
     call = _finish_text_call(payload)
     assert call.name == "advisor_finish"
     assert FinishInput.model_validate(call.arguments).decision.model_dump(mode="json")["blocks"][0]["text"] == decision["blocks"][0]["text"]
+
+
+def test_document_snippet_shows_the_query_dense_part_of_a_long_passage():
+    from app.generation.research_tools import _query_snippet
+
+    text = ("Library room reservations are unrelated. " * 40
+            + "The S/U cap is 20 credit hours and ARCHE credit counts toward it. "
+            + "More unrelated parking and transportation text. " * 40)
+    snippet = _query_snippet(text, "S/U credit hours ARCHE cross-registration")
+    assert "20 credit hours" in snippet and "ARCHE" in snippet
+    assert snippet.index("20 credit hours") < 400
+
+
+def test_policy_search_read_round_is_narrowed_to_the_matching_section():
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.config import load_settings
+    from app.generation.research_controller import ResearchController
+    from app.llm.base import ToolDefinition
+
+    session = SimpleNamespace(
+        settings=load_settings(),
+        store=SimpleNamespace(evidence=lambda _run: []), run=SimpleNamespace(run_id=uuid4()),
+        active=[], state=None, entity_evidence={},
+        scope=SimpleNamespace(sources={"source-1": SimpleNamespace(source_kind="institutional_policy")},
+                              programs={}), handles={}, checks={}, actions=[],
+        program_reads={}, program_positions={}, program_sizes={}, program_cursors={},
+        supplied=set(), remaining_limits={}, pending_policy_read="h_policy",
+    )
+    definitions = (
+        ToolDefinition("advisor_read_document", "Read.", {"type": "object",
+            "properties": {"handle": {"type": "string"}}, "required": []}),
+        ToolDefinition("advisor_search", "Search.", {"type": "object", "properties": {}}),
+        ToolDefinition("advisor_finish", "Finish.", {"type": "object", "properties": {}}),
+    )
+    request, _user = ResearchController().request(
+        session, SimpleNamespace(definitions=definitions), "What is the policy?", None,
+        [], "", False, read_required=True, policy_required=True)
+    assert [tool.name for tool in request.tools] == ["advisor_read_document", "advisor_finish"]
+    assert request.tools[0].input_schema["properties"]["handle"]["enum"] == ["h_policy"]
 
 
 @pytest.mark.parametrize("payload", [

@@ -39,6 +39,14 @@ class FeedbackService:
         actor: Principal,
     ) -> dict[str, Any]:
         cls._owner(conn, actor, workspace_key)
+        owned = conn.execute(queries.get("get_owned_feedback_response"), {
+            "workspace_key": workspace_key, "response_id": response_id,
+        }).fetchone()
+        if owned is None:
+            raise HTTPException(404, "response not found")
+        # The public answer exposes its trace ID. Keep that established identity
+        # so response-ID aliases and existing UI votes share one revision chain.
+        response_id = owned["trace_id"]
         current = conn.execute(
             queries.get("get_current_response_feedback"),
             {"workspace_key": workspace_key, "response_id": response_id},
@@ -72,7 +80,7 @@ class FeedbackService:
             ).fetchone())
         votes = conn.execute(
             queries.get("count_current_feedback_votes"),
-            {"response_id": response_id},
+            {"response_id": response_id, "workspace_key": workspace_key},
         ).fetchone()["votes"]
         stored["current_votes"] = votes
         return stored

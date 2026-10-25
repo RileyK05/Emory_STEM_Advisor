@@ -51,7 +51,8 @@ class ArtifactGenerationInput(BaseModel):
     expectedRevisionId: UUID | None = None
     outputPlan: DependentOutputPlan | None = None
     conversationId: UUID | None = None
-    throughSequence: int | None = Field(default=None, ge=0, strict=True)
+    throughSequence: int | None = Field(
+        default=None, ge=0, le=2_147_483_647, strict=True)
 
     @model_validator(mode="after")
     def revision_target(self):

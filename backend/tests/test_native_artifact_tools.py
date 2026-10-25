@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 
 from app.api import create_app
-from app.db.connection import connect
+from app.db.connection import connect, connection_dsn
 from app.generation.artifacts import build_artifact_handlers
 from app.jobs.runtime import RunExecutor
 from app.jobs.store import JobStore
@@ -22,9 +22,9 @@ def runtime(db, collection, tmp_path, provider):
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake-native",
                        tools_enabled=True, operation_token_budget=64_000,
                        default_collection=collection_name(db, collection),
-                       database_url=db.info.dsn, data_dir=tmp_path)
+                       database_url=connection_dsn(db), data_dir=tmp_path)
     config = lenient_config()
-    connect_factory = lambda: connect(db.info.dsn)
+    connect_factory = lambda: connect(connection_dsn(db))
     store = JobStore(connect_factory)
     handlers = build_artifact_handlers(settings, config, FakeEmbedder(8), provider, connect_factory)
     app = create_app(settings=settings, config=config, provider=provider, embedder=FakeEmbedder(8),

@@ -20,6 +20,7 @@ from app.advising.sequence import CourseRequirement, plan_sequence
 from app.api import create_app
 from app.atlas.importer import import_atlas
 from app.config import load_settings
+from app.db.connection import connection_dsn
 from app.llm.base import GenerationResult, ToolCall, ToolResultMessage, Usage
 from app.retrieval.config import load_retrieval_config
 from app.retrieval.retrieve import retrieve
@@ -120,7 +121,7 @@ def _api_client(db, provider, config=None):
         llm_model_id="offline-advising-tools",
         tools_enabled=True,
         operation_max_calls=8,
-        database_url=db.info.dsn,
+        database_url=connection_dsn(db),
     )
     app = create_app(
         settings=settings,
@@ -314,7 +315,9 @@ def test_source_scoped_requirement_hold_keeps_evidence_and_blocks_verified_graph
     )
     assert hold["course_code"] == "CS 171"
     assert Path(hold["evidence_capture_path"]).is_absolute()
-    assert Path(hold["evidence_capture_path"]) == capture_path.resolve()
+    saved_capture = Path(hold["evidence_capture_path"])
+    assert saved_capture.is_relative_to(load_settings().data_dir / "raw" / "holds")
+    assert saved_capture.read_bytes() == capture_path.read_bytes()
     assert _prerequisite_snapshot(db, collection) == before
 
     chunk_rows = db.execute(queries.get("diagnostic_current_chunks"), {

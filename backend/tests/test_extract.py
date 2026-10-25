@@ -106,6 +106,13 @@ def test_bodyless_heading_not_stored_as_a_title_only_passage():
     _assert_tiling(result.text, result.locators)
 
 
+def test_pdf_page_count_is_bounded_before_extraction():
+    from app.ingest.extract import MAX_PDF_PAGES
+
+    with pytest.raises(ValueError, match="page extraction limit"):
+        extract(make_pdf(["x"] * (MAX_PDF_PAGES + 1)), "application/pdf")
+
+
 def test_pdf_page_text_matches_locator_slice():
     data = make_pdf(["Page one text", "Page two words", "Page three here"])
     result = extract(data, "application/pdf")

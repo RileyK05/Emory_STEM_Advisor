@@ -21,7 +21,9 @@ from app.api.schemas import (
     SourceDoc,
     SubgraphView,
 )
-from app.auth.dependencies import get_workspace_key
+from app.api.serialize import public_payload
+from app.auth.dependencies import get_principal, get_workspace_key
+from app.auth.models import Principal
 from app.config import Settings
 from app.db import queries
 from app.debug.dependencies import get_debug
@@ -39,7 +41,7 @@ router = APIRouter()
 
 class ReindexRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    expectedIndexRevision: int = Field(ge=0)
+    expectedIndexRevision: int = Field(ge=0, le=2_147_483_647)
 
 Conn = Annotated[Connection, Depends(deps.get_conn)]
 WorkspaceDep = Annotated[str, Depends(get_workspace_key)]
@@ -47,6 +49,21 @@ SettingsDep = Annotated[Settings, Depends(deps.get_settings)]
 ConfigDep = Annotated[RetrievalConfig, Depends(deps.get_config)]
 EmbedderDep = Annotated[Embedder, Depends(deps.get_embedder_dep)]
 ProviderDep = Annotated[Provider, Depends(deps.get_provider_dep)]
+
+
+_WINDOWS_RESERVED = {
+    "CON", "PRN", "AUX", "NUL",
+    *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
+
+
+def _valid_upload_filename(filename: str) -> bool:
+    if (filename in {".", ".."} or len(filename) > 200
+            or filename.rstrip(" .") != filename
+            or any(ord(c) < 32 or c in '/\\<>:"|?*' for c in filename)):
+        return False
+    return filename.split(".", 1)[0].strip().upper() not in _WINDOWS_RESERVED
 
 
 def _content_type(filename: str) -> str:
@@ -99,6 +116,7 @@ def query(
     body: QueryRequest, request: Request, conn: Conn, settings: SettingsDep, config: ConfigDep,
     embedder: EmbedderDep, provider: ProviderDep, workspace: WorkspaceDep,
     debug: Annotated[AppliedDebug | None, Depends(get_debug)],
+    principal: Annotated[Principal, Depends(get_principal)],
 ) -> AnswerResponse | RefusalResponse:
     from app.api.query_service import query_response
     from app.quotas.service import QuotaService
@@ -107,11 +125,12 @@ def query(
     effective_settings = deps.execution_settings(
         request, conn, workspace, debug.settings if debug is not None else settings)
     effective_config = debug.config if debug is not None else config
-    return query_response(body, conn, effective_settings, effective_config, embedder, provider,
+    response = query_response(body, conn, effective_settings, effective_config, embedder, provider,
                           workspace_key=workspace,
                           connection_profiles=request.app.state.connection_profiles,
                           connection_runtime=request.app.state.connection_runtime,
                           system_prompt=debug.system_prompt if debug is not None else None)
+    return type(response).model_validate(public_payload(response.model_dump(mode="json"), principal))
 
 
 @router.post("/api/sources", response_model=SourceDoc)
@@ -122,19 +141,20 @@ def upload_source(
     config: ConfigDep,
     embedder: EmbedderDep,
     file: Annotated[UploadFile, File()],
-    collection: Annotated[str | None, Form()] = None,
+    collection: Annotated[str | None, Form(max_length=200)] = None,
 ) -> SourceDoc:
     collection_id, _ = deps.resolve_collection(conn, settings, collection)
     raw = file.file.read(settings.upload_max_bytes + 1)
     if len(raw) > settings.upload_max_bytes:
         raise HTTPException(status_code=413, detail="upload exceeds configured size limit")
     filename = file.filename or "upload.txt"
-    if (filename in {".", ".."} or len(filename) > 200
-            or any(ord(c) < 32 or c in '/\\<>:"|?*' for c in filename)):
+    if not _valid_upload_filename(filename):
         raise HTTPException(status_code=400, detail="invalid upload filename")
     if Path(filename).suffix.lower() not in {".txt", ".md", ".markdown", ".pdf"}:
         raise HTTPException(status_code=415, detail="supported sources: PDF, text, Markdown")
     content_type = _content_type(filename)
+    if raw.startswith(b"%PDF-") and content_type != "application/pdf":
+        raise HTTPException(status_code=415, detail="PDF bytes require a .pdf filename")
     count_tokens = getattr(embedder, "count_tokens", None)
     if count_tokens is None:
         raise HTTPException(status_code=503, detail="embedding tokenizer is unavailable")
@@ -169,7 +189,10 @@ def upload_source(
     finally:
         temp_path.unlink(missing_ok=True)
         temp_dir.rmdir()
-    return _source_doc(match, can_reindex=True)
+    document = _source_doc(match, can_reindex=True)
+    if document.name != filename:
+        document.warnings = [*document.warnings, f"This file is already indexed as {document.name}."]
+    return document
 
 
 @router.post("/api/sources/{source_id}/reindex", response_model=SourceDoc)

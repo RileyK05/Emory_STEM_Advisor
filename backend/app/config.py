@@ -96,6 +96,10 @@ class Settings:
     llm_api_key: str | None = field(default=None, repr=False)
     llm_base_url: str | None = None
     upload_max_bytes: int = 20 * 1024 * 1024
+    upload_max_extracted_chars: int = 2_000_000
+    upload_max_segment_chars: int = 16_384
+    upload_max_chunks: int = 2048
+    upload_index_timeout_seconds: float = 60.0
     request_max_bytes: int = 21 * 1024 * 1024
     readiness_timeout_seconds: int = 3
     embedding_device: str = "cpu"
@@ -333,6 +337,11 @@ class Settings:
             raise ValueError("Office requires an authenticated remote sandbox")
         if self.upload_max_bytes <= 0 or self.request_max_bytes <= 0:
             raise ValueError("UPLOAD_MAX_BYTES must be positive")
+        if (min(self.upload_max_extracted_chars, self.upload_max_segment_chars,
+                self.upload_max_chunks) <= 0
+                or not math.isfinite(self.upload_index_timeout_seconds)
+                or self.upload_index_timeout_seconds <= 0):
+            raise ValueError("upload indexing limits must be positive")
         if self.embedding_max_tokens <= 0 or self.hf_max_context <= 0:
             raise ValueError("model token ceilings must be positive")
         if (not math.isfinite(self.llm_timeout_seconds)
@@ -413,6 +422,10 @@ def load_settings() -> Settings:
         llm_api_key=os.environ.get("LLM_API_KEY") or (os.environ.get(key_variable) if key_variable else None),
         llm_base_url=_optional("LLM_BASE_URL"),
         upload_max_bytes=_int("UPLOAD_MAX_BYTES", 20 * 1024 * 1024),
+        upload_max_extracted_chars=_int("UPLOAD_MAX_EXTRACTED_CHARS", 2_000_000),
+        upload_max_segment_chars=_int("UPLOAD_MAX_SEGMENT_CHARS", 16_384),
+        upload_max_chunks=_int("UPLOAD_MAX_CHUNKS", 2048),
+        upload_index_timeout_seconds=_float("UPLOAD_INDEX_TIMEOUT_SECONDS", 60),
         embedding_device=os.environ.get("EMBEDDING_DEVICE", "cpu"),
         request_max_bytes=_int("REQUEST_MAX_BYTES", 21 * 1024 * 1024),
         readiness_timeout_seconds=_int("READINESS_TIMEOUT_SECONDS", 3),

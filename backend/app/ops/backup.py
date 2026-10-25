@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+import zlib
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from uuid import UUID
@@ -157,7 +158,10 @@ def _referenced_files(conn, data_dir: Path) -> list[dict]:
             })
     if optional_tables["requirement_holds"]:
         for row in conn.execute(queries.get("backup_requirement_hold_capture_files")).fetchall():
-            path = _resolved_file(data_dir, row["raw_path"], raw_root)
+            try:
+                path = _resolved_file(data_dir, row["raw_path"], raw_root)
+            except (BackupError, OSError) as exc:
+                raise BackupError(f"requirement hold {row['hold_id']} has invalid saved evidence") from exc
             expected = row["capture_hash"]
             rel = path.relative_to(data_dir.resolve()).as_posix()
             if rel in items and items[rel]["sha256"] != expected:
@@ -294,6 +298,15 @@ def _validate_member(name: str) -> bool:
 
 
 def _load_and_verify(archive_path: Path, stage: Path) -> tuple[dict, Path]:
+    try:
+        return _load_archive(archive_path, stage)
+    except BackupError:
+        raise
+    except (zipfile.BadZipFile, EOFError, RuntimeError, NotImplementedError, zlib.error) as exc:
+        raise BackupError("backup archive is invalid or corrupt") from exc
+
+
+def _load_archive(archive_path: Path, stage: Path) -> tuple[dict, Path]:
     try:
         archive = zipfile.ZipFile(archive_path, "r")
     except (OSError, zipfile.BadZipFile) as exc:

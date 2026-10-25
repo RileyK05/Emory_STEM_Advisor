@@ -89,12 +89,26 @@ def test_exact_course_code_outranks_repeated_term_boilerplate(db, collection, tm
     assert top["source_name"] == "offering.md"
 
 
-def test_topical_course_not_crowded_out_by_generic_policy(db, collection, tmp_path):
-    ingest_text(db, collection, tmp_path, "policy.txt", "catalog courses current " * 30)
-    ingest_text(db, collection, tmp_path, "lab.txt", "Biotechnology: gene cloning and cell culture.")
+@pytest.mark.parametrize(("query", "target", "noise", "name"), [
+    ("I want to explore biotechnology. Recommend current catalog courses.",
+     "Biotechnology: gene cloning and cell culture.", "catalog courses current " * 30, "lab.txt"),
+    ("What is the S/U credit cap? Do ARCHE credits count?",
+     "ARCHE counts toward the limit of 20 credit hours of satisfactory/unsatisfactory courses.",
+     "Credit is required for this degree. " * 30, "grading.txt"),
+    ("My friend promised 12 credits always count in a 4+1 program automatically. Is that true?",
+     "4+1 programs ordinarily permit no more than 6 credit hours to be double counted.",
+     "Approved courses automatically count for this opportunity. " * 30, "programs.txt"),
+    ("Which economics electives count for the Artificial Intelligence minor?",
+     "ECON 315 and ECON 320 are approved electives for Artificial Intelligence.",
+     "Economics of Artificial Intelligence describes market decisions. " * 30,
+     "artificial-intelligence-minor.md"),
+])
+def test_topical_course_not_crowded_out_by_generic_policy(db, collection, tmp_path,
+                                                       query, target, noise, name):
+    ingest_text(db, collection, tmp_path, "policy.txt", noise)
+    ingest_text(db, collection, tmp_path, name, target)
     config = replace(load_retrieval_config().seams.keyword, limit=1)
-    result = keyword_seam(db, collection,
-        "I want to explore biotechnology. Recommend current catalog courses.", config)
+    result = keyword_seam(db, collection, query, config)
     assert len(result.candidates) == 1
     # The selected chunk actually contains the topic, rather than repeated instructions.
     from app.db import queries
@@ -102,7 +116,7 @@ def test_topical_course_not_crowded_out_by_generic_policy(db, collection, tmp_pa
     details = db.execute(queries.get("cited_chunk_details_many"), {
         "chunk_ids": [result.candidates[0].chunk_id], "workspace_key": None,
     }).fetchone()
-    assert "Biotechnology" in details["text"]
+    assert details["source_name"] == name
 
 
 def test_repeated_generic_words_do_not_outrank_a_longer_topic(db, collection, tmp_path):

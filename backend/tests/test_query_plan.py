@@ -14,6 +14,7 @@ from app.api import create_app
 from app.atlas.importer import import_atlas
 from app.config import load_settings
 from app.db import queries
+from app.db.connection import connection_dsn
 from app.generation.query_plan import PlanRejected, parse_plan
 from app.ingest.provenance import provenance_from_manifest
 from app.llm.base import GenerationResult, Usage
@@ -164,7 +165,7 @@ def test_planned_course_reaches_the_answer_and_planning_shares_the_operation(
     provider = _PlanningProvider(plan_text)
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake-planner",
                        query_planning_enabled=True, tools_enabled=False,
-                       embedding_model_id=MODEL, database_url=db.info.dsn,
+                       embedding_model_id=MODEL, database_url=connection_dsn(db),
                        default_collection=collection_name(db, collection), data_dir=tmp_path)
     app = create_app(settings=settings, config=lenient_config(), provider=provider,
                      embedder=FakeEmbedder(8), allow_test_client=True)

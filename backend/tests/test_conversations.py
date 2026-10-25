@@ -7,7 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import HTTPException
 
-from app.auth.dependencies import get_workspace_key
+from app.auth.dependencies import get_principal, get_workspace_key
 from app.auth.models import Principal
 from app.conversations.experiments import ExperimentService
 from app.conversations.store import (
@@ -23,10 +23,13 @@ from tests.fakes import FakeProvider
 from tests.helpers import api_client, collection_name, ingest_text
 
 
-def test_history_and_exact_citations_survive_reload_and_request_replay(db, collection, tmp_path):
+@pytest.mark.parametrize("mode", ["development", "oidc"])
+def test_history_and_exact_citations_survive_reload_and_request_replay(db, collection, tmp_path, mode):
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is a documented course concept.")
     provider = FakeProvider("Alpha is documented [1].")
     client = api_client(db, collection, provider=provider)
+    client.app.dependency_overrides[get_principal] = lambda: Principal(
+        workspace_key="development", issuer=None, subject="test", mode=mode)
     made = client.post("/api/conversations", json={"title": "Alpha questions"}).json()
     path = "/api/conversations/" + made["conversationId"]
     first = {"query": "alpha", "collectionId": collection_name(db, collection),
@@ -34,6 +37,11 @@ def test_history_and_exact_citations_survive_reload_and_request_replay(db, colle
     response = client.post(path + "/turns", json=first)
     assert response.status_code == 200, response.text
     answer = response.json()
+    if mode == "oidc":
+        assert answer["trace"]["prompt"] == {"system": "", "user": ""}
+        assert answer["trace"]["seams"] == []
+    else:
+        assert answer["trace"]["prompt"]["system"]
     assert answer["sequence"] == 2
     assert answer["claims"][0]["reviewStatus"] == "unreviewed"
     assert answer["claims"][0]["citationChunkIds"] == [answer["citations"][0]["chunkId"]]
@@ -96,6 +104,16 @@ def test_followup_retrieval_carries_the_courses_the_last_answer_named(answer, ex
 
 
 @pytest.mark.parametrize(("query", "rows", "expected"), [
+    ("My friend says 12 is automatic. Correct my friend using that policy.",
+     [{"role": "user", "text": "I completed CS 170. What next?", "evidence": {}},
+      {"role": "user", "text": "Switch topics: how many credits can a 4+1 program double-count?",
+       "evidence": {}},
+      {"role": "assistant", "text": "Ordinarily six credits [1].", "evidence": {}}],
+     ("Switch topics: how many credits can a 4+1 program double-count?\n"
+      "Follow-up: My friend says 12 is automatic. Correct my friend using that policy.")),
+    ("New topic: what is the S/U credit cap?",
+     [{"role": "user", "text": "Which CS courses?", "evidence": {}}],
+     "New topic: what is the S/U credit cap?"),
     ("What about the major?",
      [{"sequence": 1, "role": "user",
        "text": "What are the requirements for the computer science minor?", "evidence": {}},
@@ -680,3 +698,11 @@ def test_experiment_identity_is_distinct_from_conversation_replay(db, collection
     with pytest.raises(HTTPException):
         store.replay(conversation_id, pending_id, {"query": "later"})
     assert db.execute("SELECT count(*) AS n FROM debug_experiments").fetchone()["n"] == experiments
+
+
+def test_conversation_creation_limit_is_enforced(db):
+    store = ConversationStore(db, "development", max_conversations=1)
+    store.create("One")
+    with pytest.raises(HTTPException) as exc:
+        store.create("Two")
+    assert exc.value.status_code == 429

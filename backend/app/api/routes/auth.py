@@ -4,6 +4,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
+from httpx import HTTPError
 
 from app.api.schemas import AuthSession
 from app.auth.dependencies import _boundary
@@ -50,6 +51,8 @@ async def login(request: Request):
         start = await service.begin_login()
     except AuthRejected as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except HTTPError as exc:
+        raise HTTPException(status_code=503, detail="identity provider is unavailable") from exc
     response = RedirectResponse(start.authorization_url, status_code=303)
     response.set_cookie(
         LOGIN_COOKIE_NAME, start.state, max_age=start.expires_in,

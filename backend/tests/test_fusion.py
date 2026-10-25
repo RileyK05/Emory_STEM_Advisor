@@ -1,6 +1,9 @@
 """Pure fusion tests: normalization, max-not-sum, quota, allocation."""
 
+from dataclasses import replace
 from uuid import NAMESPACE_URL, uuid4, uuid5
+
+import pytest
 
 from app.retrieval.fusion import fuse
 from app.retrieval.types import Candidate, SeamResult
@@ -115,7 +118,8 @@ def test_soft_source_cap_admits_a_stronger_sibling():
     assert weak not in {c.source_id for c in fused}
 
 
-def test_full_source_budget_keeps_every_covered_source():
+@pytest.mark.parametrize("program_evidence", [False, True])
+def test_full_source_budget_keeps_every_covered_source(program_evidence):
     strong, medium, weak = uuid4(), uuid4(), uuid4()
     keyword = _seam(
         "keyword",
@@ -126,11 +130,15 @@ def test_full_source_budget_keeps_every_covered_source():
             _candidate(weak, 0, "keyword", 3.0),
         ],
     )
+    if program_evidence:
+        keyword = replace(keyword, candidates=[replace(c, program_evidence=c.source_id == strong)
+                                               for c in keyword.candidates])
 
     fused = fuse([keyword], cited_set_size=3, embed_only_quota=4)
 
-    assert {c.source_id for c in fused} == {strong, medium, weak}
-    assert (strong, 1) not in {(c.source_id, c.chunk_index) for c in fused}
+    assert {c.source_id for c in fused} == ({strong, medium} if program_evidence
+                                           else {strong, medium, weak})
+    assert ((strong, 1) in {(c.source_id, c.chunk_index) for c in fused}) == program_evidence
 
 
 def test_soft_source_cap_keeps_diversity_when_sibling_is_weaker():

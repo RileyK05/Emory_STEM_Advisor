@@ -217,3 +217,16 @@ def test_html_manual_revision_clears_changed_html_evidence(db, collection, tmp_p
     assert saved["evidence"] == {}
     assert saved["provenance"]["authority"] == "manual_draft"
     assert saved["provenance"]["unverifiedElements"] == '["html"]'
+
+
+def test_artifact_count_and_revision_caps_are_enforced(db, tmp_path):
+    from app.artifacts.errors import ArtifactLimitError
+
+    store = ArtifactStore(db, workspace_key="development", data_dir=tmp_path,
+                          max_artifacts=1, max_revisions=1)
+    first = store.create(HtmlArtifactSpec(title="One", html="<p>one</p>"))
+    with pytest.raises(ArtifactLimitError):
+        store.create(HtmlArtifactSpec(title="Two", html="<p>two</p>"))
+    with pytest.raises(ArtifactLimitError):
+        store.revise(first["artifact_id"], first["revision_id"],
+                     HtmlArtifactSpec(title="One", html="<p>changed</p>"))

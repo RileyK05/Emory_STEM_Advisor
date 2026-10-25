@@ -566,6 +566,11 @@ class OpenAICompatibleProvider(OpenAIProvider):
             response = self.client.chat.completions.create(**payload, **_timeout(request))
         except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
             raise _error("openai-compatible", exc) from None
+        if not response.choices:
+            error = ProviderError("model returned no choices", provider="openai-compatible",
+                                  request_id=_get(response, "_request_id"))
+            error.usage = _chat_usage(getattr(response, "usage", None))
+            raise error
         choice = response.choices[0]
         msg = choice.message
         calls = tuple(ToolCall(_get(c, "id", ""), _get(_get(c, "function"), "name", ""),

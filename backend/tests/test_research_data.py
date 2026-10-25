@@ -105,7 +105,8 @@ def test_scope_pins_accessible_current_sources_and_their_bound_programs(db, coll
     ("career_reference", "historical", False, False),
     ("institutional_publication", "unknown", False, False),
     ("institutional_publication", "unknown", True, False),
-    ("institutional_publication", "unknown", False, True)])
+    ("institutional_publication", "unknown", False, True),
+    ("institutional_catalog", "unknown", False, False)])
 def test_curated_reference_is_classified_readable_and_scoped(
         db, collection, tmp_path, category, status, large_metadata, metadata_only):
     from app.advising.research_types import EvidenceRecord
@@ -118,7 +119,9 @@ def test_curated_reference_is_classified_readable_and_scoped(
 
     corpus = _corpus(db, collection, tmp_path)
     path = tmp_path / "data-engineers.md"
-    path.write_text("# Data engineers\n\nThey design and maintain data pipelines.\n",
+    prefix = ("# Library administration\n\n" + "Room booking is unrelated to this question.\n" * 400
+              + "\n") if category == "institutional_catalog" else ""
+    path.write_text(prefix + "# Data engineers\n\nThey design and maintain data pipelines.\n",
                     encoding="utf-8")
     # The manifest entry is the verified import; the document cannot classify itself.
     entry = {"origin_key": "careers:fixture:data-engineers", "acquired_at": "2026-10-12",
@@ -127,7 +130,8 @@ def test_curated_reference_is_classified_readable_and_scoped(
                             "geography": "United States", "published_at": "2026-01-15",
                             "title": "Data engineering preparation", "institution": "Fixture University",
                             "issuing_unit": "Advising office", "edition": "2026",
-                            "document_roles": ["career_preparation"],
+                            "document_roles": ["requirements"] if category == "institutional_catalog"
+                            else ["career_preparation"],
                             "applicability": {"school": ["College"], "audience": ["undergraduate"]},
                             "applicability_status": status}}
     if large_metadata:
@@ -145,11 +149,12 @@ def test_curated_reference_is_classified_readable_and_scoped(
     pin = scope.sources[career]
     assert (pin.source_kind, pin.publisher, pin.published_at) == (
         category, "Fixture", "2026-01-15")
-    assert pin.document_roles == ("career_preparation",)
+    assert pin.document_roles == tuple(entry["provenance"]["document_roles"])
     with pytest.raises(TypeError):
         pin.applicability["school"] = ("Other school",)
     page = read_document(db, scope, career)
-    assert "data pipelines" in page.chunks[0].text
+    if category != "institutional_catalog":
+        assert "data pipelines" in page.chunks[0].text
     store = ResearchStore(db, "development")
     run, _ = store.start(scope, run_id=uuid4(), prompt_version="t1", config_version="6")
     config = lenient_config()
@@ -164,18 +169,26 @@ def test_curated_reference_is_classified_readable_and_scoped(
     # Historical/unknown applicability is surfaced, never guessed or filtered away.
     leads = session.search(SearchInput(
         query="Fixture University Advising office" if metadata_only else "data pipelines",
-        kind="document" if metadata_only else "any"), None).data["leads"]
+        kind="policy" if category == "institutional_catalog" else
+        "document" if metadata_only else "any"), None).data["leads"]
     if metadata_only:
         assert leads[0]["filename"] == path.name
         assert all(lead["kind"] == "document" and lead["snippet"] == "" for lead in leads)
     lead = next(lead for lead in leads if lead["kind"] == "document"
                 and lead["filename"] == path.name)
     document = session.document(ReadInput(handle=lead["handle"]), None).data
+    if category == "institutional_catalog":
+        assert any("data pipelines" in e.exact_text for e in store.evidence(run.run_id))
+        assert document["earlier_chunks_unread_by_this_read"]
+        fallback = session.search(SearchInput(query="Data engineering preparation requirements",
+                                              kind="program"), None).data["requirement_documents"]
+        captured = next(item for item in fallback if item["filename"] == path.name)
+        assert session.document(ReadInput(handle=captured["handle"]), None).data["evidence_ids"]
     for result in (lead, document):
         assert result["title"] == "Data engineering preparation"
         assert result["institution"] == "Fixture University"
         assert result["issuing_unit"] == "Advising office"
-        assert result["document_roles"] == ["career_preparation"]
+        assert result["document_roles"] == entry["provenance"]["document_roles"]
         assert result["applicability_status"] == status
     assert document["applicability"] == entry["provenance"]["applicability"]
     if large_metadata:
@@ -240,6 +253,27 @@ def test_mention_comparison_is_overlap_only_and_keeps_raw_lines(db, collection, 
     assert "CS 371W" in result.unique[corpus["bs"]]
     with pytest.raises(ValueError):
         compare_mentions([read_program(db, scope, corpus["bs"])])
+
+
+def test_program_cursor_cannot_be_transferred_to_another_program(db, collection, tmp_path):
+    from app.config import load_settings
+    from app.generation.research_tools import ReadInput, ResearchSession
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import MODEL, lenient_config
+
+    corpus = _corpus(db, collection, tmp_path)
+    scope, store = _scope(db, collection), ResearchStore(db, "development")
+    run, _ = store.start(scope, run_id=uuid4(), prompt_version="test", config_version="6")
+    session = ResearchSession(db, scope, store, run,
+        settings=replace(load_settings(), embedding_model_id=MODEL),
+        config=lenient_config(), embedder=FakeEmbedder(8))
+    session.handles["h_bs"] = ("program", corpus["bs"])
+    session.handles["h_minor"] = ("program", corpus["minor"])
+    # Seed a cursor for the minor handle without needing a long fixture.
+    _, cursor = session.page(list(range(20)), ReadInput(handle="h_minor"), 8, "program")
+    assert cursor
+    with pytest.raises(InvalidResearchRecord, match="different program handle"):
+        session.program(ReadInput(handle="h_bs", cursor=cursor), None)
 
 
 def test_course_and_document_reads_stay_in_scope_and_page_whole_chunks(db, collection, tmp_path):
@@ -805,7 +839,7 @@ def _research_provider(monkeypatch, script):
     return provider
 
 
-@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair"])
+@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "program_paging", "program_paging_budget", "factual_evidence_retention"])
 def test_research_answers_progressively_and_persists_its_decision(
         db, collection, tmp_path, monkeypatch, scenario):
     from app.api.query_service import query_response
@@ -821,6 +855,15 @@ def test_research_answers_progressively_and_persists_its_decision(
         "preparation_or_selected", "preparation_or_completed",
         "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice"
     }
+    if scenario in {"program_paging", "program_paging_budget"}:
+        title = "Computer Science (BS)"
+        body = CS_BS + "\n" + "\n".join(f"- CS {n}" for n in range(701, 717))
+        identity = _ingest_catalog_file(db, collection, tmp_path, title, body, name="long-bs.md")
+        record = to_record(parse_program(title, body), catalog="Test Catalog",
+                           source_url="https://example.test/catalog.pdf", first_page=3, last_page=4)
+        path = tmp_path / "paged-programs.jsonl"
+        path.write_text(json.dumps({**record, "source": identity}) + "\n", encoding="utf-8")
+        import_programs(db, collection_id=collection, path=path)
     if scenario in preparation_or_scenarios:
         from tests.test_atlas_import import _SAMPLE
 
@@ -849,10 +892,43 @@ def test_research_answers_progressively_and_persists_its_decision(
         tools_enabled=True, advising_research_enabled=True, routing_enabled=False,
         embedding_model_id=MODEL, db_pool_max_size=0,
         research_max_tool_calls=8 if scenario == "program_read_before_preparation" else 24)
+    if scenario == "program_paging_budget":
+        settings = replace(settings, research_max_calls=5)
     observed = {}
     def script(context, index, request=None):
         def call(name, args):
             return [ToolCall(f"call-{index}", "advisor_" + name, args)]
+        if scenario in {"program_paging", "program_paging_budget"}:
+            if index == 0:
+                return call("list_programs", {})
+            progress = context["program_read_progress"]
+            if not progress:
+                handle = next(h["handle"] for h in context["issued_handles"] if h["kind"] == "program")
+                return call("read_program", {"handle": handle})
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            if context["state_update_requested"]:
+                return call("update_research", {"state": {"revision": 0,
+                    "decision_question": "Read all requirements", "active_evidence_ids": ids}})
+            current = progress[0]
+            if current["next_cursor"] and not context["finish_required"]:
+                return call("read_program", {"handle": current["handle"],
+                                             "cursor": current["next_cursor"]})
+            observed["coverage"] = (current["read_items"], current["total_items"])
+            return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+                "blocks": [{"kind": "fact", "text": "CS 170 is listed in the program.",
+                            "evidence_ids": ids}]}})
+        if scenario == "factual_evidence_retention":
+            if index == 0:
+                return call("read_courses", {"course_codes": ["ECON 101"]})
+            if index == 1:
+                observed["target"] = context["exact_evidence_untrusted"][0]["evidence_id"]
+                return call("update_research", {"state": {"revision": 0,
+                    "decision_question": "Describe ECON 101", "active_evidence_ids": []}})
+            if not context["finish_required"]:
+                return call("read_courses", {"course_codes": ["ECON 201"]})
+            return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+                "blocks": [{"kind": "fact", "text": "ECON 101 is Principles of Macroeconomics.",
+                            "evidence_ids": [observed["target"]]}]}})
         if scenario == "program_read_before_preparation":
             observed.setdefault("actions", [])
             available = {tool.name for tool in request.tools}
@@ -1151,7 +1227,9 @@ def test_research_answers_progressively_and_persists_its_decision(
         conversation_args = {"conversation_id": conversation_id, "conversation_request_id": request_id}
     question = ("I have a 3.7 GPA and a Chemistry major. Does that guarantee admission to Emory MD?"
                 if scenario == "finish_feedback_roundtrip" else
-                "What is ECON 201?" if scenario == "truncated_research_repair" else "Help choose a path")
+                "What is ECON 201?" if scenario == "truncated_research_repair" else
+                "Describe ECON 101 Principles of Macroeconomics." if scenario == "factual_evidence_retention"
+                else "Help choose a path")
     if scenario == "finish_rejects_unsupported_references":
         from fastapi import HTTPException
 
@@ -1166,8 +1244,14 @@ def test_research_answers_progressively_and_persists_its_decision(
         sourceIds=sources), db, settings, lenient_config(), FakeEmbedder(8), provider, **conversation_args)
     assert response.type == "answer"
     assert response.research.completeness == (
-        "partial" if scenario in {"cached_read_priority", "program_read_before_preparation", "finish_feedback_roundtrip",
+        "partial" if scenario in {"factual_evidence_retention", "program_paging_budget", "cached_read_priority", "program_read_before_preparation", "finish_feedback_roundtrip",
                                   "truncated_research_repair"} else "complete")
+    if scenario in {"program_paging", "program_paging_budget"}:
+        read, total = observed["coverage"]
+        assert (read == total) == (scenario == "program_paging")
+        if scenario == "program_paging_budget":
+            assert f"{read} of {total} items read" in response.answer
+            assert response.research.unresolvedQuestions
     run = ResearchStore(db, "development").get(UUID(response.research.runId))
     if scenario == "program_read_before_preparation":
         assert observed["program_read_preceded_preparation"]
@@ -1228,7 +1312,7 @@ def test_research_answers_progressively_and_persists_its_decision(
     assert run.status == ("clarification" if scenario in {"clarification", "saved_clarification"}
                           else "insufficient_evidence" if scenario in {"finish_feedback_roundtrip",
                                                                        "truncated_research_repair"}
-                          else "partial" if scenario in {"cached_read_priority",
+                          else "partial" if scenario in {"factual_evidence_retention", "program_paging_budget", "cached_read_priority",
                                                          "program_read_before_preparation"}
                           else "completed")
     if scenario in {"clarification", "saved_clarification", "finish_feedback_roundtrip",

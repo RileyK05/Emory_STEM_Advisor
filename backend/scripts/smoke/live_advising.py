@@ -115,7 +115,8 @@ class RecordingProvider:
             raise
         else:
             row.update({"text": result.text, "finish_reason": result.finish_reason,
-                        "model": result.model, "usage": asdict(result.usage),
+                        "model": result.model, "request_id": result.request_id,
+                        "usage": asdict(result.usage),
                         "tool_calls": [asdict(call) for call in result.tool_calls]})
             if self.verbose_tools:
                 print(json.dumps({"case": self.case_id, "provider_call": len(self.calls),
@@ -147,6 +148,8 @@ def main() -> None:
     parser.add_argument("--max-output-tokens", type=int, default=4096)
     parser.add_argument("--format-guidance", action="store_true",
                         help="Diagnostic prompt guidance; leaves the application's prompt unchanged")
+    parser.add_argument("--research-system-file", type=Path,
+                        help="Process-local research system-prompt override; does not edit the app")
     parser.add_argument("--recommendations", action="store_true",
                         help="Also record the department/topic graph recommendation response")
     parser.add_argument("--graph-only", action="store_true",
@@ -155,6 +158,20 @@ def main() -> None:
     args = parser.parse_args()
     if args.mode == "research" and args.format_guidance:
         parser.error("research uses its typed fact/judgment contract, not legacy citation guidance")
+    if args.research_system_file and args.mode != "research":
+        parser.error("--research-system-file requires --mode research")
+    research_prompt = None
+    if args.research_system_file:
+        path = args.research_system_file.resolve()
+        if not path.is_file():
+            parser.error("research system prompt file is missing")
+        research_prompt = path.read_text(encoding="utf-8")
+        if not research_prompt.strip():
+            parser.error("research system prompt file is empty")
+        from app.generation import research_controller
+
+        # Process-local variant; the persisted prompt hash is recorded below.
+        research_controller.SYSTEM = research_prompt
     output = args.output.resolve() if args.output else None
     if output and output.exists():
         parser.error("output already exists")
@@ -209,6 +226,11 @@ def main() -> None:
               "citation_repair_enabled": settings.answer_citation_repair_enabled,
               "compatible_thinking": settings.llm_compatible_thinking,
               "diagnostic_format_guidance": args.format_guidance,
+              "diagnostic_research_prompt": ({
+                  "path": str(args.research_system_file.resolve()),
+                  "sha256": hashlib.sha256(research_prompt.encode("utf-8")).hexdigest(),
+                  "bytes": len(research_prompt.encode("utf-8")),
+              } if research_prompt else None),
               "limits": {"max_calls": args.max_calls, "token_budget": args.token_budget,
                          "max_output_tokens_per_call": args.max_output_tokens},
               "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

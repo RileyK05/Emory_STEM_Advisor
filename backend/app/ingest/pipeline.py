@@ -1,6 +1,7 @@
 """Ingest orchestration. Never holds a transaction across extract or embed."""
 
 import hashlib
+import time
 from collections.abc import Callable
 from pathlib import Path
 from uuid import UUID, uuid4, uuid5
@@ -244,18 +245,32 @@ def ingest_file(
     index_revision = claim["index_revision"]
 
     version = config.chunking.chunker_version
+    settings = load_settings()
+    deadline = time.monotonic() + settings.upload_index_timeout_seconds
+    tokenizer = count_tokens
+
+    def bounded_tokens(text: str) -> int:
+        if len(text) > settings.upload_max_segment_chars:
+            raise ValueError("source text segment exceeds the upload indexing limit")
+        if time.monotonic() >= deadline:
+            raise ValueError("source indexing exceeded the upload time limit")
+        return tokenizer(text)
+
     try:
         extracted = extract(
             raw,
             content_type,
             lines_per_locator=config.chunking.text_lines_per_locator,
         )
+        if workspace_key is not None and len(extracted.text) > settings.upload_max_extracted_chars:
+            raise ValueError("extracted source text exceeds the upload indexing limit")
         spans = chunk(
             extracted.text,
             extracted.locators,
-            count_tokens=count_tokens,
+            count_tokens=bounded_tokens if workspace_key is not None else count_tokens,
             target_tokens=config.chunking.target_tokens,
             overlap_tokens=config.chunking.overlap_tokens,
+            max_chunks=settings.upload_max_chunks if workspace_key is not None else None,
         )
     except Exception as exc:
         _mark_failed(conn, source_id, index_revision, exc)

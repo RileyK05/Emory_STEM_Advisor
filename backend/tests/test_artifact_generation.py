@@ -13,7 +13,7 @@ from app.api import create_app
 from app.artifacts.models import ArtifactReference, DocumentSpec
 from app.artifacts.service import export_artifact
 from app.config import load_settings
-from app.db.connection import connect
+from app.db.connection import connect, connection_dsn
 from app.generation.artifacts import build_artifact_handlers, validate_candidate
 from app.ingest.pipeline import ingest_file
 from app.jobs.runtime import RunExecutor
@@ -95,11 +95,11 @@ def setup_runtime(db, collection, provider, tmp_path):
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake-native",
                        operation_token_budget=100_000,
                        default_collection=collection_name(db, collection), data_dir=tmp_path,
-                       database_url=db.info.dsn)
+                       database_url=connection_dsn(db))
     config = lenient_config()
-    store = JobStore(lambda: connect(db.info.dsn))
+    store = JobStore(lambda: connect(connection_dsn(db)))
     handlers = build_artifact_handlers(settings, config, FakeEmbedder(8), provider,
-                                      lambda: connect(db.info.dsn))
+                                      lambda: connect(connection_dsn(db)))
     app = create_app(allow_test_client=True, settings=settings, config=config, embedder=FakeEmbedder(8), provider=provider)
     app.state.override_conn, app.state.job_store = db, store
     return TestClient(app), store, RunExecutor(handlers, data_dir=tmp_path)
@@ -334,7 +334,7 @@ def test_source_reindex_after_staging_fences_final_publication(db, collection, t
     class ReindexBeforePublish(RunExecutor):
         def __call__(self, job, context):
             staged = super().__call__(job, context)
-            conn = connect(db.info.dsn)
+            conn = connect(connection_dsn(db))
             try:
                 ingest_file(
                     conn, collection_id=collection, path=tmp_path / "lecture.txt",

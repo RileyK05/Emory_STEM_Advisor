@@ -116,6 +116,9 @@ def _include_routers(app: FastAPI) -> None:
 
 
 def _install_error_handlers(app: FastAPI) -> None:
+    from fastapi.exceptions import RequestValidationError
+    from psycopg import OperationalError
+    from psycopg_pool import PoolTimeout
     from pydantic import ValidationError
 
     from app.api import errors
@@ -126,6 +129,9 @@ def _install_error_handlers(app: FastAPI) -> None:
     app.add_exception_handler(ArtifactNotFound, errors.not_found)
     app.add_exception_handler(RevisionConflict, errors.revision_conflict)
     app.add_exception_handler(ValidationError, errors.artifact_validation)
+    app.add_exception_handler(RequestValidationError, errors.request_validation)
+    app.add_exception_handler(OperationalError, errors.database_unavailable)
+    app.add_exception_handler(PoolTimeout, errors.database_unavailable)
 
 
 def create_app(

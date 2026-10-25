@@ -16,6 +16,23 @@ from app.config import (
 MINICPM = "openbmb/MiniCPM-2B-128k"
 
 
+@pytest.mark.parametrize(("target", "app", "valid"), [
+    ("postgresql://user:secret@localhost/advisor", None, False),
+    ("host=localhost user=advisor", None, False),
+    ("postgresql://user:secret@localhost/advisor_test", None, True),
+    ("dbname=advisor_test", "postgresql://other@127.0.0.1/advisor_test", False),
+    ("dbname=advisor_test", "dbname=advisor", True),
+])
+def test_external_test_database_must_be_disposable_and_separate(target, app, valid):
+    from tests.conftest import _validate_test_database
+
+    if valid:
+        _validate_test_database(target, app)
+    else:
+        with pytest.raises(RuntimeError, match="TEST_DATABASE_URL"):
+            _validate_test_database(target, app)
+
+
 @pytest.fixture
 def repo_root(monkeypatch, tmp_path):
     # _load_dotenv reads REPO_ROOT/.env; point the module at a temp root.

@@ -20,6 +20,36 @@ from app.generation.claims import review_units
 from app.retrieval.types import CitedChunk, Refusal, Retrieved, SeamResult
 
 
+def public_payload(value, principal):
+    """Redact diagnostics at the HTTP boundary, keeping numbered cited excerpts.
+
+    Saved evidence retains the complete trace for authorized review and replay.
+    Empty context slots keep the original citation numbers stable.
+    """
+    if principal.mode == "development" or principal.role == "admin":
+        return value
+    if isinstance(value, list):
+        return [public_payload(item, principal) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {key: public_payload(item, principal) for key, item in value.items()}
+    trace = result.get("trace")
+    if isinstance(trace, dict) and "traceId" in trace:
+        cited = {item["chunkId"] for item in (result.get("citations") or [])}
+        result["trace"] = {
+            "traceId": trace["traceId"], "query": "", "normalizedQuery": "",
+            "seams": [], "contributions": [],
+            "contextBlock": [item if item.get("chunkId") in cited else {
+                **item, "sourceName": "", "locatorLabel": "", "text": "",
+            } for item in (trace.get("contextBlock") or [])],
+            "prompt": {"system": "", "user": ""},
+            "modelCall": {"provider": "", "modelId": "", "promptTokens": None,
+                          "completionTokens": None, "usageSource": "unknown", "latencyMs": 0},
+            "warnings": [], "errors": [],
+        }
+    return result
+
+
 def _seams(results: tuple[SeamResult, ...]) -> list[SeamStatus]:
     return [
         SeamStatus(

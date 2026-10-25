@@ -16,6 +16,8 @@ from app.util.localpath import io_path
 
 Spec = DocumentSpec | WorkbookSpec | HtmlArtifactSpec
 SPEC_TYPES = {"document": DocumentSpec, "workbook": WorkbookSpec, "html": HtmlArtifactSpec}
+MAX_ARTIFACTS_PER_WORKSPACE = 500
+MAX_REVISIONS_PER_ARTIFACT = 500
 
 
 class ArtifactNotFound(ValueError):
@@ -34,13 +36,33 @@ def validate_spec(kind: str, payload: dict) -> Spec:
 
 
 class ArtifactStore:
-    def __init__(self, conn, *, workspace_key: str, data_dir: Path):
+    def __init__(self, conn, *, workspace_key: str, data_dir: Path,
+                 max_artifacts: int = MAX_ARTIFACTS_PER_WORKSPACE,
+                 max_revisions: int = MAX_REVISIONS_PER_ARTIFACT):
         self.conn = conn
         self.workspace_key = workspace_key
         self.data_dir = data_dir
+        self.max_artifacts = max_artifacts
+        self.max_revisions = max_revisions
 
     def _reject_deleted_workspace(self) -> None:
         require_live_workspace(self.conn, self.workspace_key, lock=True)
+
+    def _check_artifact_cap(self) -> None:
+        row = self.conn.execute(
+            queries.get("count_artifacts_for_workspace"),
+            {"workspace_key": self.workspace_key},
+        ).fetchone()
+        if row is not None and row["count"] >= self.max_artifacts:
+            raise ArtifactLimitError("workspace artifact limit reached")
+
+    def _check_revision_cap(self, artifact_id: UUID) -> None:
+        row = self.conn.execute(
+            queries.get("count_artifact_revisions_for_artifact"),
+            {"artifact_id": artifact_id, "workspace_key": self.workspace_key},
+        ).fetchone()
+        if row is not None and row["count"] >= self.max_revisions:
+            raise ArtifactLimitError("artifact revision limit reached")
 
     def get(self, artifact_id: UUID, revision_id: UUID | None = None) -> dict:
         row = self.conn.execute(
@@ -73,6 +95,7 @@ class ArtifactStore:
     def create_uncommitted(self, spec: Spec) -> dict:
         """Insert an artifact using the caller's transaction; do not commit."""
         self._reject_deleted_workspace()
+        self._check_artifact_cap()
         artifact_id, revision_id = uuid4(), uuid4()
         self.conn.execute(
             queries.get("insert_artifact"),
@@ -123,6 +146,7 @@ class ArtifactStore:
                 ] != spec.model_dump(mode="json"):
                     raise RevisionConflict("draft ID already has different revision content")
                 return existing
+        self._check_revision_cap(artifact_id)
         current = self.get(artifact_id)
         if current["kind"] != spec.kind:
             raise ValueError("a revision cannot change artifact kind")
@@ -183,6 +207,8 @@ class ArtifactStore:
                 finally:
                     staged.unlink(missing_ok=True)
         with self.conn.transaction():
+            self._reject_deleted_workspace()
+            self._check_artifact_cap()
             self.conn.execute(
                 queries.get("insert_artifact"),
                 {
@@ -240,6 +266,7 @@ class ArtifactStore:
         # Finish read transactions before the short CAS transaction.
         self.conn.commit()
         with self.conn.transaction():
+            self._check_revision_cap(artifact_id)
             updated = self.conn.execute(
                 queries.get("advance_artifact_head"),
                 {

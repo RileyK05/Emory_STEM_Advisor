@@ -1,6 +1,7 @@
 """Keyword seam: full-text OR-match over indexed chunks. No model."""
 
 import re
+from itertools import pairwise
 from uuid import UUID
 
 from psycopg import Connection
@@ -10,7 +11,7 @@ from app.retrieval.config import KeywordSeamConfig
 from app.retrieval.types import Candidate, SeamResult
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
-_NUMERIC_REF_RE = re.compile(r"\b\d+(?:[./-]\d+)+\b")
+_NUMERIC_REF_RE = re.compile(r"\b\d+(?:[./+\-]\d+)+\b")
 # Match only explicit Atlas-shaped subject/number codes. Keep `_OX` as a
 # separate searchable token; it is part of the course identity, not an alias.
 _COURSE_CODE_RE = re.compile(
@@ -31,6 +32,9 @@ ENGLISH_STOPS = frozenset(
     ["a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "did", "do", "does", "doing", "down", "during", "each", "few", "for", "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "just", "me", "more", "most", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once", "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she", "so", "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they", "this", "those", "through", "to", "too", "under", "until", "up", "very", "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why", "with", "you", "your", "yours", "yourself", "yourselves"]
 )
 def _tokens(query: str, min_token_len: int) -> list[str]:
+    grading_basis = bool(re.search(r"\b(?:s\s*/\s*u|satisfactory\s*/?\s*unsatisfactory)\b",
+                                  query, re.IGNORECASE))
+    query = re.sub(r"\bs\s*/\s*u\b", "satisfactory unsatisfactory", query, flags=re.IGNORECASE)
     seen: list[str] = []
     for token in _TOKEN_RE.findall(query.lower()):
         if ((len(token) >= min_token_len or token.isdigit())
@@ -41,6 +45,9 @@ def _tokens(query: str, min_token_len: int) -> list[str]:
         for token in code_terms:
             if token not in seen:
                 seen.append(token)
+    if grading_basis:
+        # PostgreSQL's parser indexes this slash compound as one lexeme.
+        seen.append("satisfactory/unsatisfactory")
     return seen
 
 
@@ -115,12 +122,20 @@ def keyword_seam(
             name="keyword", enabled=True, state="dormant", reason="no searchable terms"
         )
 
-    # Only [a-z0-9]+ tokens reach SQL, joined with OR. Hostile input cannot
-    # break the tsquery because it is passed as a parameter.
+    # Only normalized tokens and the fixed grading-basis compound reach SQL.
+    # Arbitrary user operators never enter the parameterized tsquery.
     q = " | ".join(tokens)
     specific = _specific_tokens(tokens)
     specific_q = " | ".join(specific) if specific else None
     course_code_header_pattern = _course_code_header_pattern(query)
+    program_query = re.sub(r"\bAI\s+(minor|major)\b", r"Artificial Intelligence \1", query,
+                           flags=re.IGNORECASE)
+    program_query = re.sub(r"\bCS\s+(minor|major|BS|BA)\b", r"Computer Science \1",
+                           program_query, flags=re.IGNORECASE)
+    # A contiguous named subject in a locator/filename beats an incidental body
+    # mention. Single generic words ("minor", "policy") confer no title band.
+    title_pairs = [f"({a} <-> {b})" for a, b in pairwise(tokens)
+                   if not a.isdigit() and not b.isdigit()]
     numeric_refs = _NUMERIC_REF_RE.findall(query)
     numeric_pattern = (
         r"(^|[^0-9])(" + "|".join(re.escape(ref) for ref in numeric_refs) + r")([^0-9]|$)"
@@ -131,6 +146,9 @@ def keyword_seam(
         {"q": q, "collection_id": collection_id, "limit": config.limit,
          "source_ids": source_ids, "workspace_key": workspace_key,
          "numeric_pattern": numeric_pattern, "specific_q": specific_q,
+         "title_queries": title_pairs,
+         "program_query": program_query,
+         "role_query": "checklist" if "checklist" in tokens else None,
          "course_code_header_pattern": course_code_header_pattern},
     ).fetchall()
     candidates = [
@@ -140,6 +158,7 @@ def keyword_seam(
             chunk_index=row["chunk_index"],
             seam="keyword",
             raw_score=float(row["score"]),
+            program_evidence=row["program_match"],
         )
         for row in rows
     ]

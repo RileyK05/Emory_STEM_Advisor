@@ -3,13 +3,44 @@
 
 
 import pytest
+from pydantic import ValidationError
 
+from app.api.routes.conversations import ConversationQuery
+from app.api.routes.corpus import ReindexRequest
+from app.api.schemas import (
+    AcademicRecordImportPreviewRequest,
+    ExportSummaryRequest,
+    PrivacyDeletionRequest,
+    QueryRequest,
+)
 from app.config import load_settings
 from app.db import queries
 from app.db.bootstrap import prepare_database
 from app.db.collections import UnknownCollection, resolve_collection
 from tests.fakes import FakeProvider
 from tests.helpers import api_client, collection_name, ingest_text
+
+
+@pytest.mark.parametrize("build", [
+    lambda: QueryRequest(query="x" * 8001),
+    lambda: QueryRequest(query="q", studentCohort="x" * 201),
+    lambda: QueryRequest(query="q", collectionId="x" * 201),
+    lambda: ExportSummaryRequest(title="x" * 501),
+    lambda: ExportSummaryRequest(throughSequence=-1),
+    lambda: PrivacyDeletionRequest(confirmation="x" * 201),
+    lambda: AcademicRecordImportPreviewRequest(
+        filename="transcript.csv", rawContent="x" * 2_000_001, expectedRecordRevision=1),
+    lambda: ExportSummaryRequest(throughSequence=10**100),
+    lambda: AcademicRecordImportPreviewRequest(
+        filename="transcript.csv", rawContent="x", expectedRecordRevision=10**100),
+    lambda: ReindexRequest(expectedIndexRevision=10**100),
+    lambda: ConversationQuery(
+        query="q", requestId="00000000-0000-0000-0000-000000000001",
+        expectedSequence=10**100),
+])
+def test_request_values_are_bounded(build):
+    with pytest.raises(ValidationError):
+        build()
 
 
 def test_read_endpoints_and_basic_error_statuses(db, collection, tmp_path):
@@ -23,12 +54,24 @@ def test_read_endpoints_and_basic_error_statuses(db, collection, tmp_path):
     assert sources[0]["status"] == "indexed" and sources[0]["chunkCount"] == 1
     assert client.get("/api/sources", params={"collection": "no-such"}).status_code == 404
     assert client.post("/api/query", json={"query": ""}).status_code == 422
+    invalid = client.post("/api/query", json={"query": {"api_key": "sk-test-never-echo"}})
+    assert invalid.status_code == 422
+    assert "sk-test-never-echo" not in invalid.text
+    assert "input" not in invalid.json()["detail"][0]
 
 
-def test_query_returns_grounded_answer(db, collection, tmp_path):
+@pytest.mark.parametrize(("mode", "role"), [
+    ("development", "admin"), ("oidc", "student"), ("oidc", "admin"),
+])
+def test_query_returns_grounded_answer(db, collection, tmp_path, mode, role):
+    from app.auth.dependencies import get_principal
+    from app.auth.models import Principal
+
     ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
     provider = FakeProvider(text="The answer is alpha [1].")
     client = api_client(db, collection, provider=provider)
+    client.app.dependency_overrides[get_principal] = lambda: Principal(
+        workspace_key="development", issuer=None, subject="test", mode=mode, role=role)
     resp = client.post(
         "/api/query",
         json={"query": "alpha", "collectionId": collection_name(db, collection)},
@@ -40,8 +83,14 @@ def test_query_returns_grounded_answer(db, collection, tmp_path):
     assert body["citations"][0]["sourceName"] == "a.txt"
     assert provider.calls == 1
     # The prompt fences the context as untrusted data.
-    assert "untrusted" in body["trace"]["prompt"]["user"]
+    if mode == "oidc" and role == "student":
+        assert body["trace"]["prompt"] == {"system": "", "user": ""}
+        assert body["trace"]["seams"] == body["trace"]["contributions"] == []
+        assert body["trace"]["warnings"] == body["trace"]["errors"] == []
+    else:
+        assert "untrusted" in body["trace"]["prompt"]["user"]
     assert body["trace"]["contextBlock"][0]["chunkId"]
+    assert body["trace"]["contextBlock"][0]["text"] == "alpha beta gamma"
 
 
 def test_query_refusal_does_not_call_model(db, collection, tmp_path):
@@ -89,14 +138,29 @@ def test_generation_gap_recurrence_and_provider_outage_are_distinct(db, collecti
     assert client.get("/api/gaps").json() == observed
 
 
-def test_upload_source(db, collection):
+@pytest.mark.parametrize(("raw", "limits", "expected"), [
+    (b"alpha beta gamma\n", {}, 200),
+    (b"alpha beta gamma\n", {"UPLOAD_MAX_EXTRACTED_CHARS": "5"}, 422),
+    (b"a" * 100, {"UPLOAD_MAX_SEGMENT_CHARS": "50"}, 422),
+    (b"alpha beta.\n\n" * 1000, {"UPLOAD_MAX_CHUNKS": "1"}, 422),
+])
+def test_upload_source(db, collection, monkeypatch, raw, limits, expected):
+    for name, value in limits.items():
+        monkeypatch.setenv(name, value)
     client = api_client(db, collection)
     resp = client.post(
         "/api/sources",
-        files={"file": ("notes.txt", b"alpha beta gamma\n", "text/plain")},
+        files={"file": ("notes.txt", raw, "text/plain")},
         data={"collection": collection_name(db, collection)},
     )
-    assert resp.status_code == 200
+    assert resp.status_code == expected, resp.text
+    if expected == 422:
+        listed = client.get(
+            "/api/sources", params={"collection": collection_name(db, collection)}).json()
+        assert listed[0]["status"] == "failed"
+        assert "limit" in listed[0]["errorMessage"]
+        assert listed[0]["chunkCount"] == 0
+        return
     body = resp.json()
     assert body["name"] == "notes.txt"
     assert body["status"] == "indexed"
@@ -105,6 +169,38 @@ def test_upload_source(db, collection):
         "/api/sources", params={"collection": collection_name(db, collection)}
     ).json()
     assert any(s["name"] == "notes.txt" for s in listed)
+    duplicate = client.post("/api/sources", data={"collection": collection_name(db, collection)},
+                            files={"file": ("renamed.txt", raw, "text/plain")}).json()
+    assert duplicate["id"] == body["id"]
+    assert "already indexed as notes.txt" in duplicate["warnings"][-1]
+    disguised = client.post("/api/sources", data={"collection": collection_name(db, collection)},
+                            files={"file": ("disguised.txt", b"%PDF-1.4\n", "text/plain")})
+    assert disguised.status_code == 415
+
+
+@pytest.mark.parametrize("filename", ["CON.txt", "notes. ", "../notes.txt", "bad\\name.txt"])
+def test_upload_rejects_unsafe_filenames(filename):
+    from app.api.routes.corpus import _valid_upload_filename
+
+    assert not _valid_upload_filename(filename)
+
+
+def test_deep_json_body_is_a_client_error(db, collection):
+    client = api_client(db, collection)
+    body = '{"query":"q","extra":' + "[" * 2000 + "0" + "]" * 2000 + "}"
+    response = client.post("/api/query", content=body,
+                           headers={"content-type": "application/json"})
+    assert response.status_code < 500
+
+
+def test_collection_lookup_treats_sql_metacharacters_as_data(db, collection):
+    client = api_client(db, collection)
+    response = client.post(
+        "/api/query",
+        json={"query": "alpha", "collectionId": "course-docs' OR 1=1 --"},
+    )
+    assert response.status_code == 404
+    assert "course-docs' OR 1=1 --" not in response.text
 
 
 def test_metrics_are_loopback_only_and_report_pool_and_queue_state(db, collection):

@@ -42,3 +42,11 @@ JOIN artifact_revisions r ON r.revision_id = a.head_revision_id
 WHERE a.workspace_key = %(workspace_key)s
 ORDER BY a.created_at DESC, a.artifact_id
 LIMIT 200;
+
+-- name: count_artifacts_for_workspace
+SELECT count(*) AS count FROM artifacts WHERE workspace_key = %(workspace_key)s;
+
+-- name: count_artifact_revisions_for_artifact
+SELECT count(*) AS count
+FROM artifact_revisions r JOIN artifacts a ON a.artifact_id = r.artifact_id
+WHERE a.artifact_id = %(artifact_id)s AND a.workspace_key = %(workspace_key)s;

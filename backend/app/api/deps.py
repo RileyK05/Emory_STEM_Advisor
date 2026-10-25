@@ -118,8 +118,9 @@ def resolve_collection(conn, settings: Settings, name: str | None) -> tuple[UUID
     """HTTP adapter: an unknown collection is a 404, never an empty result."""
     try:
         return lookup_collection(conn, settings, name)
-    except UnknownCollection as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from None
+    except UnknownCollection:
+        # Never reflect a user-supplied collection name into a public error.
+        raise HTTPException(status_code=404, detail="unknown collection") from None
 
 
 def _admin_panel_enabled(request: Request, principal: Principal) -> Principal:
