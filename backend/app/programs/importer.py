@@ -7,6 +7,7 @@ from uuid import UUID, uuid5
 
 from psycopg import Connection
 
+from app.atlas.records import normalize_code
 from app.db import queries
 from app.programs.binding import Binding, bind
 from app.util.digest import json_digest
@@ -75,7 +76,8 @@ def import_programs(conn: Connection, *, collection_id: UUID, path: Path) -> dic
                     "program_id": pid, "position": item["position"],
                     "section": item["section"], "text": item["text"], "choose": item["choose"],
                 })
-                for code in item["courses"]:
+                # Normalized again here so a subject rename applies without re-scraping.
+                for code in dict.fromkeys(normalize_code(code) or code for code in item["courses"]):
                     conn.execute(queries.get("insert_program_course_mention"), {
                         "program_id": pid, "position": item["position"], "target_code": code,
                     })

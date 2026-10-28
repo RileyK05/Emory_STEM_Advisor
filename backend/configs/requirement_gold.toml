@@ -353,14 +353,14 @@ reviewed = false
 code = "DATASCI 210"
 text = "(MATH 210 or MATH_OX 210 or MATH 211 or MATH_OX 211) and (QTM 150 or QTM_OX 150) or equivalent transfer credit as prerequisite."
 status = "parsed"
-prerequisite = "any(all(any(MATH 210, MATH_OX 210, MATH 211, MATH_OX 211), any(QTM 150, QTM_OX 150)), cond:equivalent transfer credit)"
-note = "QTM is now DATASCI"
+prerequisite = "any(all(any(MATH 210, MATH_OX 210, MATH 211, MATH_OX 211), any(DATASCI 150, QTM_OX 150)), cond:equivalent transfer credit)"
+note = "QTM codes read as DATASCI (the rename); QTM_OX stays as written"
 reviewed = false
 
 [[course]]
 code = "DATASCI 220"
 text = "(QTM 110 or QTM_OX 110) and [QTM 210 or QTM_OX 210 or (MATH 361 and MATH 362)] and (MATH 221 or MATH_OX 221) or equivalent transfer credit as prerequisites."
 status = "parsed"
-prerequisite = "any(all(any(QTM 110, QTM_OX 110), any(QTM 210, QTM_OX 210, all(MATH 361, MATH 362)), any(MATH 221, MATH_OX 221)), cond:equivalent transfer credit)"
-note = "QTM is now DATASCI"
+prerequisite = "any(all(any(DATASCI 110, QTM_OX 110), any(DATASCI 210, QTM_OX 210, all(MATH 361, MATH 362)), any(MATH 221, MATH_OX 221)), cond:equivalent transfer credit)"
+note = "QTM codes read as DATASCI (the rename); QTM_OX stays as written"
 reviewed = false

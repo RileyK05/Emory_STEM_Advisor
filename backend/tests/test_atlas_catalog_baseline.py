@@ -60,7 +60,7 @@ def test_explicit_catalog_or_alternatives_keep_transfer_credit_as_a_condition():
         Condition("equivalent transfer credit")
     ))
     assert parse_requisites(by_code["ENVS 250"]["requisites"]).trees["prerequisite"] == AnyOf((
-        CourseRef("QTM 100"), CourseRef("QTM_OX 100"), CourseRef("BUS 350"),
+        CourseRef("DATASCI 100"), CourseRef("QTM_OX 100"), CourseRef("BUS 350"),
         CourseRef("BUS_OX 350"), Condition("equivalent transfer credit")
     ))
 
@@ -93,6 +93,11 @@ def test_catalog_cross_campus_codes_bare_alternates_and_square_brackets_have_exp
     # the outer expression scope.
     assert normalize_code("MATH_OX221") == "MATH_OX 221"
     assert normalize_code("MATH 221") != normalize_code("MATH_OX 221")
+    # A renamed subject keeps the course number; Oxford's code is left as written.
+    assert normalize_code("QTM100") == "DATASCI 100"
+    assert parse_requisites("QTM 110 or QTM_OX 110").trees["prerequisite"] == AnyOf((
+        CourseRef("DATASCI 110"), CourseRef("QTM_OX 110")
+    ))
     assert parse_requisites("CS 171 or 171Z or CS_OX 171").trees["prerequisite"] == AnyOf((
         CourseRef("CS 171"), CourseRef("CS 171Z"), CourseRef("CS_OX 171")
     ))
@@ -104,7 +109,7 @@ def test_catalog_cross_campus_codes_bare_alternates_and_square_brackets_have_exp
             AllOf((CourseRef("BIOL 142"), CourseRef("BIOL 142L"))),
             CourseRef("BIOL_OX 142"), CourseRef("BIOL_OX 142X"),
         )),
-        AnyOf((CourseRef("QTM 100"), CourseRef("QTM_OX 100"))),
+        AnyOf((CourseRef("DATASCI 100"), CourseRef("QTM_OX 100"))),
     ))
 
 

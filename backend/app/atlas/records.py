@@ -52,13 +52,24 @@ class AtlasCourse(BaseModel):
     topics: list[dict] = []
 
 
+# Subjects Emory renamed, keeping each course's number. Older requirement text
+# and program PDFs still use the old subject. Add an entry only with a cited
+# Emory source, never by inference:
+# - QTM -> DATASCI: the Department of Quantitative Theory & Methods became Data
+#   and Decision Sciences in July 2025 (datascience.emory.edu/about/), and the
+#   Spring 2027 Atlas notes pair "DATASCI/QTM 100 Intro to Stat Inference".
+#   Oxford's QTM_OX has no stated rename and is left as written.
+SUBJECT_RENAMES = {"QTM": "DATASCI"}
+
+
 def normalize_code(value: str) -> str | None:
     """Canonicalize a course code. Returns None if it does not fit the shape."""
     match = _CODE_RE.match(value)
     if match is None:
         return None
     subject, digits, letter = match.groups()
-    return f"{subject.upper()} {digits}{(letter or '').upper()}"
+    subject = SUBJECT_RENAMES.get(subject.upper(), subject.upper())
+    return f"{subject} {digits}{(letter or '').upper()}"
 
 
 def course_codes_in(text: str) -> list[str]:

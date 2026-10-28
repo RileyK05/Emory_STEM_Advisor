@@ -39,7 +39,7 @@ Electives (select 2 courses required, 6 CU)
     ("Anthropology 270S", ["ANT 270S"]),
     ("ENVS 230 [or ENVS OX 230*]", ["ENVS 230", "ENVS_OX 230"]),
     ("ECON 480/CS 480: Computing Methods", ["ECON 480", "CS 480"]),
-    ("DATASCI 220 or QTM 220", ["DATASCI 220", "QTM 220"]),
+    ("DATASCI 220 or QTM 220", ["DATASCI 220"]),  # one course under its renamed subject
     # Not codes: levels, counts, and capitalized words that aren't subjects.
     ("Any 300-level CS classroom course", []),
     ("Enrollment in ALL 300-level and above", []),
