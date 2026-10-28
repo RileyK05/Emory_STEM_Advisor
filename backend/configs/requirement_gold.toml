@@ -1,0 +1,359 @@
+# Hand-checked expected requirement trees for core STEM courses.
+#
+# Read by `python -m scripts.manual.data_audit`. `text` is the requirement text
+# stored for the course (Atlas registration restrictions, or a labeled
+# catalog fallback); the audit flags an entry when that text changes. The
+# expected trees are a reading of `text`, never the parser's output.
+#
+# Notation: all(...), any(...), a course code, or cond:TEXT. `status` is the
+# expected parse status; only `parsed` entries carry trees. An entry counts as
+# ground truth only after a person compares it with the course's Atlas page
+# and sets `reviewed = true`. Entries were drafted 2026-10-28 from the
+# Spring 2027 capture and are all unreviewed.
+
+[[course]]
+code = "CS 170"
+text = ""
+status = "none"
+reviewed = false
+
+[[course]]
+code = "CS 171"
+text = "This course requires CS 170 OR CS_OX 170 or equivalent transfer credit as a prerequisite."
+status = "parsed"
+prerequisite = "any(CS 170, CS_OX 170, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CS 224"
+text = "(CS 170 or CS_OX 170) and (MATH 111 or MATH_OX 111) or equivalent transfer credit as prerequisites."
+status = "parsed"
+prerequisite = "any(all(any(CS 170, CS_OX 170), any(MATH 111, MATH_OX 111)), cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CS 253"
+text = "CS 171 or 171Z or CS_OX 171 or equivalent transfer credit as a prerequisite."
+status = "parsed"
+prerequisite = "any(CS 171, CS 171Z, CS_OX 171, cond:equivalent transfer credit)"
+note = "'171Z' carries the CS subject"
+reviewed = false
+
+[[course]]
+code = "CS 255"
+text = "This course requires CS 171 or CS 171Z or CS_OX 171 or equivalent transfer credit as a prerequisite."
+status = "parsed"
+prerequisite = "any(CS 171, CS 171Z, CS_OX 171, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CS 326"
+text = "(CS 170 or CS_OX 170) and (CS 171 or CS_OX 171) and (CS 224 or CS_OX 224) and CS 253, or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(all(any(CS 170, CS_OX 170), any(CS 171, CS_OX 171), any(CS 224, CS_OX 224), CS 253), cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CS 334"
+text = "(CS224 or CS_OX 224) and (CS 253 or CS_OX 253) and (MATH 221 or MATH_OX 221 or MATH 275 or MATH 321) or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(all(any(CS 224, CS_OX 224), any(CS 253, CS_OX 253), any(MATH 221, MATH_OX 221, MATH 275, MATH 321)), cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CS 350"
+text = "CS 253 and CS 255 or equivalent transfer credit as prerequisites."
+status = "parsed"
+prerequisite = "any(all(CS 253, CS 255), cond:equivalent transfer credit)"
+note = "the transfer alternative covers both courses"
+reviewed = false
+
+[[course]]
+code = "CS 370"
+text = "CS 253 or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(CS 253, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CS 377"
+text = "CS 253 or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(CS 253, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "MATH 112"
+text = "This course requires MATH 111 OR MATH_OX111 OR MATH 115 OR MATH 119 OR MATH_OX119 or equivalent transfer credit as a prerequisite."
+status = "parsed"
+prerequisite = "any(MATH 111, MATH_OX 111, MATH 115, MATH 119, MATH_OX 119, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "MATH 210"
+text = "MATH 111 or MATH 111L or MATH_OX 111 or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(MATH 111, MATH 111L, MATH_OX 111, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "MATH 211"
+text = "MATH 112 or MATH 112Z or MATH_OX 112 or MATH_OX 112Z or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(MATH 112, MATH 112Z, MATH_OX 112, MATH_OX 112Z, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "MATH 212"
+text = "MATH 112 or MATH 112S or MATH 112Z or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(MATH 112, MATH 112S, MATH 112Z, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "MATH 221"
+text = "MATH 111 or MATH_OX 111 or MATH 112 or MATH_OX 112 or MATH 112Z or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(MATH 111, MATH_OX 111, MATH 112, MATH_OX 112, MATH 112Z, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "MATH 250"
+text = "This course requires MATH 111 as prerequisite AND MATH 112 or MATH_OX112 or MATH 112Z or MATH_OX112Z or equivalent transfer credit."
+status = "ambiguous"
+note = "the second clause has no label and the transfer alternative's scope is unstated; needs a curator reading"
+reviewed = false
+
+[[course]]
+code = "MATH 315"
+text = "(MATH 221 or MATH_OX 221 or MATH 275 or MATH 321) and (CS 170 or CS_OX 170 or MATH 170) or equivalent transfer credit as a prerequisite."
+status = "parsed"
+prerequisite = "any(all(any(MATH 221, MATH_OX 221, MATH 275, MATH 321), any(CS 170, CS_OX 170, MATH 170)), cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "MATH 321"
+text = "MATH 250 or MATH_OX 250 or MATH_OX 250Q or MATH 276 or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(MATH 250, MATH_OX 250, MATH_OX 250Q, MATH 276, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "MATH 361"
+text = "MATH 210 or MATH_OX 210 or MATH 211 or PHYS 211 or MATH_OX 211 or MATH 276 or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(MATH 210, MATH_OX 210, MATH 211, PHYS 211, MATH_OX 211, MATH 276, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "MATH 362"
+text = "This course requires MATH 361 or equivalent transfer credit as a prerequisite."
+status = "parsed"
+prerequisite = "any(MATH 361, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CHEM 150"
+text = ""
+status = "none"
+reviewed = false
+
+[[course]]
+code = "CHEM 150L"
+text = "CHEM 150 or equivalent transfer credit as prerequisite or co-requisite."
+status = "parsed"
+corequisite = "any(CHEM 150, cond:equivalent transfer credit)"
+note = "'prerequisite or co-requisite' is stored as the weaker corequisite"
+reviewed = false
+
+[[course]]
+code = "CHEM 202"
+text = "CHEM 141 or CHEM_OX 141 or CHEM 150 or CHEM_OX 150 or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(CHEM 141, CHEM_OX 141, CHEM 150, CHEM_OX 150, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CHEM 202L"
+text = "CHEM 141 or CHEM_OX 141 or CHEM 150L or CHEM_OX 150L as a prerequisite and CHEM 202 or CHEM_OX 202 as a prerequisite or corequisite."
+status = "parsed"
+prerequisite = "any(CHEM 141, CHEM_OX 141, CHEM 150L, CHEM_OX 150L)"
+corequisite = "any(CHEM 202, CHEM_OX 202)"
+reviewed = false
+
+[[course]]
+code = "CHEM 203"
+text = "CHEM 202 or CHEM_OX 202 or CHEM 202Z or CHEM 221 or CHEM_OX 221 or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(CHEM 202, CHEM_OX 202, CHEM 202Z, CHEM 221, CHEM_OX 221, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CHEM 203L"
+text = "CHEM 202L or CHEM_OX 202L or CHEM 202ZL as prerequisite and CHEM 203 or CHEM_OX 203 as prerequisite or co-requisite, or equivalent transfer credit."
+status = "unparsed"
+note = "the closing transfer alternative could qualify either part"
+reviewed = false
+
+[[course]]
+code = "CHEM 204"
+text = "CHEM 203 or CHEM_OX 203 or CHEM 222 or CHEM_OX 222 or CHEM 222Z or CHEM 203Z or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(CHEM 203, CHEM_OX 203, CHEM 222, CHEM_OX 222, CHEM 222Z, CHEM 203Z, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "CHEM 204L"
+text = "CHEM 203L or CHEM_OX 203L or CHEM 203ZL or CHEM 222L or CHEM_OX 222L as prerequisite and CHEM 204 or CHEM_OX 204 as prerequisite or co-requisite or equivalent transfer credit."
+status = "unparsed"
+note = "the closing transfer alternative could qualify either part"
+reviewed = false
+
+[[course]]
+code = "BIOL 141"
+text = ""
+status = "none"
+reviewed = false
+
+[[course]]
+code = "BIOL 141L"
+text = "BIOL 141 or BIOL_OX 141 as co-requisite or CHEM 141 or CHEM_OX 141 as prerequisite or equivalent transfer credit as co-requisite or prerequisite."
+status = "unparsed"
+note = "either a corequisite path or a prerequisite path; two kind trees cannot express that OR"
+reviewed = false
+
+[[course]]
+code = "BIOL 142"
+text = "This course requires BIOL 141 and BIOL 141L or BIOL 151or BIOL_OX141 or equivalent transfer credit as a prerequisite."
+status = "ambiguous"
+note = "mixed and/or without brackets; the likely reading (BIOL 141 and 141L) or BIOL 151 or BIOL_OX 141 needs a curator"
+reviewed = false
+
+[[course]]
+code = "BIOL 142L"
+text = "BIOL 142 as a corequisite."
+status = "parsed"
+corequisite = "BIOL 142"
+reviewed = false
+
+[[course]]
+code = "BIOL 240"
+text = "This course requires BIOL 141, and BIOL 141L or BIOL 151or BIOL_OX141 or equivalent transfer credit as a prerequisite."
+status = "ambiguous"
+note = "mixed and/or without brackets"
+reviewed = false
+
+[[course]]
+code = "BIOL 250"
+text = "(BIOL 142 and BIOL 142L) or BIOL_OX 142 or equivalent transfer credit as a prerequisite."
+status = "parsed"
+prerequisite = "any(any(all(BIOL 142, BIOL 142L), BIOL_OX 142), cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "BIOL 301"
+text = "[(BIOL 142 and BIOL 142L) or (BIOL_OX 142)] and (CHEM 203 or CHEM 203Z or CHEM_OX 203 or CHEM 221 or CHEM_OX 221 or CHEM 221Z) or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(all(any(all(BIOL 142, BIOL 142L), BIOL_OX 142), any(CHEM 203, CHEM 203Z, CHEM_OX 203, CHEM 221, CHEM_OX 221, CHEM 221Z)), cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "BIOL 336"
+text = "(BIOL 142 and BIOL 142L) or BIOL_OX 142 or equivalent transfer credit as a prerequisite."
+status = "parsed"
+prerequisite = "any(any(all(BIOL 142, BIOL 142L), BIOL_OX 142), cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "PHYS 141"
+text = ""
+status = "none"
+reviewed = false
+
+[[course]]
+code = "PHYS 142"
+text = "This course requires PHYS 141 OR PHYS_OX 141 OR PHYS 151 OR PHYS_OX 151 or equivalent transfer credit as a prerequisite."
+status = "parsed"
+prerequisite = "any(PHYS 141, PHYS_OX 141, PHYS 151, PHYS_OX 151, cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "PHYS 151"
+text = "(MATH 111 or MATH_OX 111) as prerequisites and (MATH 112 or MATH_OX 112 or MATH 112Z or MATH 210 or MATH_OX 210) as co-requisites, or equivalent transfer credit."
+status = "unparsed"
+note = "the closing transfer alternative could qualify either part"
+reviewed = false
+
+[[course]]
+code = "PHYS 152"
+text = "(PHYS 141 or PHYS_OX 141 or PHYS 151 or PHYS_OX 151) and (MATH 112 or MATH_OX 112 or MATH 116 or MATH 210) or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(all(any(PHYS 141, PHYS_OX 141, PHYS 151, PHYS_OX 151), any(MATH 112, MATH_OX 112, MATH 116, MATH 210)), cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "PHYS 212"
+text = "(PHYS 151 or PHYS_OX 151) or [(PHYS 141 or PHYS_OX 141) and (MATH 112 or MATH 112Z or MATH_OX 112 or MATH_OX 112Z0] or [(PHYS 141 or PHYS_OX 141) and MATH 116)] or equivalent transfer credit as prerequisite."
+status = "ambiguous"
+note = "unbalanced brackets and a typo ('MATH_OX 112Z0]') in the source"
+reviewed = false
+
+[[course]]
+code = "NBB 201"
+text = ""
+status = "none"
+reviewed = false
+
+[[course]]
+code = "NBB 301"
+text = "[(BIOL 142 and BIOL 142L) or BIOL_OX 142] and (CHEM 142 or CHEM_OX 142 or CHEM 202 or CHEM_OX 202 or CHEM 202Z) or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(all(any(all(BIOL 142, BIOL 142L), BIOL_OX 142), any(CHEM 142, CHEM_OX 142, CHEM 202, CHEM_OX 202, CHEM 202Z)), cond:equivalent transfer credit)"
+reviewed = false
+
+[[course]]
+code = "NBB 302"
+text = ""
+status = "none"
+note = "Atlas and catalog both show no restriction"
+reviewed = false
+
+[[course]]
+code = "DATASCI 100"
+text = ""
+status = "none"
+reviewed = false
+
+[[course]]
+code = "DATASCI 110"
+text = ""
+status = "none"
+reviewed = false
+
+[[course]]
+code = "DATASCI 150"
+text = ""
+status = "none"
+reviewed = false
+
+[[course]]
+code = "DATASCI 151"
+text = ""
+status = "none"
+reviewed = false
+
+[[course]]
+code = "DATASCI 210"
+text = "(MATH 210 or MATH_OX 210 or MATH 211 or MATH_OX 211) and (QTM 150 or QTM_OX 150) or equivalent transfer credit as prerequisite."
+status = "parsed"
+prerequisite = "any(all(any(MATH 210, MATH_OX 210, MATH 211, MATH_OX 211), any(QTM 150, QTM_OX 150)), cond:equivalent transfer credit)"
+note = "QTM is now DATASCI"
+reviewed = false
+
+[[course]]
+code = "DATASCI 220"
+text = "(QTM 110 or QTM_OX 110) and [QTM 210 or QTM_OX 210 or (MATH 361 and MATH 362)] and (MATH 221 or MATH_OX 221) or equivalent transfer credit as prerequisites."
+status = "parsed"
+prerequisite = "any(all(any(QTM 110, QTM_OX 110), any(QTM 210, QTM_OX 210, all(MATH 361, MATH 362)), any(MATH 221, MATH_OX 221)), cond:equivalent transfer credit)"
+note = "QTM is now DATASCI"
+reviewed = false

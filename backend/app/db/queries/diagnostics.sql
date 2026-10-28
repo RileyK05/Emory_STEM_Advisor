@@ -71,3 +71,30 @@ FROM scoped CROSS JOIN weights
 WHERE search_vector @@ term
 GROUP BY chunk_id, source_id, chunk_index
 ORDER BY score DESC, source_id, chunk_index LIMIT %(limit)s;
+
+-- name: diagnostic_audit_courses
+SELECT course_id, code, subject, title, requisites_raw, parse_status, parser_version
+FROM courses
+WHERE collection_id = %(collection_id)s AND lifecycle = 'current'
+ORDER BY code;
+
+-- name: diagnostic_audit_prereq_nodes
+SELECT n.course_id, n.node_id, n.kind, n.parent_node_id, n.position, n.node_type,
+       n.target_code, n.condition_text
+FROM prereq_nodes n
+JOIN courses co ON co.course_id = n.course_id
+WHERE co.collection_id = %(collection_id)s AND co.lifecycle = 'current';
+
+-- name: diagnostic_audit_prereq_mentions
+SELECT m.course_id, m.kind, m.target_code, m.target_course_id
+FROM prereq_mentions m
+JOIN courses co ON co.course_id = m.course_id
+WHERE co.collection_id = %(collection_id)s AND co.lifecycle = 'current';
+
+-- name: diagnostic_audit_program_slots
+SELECT p.title AS program_title, p.kind AS program_kind, pcm.target_code,
+       target.code AS resolved_code, target.lifecycle AS resolved_lifecycle
+FROM program_course_mentions pcm
+JOIN programs p ON p.program_id = pcm.program_id
+LEFT JOIN courses target ON target.course_id = pcm.target_course_id
+WHERE p.collection_id = %(collection_id)s;

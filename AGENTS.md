@@ -48,7 +48,9 @@ plans and `docs/audit/` the review status.
     queries. Deliberately not wired in yet: groundwork for Azure hosting.
 - `backend/configs/` — `retrieval.toml` (unknown keys are errors),
   `routing.toml`, `simgraph_nudges.toml` and `departments.toml` (hand-written),
-  `programs.toml`, `advising_sources.toml` (the reviewed upload allowlist), and
+  `programs.toml`, `advising_sources.toml` (the reviewed upload allowlist),
+  `requirement_gold.toml` (hand-checked expected requirement trees, checked by
+  `scripts.manual.data_audit`; an entry is ground truth only once `reviewed`), and
   `catalog-directory.md` (planning directory; not citable evidence).
 - `backend/scripts/` — run as `python -m scripts.<name>` from `backend/`; they
   use `DATABASE_URL`, or an embedded `pgserver` under `DATA_DIR/pgserver`.
