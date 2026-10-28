@@ -524,7 +524,8 @@ def test_unchanged_atlas_refreshes_old_parser_without_reembedding(db, collection
         "collection_id": collection, "code": "CS 220",
     }).fetchone()
     db.execute("UPDATE courses SET requisites_raw = NULL, parse_status = 'none', "
-               "parser_version = '3' WHERE course_id = %(c)s", {"c": course["course_id"]})
+               "parser_version = '3', authority = 'atlas', lifecycle = 'retired' "
+               "WHERE course_id = %(c)s", {"c": course["course_id"]})
     db.execute(queries.get("delete_prereq_nodes_for_course"), {"course_id": course["course_id"]})
     db.execute(queries.get("delete_prereq_mentions_for_course"), {"course_id": course["course_id"]})
     db.commit()
@@ -545,6 +546,11 @@ def test_unchanged_atlas_refreshes_old_parser_without_reembedding(db, collection
     }).fetchone()
     assert repaired["parse_status"] == "parsed"
     assert repaired["requisites_raw"] == "Prerequisite: CS 120."
+    published = db.execute(queries.get("list_courses_for_source"), {
+        "source_id": source,
+    }).fetchone()
+    assert published["authority"] == "atlas"
+    assert published["lifecycle"] == "retired"
     after_revision = db.execute(queries.get("get_source_by_hash"), source_params).fetchone()[
         "index_revision"]
     assert after_revision == before_revision + 1
@@ -592,6 +598,32 @@ def test_import_creates_courses_and_parse_status(db, collection, tmp_path):
     ).fetchall()
     assert "any" in [node["node_type"] for node in nodes]
     assert any(node["condition_text"] == "equivalent" for node in nodes)
+
+
+def test_labs_pair_with_their_lecture_only_when_the_text_names_a_corequisite(
+    db, collection, tmp_path,
+):
+    text = "\n".join(json.dumps(row) for row in [
+        {"code": "CHEM 150", "title": "Structure"},
+        {"code": "CHEM 150L", "title": "Structure Lab", "requisites": "CHEM 150 as a corequisite."},
+        {"code": "CHEM 202", "title": "Reactivity"},
+        {"code": "CHEM 202L", "title": "Reactivity Lab", "requisites": "CHEM 202 as prerequisite."},
+        {"code": "BIOL 141", "title": "Biology", "requisites": "BIOL 141L as a co-requisite."},
+        {"code": "BIOL 141L", "title": "Biology Lab"},
+    ])
+    _import(db, collection, tmp_path, text)
+    pairs = db.execute(
+        "SELECT lab_code, lecture_code FROM course_lab_pairings "
+        "WHERE collection_id = %(collection_id)s ORDER BY lab_code",
+        {"collection_id": collection},
+    ).fetchall()
+    assert [(row["lab_code"], row["lecture_code"]) for row in pairs] == [
+        ("BIOL 141L", "BIOL 141"), ("CHEM 150L", "CHEM 150"),
+    ]
+    unpaired = db.execute(queries.get("list_unpaired_labs"), {
+        "collection_id": collection,
+    }).fetchall()
+    assert [row["lab_code"] for row in unpaired] == ["CHEM 202L"]
 
 
 def test_catalog_importer_cannot_claim_atlas_authority(tmp_path):
@@ -681,7 +713,7 @@ def test_authoritative_publication_pins_capture_rows_and_releases_matching_hold(
 
     source_id = import_authoritative_atlas(
         db, collection_id=collection, path=write_primary(snapshot, "valid"), snapshots=[snapshot],
-        embedder=FakeEmbedder(dim=8), embed_model=_MODEL,
+        catalog=load_atlas(base_path), embedder=FakeEmbedder(dim=8), embed_model=_MODEL,
         count_tokens=whitespace_tokens, config=load_retrieval_config(),
     )
     row = db.execute(queries.get("get_course_by_code"), {
@@ -689,6 +721,16 @@ def test_authoritative_publication_pins_capture_rows_and_releases_matching_hold(
     }).fetchone()
     assert row["course_id"] == stable_course_id
     assert row["title"] == "Biology grouped card"
+    schools = {
+        item["code"]: (item["authority"], item["campus"], item["school"], item["source"])
+        for item in db.execute(
+            "SELECT c.code, c.authority, c.campus, s.school, s.source FROM courses c "
+            "JOIN course_schools s USING (course_id) WHERE c.collection_id = %(collection_id)s",
+            {"collection_id": collection},
+        ).fetchall()
+    }
+    assert schools["BIOL_OX 142WE"] == ("atlas", "oxford", snapshot.career, "atlas_offering")
+    assert schools["CS 171"] == ("catalog", "atlanta", "Emory College", "college_catalog")
     assert row["parse_status"] == "parsed"
     mentions = db.execute(queries.get("list_mentions_for_course"), {
         "course_id": row["course_id"],
@@ -897,7 +939,7 @@ def test_prereq_seam_directions_codes_and_dormancy(db, collection, tmp_path):
     assert lowercase.state == "active"
     assert prereq_seam(db, collection, "what is a matrix?", _seam_config()).state == "dormant"
 
-    downstream = prereq_seam(db, collection, "MATH 111",
+    downstream = prereq_seam(db, collection, "Which courses does MATH 111 unlock?",
                              _seam_config(directions=("self", "downstream")))
     assert downstream.state == "active"
     downstream_neighbors = [c for c in downstream.candidates
@@ -907,6 +949,11 @@ def test_prereq_seam_directions_codes_and_dormancy(db, collection, tmp_path):
         "chunk_id": candidate.chunk_id, "workspace_key": None,
     }).fetchone() for candidate in downstream_neighbors]
     assert any("MATH 111 or 112" in detail["text"] for detail in details)
+
+    forward = prereq_seam(db, collection, "What are prerequisites for MATH 111?",
+                          _seam_config(directions=("self", "downstream")))
+    assert forward.state == "active"
+    assert not [c for c in forward.candidates if abs(c.raw_score - 0.8) < 1e-9]
 
 
 def test_prereq_seam_uses_only_parsed_tree_edges_and_keeps_own_prose(db, collection, tmp_path):

@@ -95,8 +95,8 @@ def main() -> None:
         parser.error("--output must not overwrite the catalog fallback input")
     try:
         snapshots = _snapshots(args.captures, args.term)
-        courses = prepare_authoritative_courses(load_atlas(args.catalog), snapshots,
-                                                term=args.term)
+        catalog = load_atlas(args.catalog)
+        courses = prepare_authoritative_courses(catalog, snapshots, term=args.term)
         document = "".join(
             json.dumps(course.model_dump(mode="json"), ensure_ascii=False,
                        sort_keys=True, separators=(",", ":")) + "\n"
@@ -137,7 +137,7 @@ def main() -> None:
         collection_id = _collection_id(conn, args.collection)
         source_id = import_authoritative_atlas(
             conn, collection_id=collection_id, path=args.output, snapshots=snapshots,
-            embedder=embedder, embed_model=settings.embedding_model_id,
+            catalog=catalog, embedder=embedder, embed_model=settings.embedding_model_id,
             count_tokens=embedder.count_tokens, config=config,
         )
     print(f"published {args.output}: source {source_id}")

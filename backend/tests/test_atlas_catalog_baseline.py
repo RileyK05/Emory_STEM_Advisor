@@ -134,9 +134,17 @@ def test_live_offerings_override_catalog_and_preserve_exact_provenance_without_a
     assert by_code["MATH 221"].evidence[0]["capture_set_hash"] == snapshot.capture_set_hash
     assert by_code["MATH 221"].evidence[0]["notices"]["consent"] == "Instructor"
     assert by_code["MATH 221"].registration_notes == [
-        "Consent required: Instructor", "Permission required"
+        "2026FA; Undergraduate; class 12345: Consent required: Instructor",
+        "2026FA; Undergraduate; class 12345: Permission required",
     ]
     assert by_code["MATH 221"].requisites == "MATH 111"
+
+    grouped_row = row.__class__(**{**row.__dict__, "class_number": None, "is_grouped": True,
+                                    "notes": "Varies by section", "notices": ()})
+    grouped_snapshot = snapshot.__class__(**{**snapshot.__dict__, "records": (grouped_row,)})
+    grouped = prepare_authoritative_courses([], [grouped_snapshot], term="2026FA")[0]
+    assert grouped.registration_notes == ["2026FA; Undergraduate; grouped result: Varies by section"]
+    assert grouped.requisites == "MATH 111"
 
     # A catalog cross-list edge cannot back-link an overridden Atlas identity.
     rel = row.__class__(**{**row.__dict__, "raw_course_code": "REL 325",
@@ -147,6 +155,53 @@ def test_live_offerings_override_catalog_and_preserve_exact_provenance_without_a
         [catalog_link], [scoped], term="2026FA"
     ))
     assert canonical["AAS 325"] != canonical["REL 325"]
+
+
+@pytest.mark.parametrize(("titles", "title", "topics", "catalog"), [
+    (["Structure and Properties"] * 2, "Structure and Properties", None, None),
+    # One topic this term: the catalog course title marks where the topic starts.
+    (["Special Topics: Printmaking: Painterly Prints"], "Special Topics",
+     "Printmaking: Painterly Prints", "Special Topics"),
+    (["Special Studies in the History of Art: Modeling Space + Form"],
+     "Special Studies in the History of Art: Modeling Space + Form", None,
+     "Special Studies History of Art"),
+    # One topic offering's title names that topic, not the course.
+    (["Special Topics: AAS: Wade in the Water", "Special Topics: AAS: Made in Her Image"],
+     "Special Topics: AAS", "Made in Her Image; Wade in the Water", None),
+    # Topics that share leading words still cut back to the ": " boundary.
+    (["Topics: Black Nihilism", "Topics: Black Culture"],
+     "Topics", "Black Culture; Black Nihilism", None),
+    # A bare base title listed beside its topics is the course title.
+    (["Topics in Religion", "Topics in Religion: Justice and the Commons"],
+     "Topics in Religion", "Justice and the Commons", None),
+    (["Calculus I", "Linear Algebra"], None, None, None),
+])
+def test_topic_offerings_share_the_course_title_and_keep_topics_as_notes(
+    titles, title, topics, catalog
+):
+    rows = tuple(OfferingRecord(
+        result_cursor=index, raw_course_code="AAS 285", title=value,
+        class_number=str(index), group_identity="group", is_grouped=True,
+        matched_identity="AAS 285", srcdb="db", credits="4", description="Topics vary.",
+        restrictions=None, notes=None, notices=(), raw_metadata={"sections": []},
+        evidence_hash=f"e{index}", review_status="eligible",
+        observed_at="2026-01-01T00:00:00Z", capture_envelope_hash=f"c{index}",
+    ) for index, value in enumerate(titles))
+    snapshot = ValidatedOfferings(
+        term="2026FA", career="Undergraduate", announced_count=len(rows), search_criteria="all",
+        index_evidence_hash="index", index_observed_at="2026-01-01T00:00:00Z",
+        index_capture_envelope_hash="index-envelope", records=rows, capture_envelopes=(),
+    )
+    base = [AtlasCourse(code="AAS 285", title=catalog)] if catalog else []
+    if title is None:
+        with pytest.raises(ValueError, match="no course title"):
+            prepare_authoritative_courses(base, [snapshot], term="2026FA")
+        return
+    course = prepare_authoritative_courses(base, [snapshot], term="2026FA")[0]
+    assert course.title == title
+    assert "; ".join(topic["topic"] for topic in course.topics) == (topics or "")
+    assert all(topic["class_numbers"] for topic in course.topics)
+    assert course.registration_notes == []
 
 
 def test_offering_restriction_variants_fail_closed_and_require_one_exact_term():

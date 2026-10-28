@@ -71,6 +71,10 @@ _PARSED = {
         "CS_OX 170 or equivalent transfer credit as a prerequisite",
         AnyOf((CourseRef("CS_OX 170"), Condition("equivalent transfer credit"))),
         ["CS_OX 170"]),
+    "single labeled prerequisite with transfer alternative": (
+        "MUS 121 as prerequisite or equivalent transfer credit.",
+        AnyOf((CourseRef("MUS 121"), Condition("equivalent transfer credit"))),
+        ["MUS 121"]),
     "transfer credit comma or after conjunction": (
         ("(CS 170 or CS_OX 170) and (CS 171 or CS_OX 171) and "
          "(CS 224 or CS_OX 224) and CS 253, or equivalent transfer credit "
@@ -87,17 +91,6 @@ _PARSED = {
         AnyOf((AllOf(_c("BIOL 142", "BIOL 142L")), CourseRef("BIOL_OX 142"),
                Condition("equivalent transfer credit"))),
         ["BIOL 142", "BIOL 142L", "BIOL_OX 142"]),
-    "transfer credit combined prerequisite or corequisite label": (
-        "CHEM 150L or equivalent transfer credit as prerequisite or co-requisite",
-        AnyOf((CourseRef("CHEM 150L"), Condition("equivalent transfer credit"))),
-        ["CHEM 150L"]),
-    "transfer credit combined label after conjunction": (
-        ("(CHEM 204L or CHEM_OX 204L) and (CHEM 205L or CHEM_OX 205L) or "
-         "equivalent transfer credit as prerequisite or co-requisite"),
-        AnyOf((AllOf((AnyOf(_c("CHEM 204L", "CHEM_OX 204L")),
-                      AnyOf(_c("CHEM 205L", "CHEM_OX 205L")))),
-               Condition("equivalent transfer credit"))),
-        ["CHEM 204L", "CHEM_OX 204L", "CHEM 205L", "CHEM_OX 205L"]),
     "run-together code and conjunction": ("BIOL 151or CHEM 150",
                                           AnyOf(_c("BIOL 151", "CHEM 150")),
                                           ["BIOL 151", "CHEM 150"]),
@@ -152,6 +145,49 @@ def test_combined_prerequisite_or_corequisite_label_parses():
     assert result.status == "parsed"
     assert result.trees == {"corequisite": CourseRef("CHEM 150L")}
     assert [(m.kind, m.code) for m in result.mentions] == [("corequisite", "CHEM 150L")]
+
+
+@pytest.mark.parametrize(("text", "tree"), [
+    ("CHEM 150L or equivalent transfer credit as prerequisite or co-requisite",
+     AnyOf((CourseRef("CHEM 150L"), Condition("equivalent transfer credit")))),
+    (("(CHEM 204L or CHEM_OX 204L) and (CHEM 205L or CHEM_OX 205L) or "
+      "equivalent transfer credit as prerequisite or co-requisite"),
+     AnyOf((AllOf((AnyOf(_c("CHEM 204L", "CHEM_OX 204L")),
+                   AnyOf(_c("CHEM 205L", "CHEM_OX 205L")))),
+            Condition("equivalent transfer credit")))),
+])
+def test_transfer_with_combined_label_preserves_corequisite_timing(text, tree):
+    result = parse_requisites(text)
+    assert result.status == "parsed"
+    assert result.trees == {"corequisite": tree}
+    assert all(mention.kind == "corequisite" for mention in result.mentions)
+
+
+@pytest.mark.parametrize(("text", "course_code", "status", "corequisite"), [
+    # The combined label written inline after its courses keeps them.
+    ("ENVS 240 as prerequisite or co-requisite, or equivalent transfer credit.", "ENVS 240L",
+     "parsed", AnyOf((CourseRef("ENVS 240"), Condition("equivalent transfer credit")))),
+    ("CHEM 202L as prerequisite and CHEM 203 or CHEM_OX 203 as prerequisite or co-requisite.",
+     "CHEM 203L", "parsed", AnyOf(_c("CHEM 203", "CHEM_OX 203"))),
+    ("CHEM 222 or equivalent transfer credit as a pre/co-requisite.", "CHEM 222L",
+     "parsed", AnyOf((CourseRef("CHEM 222"), Condition("equivalent transfer credit")))),
+    # Concurrent enrollment names the lab itself; only the other course is required.
+    (("CHEM_OX 203 and CHEM_OX 203L as prerequisites or equivalent transfer credit. "
+      "Students must enroll in CHEM_OX 204 and CHEM_OX 204L together. If not enrolled in "
+      "both lecture and lab, students will be dropped at the end of add/drop/swap."),
+     "CHEM_OX 204L", "parsed", CourseRef("CHEM_OX 204")),
+    # Oxford's bare labels; the enrollment sentence restates the same corequisite.
+    (("CHEM_OX 150 and CHEM_OX 150L prerequisites & CHEM_OX 202L co-requisite. Students must "
+      "enroll in CHEM_OX 202 and CHEM_OX 202L together."),
+     "CHEM_OX 202", "parsed", CourseRef("CHEM_OX 202L")),
+    # A bare label word inside prose is not a label.
+    ("MATH 111 prerequisite waivers are granted by the department.", None, "unparsed", None),
+    ("Students must enroll in the lecture and lab together.", "CHEM_OX 204L", "unparsed", None),
+])
+def test_explicit_corequisite_wordings_name_the_corequisite(text, course_code, status, corequisite):
+    result = parse_requisites(text, course_code=course_code)
+    assert result.status == status
+    assert result.trees.get("corequisite") == corequisite
 
 
 def test_description_requirements_are_extracted_only_when_explicit():
@@ -247,6 +283,28 @@ def test_transfer_tail_does_not_discard_a_following_alternative():
     assert [mention.code for mention in result.mentions] == ["ENVS 483"]
 
 
+@pytest.mark.parametrize("text", [
+    ("CS 170 or CS_OX 170 as prerequisite and MATH 111 or MATH_OX 111 "
+     "as co-requisite or equivalent transfer credit."),
+    ("(PHYS 142 or PHYS_OX 142) as prerequisite and (MATH 211 or MATH_OX 211) "
+     "as co-requisite or equivalent transfer credit."),
+])
+def test_split_transfer_clause_with_unclear_scope_is_unresolved(text):
+    result = parse_requisites(text)
+    assert result.status == "unparsed"
+    assert any("equivalent transfer credit" in part for part in result.leftover)
+
+
+@pytest.mark.parametrize("text", [
+    "QTM100 equivalent transfer credit as a prerequisite",
+    "ECON 201 AND ECON 212 AND ECON 420 or ECON 422 equivalent transfer credit as a prerequisite",
+])
+def test_transfer_clause_without_connector_is_unresolved(text):
+    result = parse_requisites(text)
+    assert result.status == "unparsed"
+    assert any("equivalent transfer credit" in part for part in result.leftover)
+
+
 def test_used_for_trailer_does_not_create_a_self_loop():
     result = parse_requisites(
         "FREN 310 as prerequisite. Used for: FREN 313, FREN 314",
@@ -278,3 +336,23 @@ def test_a_course_is_never_its_own_prerequisite():
 ])
 def test_prereq_seam_finds_course_codes_in_a_query(query, codes):
     assert course_codes_in_query(query) == codes
+
+
+@pytest.mark.parametrize("query", [
+    "Which courses does CS 253 unlock?",
+    "What can I take after completing CS 253?",
+    "What courses can I take after CS 253?",
+    "Which courses list CS 253 as a prerequisite?",
+])
+def test_reverse_prereq_intent_is_recognized(query):
+    from app.retrieval.seams.prereq import is_reverse_query
+    assert is_reverse_query(query)
+
+
+@pytest.mark.parametrize("query", [
+    "What are the prerequisites for CS 253?",
+    "What does CS 253 require?",
+])
+def test_forward_prereq_questions_are_not_reverse(query):
+    from app.retrieval.seams.prereq import is_reverse_query
+    assert not is_reverse_query(query)

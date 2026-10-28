@@ -105,7 +105,29 @@ def _write_course(conn, collection_id, source_id, locator_id, course, canonical_
         "canonical_code": canonical_code, "lifecycle": lifecycle, "authority": authority,
     })
     replace_course_requisites(conn, course_id, parsed)
+    _replace_course_schools_and_topics(conn, course_id, course)
     return True
+
+
+def _replace_course_schools_and_topics(conn, course_id: UUID, course: AtlasCourse) -> None:
+    """Atlas careers are the schools; a reconciled catalog fallback is the College's."""
+    conn.execute(queries.get("delete_course_schools_for_course"), {"course_id": course_id})
+    conn.execute(queries.get("delete_course_topics_for_course"), {"course_id": course_id})
+    if course.authority == "atlas":
+        schools = [(career, "atlas_offering", course.term) for career in course.careers]
+    elif course.authority == "catalog":
+        schools = [("Emory College", "college_catalog", None)]
+    else:
+        schools = []
+    for school, source, term in schools:
+        conn.execute(queries.get("insert_course_school"), {
+            "course_id": course_id, "school": school, "source": source, "term": term,
+        })
+    for topic in course.topics:
+        conn.execute(queries.get("insert_course_topic"), {
+            "course_id": course_id, "term": course.term, "topic": topic["topic"],
+            "class_numbers": topic["class_numbers"],
+        })
 
 
 def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Path) -> int:
@@ -153,6 +175,10 @@ def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Pat
             row = stored[course.code]
             if (row["parser_version"] != PARSER_VERSION
                     or row["requisites_raw"] != requisite_text(course.requisites, course.description)):
+                # Reparse updates derived requirements, not the published course's
+                # authority or lifecycle. Those are controlled by publication.
+                course = course.model_copy(update={"authority": row["authority"],
+                                                   "lifecycle": row["lifecycle"]})
                 _write_course(conn, collection_id, source["source_id"], row["locator_id"],
                               course, canonical[course.code])
                 changed.append(course.code)
@@ -338,9 +364,13 @@ def import_atlas(
 def import_authoritative_atlas(
     conn: Connection, *, collection_id: UUID, path: Path, embedder: Embedder,
     embed_model: str, count_tokens: Callable[[str], int], config: RetrievalConfig,
-    snapshots: list,
+    snapshots: list, catalog: list[AtlasCourse] | None = None,
 ) -> UUID:
-    """Publish a prepared catalog fallback merged with validated Atlas evidence."""
+    """Publish a prepared catalog fallback merged with validated Atlas evidence.
+
+    `catalog` is the fallback input the file was prepared from; Atlas records are
+    re-derived from it and the snapshots, so catalog-delimited topic titles verify.
+    """
     from app.atlas.offerings import ValidatedOfferings
 
     if not snapshots or any(not isinstance(value, ValidatedOfferings) for value in snapshots):
@@ -354,7 +384,8 @@ def import_authoritative_atlas(
     courses = load_atlas_lines(path.read_text(encoding="utf-8").splitlines())
     expected_atlas = {
         course.code: course
-        for course in prepare_authoritative_courses([], snapshots, term=term)
+        for course in prepare_authoritative_courses(catalog or [], snapshots, term=term)
+        if course.authority == "atlas"
     }
     incoming_by_code = {course.code: course for course in courses if course.authority == "atlas"}
     if set(incoming_by_code) != set(expected_atlas):

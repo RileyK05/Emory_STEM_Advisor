@@ -48,6 +48,8 @@ class AtlasCourse(BaseModel):
     careers: list[str] = []
     evidence: list[dict] = []
     registration_notes: list[str] = []
+    # A topics course's offerings this term: {"topic": str, "class_numbers": [str]}.
+    topics: list[dict] = []
 
 
 def normalize_code(value: str) -> str | None:
@@ -162,6 +164,9 @@ def render_courses(courses: list[AtlasCourse]) -> tuple[str, list[tuple[str, str
         block += f"\n\n{course.description}"
         if course.requisites:
             block += f"\n\nRequisites: {course.requisites}"
+        if course.topics:
+            block += f"\n\nTopics offered ({course.term}): " + "; ".join(
+                topic["topic"] for topic in course.topics)
         for note in course.registration_notes:
             block += f"\n\nAtlas registration context: {note}"
         if parts:

@@ -16,7 +16,7 @@ from app.programs.requirements import (
     _is_level_descriptor,
 )
 
-PARSER_VERSION = "9"
+PARSER_VERSION = "13"
 
 # A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
 # uppercase, so ordinary words and "111or" are not read as codes. Spelled-out
@@ -63,7 +63,10 @@ _CARRY_SEP = re.compile(r"\s*(?:(?:,|/|and|or)\s*)*", re.IGNORECASE)
 _INLINE_LABEL_RE = re.compile(
     r"\s+as\s+(?:an?\s+)?"
     r"(recommended\s+preparation|recommended|prerequisite\s+or\s+co[ -]?requisite|"
-    r"co[ -]?requisites?|pre[ -]?requisites?)\b",
+    r"co[ -]?requisites?|pre[ -]?requisites?)\b"
+    # Oxford's bare form, "CHEM_OX 150 prerequisites & CHEM_OX 202L co-requisite",
+    # counts only where the label closes a clause.
+    r"|\s+(co[ -]?requisites?|pre[ -]?requisites?)(?=\s*(?:[.,;&]|\band\b|$))",
     re.IGNORECASE,
 )
 _EXCLUSION_RE = re.compile(
@@ -157,7 +160,7 @@ def _strip_grades(text: str) -> str:
 
 
 def _trim_separators(text: str) -> str:
-    return re.sub(r"^(?:and|or|[,;])\s+", "", text.strip(), flags=re.IGNORECASE).strip(" ,.;")
+    return re.sub(r"^(?:and|or|[,;&])\s+", "", text.strip(), flags=re.IGNORECASE).strip(" ,.;")
 
 
 def _split_inline(kind: str, content: str) -> list[tuple[str, str]]:
@@ -169,15 +172,26 @@ def _split_inline(kind: str, content: str) -> list[tuple[str, str]]:
     for match in matches:
         chunk = _trim_separators(content[start:match.start()])
         if chunk:
-            output.append((_kind_for_label(match.group(1)), chunk))
+            output.append((_kind_for_label(match.group(1) or match.group(2)), chunk))
         start = match.end()
     tail = _trim_separators(content[start:])
-    if tail:
+    if len(output) == 1 and _TRANSFER_ONLY_RE.fullmatch(tail):
+        # "ENVS 240 as co-requisite, or equivalent transfer credit": with one
+        # labelled part the alternative modifies it. After several parts its
+        # scope is unclear and it stays an unresolved segment.
+        last_kind, last = output[-1]
+        output[-1] = (last_kind, f"{last} or equivalent transfer credit")
+    elif tail:
         output.append((kind, tail))
     return output
 
 
-def split_requisite_segments(text: str) -> tuple[tuple[str, str], ...]:
+_TRANSFER_ONLY_RE = re.compile(r"(?:or\s+)?equivalent\s+transfer\s+credit", re.IGNORECASE)
+
+
+def split_requisite_segments(
+    text: str, *, course_code: str | None = None
+) -> tuple[tuple[str, str], ...]:
     """Split a requisites blob into (kind, text) segments.
 
     Handles both colon labels and the catalog's trailing ``as a corequisite``
@@ -185,8 +199,17 @@ def split_requisite_segments(text: str) -> tuple[tuple[str, str], ...]:
     are not requirements and are removed before scanning.
     """
     stripped = re.sub(r"^This course requires\s+", "", text.strip(), flags=re.IGNORECASE)
+    stripped = re.sub(r"\s+&\s+", " and ", stripped)
     stripped = _RUN_TOGETHER_RE.sub(r"\1 \2 ", stripped)
-    stripped = _TRANSFER_AS_LABEL_RE.sub(r"\1", stripped)
+    stripped = _PRE_CO_SLASH_RE.sub("prerequisite or co-requisite", stripped)
+    self_code = normalize_code(course_code) if course_code else None
+    stripped = _ENROLL_TOGETHER_RE.sub(lambda match: _enroll_together(match, self_code),
+                                       stripped)
+    stripped = _TRANSFER_AS_LABEL_RE.sub(
+        lambda match: match.group(1) + (" as corequisite" if match.group(2) else ""),
+        stripped,
+    )
+    stripped = _COMBINED_INLINE_RE.sub(" as corequisite", stripped)
     stripped = _COMBINED_LABEL_RE.sub("co-requisite: ", stripped)
     stripped = _PROHIBITS_RE.sub("", stripped)
     stripped = _EXCLUSION_RE.sub("", stripped)
@@ -205,20 +228,57 @@ def split_requisite_segments(text: str) -> tuple[tuple[str, str], ...]:
             content = _trim_separators(stripped[label.end():end])
             if content:
                 segments.extend(_split_inline(kind, content))
-    return tuple((kind, content) for kind, content in segments if content)
+    # The same requirement stated twice (a label and an enrollment sentence) is one.
+    return tuple(dict.fromkeys((kind, content) for kind, content in segments if content))
 
 
 # "BIOL 151or", "PHYS 461or": a missing space glues a code to the conjunction.
 _RUN_TOGETHER_RE = re.compile(r"(\d{3}[A-Za-z]?)(and|or)(?=\d|\b)", re.IGNORECASE)
 _TRANSFER_AS_LABEL_RE = re.compile(
     r"(equivalent\s+transfer\s+credit)\s+as\s+(?:an?\s+)?"
-    r"prerequisites?(?:\s+or\s+co[ -]?requisites?)?\b",
+    r"prerequisites?(\s+or\s+co[ -]?requisites?)?\b",
+    re.IGNORECASE,
+)
+# A single explicit course followed by an inline prerequisite label and an
+# OR transfer alternative has an unambiguous scope. Move the label to the end
+# before splitting; more complex mixed-kind wording remains unresolved.
+_SINGLE_LABELED_TRANSFER_RE = re.compile(
+    rf"^\s*(?P<course>{_SUBJECT}\s?{_DIGITS})\s+as\s+(?:an?\s+)?"
+    r"prerequisites?\s+or\s+equivalent\s+transfer\s+credit\s*\.?\s*$",
     re.IGNORECASE,
 )
 # "Prerequisite or co-requisite" is one combined label; corequisite is the
 # weaker (concurrent) interpretation.
 _COMBINED_LABEL_RE = re.compile(
     r"\bpre[ -]?requisite\s+or\s+co[ -]?requisite\s*:?\s*", re.IGNORECASE)
+# The same combined label written inline after its courses ("CHEM 203 as
+# prerequisite or co-requisite"); rewriting it to a colon label would orphan them.
+_COMBINED_INLINE_RE = re.compile(
+    r"\s+as\s+(?:an?\s+)?pre[ -]?requisites?\s+or\s+co[ -]?requisites?\b(?!\s*:)",
+    re.IGNORECASE)
+_PRE_CO_SLASH_RE = re.compile(r"\bpre\s*/\s*co[ -]?requisites?\b", re.IGNORECASE)
+# "Students must enroll in CHEM_OX 202 and CHEM_OX 202L together." states
+# concurrent enrollment explicitly.
+_CODE_ONLY_RE = re.compile(rf"[A-Z][A-Z0-9]{{0,5}}[A-Z](?:_OX)?\s?{_DIGITS}")
+_ENROLL_TOGETHER_RE = re.compile(
+    r"\bStudents\s+must\s+enroll\s+in\s+(?P<courses>[^.]+?)\s+together\b\.?"
+    r"(?:\s*If\s+not\s+enrolled\s+in\s+(?:both\s+)?(?:the\s+)?lecture\s+and\s+lab\b[^.]*\.?)?",
+    re.IGNORECASE)
+
+
+def _enroll_together(match: re.Match, self_code: str | None) -> str:
+    """Rewrite as a corequisite label naming the other listed courses.
+
+    The course's own code is part of the statement, not a requirement on itself.
+    A list that is not purely course codes is left as written.
+    """
+    parts = [part.strip() for part in re.split(r"\s*(?:,|\band\b)\s*", match["courses"])
+             if part.strip()]
+    codes = [normalize_code(part) for part in parts]
+    if None in codes or any(not _CODE_ONLY_RE.fullmatch(part) for part in parts):
+        return match.group()
+    others = [code for code in codes if code != self_code]
+    return f"co-requisite: {' and '.join(others)}. " if others else ""
 # A trailing "... or equivalent transfer credit ..." is a modifier, not an `or`
 # operand; keeping it as an operand makes mixed and/or look ambiguous (EMO-028).
 # Only a clause that ends the segment qualifies, so a following restriction
@@ -431,7 +491,10 @@ def parse_requisites(
     if text is None or not text.strip():
         return ParsedRequisites("none", (), {}, ())
 
-    segments = split_requisite_segments(text)
+    single_transfer = _SINGLE_LABELED_TRANSFER_RE.fullmatch(text)
+    if single_transfer:
+        text = f"{single_transfer.group('course')} or equivalent transfer credit as prerequisite"
+    segments = split_requisite_segments(text, course_code=course_code)
     if not segments:
         return ParsedRequisites("none", (), {}, ())
 
@@ -449,9 +512,21 @@ def parse_requisites(
             continue
         transfer_tail = _TRANSFER_TAIL_RE.search(segment)
         if transfer_tail is not None:
-            segment = segment[:transfer_tail.start()].strip()
-            if not segment:
+            prefix = segment[:transfer_tail.start()].strip()
+            if not prefix:
+                # A split-off transfer clause may qualify an earlier prerequisite,
+                # corequisite, or the whole statement. Its scope is not known.
+                # Keep it unresolved rather than silently publishing a partial tree.
+                leftover.append(segment)
+                unparsed = True
                 continue
+            segment = prefix
+            if transfer_tail.group("connector") is None:
+                # With no stated connector the transfer clause's relationship
+                # to the course expression is unknown; do not invent AND or OR.
+                leftover.append(transfer_tail.group().strip())
+                unparsed = True
+                transfer_tail = None
         tokens = _scan(segment)
         if self_code is not None and any(
             ttype == "code" and value == self_code for ttype, value in tokens

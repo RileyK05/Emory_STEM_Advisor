@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections import defaultdict
 from collections.abc import Iterable
 
@@ -10,6 +11,25 @@ from app.atlas.records import AtlasCourse, normalize_code
 from app.atlas.requisites import requisite_text
 
 ATLAS_URL = "https://atlas.emory.edu/"
+
+
+def shared_title(titles: Iterable[str]) -> str:
+    """The course title shared by every offering of one code.
+
+    Atlas titles a topics offering "Base: Topic", so one offering's title names
+    a single topic, not the course. The shared base is the longest common prefix
+    that ends at a ": " boundary (or is itself one of the titles).
+    """
+    distinct = sorted(set(titles))
+    if len(distinct) == 1:
+        return distinct[0]
+    prefix = os.path.commonprefix(distinct)
+    if all(title == prefix or title.startswith(prefix + ": ") for title in distinct):
+        return prefix
+    cut = prefix.rfind(": ")
+    if cut <= 0:
+        raise ValueError(f"offerings share no course title: {distinct!r}")
+    return prefix[:cut]
 
 
 def prepare_authoritative_courses(
@@ -65,7 +85,8 @@ def prepare_authoritative_courses(
             pair[0].career, pair[1].group_identity, pair[1].class_number or "",
             pair[1].evidence_hash,
         )):
-            note_values = [value for value in (item.notes,) if value]
+            scope = (f"{snapshot.term}; {snapshot.career}; "
+                     + (f"class {item.class_number}" if item.class_number else "grouped result"))
             notice_map = dict(item.notices)
             evidence.append({
                 "source_url": ATLAS_URL,
@@ -81,9 +102,24 @@ def prepare_authoritative_courses(
                 "notices": dict(sorted(notice_map.items())),
                 "context": item.raw_metadata,
             })
-            notes.update(note_values)
+            if item.notes:
+                notes.add(f"{scope}: {item.notes}")
             if notice_map.get("consent"):
-                notes.add(f"Consent required: {notice_map['consent']}")
+                notes.add(f"{scope}: Consent required: {notice_map['consent']}")
+        title = shared_title(item.title for _snapshot, item in scoped_rows)
+        # A term may offer one topic only; the catalog's course title, when it
+        # prefixes the Atlas title at a ": " boundary, marks where the topic starts.
+        catalog = result.get(code)
+        if catalog is not None and title.startswith(catalog.title + ": "):
+            title = catalog.title
+        topics: dict[str, set[str]] = defaultdict(set)
+        for _snapshot, item in scoped_rows:
+            if item.title != title:
+                topics[item.title[len(title) + 2:]].update(
+                    [item.class_number] if item.class_number else
+                    (str(section["crn"]) for section in item.raw_metadata.get("sections", ())
+                     if section.get("crn"))
+                )
         if len(variants) > 1:
             descriptions = sorted(value or "(no restriction text captured)" for value in variants)
             requisite = (
@@ -95,7 +131,7 @@ def prepare_authoritative_courses(
         # Catalog cross-list declarations do not transfer to Atlas identities.
         result[code] = AtlasCourse(
             code=code,
-            title=first.title,
+            title=title,
             description=first.description,
             credits=first.credits,
             requisites=requisite,
@@ -106,6 +142,8 @@ def prepare_authoritative_courses(
             careers=sorted({snapshot.career for snapshot, _item in scoped_rows}),
             evidence=evidence,
             registration_notes=sorted(notes),
+            topics=[{"topic": topic, "class_numbers": sorted(numbers)}
+                    for topic, numbers in sorted(topics.items())],
         )
     atlas_codes = set(rows)
     # A catalog cross-list edge must not pull an Atlas identity back into a

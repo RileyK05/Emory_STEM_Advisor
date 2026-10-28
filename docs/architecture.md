@@ -492,10 +492,14 @@ first index marks the source `failed`; a failed replacement preserves the prior
 
 Private uploads bound extracted characters (`UPLOAD_MAX_EXTRACTED_CHARS`,
 2,000,000), each tokenizer input (`UPLOAD_MAX_SEGMENT_CHARS`, 16,384), and emitted
-chunks (`UPLOAD_MAX_CHUNKS`, 2,048). A cooperative chunking deadline
-(`UPLOAD_INDEX_TIMEOUT_SECONDS`, 60 seconds) is checked before tokenization.
+chunks (`UPLOAD_MAX_CHUNKS`, 300). Embedding runs in bounded
+`UPLOAD_EMBED_BATCH_SIZE` batches (64), and a cooperative deadline
+(`UPLOAD_INDEX_TIMEOUT_SECONDS`, 60 seconds) is checked before tokenization,
+between embedding batches, and before publication. Oversized embedder inputs are
+rejected rather than silently truncated. Section headings are included in the
+embedding input for continuation chunks without changing exact source text.
 These failures use the same revision-fenced failed-index path. The deadline
-does not interrupt an extraction or embedding call already running; process-level
+still cannot interrupt one native embedding call already running; process-level
 ingestion isolation and stale-upload recovery remain future work. Shared operator
 imports retain their existing limits. Uploads with PDF magic require a PDF
 filename; duplicate bytes retain their stable source ID and report the existing
@@ -697,6 +701,28 @@ cannot displace a distinct course. A cited cross-listed course is labelled by al
 of its official codes (`"AAS 325 / REL 325"`). Courses without an explicit
 relation keep their own code as the anchor.
 
+**Campus, schools, topics and lab pairings (migration 078):**
+
+- `courses.campus` (`atlanta` | `oxford`) is generated from the `_OX` subject
+  suffix. No Atlanta/Oxford equivalence is stored: the two are not one-to-one
+  (`BIOL_OX 142` stands for `BIOL 142` plus `BIOL 142L`), and Emory states
+  equivalence in requisite text where it applies.
+- `course_schools` holds the Atlas career a course is offered under, verbatim
+  (`source = atlas_offering`, with its term), or `Emory College` for a reconciled
+  catalog fallback (`source = college_catalog`). Legacy unlabelled catalog
+  imports get no school.
+- `course_topic_offerings` holds one row per topic per term. A topics course is
+  one identity; its title is the base the Atlas offerings share, cut at a `": "`
+  boundary, or the catalog course title when that prefixes the Atlas title.
+  Topics without a shared base fail preparation rather than guess.
+- `course_lab_pairings` is a view: a lab (`X 123L`) pairs with its lecture
+  (`X 123`) only where either one's parsed mentions name the other as a
+  corequisite. Same-number codes alone never pair; `list_unpaired_labs` lists the
+  remainder for parser or curator review.
+
+`_write_course` writes schools and topics with the course, so reparse and
+publication keep them in step.
+
 `python -m scripts.import_atlas --collection NAME FILE` also prints every
 `ambiguous`/`unparsed` course with its raw text so a human can fix the parser.
 A replacement that removes current course codes requires
@@ -877,6 +903,10 @@ config) -> SeamResult`:
   An exact program-title phrase additionally selects its actual field/item
   evidence chunks, only from its bound current source revision. This is raw
   source retrieval, not publication of parsed requirements as verified rules.
+  The program-title lateral is skipped unless the question names a program,
+  degree, major/minor, checklist, concentration, or track.
+- Title-match counts are computed once per candidate source/locator in a
+  materialized CTE, not once per chunk.
 - Score `ts_rank_cd(search_vector, query)`.
 - Filter: source in collection **and `sources.status = 'indexed'`**.
 - Order: `score DESC, source_id, chunk_index`; `LIMIT %(limit)s`.
@@ -918,6 +948,18 @@ not apply.
 Kill switch: if retrieval without embeddings matches or beats retrieval with
 them on the eval set, set `seams.embed.enabled = false`.
 
+Retrieval records wall times by stage in `trace.timings` (`keyword_ms`,
+`embed_query_ms`, `embed_ms`, `prereq_ms`, `details_ms`, `fusion_ms`,
+`total_ms`, `trace_write_ms`; planned searches add `planned_ms`). These are
+diagnostic only. Trace row inserts are pipelined; the trace is still exactly
+one row per `retrieve()` call. `GraniteEmbedder` keeps a bounded per-instance
+query-vector cache (128 entries) for repeated questions; document vectors are
+never cached there, and the cache dies with the process. With
+`EMBEDDER_WARMUP_ON_STARTUP=true`, the app loads the embedding model in a
+daemon thread at construction so the first real query does not pay the cold
+model-load cost; the default is off because it trades startup memory for that
+latency.
+
 ### Prerequisite graph
 
 Course codes in the query (`MATH 111`, `MATH 111 or 112`) are looked up in
@@ -927,7 +969,11 @@ parser. The seam returns, per `seams.prereq.directions`:
 
 - `self`: the course's own chunks, score 1.0;
 - `upstream`: chunks of the courses it requires, score `decay` (0.8);
-- `downstream`: chunks of the courses it unlocks, score `decay`.
+- `downstream`: chunks of the courses it unlocks, score `decay`; only for a
+  reverse-intent question ("unlock", "opens", "what can I take after", "which
+  courses require"). Ordinary forward prerequisite questions keep self/upstream
+  only. Reverse-intent retrieval raises the citation budget to 12 so the
+  downstream course rows are not displaced by program prose.
 
 Neighbor expansion uses only course references in successfully parsed
 prerequisite/corequisite trees. Mention rows from ambiguous or unparsed text and
@@ -1238,9 +1284,11 @@ erDiagram
 ```
 
 - `retrieval_traces`: query, normalized query, config version, embedding
-  model, refused flag, and the requesting `workspace_key` where one exists
-  (migration 069). Owner deletion removes attributed traces and the legacy
-  traces still reachable through saved turn evidence.
+  model, refused flag, the requesting `workspace_key` where one exists
+  (migration 069), and per-stage wall times in `timings` (migration 077).
+  Timings are diagnostic metadata, never evidence. Owner deletion removes
+  attributed traces and the legacy traces still reachable through saved turn
+  evidence.
 - `trace_seams`: every seam on every query, including disabled ones, with
   its state (`active`, `dormant`, `disabled`, `failed`), reason, and
   candidate count.
@@ -1387,8 +1435,12 @@ Course exploration stays focused on at most five course codes, exact titles, and
 supported topics; degree/eligibility comparisons require a question asking for
 them, and program matching uses course codes even when titles differ.
 
-`ANSWER_CITATION_REPAIR_ENABLED` (default false) permits one citation-format
-rewrite of completed text. It retains the original context and executed tool
+`ANSWER_CITATION_REPAIR_ENABLED` (default true) permits one citation-format
+rewrite of completed text when the course-code gate can point at a supplied
+passage naming the same identity. The gate recognizes student report phrasing,
+denial/absence phrasing, suffix and printed-range shorthand, and the reviewed
+QTM↔DATASCI subject rename. These matches establish identity only; they never
+turn a user assertion or another program's list into a requirement. The rewrite It retains the original context and executed tool
 results, disables further tool execution for the rewrite, resets provisional
 output, and revalidates the final answer. Each attempt reserves and accounts
 against the existing operation budget; truncated or refused outputs are not
@@ -1545,6 +1597,11 @@ working-state updates retain control over their requested active order.
 
 Opened program records with a continuation cursor must finish their remaining
 pages before another discovery or final proposal while reads are affordable.
+Research progress counts a read only when it advances a page/cursor or adds
+evidence; rereading the same page does not reset the no-progress window. After
+that window the controller narrows the tool set to `advisor_finish` and records
+the remaining gap as a partial result.
+
 Continuation requests advertise the current pending handle/cursor pairs and
 drop duplicate prior-page native read outputs, so a superseded cursor cannot
 invite a cached reread. A cursor presented with a different program handle
@@ -2110,6 +2167,10 @@ coverage hides raw requirements and trees and yields
 `requirements_evidence_missing`; invalid/missing persisted trees remain
 unparsed. Tree restoration is bounded to 2,000 nodes and depth 64. A narrower
 tool resource list cannot inherit requisite evidence from omitted excerpts.
+When raw requisites are absent, conservative detection of requirement wording in
+the indexed course description yields `description_requirement_unparsed` and
+blocks sequence planning without creating graph edges. This detection is not
+exhaustive, and it can also flag wording that needs human interpretation.
 
 Sequence inputs contain up to 50 explicitly selected codes and up to 100
 `completed_codes`. Completion is an unverified student assertion, disclosed in
@@ -2268,7 +2329,9 @@ transports and fake providers; paid live behavior is unverified.
 | Method | Path | Behavior |
 | --- | --- | --- |
 | POST | `/api/conversations` | Create with `{title}` |
-| GET | `/api/conversations` | Current workspace's latest 200 conversations |
+| GET | `/api/conversations` | Active conversations; `archived`, `limit` (default 500, max 500), and `offset` select a page |
+| POST | `/api/conversations/{id}/archive` | Reversibly remove from the active 500-conversation quota |
+| POST | `/api/conversations/{id}/restore` | Restore when active capacity still exists |
 | GET | `/api/conversations/{id}?after=&limit=` | Metadata and up to 200 immutable turns after a sequence |
 | POST | `/api/conversations/{id}/turns` | Bound advising request or explicit saved-history read |
 | POST | `/api/conversations/{id}/turns/stream` | Atomically queue one advising turn; durable request replay |
@@ -2280,13 +2343,22 @@ transports and fake providers; paid live behavior is unverified.
 | POST | `/api/conversations/{id}/export-summary` | Queue a summary export as a native document revision |
 
 Metadata fields are `conversationId`, `title`, `lastSequence`,
-`pendingRequestId`, `createdAt`, and `updatedAt`. Turns carry `sequence`,
+`pendingRequestId`, `contextEpoch`, `contextBoundarySequence`, `contextResetAt`,
+optional `archivedAt`, `createdAt`, and `updatedAt`. The 500-conversation cap
+counts active conversations only. Archive refuses a pending turn or pending
+summary and never destroys turns; restore rechecks capacity atomically. Turns carry `sequence`,
 `requestId`, `role` (`user|assistant`), `text`, `status`
 (`input|answer|refusal|history|failed|abandoned`), `evidence`, and `createdAt`.
 User evidence preserves requested inputs and effective collection/source scope,
 retrieval query, and full exact artifact revision specs. Assistant evidence
 preserves exact cited context, actual citations, trace identity, and any saved-turn
 references independently of mutable indexes.
+
+A terminal execution or publication failure settles the pending conversation
+request through the composed worker's failure hook and clears only that
+conversation's pending pointer. Housekeeping and backup also settle requests
+whose bound job is terminal or missing, or whose synchronous deadline has
+passed; live queued/running work is never reconciled away.
 
 A turn request extends `QueryRequest` with UUID `requestId`, integer
 `expectedSequence`, `mode=advising|history`, and optional `artifactReferences`
@@ -2619,9 +2691,12 @@ secrets and must be restored separately using the same configuration.
 
 Stop writers and workers before confirming maintenance. Creation uses an exported
 repeatable-read Postgres snapshot for both the named reference queries and
-`pg_dump`; PostgreSQL client/server major versions must match. The readiness
-check also refuses pending conversations, native decisions, summary checkpoints,
-and claim reviews, including intents persisted before a provider reservation.
+`pg_dump`; PostgreSQL client/server major versions must match. Before the read-only snapshot, creation reconciles only pending conversation
+requests whose bound job is already terminal/missing or whose synchronous
+request has outlived its deadline; it never settles live queued/running work.
+The readiness check then refuses remaining live work, naming the blocking kinds
+and sample IDs, including pending decisions, summary checkpoints, claim reviews,
+and intents persisted before a provider reservation.
 Settled unknown usage remains durable backup data; it does not justify retrying
 an ambiguous call after restore. From `backend/`:
 
