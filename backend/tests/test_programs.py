@@ -35,6 +35,8 @@ Electives (select 2 courses required, 6 CU)
     ("Biology 141 and 141L plus Biology 142 and 142L", ["BIOL 141", "BIOL 141L", "BIOL 142",
                                                         "BIOL 142L"]),
     ("Biol/Psych 320, Biol 356/NBB 358", ["BIOL 320", "PSYC 320", "BIOL 356", "NBB 358"]),
+    ("Anthropology 201 and Anthropology 202", ["ANT 201", "ANT 202"]),
+    ("Anthropology 270S", ["ANT 270S"]),
     ("ENVS 230 [or ENVS OX 230*]", ["ENVS 230", "ENVS_OX 230"]),
     ("ECON 480/CS 480: Computing Methods", ["ECON 480", "CS 480"]),
     ("DATASCI 220 or QTM 220", ["DATASCI 220", "QTM 220"]),
@@ -56,6 +58,8 @@ def test_choose_count_only_when_explicit():
     assert choose_count("Electives (select 2 courses required, 6 CU)") == 2
     assert choose_count("Two courses chosen from: CS 442, CS 443") == 2
     assert choose_count("Three additional 300-level CS courses") is None
+    assert choose_count("One course from each of the following three areas") is None
+    assert choose_count("Choose one course from each area") is None
     # A credit value must not be read as the count.
     assert choose_count("MATH 351 (3 credits) or one of the following") == 1
     assert choose_count("MATH 111 (4 credits) Two courses from the following") == 2
@@ -73,6 +77,15 @@ def test_parse_program_metadata_sections_and_wrapped_lines():
     assert by_text["Econ 312: Economics of Digital Assets (3 CU)"].section == (
         "Electives (select 2 courses required, 6 CU)")
     assert program.courses[:3] == ("MATH 111", "CS 170", "CS 370")
+
+
+def test_parse_program_rejects_a_numeric_degree_and_uses_the_title_marker():
+    text = ("ANTHROPOLOGY AND HUMAN BIOLOGY (BS)\nDEGREE AWARDED 85\n"
+            "HOURS TO COMPLET 56\nCOURSES REQUIRED 16\n"
+            "DEPARTMENT CONTACT Anthropology\nRequirements\n• ANT 101\n")
+    program = parse_program("ANTHROPOLOGY AND HUMAN BIOLOGY (BS)", text)
+    assert (program.kind, program.degree, program.hours, program.courses_required,
+            program.department) == ("major", "BS", "56", "16", "Anthropology")
 
 
 def test_parse_program_tolerates_catalog_metadata_typos():
@@ -313,6 +326,72 @@ def test_program_binds_only_to_its_exact_current_source(db, collection, tmp_path
         assert unsupported == []
     else:
         assert [row["text"] for row in unsupported] == ["CS 171"]
+
+
+@pytest.mark.parametrize("stage", ["draft", "approve", "publish"])
+def test_rule_release_requires_verified_title_and_degree_identity(
+        db, collection, tmp_path, stage):
+    from fastapi import HTTPException
+
+    from app.programs.review_service import ProgramReviewService
+
+    title = "Computer Science (BS)"
+    identity = _ingest_catalog_file(db, collection, tmp_path, title, CS_BS)
+    record = to_record(parse_program(title, CS_BS), catalog="Test Catalog",
+                       source_url="https://example.test/catalog.pdf", first_page=3, last_page=4)
+    record["source"] = identity
+    path = tmp_path / "programs.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    import_programs(db, collection_id=collection, path=path)
+    pid = program_id(collection, title)
+
+    if stage == "draft":
+        # The title says BS, but the source header reports 85. Parsing the title
+        # as a fallback must not make the degree releasable.
+        malformed = CS_BS.replace("DEGREE AWARDED BS", "DEGREE AWARDED 85")
+        identity = _ingest_catalog_file(db, collection, tmp_path, title, malformed,
+                                        name="malformed-degree.md")
+        record = to_record(parse_program(title, malformed), catalog="Test Catalog",
+                           source_url="https://example.test/catalog.pdf",
+                           first_page=3, last_page=4)
+        record["source"] = identity
+        path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        import_programs(db, collection_id=collection, path=path)
+        with pytest.raises(HTTPException, match="identity evidence"):
+            ProgramReviewService.create_rule_draft(db, pid, None)
+        return
+
+    release = ProgramReviewService.create_rule_draft(db, pid, None)
+    if stage == "publish":
+        ProgramReviewService.approve_rule_release(db, release["release_id"], None)
+    db.execute(
+        "DELETE FROM program_field_evidence WHERE program_id = %s AND field = 'degree'", (pid,),
+    )
+    with pytest.raises(HTTPException, match="identity evidence"):
+        if stage == "approve":
+            ProgramReviewService.approve_rule_release(db, release["release_id"], None)
+        else:
+            ProgramReviewService.publish_rule_release(db, release["release_id"], None)
+
+
+def test_rule_release_allows_unresolved_requirement_items_with_supported_identity(
+        db, collection, tmp_path):
+    from app.programs.review_service import ProgramReviewService
+
+    title = "Computer Science (BS)"
+    identity = _ingest_catalog_file(db, collection, tmp_path, title, CS_BS)
+    projected = CS_BS.replace("• CS 170", "• CS 171")
+    record = to_record(parse_program(title, projected), catalog="Test Catalog",
+                       source_url="https://example.test/catalog.pdf", first_page=3, last_page=4)
+    record["source"] = identity
+    path = tmp_path / "programs.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    assert import_programs(db, collection_id=collection, path=path)["evidence_unresolved"] == 1
+
+    pid = program_id(collection, title)
+    release = ProgramReviewService.create_rule_draft(db, pid, None)
+    assert ProgramReviewService.approve_rule_release(db, release["release_id"], None)["status"] == "approved"
+    assert ProgramReviewService.publish_rule_release(db, release["release_id"], None)["status"] == "published"
 
 
 @pytest.mark.parametrize("change", ["same", "changed", "removed", "unbound"])

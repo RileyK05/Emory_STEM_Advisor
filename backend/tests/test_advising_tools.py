@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.atlas.requisites import AllOf, AnyOf, CourseRef
+from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef
 from app.config import load_settings
 from app.generation.answer import answer_from_context
 from app.generation.answer_tools import answer_tool_context
@@ -88,17 +88,39 @@ def test_unresolved_or_is_never_chosen_and_missing_course_is_an_evidence_gap():
     }
 
 
-def test_missing_requisite_evidence_blocks_sequence_and_narrow_scope_cannot_inherit_it():
+def test_advising_sequence_tool_serializes_compound_and_choices_without_flattening():
+    chunks, context = _fixture()
+    context["courses"][2]["prerequisites"] = AnyOf((
+        AllOf((CourseRef("MATH 111"), CourseRef("MATH 112"))),
+        Condition("equivalent transfer credit"),
+    ))
+    registry, scope, _ = _tools(chunks, context)
+    result = registry.invoke("advisor_plan_course_sequence", {
+        "resource_ids": [str(chunk.chunk_id) for chunk in chunks],
+        "selected_codes": ["MATH 211"],
+    }, scope)
+    blocker = next(item for item in result.blockers if item.reason == "alternative_required")
+    assert blocker.alternatives == []
+    assert blocker.alternative_groups == [
+        ["MATH 111", "MATH 112"], ["equivalent transfer credit"],
+    ]
+    assert blocker.alternative_groups_truncated is False
+
+
+@pytest.mark.parametrize("blocker_reason", [
+    "requirements_evidence_missing", "description_requirement_unparsed",
+])
+def test_missing_requisite_evidence_blocks_sequence_and_narrow_scope_cannot_inherit_it(blocker_reason):
     chunks, context = _fixture()
     course = context["courses"][1]
     course.update(parse_status="unparsed", prerequisites=None, requisites_raw=None,
-                  requirements_evidence_complete=False, blocker_reason="requirements_evidence_missing")
+                  requirements_evidence_complete=False, blocker_reason=blocker_reason)
     registry, scope, _ = _tools(chunks, context)
     result = registry.invoke("advisor_plan_course_sequence", {
         "resource_ids": [str(chunk.chunk_id) for chunk in chunks], "selected_codes": ["MATH 112"],
     }, scope)
     assert result.stages == [] and not result.complete
-    assert result.blockers[0].reason == "requirements_evidence_missing"
+    assert result.blockers[0].reason == blocker_reason
 
     context["courses"][2]["citation_numbers"] = (2, 3)
     registry, scope, _ = _tools(chunks, context)

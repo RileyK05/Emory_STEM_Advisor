@@ -387,7 +387,8 @@ export function CourseMaintenancePanel() {
           )}
           {preview.dependents.length > 0 && (
             <p>
-              Dependent courses: <span className="mono">{preview.dependents.map((row) => row.code).join(', ')}</span>
+              Courses mentioning this code:{' '}
+              <span className="mono">{preview.dependents.map((row) => row.code).join(', ')}</span>
             </p>
           )}
           <p>
@@ -426,21 +427,22 @@ export function CourseMaintenancePanel() {
           </p>
           <p>Requisites: {detail.course.requisitesRaw || '—'}</p>
           <p>
-            Resolved prerequisites:{' '}
+            Course references with matching records:{' '}
             {detail.mentions
               .filter((row) => row.resolved)
               .map((row) => row.targetCode)
               .join(', ') || '—'}
           </p>
           <p>
-            Unresolved prerequisites:{' '}
+            Course references without matching records:{' '}
             {detail.mentions
               .filter((row) => !row.resolved)
               .map((row) => row.targetCode)
               .join(', ') || '—'}
           </p>
           <p>Referenced by programs: {detail.programs.map((row) => row.title).join('; ') || '—'}</p>
-          <p>Required by courses: {detail.dependents.map((row) => row.code).join(', ') || '—'}</p>
+          <p>Courses mentioning this code: {detail.dependents.map((row) => row.code).join(', ') || '—'}</p>
+          <p>References can include alternatives, recommendations, or exclusions; check the source wording.</p>
           <h5>Change history</h5>
           {detail.changes.length === 0 ? (
             <p>No recorded changes.</p>

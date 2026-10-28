@@ -2748,7 +2748,7 @@ test('desktop, phone, and tablet viewports keep long chat lists separate from re
           `${await button.innerText()} is covered at ${size.width}px`,
         );
       }
-      await chats.getByRole('button').last().click();
+      await chats.locator('.chat-list-row > button:first-child').last().click();
       if (size.width < 900) await page.getByRole('button', { name: 'Open menu' }).click();
       await openSidebar(page, /^Sources/);
       await page.getByRole('heading', { name: 'Your sources' }).waitFor();
@@ -4401,3 +4401,4 @@ test('student exports private data without leaving the download token on screen'
     await context.close();
   }
 });
+

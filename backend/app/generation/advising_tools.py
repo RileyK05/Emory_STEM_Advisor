@@ -17,7 +17,7 @@ from app.tools.registry import (
     ToolSpec,
 )
 
-ADVISING_TOOLS_VERSION = "2"
+ADVISING_TOOLS_VERSION = "3"
 
 
 def _course_code(value: str) -> str:
@@ -81,7 +81,14 @@ class RequirementsEvidence(CourseEvidence):
 class Blocker(ToolOutputModel):
     code: str
     reason: str
-    alternatives: list[str] = Field(default_factory=list)
+    alternatives: list[str] = Field(default_factory=list, description="Simple OR choices only; empty for compound grouped alternatives.")
+    alternative_groups: list[list[str]] = Field(
+        default_factory=list,
+        description="Grouped alternatives: each inner list is AND; the outer list is OR.",
+    )
+    alternative_groups_truncated: bool = Field(
+        default=False, description="True when additional alternative groups were omitted from this bounded report."
+    )
 
 
 class RequirementsOutput(ToolOutputModel):
@@ -228,7 +235,9 @@ def advising_specs(context: dict | None, chunks: list[CitedChunk]) -> tuple[Tool
             elif reason == "requirements_unparsed" and item.code in courses:
                 reason = courses[item.code]["blocker_reason"] or reason
             blockers.append(Blocker(code=item.code, reason=reason,
-                                    alternatives=list(item.alternatives)))
+                                    alternatives=list(item.alternatives),
+                                    alternative_groups=[list(group) for group in item.alternative_groups],
+                                    alternative_groups_truncated=item.alternative_groups_truncated))
         return SequenceOutput(
             stages=[list(stage) for stage in plan.stages], blockers=blockers,
             complete=plan.complete, assumed_completed_codes=sorted(set(value.completed_codes)),

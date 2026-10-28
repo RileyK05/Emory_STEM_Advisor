@@ -1,5 +1,7 @@
 """Keyword seam tests against a real Postgres. No models load."""
 
+import json
+
 import pytest
 
 from app.retrieval.config import KeywordSeamConfig
@@ -70,3 +72,44 @@ def test_min_token_len_respected(db, collection, tmp_path):
     ingest_text(db, collection, tmp_path, "a.txt", "alpha to beta\n")
     result = keyword_seam(db, collection, "to", _config(min_token_len=3))
     assert result.state == "dormant"
+
+
+def test_continuation_chunk_matches_its_section_heading(db, collection, tmp_path):
+    from uuid import uuid4
+
+    from app.db import queries
+
+    source_id = ingest_text(db, collection, tmp_path, "policy.md", "Body without the section words.\n")
+    locator_id, chunk_id = uuid4(), uuid4()
+    db.execute(queries.get("insert_locator"), {
+        "locator_id": locator_id, "source_id": source_id, "ordinal": 1,
+        "locator_type": "section", "label": "Advanced Placement Policy",
+        "start_char": 0, "end_char": 10,
+    })
+    db.execute(queries.get("insert_chunk"), {
+        "chunk_id": chunk_id, "source_id": source_id, "locator_id": locator_id,
+        "chunk_index": 99, "start_char": 0, "end_char": 10, "token_count": 2,
+        "text": "Body without the section words.",
+    })
+    db.commit()
+    result = keyword_seam(db, collection, "advanced placement policy", _config())
+    assert chunk_id in {candidate.chunk_id for candidate in result.candidates}
+
+
+def test_bound_program_evidence_is_returned_for_a_program_question(db, collection, tmp_path):
+    from app.programs.importer import import_programs
+    from app.programs.requirements import parse_program, to_record
+    from tests.test_programs import CS_BS, _ingest_catalog_file
+
+    identity = _ingest_catalog_file(db, collection, tmp_path, "Computer Science (BS)", CS_BS)
+    record = to_record(parse_program("Computer Science (BS)", CS_BS),
+                       catalog="Test Catalog", source_url="https://example.test/catalog.pdf",
+                       first_page=3, last_page=4)
+    record["source"] = identity
+    path = tmp_path / "programs.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    assert import_programs(db, collection_id=collection, path=path)["bound"] == 1
+
+    result = keyword_seam(db, collection, "Computer Science BS requirements",
+                          _config(limit=40))
+    assert any(candidate.program_evidence for candidate in result.candidates)

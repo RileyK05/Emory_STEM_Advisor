@@ -8,6 +8,7 @@ nothing here asserts that a cited passage supports a claim.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,35 @@ def _decision(**kwargs) -> FinalDecision:
     kwargs.setdefault("outcome", "recommendation")
     kwargs.setdefault("completeness", "complete")
     return FinalDecision(**kwargs)
+
+
+def test_research_preparation_serializes_bounded_grouped_alternatives(monkeypatch):
+    from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef
+    from app.generation import research_tools
+    from app.generation.research_tools import PreparationInput, ResearchSession
+
+    requirement = AnyOf((AllOf((CourseRef("MATH 111"), CourseRef("MATH 112"))),
+                         Condition("equivalent transfer credit"),
+                         *(CourseRef(f"X {index}") for index in range(140))))
+    monkeypatch.setattr(research_tools, "read_courses", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(research_tools, "load_advising_context", lambda *_args, **_kwargs: {
+        "courses": [{"code": "ECON 201", "title": "Economics", "parse_status": "parsed",
+                     "requirements_evidence_complete": True, "prerequisites": requirement,
+                     "corequisites": None, "requisites_raw": "test", "blocker_reason": None}],
+    })
+    session = ResearchSession.__new__(ResearchSession)
+    session.conn = SimpleNamespace(commit=lambda: None)
+    session.scope = SimpleNamespace(collection_id="collection", sources={})
+    session.acquire = lambda *_args, **_kwargs: []
+    session.checks = {}
+    session.store = SimpleNamespace(record_action=lambda *_args, **_kwargs: None)
+    session.run = SimpleNamespace(run_id="run")
+    result = session.preparation(PreparationInput(selected_codes=["ECON 201"], completed_codes=[]), None)
+    blocker = next(item for item in result.data["blockers"] if item["reason"] == "alternative_required")
+    assert blocker["alternative_groups"][0] == ["MATH 111", "MATH 112"]
+    assert blocker["alternatives"] == []
+    assert blocker["alternative_groups_truncated"] is True
+    assert len(blocker["alternative_groups"]) == 128
 
 
 @pytest.mark.parametrize(
@@ -156,9 +186,31 @@ def test_cited_program_requirement_is_a_mention_not_an_unread_recommendation():
     # CS 370 is not in the cited program evidence, so it still needs its own read.
     with pytest.raises(DecisionRejected, match="read recommended course CS 370"):
         validate_final(decision, state, [record], {"e1"}, {})
-    # CHEM 150 is a cited program requirement mention, not an unread recommendation.
-    mentioned_only = decision.model_copy(update={"recommended_course_codes": ("CHEM 150",)})
+    # A program mention can be stated as a sourced fact, but a course listed as
+    # recommended requires its own read, including when the mention is positive.
+    mentioned_only = decision.model_copy(update={"recommended_course_codes": ()})
     validate_final(mentioned_only, state, [record], {"e1"}, {})
+    recommended = decision.model_copy(update={"recommended_course_codes": ("CHEM 150",)})
+    with pytest.raises(DecisionRejected, match="read recommended course CHEM 150"):
+        validate_final(recommended, state, [record], {"e1"}, {})
+    course = record.model_copy(update={"evidence_id": "e2", "source_name": "CHEM 150",
+                                       "exact_text": "CHEM 150: Introductory Chemistry.",
+                                       "entity_refs": ("CHEM 150",)})
+    supported = recommended.model_copy(update={"blocks": (
+        DecisionBlock(kind="fact", text="CHEM 150 is required.", evidence_ids=("e1", "e2")),
+        DecisionBlock(kind="judgment", text="Chemistry fits you.", candidate_ids=("bio",),
+                      evidence_ids=("e1",)),
+    )})
+    validate_final(supported, state, [record, course], {"e1", "e2"}, {})
+    excluded = record.model_copy(update={"exact_text": "Electives exclude BIOL 120."})
+    excluded_decision = decision.model_copy(update={
+        "recommended_course_codes": ("BIOL 120",),
+        "blocks": (DecisionBlock(kind="fact", text="BIOL 120 is excluded.", evidence_ids=("e1",)),
+                   DecisionBlock(kind="judgment", text="Biology fits you.", candidate_ids=("bio",),
+                                 evidence_ids=("e1",))),
+    })
+    with pytest.raises(DecisionRejected, match="read recommended course BIOL 120"):
+        validate_final(excluded_decision, state, [excluded], {"e1"}, {})
 
 
 def test_fact_block_cannot_name_a_course_absent_from_its_cited_evidence():
@@ -305,6 +357,24 @@ def test_context_compaction_preserves_exact_passages_and_accounts_omission_metad
     source_notice = context["source_scope_notices"][0]
     assert set(source_notice["evidence_ids"]) == supplied
     assert notice in source_notice["notices"]
+
+    # Explicit sequence requests retain the deterministic check tool while
+    # initial working state is being established. This prevents a malformed
+    # optional state proposal from blocking the requested check.
+    sequence_registry = session.registry()
+    compact_limit = session.settings.research_max_prompt_bytes
+    session.settings = replace(session.settings, research_max_prompt_bytes=100_000)
+    sequence_request, sequence_user = ResearchController().request(
+        session, sequence_registry, "Use the deterministic sequence tool for CS 350 prerequisites",
+        history, [], "", False, state_required=True)
+    sequence_context = json.loads(sequence_user)
+    assert sequence_context["state_update_requested"] is True
+    assert "advisor_check_preparation" in {tool.name for tool in sequence_request.tools}
+    factual_request, _ = ResearchController().request(
+        session, sequence_registry, "What does CS 350 cover?", history, [], "", False,
+        state_required=True)
+    assert "advisor_check_preparation" not in {tool.name for tool in factual_request.tools}
+    session.settings = replace(session.settings, research_max_prompt_bytes=compact_limit)
     # A read of a previously omitted chunk promotes its existing server-issued
     # ID; it does not authorize other omitted chunks or synthesize a new passage.
     reread = records[-1]

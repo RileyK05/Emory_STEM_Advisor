@@ -8,6 +8,11 @@ VALUES (
     %(config_version)s, %(embed_model)s, %(refused)s
 );
 
+-- name: update_trace_timings
+UPDATE retrieval_traces
+SET timings = %(timings)s::jsonb
+WHERE trace_id = %(trace_id)s;
+
 -- name: insert_trace_seam
 INSERT INTO trace_seams (
     trace_id, seam, enabled, state, reason, candidate_count

@@ -36,13 +36,11 @@ _PREREQUISITE = re.compile(r"\b(?:prerequisite|prerequisites|requisite|requisite
 
 
 def _program_requirement_mentions(records, cited: set[str]) -> set[str]:
-    """Codes a cited program read establishes as requirements.
+    """Codes mentioned in cited program reads, including alternatives and exclusions.
 
-    Naming such a code is a requirement mention, not a recommendation to enroll;
-    only codes absent from cited program evidence need a separate course read.
-    Program evidence carries the issued program handle as an entity reference,
-    while course evidence carries the course codes. The program parser's own
-    extractor handles catalog shorthand such as ``BIOL 141/141L``.
+    A mention alone does not prove eligibility or support a course recommendation.
+    Program evidence carries the issued program handle as an entity reference;
+    the parser handles catalog shorthand such as ``BIOL 141/141L``.
     """
     mentioned: set[str] = set()
     for evidence_id in cited:
@@ -78,7 +76,6 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
     refs = {ref for e in cited if e in records for ref in records[e].entity_refs}
     if entity_evidence is not None:
         refs = {entity for entity, ids in entity_evidence.items() if ids & cited}
-    requirement_mentions = _program_requirement_mentions(records, cited)
     for block in decision.blocks:
         if block.kind != "fact" or not _INCLUSION.search(block.text):
             continue
@@ -128,8 +125,8 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
         code = normalize_code(requested)
         if code is None:
             problems.append(f"invalid recommended course code {requested!r}")
-        elif code in refs or code in requirement_mentions:
-            continue  # read, or a cited program requirement mention rather than a recommendation
+        elif code in refs:
+            continue  # A cited course read, not merely a program mention.
         elif not any(
             b.kind == "limitation" and code in b.text
             and re.search(r"missing|unavailable|unknown|not read", b.text, re.IGNORECASE)

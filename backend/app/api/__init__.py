@@ -6,12 +6,20 @@ Providers are constructed once at startup and stored on `app.state`:
 - `override_conn` — optional; tests set it to borrow their DB fixture.
 """
 
-from threading import Lock
+from threading import Lock, Thread
 
 from fastapi import FastAPI
 
 from app.config import Settings
 from app.retrieval.config import RetrievalConfig
+
+
+def _warm_embedder(embedder) -> None:
+    """Load the embedding model off the request path when explicitly opted in."""
+    try:
+        embedder.embed_query("startup warmup")
+    except Exception:  # noqa: BLE001 - a warmup failure must not affect serving
+        return
 
 
 def _office_runner(settings: Settings):
@@ -156,6 +164,9 @@ def create_app(
     state.settings = runtime.settings
     state.config = runtime.config
     state.embedder = runtime.embedder
+    if state.settings.embedder_warmup_on_startup:
+        Thread(target=_warm_embedder, args=(state.embedder,), daemon=True,
+               name="embedder-warmup").start()
     state.provider = runtime.provider
     state.provider_error = runtime.provider_error
     state.connection_profiles = runtime.connection_profiles

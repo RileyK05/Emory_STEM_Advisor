@@ -26,8 +26,24 @@ from app.retrieval.types import Candidate, SeamResult
 _TAIL = r"\d{2,4}(?:[A-Z][A-Z0-9]{0,7}|[a-z][A-Z]?)?"
 _SUBJECT_RE = re.compile(rf"\b([A-Za-z][A-Za-z0-9]{{0,10}}[A-Za-z](?:_OX)?)\s*({_TAIL})\b")
 _NUMBER_RE = re.compile(rf"\b({_TAIL})\b")
-_CARRY_SEP = re.compile(r"\s*(?:(?:,|/|and|or)\s*)*")
+_CARRY_SEP = re.compile(r"\s*(?:(?:,|/|\+|&|-|–|and|or|plus)\s*)*", re.IGNORECASE)
 _CONJUNCTIONS = frozenset({"and", "or"})
+# Reverse-intent questions ask what a completed course opens, not what it needs.
+# Keep downstream graph hits out of ordinary forward prerequisite questions.
+REVERSE_CITED_SET_SIZE = 12
+
+
+def is_reverse_query(query: str) -> bool:
+    return bool(_REVERSE_RE.search(query))
+
+
+_REVERSE_RE = re.compile(
+    r"\b(?:unlock|opens?\s+(?:up)?|what\s+courses?\s+can\s+I\s+take\s+after|"
+    r"which\s+courses\s+(?:require|need|have|list|name)|"
+    r"what\s+courses\s+(?:require|need|have|list|name)|"
+    r"after\s+(?:I\s+)?(?:complet|finish|tak)(?:e|ed|es|ing)|downstream|reverse\s+prereq)\b",
+    re.IGNORECASE,
+)
 _SUBJECT_ALIASES = {word.lower(): code for word, code in SUBJECT_ALIASES.items()}
 
 
@@ -145,7 +161,7 @@ def prereq_seam(
                         raw_score=config.decay,
                     ),
                 )
-        if "downstream" in config.directions:
+        if "downstream" in config.directions and _REVERSE_RE.search(query):
             for chunk in conn.execute(
                 queries.get("prereq_downstream"), {"course_id": course_id,
                     "collection_id": collection_id, "source_ids": source_ids,
@@ -159,6 +175,7 @@ def prereq_seam(
                         chunk_index=chunk["chunk_index"],
                         seam="prereq",
                         raw_score=config.decay,
+                        prereq_downstream=True,
                     ),
                 )
 

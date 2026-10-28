@@ -212,9 +212,32 @@ def create_backup(
     # take effect. The exported snapshot must stay open until pg_dump finishes,
     # then the read-only transaction is rolled back before returning.
     conn.rollback()
+    # Settle only requests whose bound job is already terminal or missing. This
+    # prevents one crashed stream from blocking every backup without bypassing
+    # live queued/running work. Use a separate short write transaction so the
+    # read-only snapshot below sees one consistent state.
+    from app.conversations.recovery import reconcile_pending_requests
+
+    try:
+        reconcile_pending_requests(conn)
+    except Exception as exc:
+        raise BackupError("backup could not reconcile stale pending requests") from exc
+    conn.rollback()
     conn.execute(queries.get("backup_set_repeatable_read_snapshot"))
     if not conn.execute(queries.get("backup_ready")).fetchone()["ready"]:
-        raise BackupError("backup refused while jobs are queued or running, or model requests remain pending")
+        blockers = [
+            row for row in conn.execute(queries.get("backup_blockers")).fetchall()
+            if row["count"] > 0
+        ]
+        detail = ", ".join(
+            f"{row['count']} {row['kind']} (e.g. {row['sample_id']})"
+            for row in blockers
+        )
+        conn.rollback()
+        raise BackupError(
+            "backup refused while jobs are queued or running, or model requests "
+            "remain pending: " + (detail or "unknown live work")
+        )
     snapshot = conn.execute(queries.get("backup_export_snapshot")).fetchone()["snapshot_id"]
     version = int(conn.execute(queries.get("backup_server_version")).fetchone()["server_version_num"])
     files = _referenced_files(conn, data_dir.resolve())

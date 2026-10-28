@@ -97,6 +97,7 @@ function buildTrace(seed: TraceSeed): RetrievalTrace {
     modelCall,
     warnings: seed.warnings ?? [],
     errors: seed.errors ?? [],
+    timings: { keyword_ms: 5, embed_ms: 8, prereq_ms: 1, fusion_ms: 1, total_ms: 15 },
   };
 }
 
@@ -240,6 +241,8 @@ export class MockClient implements AdvisorClient {
 
   listConversations = unavailable(CONVERSATIONS);
   createConversation = unavailable(CONVERSATIONS);
+  archiveConversation = unavailable(CONVERSATIONS);
+  restoreConversation = unavailable(CONVERSATIONS);
   getConversation = unavailable(CONVERSATIONS);
   startConversationTurnStream = unavailable(CONVERSATIONS);
   getConversationTurnEvents = unavailable(CONVERSATIONS);

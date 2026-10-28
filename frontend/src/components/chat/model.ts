@@ -111,6 +111,12 @@ export interface ChatController {
   changeScope: (scope: SourceScope) => void;
   open: (id: string) => void;
   startNew: () => void;
+  /** Archive a saved chat without deleting its turns. Saved mode only. */
+  archive?: (id: string) => void;
+  archivedConversations?: ConversationSummary[];
+  showArchived?: boolean;
+  toggleArchived?: () => void;
+  restore?: (id: string) => void;
   /** The open chat's id, creating the chat (titled `title`) if it is new. Null in demo mode or on failure. */
   ensureSaved: (title: string) => Promise<string | null>;
   refreshList: () => void;

@@ -1,23 +1,9 @@
 -- name: keyword_search
--- Exact bound program evidence, requested verified checklist metadata, course
--- headings and numeric references outrank topical matches. Lexical rank stays
--- bounded inside each band; single generic title words confer no title band.
-SELECT chunk_id, source_id, chunk_index, program_match,
-       (
-           CASE WHEN program_match THEN 4.0
-                WHEN role_match AND title_matches > 0 THEN 3.5
-                WHEN course_code_heading THEN 3.0
-                WHEN numeric_match THEN 2.0
-                WHEN title_matches >= 2 THEN 2.0
-                WHEN specific THEN 1.0
-                WHEN title_matches > 0 THEN 0.5
-                ELSE 0.0 END
-           + lexical / (1.0 + lexical)
-       )::float8 AS score
-FROM (
+WITH matched AS MATERIALIZED (
     SELECT c.chunk_id,
            c.source_id,
            c.chunk_index,
+           c.locator_id,
            (
                ts_rank_cd(c.search_vector, to_tsquery('english', %(q)s))
                + CASE WHEN c.text ~ %(numeric_pattern)s THEN 1.0 ELSE 0.0 END
@@ -33,11 +19,7 @@ FROM (
            (%(course_code_header_pattern)s::text IS NOT NULL
             AND c.text ~* %(course_code_header_pattern)s::text) AS course_code_heading,
            (%(numeric_pattern)s::text IS NOT NULL
-            AND c.text ~ %(numeric_pattern)s::text) AS numeric_match,
-           (SELECT count(*) FROM unnest(%(title_queries)s::text[]) AS title_query
-            WHERE to_tsvector('english', coalesce(pv.title, '') || ' ' || coalesce(l.label, '') || ' ' ||
-                  regexp_replace(s.filename, '[-_.]', ' ', 'g'))
-                  @@ to_tsquery('english', title_query)) AS title_matches
+            AND c.text ~ %(numeric_pattern)s::text) AS numeric_match
     FROM chunks c
     JOIN sources s ON s.source_id = c.source_id
     JOIN locators l ON l.locator_id = c.locator_id
@@ -45,7 +27,8 @@ FROM (
     LEFT JOIN LATERAL (
         SELECT true AS matched
         FROM programs p
-        WHERE p.collection_id = s.collection_id AND p.source_id = s.source_id
+        WHERE %(program_query)s::text IS NOT NULL
+          AND p.collection_id = s.collection_id AND p.source_id = s.source_id
           AND p.is_active AND p.source_index_revision = s.index_revision
           AND p.binding_status IN ('bound', 'evidence_unresolved')
           AND to_tsvector('english', %(program_query)s)
@@ -61,8 +44,40 @@ FROM (
       AND s.is_current
       AND (s.workspace_key IS NULL OR s.workspace_key = %(workspace_key)s)
       AND (%(source_ids)s::uuid[] IS NULL OR c.source_id = ANY(%(source_ids)s::uuid[]))
-      AND (pm.matched OR c.search_vector @@ to_tsquery('english', %(q)s)
+      AND (pm.matched
+           OR (c.search_vector || to_tsvector('english', coalesce(l.label, '')))
+              @@ to_tsquery('english', %(q)s)
            OR (%(numeric_pattern)s::text IS NOT NULL AND c.text ~ %(numeric_pattern)s::text))
-) matched
-ORDER BY score DESC, source_id, chunk_index
+),
+title_scores AS MATERIALIZED (
+    -- The title vector depends on the source and locator, not the chunk. Build
+    -- it once per candidate locator and compare each title query against that
+    -- vector instead of recomputing to_tsvector inside the unnest loop.
+    SELECT m.locator_id,
+           (SELECT count(*) FROM unnest(%(title_queries)s::text[]) AS title_query
+            WHERE tv.title_vector @@ to_tsquery('english', title_query)) AS title_matches
+    FROM (SELECT DISTINCT locator_id, source_id FROM matched) m
+    JOIN sources s ON s.source_id = m.source_id
+    JOIN locators l ON l.locator_id = m.locator_id
+    LEFT JOIN source_provenance pv ON pv.source_id = m.source_id
+    CROSS JOIN LATERAL (
+        SELECT to_tsvector('english', coalesce(pv.title, '') || ' ' || coalesce(l.label, '') || ' ' ||
+               regexp_replace(s.filename, '[-_.]', ' ', 'g')) AS title_vector
+    ) tv
+)
+SELECT m.chunk_id, m.source_id, m.chunk_index, m.program_match,
+       (
+           CASE WHEN m.program_match THEN 4.0
+                WHEN m.role_match AND t.title_matches > 0 THEN 3.5
+                WHEN m.course_code_heading THEN 3.0
+                WHEN m.numeric_match THEN 2.0
+                WHEN t.title_matches >= 2 THEN 2.0
+                WHEN m.specific THEN 1.0
+                WHEN t.title_matches > 0 THEN 0.5
+                ELSE 0.0 END
+           + m.lexical / (1.0 + m.lexical)
+       )::float8 AS score
+FROM matched m
+JOIN title_scores t ON t.locator_id = m.locator_id
+ORDER BY score DESC, m.source_id, m.chunk_index
 LIMIT %(limit)s;

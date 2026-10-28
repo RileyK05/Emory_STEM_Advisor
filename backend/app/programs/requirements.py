@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from app.atlas.records import normalize_code
 
-PARSER_VERSION = "1"
+PARSER_VERSION = "2"
 
 # Words the catalog uses in place of subject codes. Only exact (case-sensitive)
 # forms listed here are read as subjects when not written in capitals.
@@ -46,7 +46,7 @@ _NUMBER = r"\d{3}(?:[A-Z]{1,2}|[a-z][A-Z]?)?"
 # Lines at least this long were cut by the PDF's page width (see parse_program).
 _WRAP_WIDTH = 80
 # "ENVS OX 230" is how the catalog sometimes writes ENVS_OX 230.
-_SUBJECT_WORD = r"[A-Z]{2,7}(?:_OX|\s+OX(?=\s?\d))?|[A-Z][a-z]{1,10}"
+_SUBJECT_WORD = r"[A-Z]{2,7}(?:_OX|\s+OX(?=\s?\d))?|[A-Z][a-z]{1,20}"
 _SUBJECTS = rf"(?P<subjects>(?:{_SUBJECT_WORD})(?:\s*/\s*(?:{_SUBJECT_WORD}))*)"
 _CODE_RE = re.compile(rf"\b{_SUBJECTS}\s?(?P<number>{_NUMBER})\b")
 _BARE_RE = re.compile(rf"\b(?P<number>{_NUMBER})\b")
@@ -63,8 +63,10 @@ _CHOOSE_RES = (
     # or an unrelated number hijack the count.
     re.compile(rf"\b{_COUNT}\b(?:\s*\(\d+\))?(?:\s+(?:courses?|classes?))?"
                rf"\s+(?:from|of)\s+the\s+following", re.IGNORECASE),
-    re.compile(rf"\b(?:select|choose)\s+{_COUNT}\b", re.IGNORECASE),
-    re.compile(rf"\b{_COUNT}\s+courses?\s+(?:chosen\s+)?from\b", re.IGNORECASE),
+    re.compile(rf"\b(?:select|choose)\s+{_COUNT}\b"
+               rf"(?!\s+(?:courses?\s+)?from\s+each\b)", re.IGNORECASE),
+    re.compile(rf"\b{_COUNT}\s+courses?\s+(?:chosen\s+)?from\b(?!\s+each\b)",
+               re.IGNORECASE),
 )
 # A section heading such as "Mathematics (3 courses required, 11 CU)".
 _SECTION_COUNT_RE = re.compile(r"\(\s*(?:select\s+)?\d+[^)]*required", re.IGNORECASE)
@@ -180,11 +182,31 @@ def choose_count(text: str) -> int | None:
     return None
 
 
+def _degree_from_title(title: str) -> str | None:
+    match = re.search(r"\(([A-Za-z][A-Za-z/&+ ]{0,14})\)\s*$", title)
+    return match.group(1).strip() if match else None
+
+
+def _degree(value: str | None, title: str) -> str | None:
+    """Keep a degree label only when it is a label, not a stray page number.
+
+    The published catalog has at least one malformed ``DEGREE AWARDED 85`` line.
+    The title's ``(BS)`` marker is the deterministic fallback; a numeric value is
+    never a degree.
+    """
+    candidate = (value or "").strip()
+    if candidate and re.fullmatch(r"[A-Za-z][A-Za-z/&+ ]{0,14}", candidate):
+        return candidate
+    return _degree_from_title(title)
+
+
 def _kind(title: str, degree: str | None) -> str:
     upper = title.upper()
     if "(MINOR)" in upper:
         return "minor"
     if "MAJOR" in upper or (degree and degree.upper() in {"BA", "BS", "BBA"}):
+        return "major"
+    if _degree_from_title(title) is not None:
         return "major"
     return "other"
 
@@ -244,8 +266,9 @@ def parse_program(title: str, text: str) -> Program:
             continue
         items.append((section, _BULLET_RE.sub("", line) if _BULLET_RE.match(line) else line))
 
-    program = Program(title=title, kind=_kind(title, meta.get("degree")),
-                      degree=meta.get("degree"), hours=meta.get("hours"),
+    degree = _degree(meta.get("degree"), title)
+    program = Program(title=title, kind=_kind(title, degree),
+                      degree=degree, hours=meta.get("hours"),
                       courses_required=meta.get("courses_required"),
                       department=meta.get("department"))
     for position, (item_section, item_text) in enumerate(items):

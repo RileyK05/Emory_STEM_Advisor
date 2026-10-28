@@ -6,7 +6,9 @@ Enforces zero-LLM deterministic extraction, exact source binding validation,
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
@@ -72,6 +74,73 @@ def _locked_release(conn, release_id, expected_program_id=None):
     return conn.execute(queries.get("lock_program_rule_release"), {"release_id": release_id}).fetchone()
 
 
+def _require_identity_evidence(conn, program):
+    """Require exact current-source support for every declared identity field.
+
+    Requirement clauses may remain unresolved for human review, but a release
+    cannot freeze a title or degree inferred from somewhere other than its
+    indexed source header.
+    """
+    rows = conn.execute(queries.get("list_program_identity_evidence"), {
+        "program_id": program["program_id"],
+    }).fetchall()
+    expected = {"title": program["title"]}
+    if program["degree"]:
+        expected["degree"] = program["degree"]
+    grouped = {field: [] for field in expected}
+    for row in rows:
+        field = row["field"]
+        if field not in expected:
+            continue
+        start, end = row["span_start"], row["span_end"]
+        chunk_text = row["chunk_text"]
+        if (row["source_id"] != program["source_id"]
+                or row["chunk_source_id"] != program["source_id"]
+                or row["source_index_revision"] != program["source_index_revision"]
+                or row["chunk_start_char"] is None
+                or start is None or end is None or start < 0 or end <= start
+                or end > len(chunk_text)):
+            raise HTTPException(409, f"program identity evidence is invalid for: {field}")
+        span = chunk_text[start:end]
+        if hashlib.sha256(span.encode("utf-8")).hexdigest() != row["text_digest"]:
+            raise HTTPException(409, f"program identity evidence is invalid for: {field}")
+        grouped[field].append((row["ordinal"], row["chunk_start_char"] + start, span))
+    supported = set()
+    for field, pieces in grouped.items():
+        if not pieces:
+            continue
+        pieces.sort(key=lambda piece: piece[0])
+        if [piece[0] for piece in pieces] != list(range(len(pieces))):
+            continue
+        assembled = pieces[0][2]
+        previous_end = pieces[0][1] + len(pieces[0][2])
+        valid = True
+        for _ordinal, source_start, span in pieces[1:]:
+            gap = source_start - previous_end
+            if gap < 0 or gap > 2:
+                valid = False
+                break
+            assembled += "\n" * gap + span
+            previous_end = source_start + len(span)
+        if not valid:
+            continue
+        if field == "title":
+            matches = " ".join(expected[field].split()).casefold() == " ".join(assembled.split()).casefold()
+        else:
+            header = re.match(r"^D\w*GREE\s+A\w*RDED(?![A-Z])\s*", assembled, re.IGNORECASE)
+            matches = bool(header and assembled[header.end():].strip().casefold()
+                           == expected[field].strip().casefold())
+        if matches:
+            supported.add(field)
+    missing = set(expected) - supported
+    if missing:
+        names = ", ".join(sorted(missing))
+        raise HTTPException(
+            409,
+            f"program identity evidence is incomplete or invalid for: {names}",
+        )
+
+
 class ProgramReviewService:
     @staticmethod
     def get_program_inspection(conn, program_id: UUID) -> dict:
@@ -129,6 +198,8 @@ class ProgramReviewService:
                 409,
                 "stale evidence prevents release: bound source is missing or no longer current",
             )
+
+        _require_identity_evidence(conn, program)
 
         raw_items = conn.execute(
             queries.get("list_program_items_for_inspection"), {"program_id": program_id}
@@ -194,7 +265,8 @@ class ProgramReviewService:
         *, expected_program_id: UUID | None = None,
     ) -> dict:
         release = _locked_release(conn, release_id, expected_program_id)
-        _current_program(conn, release["program_id"], release)
+        program = _current_program(conn, release["program_id"], release)
+        _require_identity_evidence(conn, program)
         if release["status"] not in ("draft", "reviewing"):
             raise HTTPException(
                 409, f"cannot approve release with status '{release['status']}'"
@@ -233,7 +305,8 @@ class ProgramReviewService:
         *, expected_program_id: UUID | None = None,
     ) -> dict:
         release = _locked_release(conn, release_id, expected_program_id)
-        _current_program(conn, release["program_id"], release)
+        program = _current_program(conn, release["program_id"], release)
+        _require_identity_evidence(conn, program)
         if release["status"] != "approved":
             raise HTTPException(
                 409, f"cannot publish release with status '{release['status']}'"

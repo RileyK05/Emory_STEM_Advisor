@@ -16,6 +16,9 @@ class Candidate:
     seam: str
     raw_score: float
     program_evidence: bool = False
+    # Set only for a reverse-intent downstream prerequisite hit. Fusion uses
+    # this to keep downstream courses from being displaced by program prose.
+    prereq_downstream: bool = False
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,8 @@ class RetrievalTrace:
     # tracking being unavailable) without rebuilding the trace. It is copied
     # into the response trace by the API serializers.
     warnings: list[str] = field(default_factory=list)
+    # Retrieval-stage wall times in milliseconds. Diagnostic only; not evidence.
+    timings: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

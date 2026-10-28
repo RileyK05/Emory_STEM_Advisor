@@ -17,9 +17,11 @@ from dataclasses import replace
 
 from app.auth.housekeeping import PURGE_INTERVAL_SECONDS, purge_expired_auth
 from app.config import configure_runtime_database, load_settings
+from app.conversations.recovery import reconcile_pending_requests
 from app.db.bootstrap import prepare_database
 from app.db.connection import connector, open_connection, resolved_database_url
 from app.generation.artifacts import build_worker_handlers
+from app.jobs.dispatch import KindDispatchingExecutor
 from app.jobs.runtime import RunExecutor
 from app.jobs.store import JobStore, LeaseLost
 from app.jobs.worker import run_once
@@ -54,6 +56,19 @@ def _prune_quotas_if_due(connect_fn, next_prune: float) -> float:
     except Exception as exc:  # noqa: BLE001 - maintenance must not stop claims
         print(f"quota/privacy prune failed: {type(exc).__name__}", file=sys.stderr)
     return time.monotonic() + 3600
+
+
+def _reconcile_conversations(connect_fn) -> None:
+    """Settle turns whose bound job is already terminal or missing."""
+    try:
+        with connect_fn() as conn:
+            settled = reconcile_pending_requests(conn)
+        if settled:
+            sample = ", ".join(item["requestId"] for item in settled[:10])
+            print(f"settled {len(settled)} stale conversation request(s): {sample}",
+                  file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 - housekeeping must not stop claims
+        print(f"conversation reconciliation failed: {type(exc).__name__}", file=sys.stderr)
 
 
 def _purge_auth_if_due(connect_fn, next_purge: float) -> float:
@@ -97,25 +112,15 @@ def main() -> None:
         settings = replace(settings, database_url=dsn)
         handlers = build_worker_handlers(settings)
         artifact_executor = RunExecutor(handlers.artifacts, data_dir=settings.data_dir)
-        conversation_executor = handlers.conversation
-
-        class AdvisorExecutor:
-            def __call__(self, job, context):
-                if job.kind == "conversation.turn":
-                    return conversation_executor(job, context)
-                return artifact_executor(job, context)
-
-            def publish_success(self, conn, job, value):
-                if job.kind == "conversation.turn":
-                    return conversation_executor.publish_success(conn, job, value)
-                return artifact_executor.publish_success(conn, job, value)
-
-        executor = AdvisorExecutor()
+        executor = KindDispatchingExecutor(
+            conversation=handlers.conversation, artifacts=artifact_executor)
         store = JobStore(connector(settings))
 
         if args.once:
             _drain_source_invalidations(connector(settings), args.worker_id)
+            _reconcile_conversations(connector(settings))
             run_once(store, args.worker_id, executor, lease_seconds=args.lease_seconds)
+            _reconcile_conversations(connector(settings))
             return
 
         stop = threading.Event()
@@ -155,6 +160,7 @@ def main() -> None:
                     store.recover_expired(limit=100)
                 except Exception as exc:  # noqa: BLE001 - maintenance must not stop claims
                     print(f"lease recovery failed: {type(exc).__name__}", file=sys.stderr)
+                _reconcile_conversations(connector(settings))
                 stop.wait(5.0)
         except KeyboardInterrupt:
             stop.set()

@@ -59,6 +59,8 @@ export interface RetrievalTrace {
   modelCall: ModelCallInfo;
   warnings: string[];
   errors: string[];
+  /** Retrieval-stage wall times in milliseconds; diagnostic only. */
+  timings: Record<string, number>;
 }
 
 export interface Citation {
@@ -550,6 +552,7 @@ export interface ConversationSummary {
   contextEpoch?: number;
   contextBoundarySequence?: number;
   contextResetAt?: string | null;
+  archivedAt?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -726,8 +729,10 @@ export interface AdvisorClient {
   getEffectiveFlags(): Promise<EffectiveFlagsResponse>;
   listCollections(): Promise<CollectionDoc[]>;
   query(req: QueryRequest): Promise<QueryResponse>;
-  listConversations(): Promise<ConversationSummary[]>;
+  listConversations(archived?: boolean, limit?: number, offset?: number): Promise<ConversationSummary[]>;
   createConversation(request: CreateConversationRequest): Promise<ConversationSummary>;
+  archiveConversation(id: string): Promise<ConversationSummary>;
+  restoreConversation(id: string): Promise<ConversationSummary>;
   getConversation(id: string, after?: number, limit?: number): Promise<ConversationRecord>;
   startConversationTurnStream(id: string, request: ConversationTurnRequest): Promise<ConversationStreamStartResponse>;
   getConversationTurnEvents(

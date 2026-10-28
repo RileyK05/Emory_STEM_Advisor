@@ -299,7 +299,8 @@ def _tool_answer_provider(conn, body, outcome, operation, settings, provider, se
         on_provisional_text=on_provisional_text,
         on_provisional_reset=on_provisional_reset,
         final_repair=(lambda result: citation_repair_hint(
-            result, outcome.chunks, query=body.query, history_context=history_context))
+            result, outcome.chunks, query=body.query,
+            history_context=history_context, identity_only=True))
         if settings.answer_citation_repair_enabled else None,
         required_tool_names=frozenset({"advisor_plan_course_sequence"})
         if _requests_course_sequence(body.query) else frozenset(),
@@ -544,6 +545,7 @@ def query_response(
             on_attempt=None if settings.tools_enabled else account,
             on_provisional_text=(on_provisional_text if not settings.tools_enabled else None),
             repair_citations=settings.answer_citation_repair_enabled and not settings.tools_enabled,
+            repair_identity_only=True,
             on_provisional_reset=on_provisional_reset,
             before_provider_call=lambda: release_borrow(conn),
             system_prompt=system_prompt,

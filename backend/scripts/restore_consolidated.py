@@ -9,6 +9,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from uuid import UUID
 
 from app.db import migrate, queries
 from app.db.connection import connect
@@ -29,6 +30,8 @@ def restore_consolidated(archive_path: Path, target_data: Path) -> dict:
         target = reference = None
         try:
             target = connect(server.get_uri())
+            if not target.execute(queries.get("backup_target_empty")).fetchone()["is_empty"]:
+                raise ValueError("replacement database must be empty before migrations")
             version = int(target.execute(queries.get("backup_server_version")).fetchone()[
                 "server_version_num"])
             if version // 10000 != int(manifest["postgres_server_version_num"]) // 10000:
@@ -55,6 +58,10 @@ def restore_consolidated(archive_path: Path, target_data: Path) -> dict:
             if reference.execute(queries.get("schema_catalog")).fetchall() != target.execute(
                     queries.get("schema_catalog")).fetchall():
                 raise ValueError("backup upgrade and consolidated schema differ")
+            # Migrations seed these tables on a fresh install. The upgraded backup
+            # supplies their complete contents, including any operator changes.
+            target.execute(queries.get("schema_clear_fresh_feature_flags"))
+            target.execute(queries.get("schema_clear_fresh_quota_policies"))
             target.commit()
             # Copy the upgraded reference, not the original pre-upgrade dump:
             # later migrations can drop tables or transform rows (e.g. v033).
@@ -86,11 +93,22 @@ def restore_consolidated(archive_path: Path, target_data: Path) -> dict:
                     shutil.copyfile(Path(temp_name) / "stage" / "files" / rel, final)
                     for source_id in item.get("source_ids", []):
                         target.execute(queries.get("backup_restore_source_path"), {
-                            "source_id": source_id, "raw_path": str(final),
+                            "source_id": UUID(source_id), "raw_path": str(final),
                         })
                     for artifact_id in item.get("artifact_ids", []):
                         target.execute(queries.get("backup_restore_artifact_path"), {
-                            "artifact_id": artifact_id, "original_path": str(final),
+                            "artifact_id": UUID(artifact_id), "original_path": str(final),
+                        })
+                    for ref in item.get("capture_file_refs", []):
+                        target.execute(queries.get("backup_restore_atlas_capture_path"), {
+                            "source_id": UUID(ref["source_id"]),
+                            "capture_set_hash": ref["capture_set_hash"],
+                            "capture_hash": ref["capture_hash"], "raw_path": str(final),
+                        })
+                    for ref in item.get("hold_capture_refs", []):
+                        target.execute(queries.get("backup_restore_requirement_hold_capture_path"), {
+                            "hold_id": UUID(ref["hold_id"]), "capture_hash": ref["capture_hash"],
+                            "raw_path": str(final),
                         })
                 copied_files = _referenced_files(target, target_data)
                 if len(copied_files) != len(manifest["files"]):

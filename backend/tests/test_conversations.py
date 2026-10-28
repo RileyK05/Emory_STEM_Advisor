@@ -706,3 +706,113 @@ def test_conversation_creation_limit_is_enforced(db):
     with pytest.raises(HTTPException) as exc:
         store.create("Two")
     assert exc.value.status_code == 429
+
+
+def test_reconcile_settles_terminal_or_stale_pending_requests_but_not_live_work(
+    db, migrated_dsn,
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.conversations.recovery import reconcile_pending_requests
+
+    store = ConversationStore(db, "development")
+    conversation_id = UUID(store.create("Orphan recovery")["conversationId"])
+    terminal_request = uuid4()
+    accepted = store.begin_stream(
+        conversation_id, terminal_request, 0,
+        {"request": {"query": "will fail"}, "query": "will fail", "effective": {}},
+    )
+    db.commit()
+    assert reconcile_pending_requests(db) == []
+    assert store.get(conversation_id)["pending_request_id"] == terminal_request
+
+    db.execute(
+        "UPDATE jobs SET status='failed', lease_owner=NULL, lease_token=NULL, "
+        "lease_expires_at=NULL, finished_at=now() WHERE job_id=%s",
+        (accepted["job_id"],),
+    )
+    db.commit()
+    settled = reconcile_pending_requests(db)
+    assert [item["requestId"] for item in settled] == [str(terminal_request)]
+    assert store.get(conversation_id)["pending_request_id"] is None
+    assert db.execute(
+        "SELECT state FROM conversation_requests WHERE conversation_id=%s AND request_id=%s",
+        (conversation_id, terminal_request),
+    ).fetchone()["state"] == "failed"
+
+    # A synchronous request with no job is settled only after its deadline.
+    stale_request = uuid4()
+    store.begin(
+        conversation_id, stale_request, store.get(conversation_id)["last_sequence"],
+        {"request": {"query": "old"}, "query": "old", "effective": {}},
+    )
+    db.execute(
+        "UPDATE conversation_requests SET created_at=%s "
+        "WHERE conversation_id=%s AND request_id=%s",
+        (datetime.now(UTC) - timedelta(hours=1), conversation_id, stale_request),
+    )
+    db.commit()
+    assert [item["requestId"] for item in reconcile_pending_requests(db)] == [
+        str(stale_request)
+    ]
+    assert store.get(conversation_id)["pending_request_id"] is None
+
+
+def test_archive_and_restore_free_active_capacity_without_deleting_history(db):
+    store = ConversationStore(db, "development", max_conversations=1)
+    first = store.create("First")
+    first_id = UUID(first["conversationId"])
+    archived = store.archive(first_id)
+    assert archived["archivedAt"] is not None
+    assert store.list() == []
+    assert [item["conversationId"] for item in store.list(archived=True)] == [str(first_id)]
+
+    second = store.create("Second")
+    second_id = UUID(second["conversationId"])
+    with pytest.raises(HTTPException) as exc:
+        store.restore(first_id)
+    assert exc.value.status_code == 429
+    store.archive(second_id)
+    restored = store.restore(first_id)
+    assert restored["archivedAt"] is None
+    assert [item["conversationId"] for item in store.list()] == [str(first_id)]
+    assert store.turns(first_id)["turns"] == []
+
+    with pytest.raises(HTTPException) as missing:
+        ConversationStore(db, "other-workspace").archive(first_id)
+    assert missing.value.status_code == 404
+
+
+def test_archive_refuses_a_pending_turn_and_sending_a_restored_conversation(db):
+    store = ConversationStore(db, "development")
+    conversation_id = UUID(store.create("Pending archive")["conversationId"])
+    request_id = uuid4()
+    store.begin_stream(
+        conversation_id, request_id, 0,
+        {"request": {"query": "pending"}, "query": "pending", "effective": {}},
+    )
+    with pytest.raises(HTTPException) as pending:
+        store.archive(conversation_id)
+    assert pending.value.status_code == 409
+    store.abandon(conversation_id, request_id)
+    store.archive(conversation_id)
+    with pytest.raises(HTTPException) as archived:
+        store.begin(conversation_id, uuid4(), 2,
+                    {"request": {"query": "again"}, "query": "again", "effective": {}})
+    assert archived.value.status_code == 409
+
+
+def test_conversation_archive_and_restore_http_routes(db, collection):
+    client = api_client(db, collection)
+    made = client.post("/api/conversations", json={"title": "Archive route"}).json()
+    path = "/api/conversations/" + made["conversationId"]
+    assert client.get("/api/conversations").json()[0]["conversationId"] == made["conversationId"]
+    archived = client.post(path + "/archive")
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["archivedAt"]
+    assert client.get("/api/conversations").json() == []
+    archived_list = client.get("/api/conversations", params={"archived": True}).json()
+    assert [item["conversationId"] for item in archived_list] == [made["conversationId"]]
+    restored = client.post(path + "/restore")
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["archivedAt"] is None

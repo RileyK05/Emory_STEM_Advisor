@@ -268,7 +268,9 @@ def read_capture(value: Mapping[str, Any]) -> Capture:
             observed_at=observed_at,
             evidence_hash=digest,
             sections=tuple(sections),
-            notes=content(next((n for n in section_nodes if "section--classnotes" in n.classes), None)),
+            notes=content(next((n for n in section_nodes if n.classes & {
+                "section--classnotes", "section--clssnotes",
+            }), None)),
             notices=tuple(notices),
             section_variation_review=is_grouped,
         )

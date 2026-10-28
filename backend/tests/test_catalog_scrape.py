@@ -54,7 +54,8 @@ def test_live_detail_capture_preserves_raw_identity_boundaries_and_restrictions(
     assert len(record.evidence_hash) == 64
 
 
-def test_live_detail_capture_keeps_exact_unusual_code_and_missing_restrictions_distinct():
+@pytest.mark.parametrize("notes_class", ["classnotes", "clssnotes"])
+def test_live_detail_capture_keeps_exact_unusual_code_and_missing_restrictions_distinct(notes_class):
     capture = {
         "kind": "detail", "source_url": "https://atlas.emory.edu/", "term": "Spring 2027",
         "career": "Emory College", "observed_at": "2026-10-20T00:00:00Z", "extra": {},
@@ -62,11 +63,12 @@ def test_live_detail_capture_keeps_exact_unusual_code_and_missing_restrictions_d
           <div class="dtl-section">Class Nbr 77</div><div class="detail-title">A &amp; B \u2014 \u03a9</div>
           <div class="detail-hours_html">Credit Hours: 1</div>
           <div class="section section--description"><div class="section__content">First sentence.\nFull exclusions &amp; details.</div></div>
-          <div class="section section--classnotes"><div class="section__content">All nursing pre-reqs require department permission.</div></div>
+          <div class="section section--NOTES_CLASS"><div class="section__content">All nursing pre-reqs require department permission.</div></div>
           <div class="detail-consent">Department approval required.</div>
           <a class="course-section" data-key="crn:77" data-group="code:RES999PUBH"
              data-matched="crn:77" data-srcdb="5271"><div class="course-section-camp">Campus: ATL</div></a>"""
     }
+    capture["html"] = capture["html"].replace("NOTES_CLASS", notes_class)
     record = read_capture(capture)
     assert isinstance(record, DetailRecord)
     assert record.code == "RES999PUBH"

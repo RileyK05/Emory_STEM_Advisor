@@ -8,7 +8,7 @@ import tempfile
 import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from psycopg.conninfo import make_conninfo
@@ -75,8 +75,19 @@ def short_dir():
 def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_originals(
     db, collection, migrated_dsn, tmp_path, short_dir
 ):
+    from scripts.restore_consolidated import restore_consolidated
+
     data_dir = short_dir / "src"
     target_data = short_dir / "dst"
+    db.execute(queries.get("seed_feature_flags"), {
+        "flag_name": "backup_test_flag", "description": "Restored flag",
+        "env_ceiling_key": None, "default_enabled": True,
+    })
+    db.execute(queries.get("seed_quota_policy"), {
+        "policy_id": uuid4(), "scope_type": "workspace", "scope_id": "backup-test",
+        "queries_per_minute": 17, "queries_per_day": 123, "tokens_per_day": None,
+        "spend_usd_per_day": None, "max_active_jobs": None,
+    })
     raw = b"Stable citation source bytes."
     digest = hashlib.sha256(raw).hexdigest()
     source_id, locator_id, chunk_id = uuid4(), uuid4(), uuid4()
@@ -334,6 +345,38 @@ def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_orig
         target.close()
         _drop_database(migrated_dsn, target_db_name)
 
+    # The consolidated path builds a migrated baseline before importing rows.
+    # It must replace migration seeds with the archive and rebase every file kind.
+    consolidated = short_dir / "consolidated"
+    report = restore_consolidated(archive, consolidated)
+    assert report["row_fingerprints_match"] and report["foreign_keys_valid"]
+    import pgserver
+
+    server = pgserver.get_server(consolidated / "pgserver", cleanup_mode="stop")
+    try:
+        with connect(server.get_uri()) as restored:
+            flag = restored.execute(queries.get("get_feature_flag"), {
+                "flag_name": "backup_test_flag",
+            }).fetchone()
+            assert flag["default_enabled"] is True
+            policy = restored.execute(queries.get("get_quota_policy"), {
+                "scope_type": "workspace", "scope_id": "backup-test",
+            }).fetchone()
+            assert (policy["queries_per_minute"], policy["queries_per_day"]) == (17, 123)
+            capture = restored.execute(queries.get("list_atlas_offering_capture_files"), {
+                "source_id": source_id, "capture_set_hash": capture_set_hash,
+            }).fetchone()
+            expected_capture = consolidated / "raw" / "atlas-captures" / f"{capture_hash}.json"
+            assert Path(capture["raw_path"]) == expected_capture
+            assert expected_capture.read_bytes() == capture_bytes
+            holds = restored.execute(queries.get("backup_requirement_hold_capture_files")).fetchall()
+            for hold in holds:
+                if hold["hold_id"] in {hold_id, released_hold_id}:
+                    assert Path(hold["raw_path"]) == expected_capture
+            assert {hold["hold_id"] for hold in holds} >= {hold_id, released_hold_id}
+    finally:
+        server.cleanup()
+
 
 def test_backup_refuses_pending_decision_before_call_reservation(db, migrated_dsn, tmp_path):
     from app.operations.budget import OperationBudgetController, OperationLimits
@@ -437,3 +480,36 @@ def test_restore_verifier_rejects_corrupted_payload_checksum(tmp_path, corruptio
     message = "failed checksum" if corruption == "checksum" else "invalid"
     with pytest.raises(BackupError, match=message):
         _load_and_verify(archive, tmp_path / "stage")
+
+
+def test_backup_reconciles_terminal_pending_conversation_request(
+    db, migrated_dsn, short_dir,
+):
+    from app.conversations.store import ConversationStore
+
+    store = ConversationStore(db, "backup-stale-conversation")
+    conversation_id = UUID(store.create("Stale stream")["conversationId"])
+    request_id = uuid4()
+    accepted = store.begin_stream(
+        conversation_id, request_id, 0,
+        {"request": {"query": "crash"}, "query": "crash", "effective": {}},
+    )
+    db.execute(
+        "UPDATE jobs SET status='failed', lease_owner=NULL, lease_token=NULL, "
+        "lease_expires_at=NULL, finished_at=now() WHERE job_id=%s",
+        (accepted["job_id"],),
+    )
+    db.commit()
+    assert not db.execute(queries.get("backup_ready")).fetchone()["ready"]
+
+    destination = short_dir / "stale-stream.zip"
+    created = create_backup(
+        db, dsn=migrated_dsn, data_dir=short_dir / "source-data",
+        destination=destination, maintenance_confirmed=True,
+    )
+    assert isinstance(created["files"], list)
+    assert destination.is_file()
+    assert db.execute(
+        "SELECT state FROM conversation_requests WHERE conversation_id=%s AND request_id=%s",
+        (conversation_id, request_id),
+    ).fetchone()["state"] == "failed"

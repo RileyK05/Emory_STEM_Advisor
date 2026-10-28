@@ -600,6 +600,8 @@ def test_granite_rejects_tokenizer_overflow_before_encode(monkeypatch):
     embedder = granite.GraniteEmbedder(settings)
     assert embedder.count_tokens("one two") == 3
     embedder.embed_query("one two")
+    assert embedder.embed_query("one two").shape == (1, 2)
+    assert instances[0].encoded == ["one two"]
     with pytest.raises(ValueError, match="4 tokens.*ceiling is 3"):
         embedder.embed_query("one two three")
     with pytest.raises(ValueError, match="ceiling is 3"):

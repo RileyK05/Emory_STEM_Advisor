@@ -1,7 +1,9 @@
 """Grounded generation through the provider seam; invalid outputs are withheld."""
 
+import base64
 import json
 import re
+import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from uuid import UUID
@@ -150,20 +152,36 @@ def _context_block(chunks: list[CitedChunk], *, include_resource_ids: bool = Fal
 # A paragraph may name a course while saying the passage does not establish it.
 _NONSUPPORT_RE = re.compile(
     r"\b(?:does not support|do not support|not support|no evidence|"
-    r"not in the|cannot determine|not established|not found|does not (?:show|state|describe|list)|"
+    r"not in the|cannot determine|not established|not found|"
+    r"does not (?:show|state|describe|list|include|contain|cover|mention|name)|"
+    r"do not (?:show|state|describe|list|include|contain|cover|mention|name)|"
     r"cannot (?:confirm|verify)|contains no|names no|"
     r"no supplied (?:passage|source)(?:\s+or\s+[a-z][a-z ]{0,60})?\s+"
     r"(?:establishes|names|contains|lists)|"
     r"does not (?:establish|substitute|verify|confirm|validate)|"
     r"cannot (?:establish|substitute|verify|confirm|validate)|"
     r"no basis|gives no basis|neither (?:course )?code (?:appears|is named)|"
-    r"not listed|unresolved here)\b",
+    r"not (?:listed|included|contained|named)|unresolved here|"
+    r"no course (?:numbered|named|coded|listed)|there (?:is|are) no)\b",
     re.IGNORECASE,
 )
 
 
 def _course_codes(text: str, subjects: set[str]) -> set[str]:
     return {code for code in course_codes_in_query(text) if code.split()[0] in subjects}
+
+
+# Reviewed identity-only aliases. Emory renamed the QTM subject to DATASCI and
+# kept the course numbers; the 2026 checklists state that all QTM versions are
+# equivalent to DATASCI versions. This mapping only prevents a false "code not
+# in the passage" rejection; it never creates a requirement or a graph edge.
+_RENAMED_SUBJECTS = {"QTM": "DATASCI", "DATASCI": "QTM"}
+
+
+def _identity_forms(code: str) -> set[str]:
+    subject, _, tail = code.partition(" ")
+    renamed = _RENAMED_SUBJECTS.get(subject)
+    return {code, f"{renamed} {tail}"} if renamed else {code}
 
 
 def _source_course_codes(text: str, subjects: set[str]) -> set[str]:
@@ -174,16 +192,25 @@ def _source_course_codes(text: str, subjects: set[str]) -> set[str]:
         text = re.sub(r"\b(" + "|".join(map(re.escape, names))
                       + r")\s+(\d)[ \t]+(\d{2})(?!\d)", r"\1 \2\3", text,
                       flags=re.IGNORECASE)
-    return _course_codes(text, subjects)
+    return {form for code in _course_codes(text, subjects)
+            for form in _identity_forms(code)}
 
 
 _REPORT_RE = re.compile(
-    r"\b(?:i|we)\s+(?:(?:merely\s+)?report(?:ed)?\s+(?:completing\s+)?|"
-    r"(?:have\s+)?(?:not\s+)?completed\s+)([^.!?;\n]+)", re.IGNORECASE)
-_ATTRIBUTION_RE = re.compile(r"\b(?:you (?:report|reported|completed|took)|"
-                             r"your (?:reported|report)|"
-                             r"student(?:'s)? (?:report|assertion)|reported completions|"
-                             r"report (?:is|was) (?:withdrawn|retracted|corrected))\b", re.IGNORECASE)
+    r"\b(?:(?:i|we)\s+(?:have\s+|had\s+)?"
+    r"(?:taken|took|completed|done|finished|passed)\s+"
+    r"|(?:i've|we've)\s+(?:taken|completed|done|finished|passed)\s+"
+    r"|(?:i|we)\s+(?:(?:merely\s+)?report(?:ed)?\s+(?:completing\s+)?)"
+    r"|done\s*:\s*)([^.!?;\n]+)", re.IGNORECASE)
+# "I have CS 170" is a report only when a code follows immediately.
+_REPORT_HAVE_RE = re.compile(
+    r"\b(?:i|we)\s+have\s+(?=(?:[A-Z]{2,7}|[A-Z][a-z]{1,10})\s+\d)([^.!?;\n]+)",
+    re.IGNORECASE)
+_ATTRIBUTION_RE = re.compile(
+    r"\b(?:you (?:report|reported|completed|took|have(?:\s+(?:taken|completed|done))?|'ve taken)|"
+    r"you've (?:taken|completed|done)|your (?:reported|report)|"
+    r"student(?:'s)? (?:report|assertion)|reported completions|"
+    r"report (?:is|was) (?:withdrawn|retracted|corrected))\b", re.IGNORECASE)
 _RULE_RE = re.compile(r"\b(?:requir\w*|prerequisit\w*|eligib\w*|satisf\w*|"
                       r"counts?|guarante\w*|offered|equival\w*)\b", re.IGNORECASE)
 
@@ -200,7 +227,9 @@ def _reported_codes(query: str, history: str | None, subjects: set[str]) -> set[
                                 and t.get("role") == "user" and isinstance(t.get("text"), str))
         except (ValueError, TypeError):
             pass  # A prose summary cannot authorize a student-report exemption.
-    return {code for message in messages for match in _REPORT_RE.finditer(message)
+    return {code for message in messages
+            for pattern in (_REPORT_RE, _REPORT_HAVE_RE)
+            for match in pattern.finditer(message)
             for code in _course_codes(match.group(1), subjects)}
 
 
@@ -246,14 +275,31 @@ def _cited_chunks(answer: str, chunks: list[CitedChunk]) -> tuple[Citation, ...]
 
 def citation_repair_hint(result: GenerationResult, chunks: list[CitedChunk], *,
                          query: str = "", history_context: str | None = None,
-                         course_subjects: set[str] | None = None) -> str | None:
-    """Only completed, non-refusal text is eligible for one structural rewrite."""
+                         course_subjects: set[str] | None = None,
+                         identity_only: bool = False) -> str | None:
+    """Only completed, non-refusal text is eligible for one structural rewrite.
+
+    ``identity_only`` is the production default: repair a course identity that is
+    present in another supplied block, but never spend a second call on an
+    uncited or empty draft. Structural repair remains available to explicit
+    callers and its own regression tests.
+    """
     if (result.refusal or result.tool_calls or not result.text.strip()
             or result.finish_reason not in {None, "stop", "end_turn", "completed"}):
         return None
     try:
         _cited_chunks(result.text, chunks)
     except InvalidCitation:
+        if identity_only:
+            # A partially cited draft is recoverable; a completely uncited
+            # draft is not. This keeps one bounded repair from becoming a
+            # second call for a content-free or malformed response.
+            try:
+                visible = citation_visible_text(result.text)
+                if not citation_numbers_visible(visible, len(chunks)):
+                    return None
+            except InvalidCitation:
+                return None
         return CITATION_REPAIR_PROMPT
     subjects = set(course_subjects or ()) | set(SUBJECT_ALIASES.values())
     subjects.update(code.split()[0] for chunk in chunks
@@ -322,6 +368,7 @@ def answer_from_context(
     history_context: str | None = None,
     include_resource_ids: bool = False,
     repair_citations: bool = False,
+    repair_identity_only: bool = False,
     on_provisional_reset: Callable[[], None] | None = None,
     before_provider_call: Callable[[], None] | None = None,
     system_prompt: str | None = None,
@@ -353,8 +400,10 @@ def answer_from_context(
         raise
     if on_attempt:
         on_attempt(result, None)  # Account before rejection/repair/return.
-    repair_hint = citation_repair_hint(result, chunks, query=query, history_context=history_context,
-                                       course_subjects=course_subjects) if repair_citations else None
+    repair_hint = citation_repair_hint(
+        result, chunks, query=query, history_context=history_context,
+        course_subjects=course_subjects, identity_only=repair_identity_only,
+    ) if repair_citations else None
     if repair_hint:
         initial_usage = result.usage
         if on_provisional_reset:
@@ -422,6 +471,63 @@ def answer_from_context(
     return replace(answer, citations=citations)
 
 
+_CITATION_MARKER_RE = re.compile(r"\[\s*\d[\d,\s\-–]*\]")
+_VACUOUS_RE = re.compile(
+    r"\b(?:the (?:requirement|answer|information|fact) (?:is|was) "
+    r"(?:stated|provided|found|given) (?:in|by) the (?:source|passage|context|document|evidence)"
+    r"|as stated in the (?:source|passage|context|document)"
+    r"|this is (?:supported|stated|confirmed) by the (?:source|passage|context|document)"
+    r"|see the (?:cited|provided) (?:source|passage|context)"
+    r"|the (?:source|passage|context) states this)\b",
+    re.IGNORECASE,
+)
+
+
+def _content_words(text: str) -> list[str]:
+    """Normalized content words with citation markers, punctuation and joins removed."""
+    text = unicodedata.normalize("NFKC", text)
+    text = _CITATION_MARKER_RE.sub(" ", text)
+    text = text.replace("_", " ")
+    return re.findall(r"[a-z0-9]+", text.casefold())
+
+
+def _shingles(words: list[str], size: int) -> set[tuple[str, ...]]:
+    return {tuple(words[index:index + size]) for index in range(len(words) - size + 1)}
+
+
+def _overlaps_prompt(text: str, prompt: str) -> bool:
+    """Detect a substantial instruction echo after common trivial obfuscations.
+
+    This is a leakage check, not an entailment check.  It compares normalized
+    word shingles, so citation insertions, punctuation, underscore joins and
+    Unicode forms do not hide an echo.  A bounded base64 decode catches the
+    reported encoded-prompt case.
+    """
+    words = _content_words(text)
+    prompt_words = _content_words(prompt)
+    if len(prompt_words) < 8:
+        return False
+    prompt_shingles = _shingles(prompt_words, 5)
+    if len(words) >= 8:
+        if _shingles(words, 8) & _shingles(prompt_words, 8):
+            return True
+        answer_shingles = _shingles(words, 5)
+        if len(answer_shingles) >= 8 and (
+                len(answer_shingles & prompt_shingles) / len(answer_shingles) >= 0.5):
+            return True
+    # A base64 block is only a candidate when it decodes to prompt text.
+    for token in re.findall(r"[A-Za-z0-9+/]{40,}={0,2}", text):
+        try:
+            decoded = base64.b64decode(token, validate=True).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        decoded_shingles = _shingles(_content_words(decoded), 5)
+        if len(decoded_shingles) >= 8 and (
+                len(decoded_shingles & prompt_shingles) / len(decoded_shingles) >= 0.5):
+            return True
+    return False
+
+
 def _reject_unusable(result: GenerationResult, text: str, answer: GeneratedAnswer) -> None:
     """Withhold outputs that are refusals, truncated, filtered, tool requests, or empty."""
     if result.refusal:
@@ -437,10 +543,11 @@ def _reject_unusable(result: GenerationResult, text: str, answer: GeneratedAnswe
     if not text:
         raise GenerationRejected("model returned empty output", answer,
                                  recoverable_integrity=True)
-    # Exact instruction echoes are observable without claiming to judge meaning.
-    # Source quotations and lexical overlap are not entailment tests.
-    words = re.findall(r"\w+", text.casefold())
-    prompt_words = re.findall(r"\w+", answer.system_prompt.casefold())
-    phrases = {tuple(prompt_words[i:i + 12]) for i in range(len(prompt_words) - 11)}
-    if any(tuple(words[i:i + 12]) in phrases for i in range(len(words) - 11)):
+    if _overlaps_prompt(text, answer.system_prompt):
         raise GenerationRejected("model output echoed system instructions", answer)
+    if not _content_words(text):
+        raise GenerationRejected("model returned no substantive answer", answer,
+                                 recoverable_integrity=True)
+    if _VACUOUS_RE.search(_CITATION_MARKER_RE.sub(" ", text)):
+        raise GenerationRejected("model returned a content-free cited reply", answer,
+                                 recoverable_integrity=True)

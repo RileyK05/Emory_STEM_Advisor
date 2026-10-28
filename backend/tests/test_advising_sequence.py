@@ -70,6 +70,91 @@ def test_or_requires_one_explicit_choice_and_never_guesses():
     assert already_done.stages == (("CS 253",),)
 
 
+def test_or_discloses_condition_as_an_alternative_without_requiring_it():
+    courses = {
+        "CS 253": course(
+            "CS 253",
+            prereq=AnyOf((CourseRef("CS 170"), Condition("equivalent transfer credit"))),
+            status="parsed",
+        ),
+    }
+
+    unresolved = plan_sequence(courses, ["CS 253"])
+    completed = plan_sequence(courses, ["CS 253"], ["CS 170"])
+
+    assert not unresolved.complete
+    assert any(b.reason == "alternative_required" and
+               set(b.alternatives) == {"CS 170", "equivalent transfer credit"}
+               for b in unresolved.blockers)
+    assert completed.complete and not completed.blockers
+
+
+def test_or_blocker_preserves_and_groups_and_transfer_condition_branch():
+    courses = {
+        "CS 253": course(
+            "CS 253",
+            prereq=AnyOf((AllOf((CourseRef("CS 253A"), CourseRef("CS 255"))),
+                          Condition("equivalent transfer credit"))),
+            status="parsed",
+        ),
+        "CS 253A": course("CS 253A"),
+        "CS 255": course("CS 255"),
+    }
+    plan = plan_sequence(courses, ["CS 253"])
+    blocker = next(b for b in plan.blockers if b.reason == "alternative_required")
+    assert blocker.alternative_groups == (("CS 253A", "CS 255"), ("equivalent transfer credit",))
+    assert blocker.alternatives == ()
+
+
+def test_partially_completed_and_or_branch_keeps_remaining_requirements_and_other_route():
+    courses = {
+        "CS 253": course(
+            "CS 253",
+            prereq=AnyOf((AllOf((CourseRef("CS 253A"), CourseRef("CS 255"))),
+                          Condition("equivalent transfer credit"))),
+            status="parsed",
+        ),
+        "CS 253A": course("CS 253A"),
+        "CS 255": course("CS 255"),
+    }
+    plan = plan_sequence(courses, ["CS 253"], ["CS 253A"])
+    blocker = next(b for b in plan.blockers if b.reason == "alternative_required")
+    assert blocker.alternative_groups == (("CS 253A", "CS 255"), ("equivalent transfer credit",))
+    assert blocker.alternatives == ()
+    assert "CS 255" in blocker.alternative_groups[0]
+
+
+def test_large_or_group_report_is_explicitly_truncated():
+    alternatives = tuple(CourseRef(f"X {index}") for index in range(140))
+    courses = {"TARGET 1": course("TARGET 1", prereq=AnyOf(alternatives), status="parsed")}
+    plan = plan_sequence(courses, ["TARGET 1"])
+    blocker = next(b for b in plan.blockers if b.reason == "alternative_required")
+    assert len(blocker.alternative_groups) == 128
+    assert blocker.alternative_groups_truncated
+    assert all(group != ("Additional requisite alternatives omitted; consult the cited requirement.",)
+               for group in blocker.alternative_groups)
+
+
+def test_truncated_or_under_and_still_includes_later_mandatory_terms():
+    many_choices = AnyOf(tuple(CourseRef(f"X {index}") for index in range(140)))
+    prereq = AllOf((many_choices, CourseRef("MATH 111")))
+    plan = plan_sequence({"TARGET 1": course("TARGET 1", prereq=prereq, status="parsed")},
+                         ["TARGET 1"])
+    blocker = next(b for b in plan.blockers if b.reason == "alternative_required")
+    assert blocker.alternatives == ()
+    assert blocker.alternative_groups_truncated is True
+    assert blocker.alternative_groups
+    assert all("MATH 111" in group for group in blocker.alternative_groups)
+
+
+def test_wide_and_group_is_processed_without_recursing_per_child():
+    prereq = AllOf(tuple(CourseRef(f"X {index}") for index in range(1500)))
+    plan = plan_sequence({"TARGET 1": course("TARGET 1", prereq=prereq, status="parsed")},
+                         ["TARGET 1"])
+    blocker = next(b for b in plan.blockers if b.reason == "missing_prerequisite")
+    assert blocker.alternatives == ("X 0",)
+
+
 def test_unknown_course_and_unparsed_requirements_block_without_losing_safe_course():
     courses = {
         "CS 253": course("CS 253", prereq=CourseRef("MATH 111"), status="parsed"),

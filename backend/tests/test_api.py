@@ -251,3 +251,29 @@ def test_named_collection_resolves(db, collection):
 def test_unknown_collection_is_a_domain_error_that_job_routes_map_as_invalid_input(db, collection):
     with pytest.raises(UnknownCollection, match="no-such-collection"):
         resolve_collection(db, load_settings(), "no-such-collection")
+
+
+def test_student_trace_hides_non_cited_chunk_and_source_ids():
+    from types import SimpleNamespace
+
+    from app.api.serialize import public_payload
+
+    value = {
+        "citations": [{"chunkId": "cited"}],
+        "trace": {
+            "traceId": "trace",
+            "contextBlock": [
+                {"chunkId": "cited", "sourceId": "source-a", "sourceName": "a",
+                 "locatorLabel": "page 1", "text": "cited text"},
+                {"chunkId": "uncited", "sourceId": "source-b", "sourceName": "b",
+                 "locatorLabel": "page 2", "text": "uncited text"},
+            ],
+        },
+    }
+    public = public_payload(value, SimpleNamespace(mode="oidc", role="student"))
+    assert public["trace"]["contextBlock"][0]["chunkId"] == "cited"
+    assert public["trace"]["contextBlock"][0]["text"] == "cited text"
+    assert public["trace"]["contextBlock"][1] == {
+        "chunkId": "", "sourceId": "", "sourceName": "", "locatorLabel": "", "text": "",
+    }
+    assert public["trace"]["timings"] == {}

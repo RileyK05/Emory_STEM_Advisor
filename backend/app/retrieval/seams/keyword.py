@@ -8,9 +8,15 @@ from psycopg import Connection
 
 from app.db import queries
 from app.retrieval.config import KeywordSeamConfig
+from app.retrieval.policy import has_policy_terms
 from app.retrieval.types import Candidate, SeamResult
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+_PROGRAM_INTENT_RE = re.compile(
+    r"\b(?:major|minor|bs|ba|bba|degree|program|checklist|concentration|track)\b",
+    re.IGNORECASE,
+)
+
 _NUMERIC_REF_RE = re.compile(r"\b\d+(?:[./+\-]\d+)+\b")
 # Match only explicit Atlas-shaped subject/number codes. Keep `_OX` as a
 # separate searchable token; it is part of the course identity, not an alias.
@@ -132,6 +138,11 @@ def keyword_seam(
                            flags=re.IGNORECASE)
     program_query = re.sub(r"\bCS\s+(minor|major|BS|BA)\b", r"Computer Science \1",
                            program_query, flags=re.IGNORECASE)
+    # A course lookup should not run the program-title lateral once per
+    # candidate chunk. Program evidence is only relevant when the question names
+    # a program, degree, major/minor, checklist, concentration, or track.
+    if not _PROGRAM_INTENT_RE.search(query):
+        program_query = None
     # A contiguous named subject in a locator/filename beats an incidental body
     # mention. Single generic words ("minor", "policy") confer no title band.
     title_pairs = [f"({a} <-> {b})" for a, b in pairwise(tokens)
@@ -148,6 +159,7 @@ def keyword_seam(
          "numeric_pattern": numeric_pattern, "specific_q": specific_q,
          "title_queries": title_pairs,
          "program_query": program_query,
+         "policy_query": has_policy_terms(query),
          "role_query": "checklist" if "checklist" in tokens else None,
          "course_code_header_pattern": course_code_header_pattern},
     ).fetchall()

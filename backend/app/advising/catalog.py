@@ -12,7 +12,34 @@ from app.retrieval.types import CitedChunk
 
 _MAX_TREE_NODES = 2_000
 _MAX_TREE_DEPTH = 64
-_DESCRIPTION_REQUIREMENT_RE = re.compile(r"\b(?:pre|co)[ -]?requisites?\s*:", re.IGNORECASE)
+# These expressions detect source wording that needs review; they do not
+# determine its meaning or create prerequisite edges. Keep the SQL predicate in
+# list_advising_courses_for_scope aligned so omitted chunks cannot hide it.
+_DESCRIPTION_REQUIREMENT_RE = re.compile(
+    r"\b(?:pre|co)[ -]?requisites?\b"
+    r"|\bpre\s+and\s+co[ -]?requisites?\b"
+    r"|\bsuccessfully\s+completed\s+[a-z]{2,}(?:_ox)?\s*\d{3}"
+    r"|\bmust\s+have\s+completed\s+[a-z]{2,}(?:_ox)?\s*\d{3}"
+    r"|\b(?:must\s+have\s+permission\s+of\s+(?:the\s+)?instructor"
+    r"|(?:written\s+)?permission\s+of\s+(?:the\s+)?instructor\s+(?:is\s+)?required"
+    r"|requires?\s+(?:the\s+)?(?:written\s+)?permission\s+of\s+(?:the\s+)?instructor"
+    r"|and/or\s+(?:the\s+)?instructor\s+permission)\b",
+    re.IGNORECASE,
+)
+_DESCRIPTION_FORWARD_REFERENCE_RE = re.compile(
+    r"\b(?:counts\s+as|it\s+is)\s+(?:a\s+)?(?:pre|co)[ -]?requisites?\b"
+    r"(?=\s+for\s+(?:many\s+)?(?:other\b|\d{3}-level\b))"
+    r"|\bno\s+(?:pre|co)[ -]?requisites?\s+(?:are\s+)?(?:necessary|required)\b"
+    r"(?=\s*(?:[.!?]|$))"
+    r"|\bhas\s+no\s+(?:pre|co)[ -]?requisites?\s*(?:[.!?]|$)",
+    re.IGNORECASE,
+)
+
+
+def _description_mentions_requirements(text: str) -> bool:
+    # Exclude common forward references and explicit absence statements. Other
+    # wording remains conservative, not a determination of eligibility.
+    return bool(_DESCRIPTION_REQUIREMENT_RE.search(_DESCRIPTION_FORWARD_REFERENCE_RE.sub("", text)))
 
 
 def _restore_tree(rows: list[dict[str, Any]]) -> Req:
@@ -244,7 +271,7 @@ def load_advising_context(
         # A missing structured field must not turn that into verified no requirements.
         description_requirement_unparsed = not (raw and raw.strip()) and (
             row.get("description_has_requirements", False) or any(
-                _DESCRIPTION_REQUIREMENT_RE.search(chunk.text) for chunk in locator_chunks)
+                _description_mentions_requirements(chunk.text) for chunk in locator_chunks)
         )
         if description_requirement_unparsed:
             requirements_complete = False
@@ -308,6 +335,7 @@ def load_advising_context(
             "requirements_evidence_complete": requirements_complete,
             "blocker_reason": (
                 "source_conflict" if requirement_hold is not None else
+                "description_requirement_unparsed" if description_requirement_unparsed else
                 None if requirements_complete else "requirements_evidence_missing"
             ),
             "requisites_raw": raw if requirements_complete or requirement_hold is not None else None,

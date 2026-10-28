@@ -194,12 +194,29 @@ export class HttpClient implements AdvisorClient {
     return request<RetiredCourse[]>(`/api/retired-courses?${params.toString()}`);
   }
 
-  async listConversations(): Promise<ConversationSummary[]> {
-    return request<ConversationSummary[]>('/api/conversations');
+  async listConversations(archived = false, limit?: number, offset?: number): Promise<ConversationSummary[]> {
+    const params = new URLSearchParams();
+    if (archived) params.set('archived', 'true');
+    if (limit !== undefined) params.set('limit', String(limit));
+    if (offset !== undefined) params.set('offset', String(offset));
+    const suffix = params.size ? `?${params.toString()}` : '';
+    return request<ConversationSummary[]>(`/api/conversations${suffix}`);
   }
 
   async createConversation(body: CreateConversationRequest): Promise<ConversationSummary> {
     return request<ConversationSummary>('/api/conversations', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  async archiveConversation(id: string): Promise<ConversationSummary> {
+    return request<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/archive`, {
+      method: 'POST',
+    });
+  }
+
+  async restoreConversation(id: string): Promise<ConversationSummary> {
+    return request<ConversationSummary>(`/api/conversations/${encodeURIComponent(id)}/restore`, {
+      method: 'POST',
+    });
   }
 
   async getConversation(id: string, after = 0, limit = 200): Promise<ConversationRecord> {

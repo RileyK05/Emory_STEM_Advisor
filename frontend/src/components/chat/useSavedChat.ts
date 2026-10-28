@@ -28,6 +28,8 @@ function savedScope(record: ConversationRecord): SourceScope | undefined {
 export function useSavedChat(): ChatController {
   const { scope, setScope } = useApp();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [archivedConversations, setArchivedConversations] = useState<ConversationSummary[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversation, setConversation] = useState<ConversationRecord | null>(null);
   const [turnsAfter, setTurnsAfter] = useState(0);
@@ -397,6 +399,51 @@ export function useSavedChat(): ChatController {
     }
   };
 
+  const archive = async (id: string) => {
+    if (busyRef.current.has(id) || abandoningRef.current.has(id)) return;
+    setError(null);
+    setNotice(null);
+    try {
+      await getClient().archiveConversation(id);
+      if (!alive.current) return;
+      setConversations((items) => items.filter((item) => item.conversationId !== id));
+      if (activeConversation.current === id) startNew();
+      setNotice('Chat archived. Its turns are kept.');
+    } catch (cause) {
+      if (alive.current) setError(errorMessage(cause));
+    }
+  };
+
+  const toggleArchived = async () => {
+    const next = !showArchived;
+    setShowArchived(next);
+    setError(null);
+    if (!next) return;
+    setLoadingList(true);
+    try {
+      const items = await getClient().listConversations(true, 500, 0);
+      if (alive.current) setArchivedConversations(items);
+    } catch (cause) {
+      if (alive.current) setError(errorMessage(cause));
+    } finally {
+      if (alive.current) setLoadingList(false);
+    }
+  };
+
+  const restore = async (id: string) => {
+    setError(null);
+    setNotice(null);
+    try {
+      const restored = await getClient().restoreConversation(id);
+      if (!alive.current) return;
+      setArchivedConversations((items) => items.filter((item) => item.conversationId !== id));
+      setConversations((items) => [restored, ...items.filter((item) => item.conversationId !== id)]);
+      setNotice('Chat restored.');
+    } catch (cause) {
+      if (alive.current) setError(errorMessage(cause));
+    }
+  };
+
   const entries = useMemo(() => entriesFromTurns(conversation?.turns ?? []), [conversation]);
   const currentBusy = creatingConversation || (conversationId ? busyIds.has(conversationId) : false);
   const abandoning = conversationId ? abandoningIds.has(conversationId) : false;
@@ -424,6 +471,11 @@ export function useSavedChat(): ChatController {
     },
     open: (id) => void open(id),
     startNew,
+    archive: (id) => void archive(id),
+    archivedConversations,
+    showArchived,
+    toggleArchived: () => void toggleArchived(),
+    restore: (id) => void restore(id),
     ensureSaved: async (titleText) => (await ensureConversation(titleText))?.id ?? null,
     refreshList: () => void refreshList(),
     error,

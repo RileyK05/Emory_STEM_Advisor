@@ -2,6 +2,7 @@
 
 import json
 import threading
+from collections import OrderedDict
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -173,9 +174,17 @@ def _validate_length(settings: Settings, model: SentenceTransformer, text: str) 
             f"embedding input has {count} tokens; configured model ceiling is {ceiling}"
         )
 
+_QUERY_CACHE_SIZE = 128
+
+
 class GraniteEmbedder:
     def __init__(self, settings: Settings):
         self._settings = settings
+        # Query embeddings are deterministic for one loaded model. A bounded
+        # in-process cache avoids repeating the CPU encode for repeated
+        # questions and research sub-searches; it never stores document vectors.
+        self._query_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+        self._query_cache_lock = threading.Lock()
 
     def count_tokens(self, text: str) -> int:
         return _token_count(_load(self._settings), text)
@@ -188,7 +197,18 @@ class GraniteEmbedder:
                             convert_to_numpy=True).astype(np.float32)
 
     def embed_query(self, text: str) -> np.ndarray:
+        with self._query_cache_lock:
+            cached = self._query_cache.get(text)
+            if cached is not None:
+                self._query_cache.move_to_end(text)
+                return cached.copy()
         model = _load(self._settings)
         _validate_length(self._settings, model, text)
-        return model.encode(text, normalize_embeddings=True,
-                            convert_to_numpy=True).astype(np.float32)
+        vector = model.encode(text, normalize_embeddings=True,
+                              convert_to_numpy=True).astype(np.float32)
+        with self._query_cache_lock:
+            self._query_cache[text] = vector.copy()
+            self._query_cache.move_to_end(text)
+            while len(self._query_cache) > _QUERY_CACHE_SIZE:
+                self._query_cache.popitem(last=False)
+        return vector

@@ -98,11 +98,15 @@ class Settings:
     upload_max_bytes: int = 20 * 1024 * 1024
     upload_max_extracted_chars: int = 2_000_000
     upload_max_segment_chars: int = 16_384
-    upload_max_chunks: int = 2048
+    upload_max_chunks: int = 300
+    upload_embed_batch_size: int = 64
     upload_index_timeout_seconds: float = 60.0
     request_max_bytes: int = 21 * 1024 * 1024
     readiness_timeout_seconds: int = 3
     embedding_device: str = "cpu"
+    # Opt-in: load the embedding model in a daemon thread after the app is
+    # constructed, so the first real query does not pay the model-load cost.
+    embedder_warmup_on_startup: bool = False
     profile_encryption_key: str | None = field(default=None, repr=False)
     llm_timeout_seconds: float = 60.0
     llm_max_output_tokens: int = 1024
@@ -170,7 +174,7 @@ class Settings:
     auth_session_ttl_seconds: int = 28800
     auth_transaction_ttl_seconds: int = 300
     tools_enabled: bool = False
-    answer_citation_repair_enabled: bool = False
+    answer_citation_repair_enabled: bool = True
     tool_max_calls: int = 4
     # Opt-in: before retrieval, the answering connection reads the scoped catalog
     # directory and proposes bounded searches (docs/architecture.md).
@@ -338,7 +342,7 @@ class Settings:
         if self.upload_max_bytes <= 0 or self.request_max_bytes <= 0:
             raise ValueError("UPLOAD_MAX_BYTES must be positive")
         if (min(self.upload_max_extracted_chars, self.upload_max_segment_chars,
-                self.upload_max_chunks) <= 0
+                self.upload_max_chunks, self.upload_embed_batch_size) <= 0
                 or not math.isfinite(self.upload_index_timeout_seconds)
                 or self.upload_index_timeout_seconds <= 0):
             raise ValueError("upload indexing limits must be positive")
@@ -424,9 +428,11 @@ def load_settings() -> Settings:
         upload_max_bytes=_int("UPLOAD_MAX_BYTES", 20 * 1024 * 1024),
         upload_max_extracted_chars=_int("UPLOAD_MAX_EXTRACTED_CHARS", 2_000_000),
         upload_max_segment_chars=_int("UPLOAD_MAX_SEGMENT_CHARS", 16_384),
-        upload_max_chunks=_int("UPLOAD_MAX_CHUNKS", 2048),
+        upload_max_chunks=_int("UPLOAD_MAX_CHUNKS", 300),
+        upload_embed_batch_size=_int("UPLOAD_EMBED_BATCH_SIZE", 64),
         upload_index_timeout_seconds=_float("UPLOAD_INDEX_TIMEOUT_SECONDS", 60),
         embedding_device=os.environ.get("EMBEDDING_DEVICE", "cpu"),
+        embedder_warmup_on_startup=_bool("EMBEDDER_WARMUP_ON_STARTUP", False),
         request_max_bytes=_int("REQUEST_MAX_BYTES", 21 * 1024 * 1024),
         readiness_timeout_seconds=_int("READINESS_TIMEOUT_SECONDS", 3),
         profile_encryption_key=_optional("PROFILE_ENCRYPTION_KEY"),
@@ -478,7 +484,7 @@ def load_settings() -> Settings:
         auth_session_ttl_seconds=_int("AUTH_SESSION_TTL_SECONDS", 28800),
         auth_transaction_ttl_seconds=_int("AUTH_TRANSACTION_TTL_SECONDS", 300),
         tools_enabled=_bool("TOOLS_ENABLED", False),
-        answer_citation_repair_enabled=_bool("ANSWER_CITATION_REPAIR_ENABLED", False),
+        answer_citation_repair_enabled=_bool("ANSWER_CITATION_REPAIR_ENABLED", True),
         tool_max_calls=_int("TOOL_MAX_CALLS", 4),
         query_planning_enabled=_bool("QUERY_PLANNING_ENABLED", False),
         query_planning_token_budget=_int("QUERY_PLANNING_TOKEN_BUDGET", 300_000),

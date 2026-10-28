@@ -46,7 +46,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "8"
+RESEARCH_TOOLS_VERSION = "10"
 
 
 class SearchInput(ToolInputModel):
@@ -79,7 +79,7 @@ class CompareInput(ToolInputModel):
 
 class PreparationInput(ToolInputModel):
     selected_codes: list[CourseCode] = Field(min_length=1, max_length=30)
-    completed_codes: list[CourseCode] = Field(default_factory=list, max_length=30)
+    completed_codes: list[CourseCode] = Field(max_length=30)
 
 
 class RecallInput(ToolInputModel):
@@ -282,6 +282,7 @@ class ResearchSession:
         self.execution_id = None
         self.new_evidence = 0
         self.read_count = 0
+        self.read_keys: set[tuple] = set()
         self.discovery_count = 0
         self.state = None
         self.validation_hint = ""
@@ -412,7 +413,7 @@ class ResearchSession:
             self.cursors[next_cursor] = (key, offset + size)
         return rows[offset:offset + size], next_cursor
 
-    def acquire(self, chunks, *, refs=(), complete=True, action="read"):
+    def acquire(self, chunks, *, refs=(), complete=True, action="read", progress_key=None):
         before = len(self.store.evidence(self.run.run_id))
         read_bytes = sum(len(c.text.encode()) for c in chunks)
         existing = self.store.evidence(self.run.run_id)
@@ -438,7 +439,10 @@ class ResearchSession:
             entities = refs.get(chunk.chunk_id, ()) if isinstance(refs, dict) else refs
             for entity in entities:
                 self.entity_evidence.setdefault(entity, set()).add(records[str(chunk.chunk_id)])
-        self.read_count += 1
+        key = progress_key if progress_key is not None else (action,)
+        if key not in self.read_keys:
+            self.read_keys.add(key)
+            self.read_count += 1
         return list(result.evidence_ids)
 
     def browse(self, value, _scope):
@@ -589,7 +593,8 @@ class ResearchSession:
             ]) from None
         chunks = {c.chunk_id: c for supported in [*read.fields.values(), *(i.line for i in items)]
                   for c, _start, _end in supported.support}
-        ids = self.acquire(list(chunks.values()), refs=(value.handle,), action="read_program")
+        ids = self.acquire(list(chunks.values()), refs=(value.handle,), action="read_program",
+                           progress_key=("read_program", value.handle, value.cursor))
         records = {e.chunk_id: e.evidence_id for e in self.store.evidence(self.run.run_id)}
         def evidence(supported):
             return list(dict.fromkeys(records[str(c.chunk_id)] for c, _s, _e in supported.support))
@@ -599,15 +604,22 @@ class ResearchSession:
         positions.update(i.position for i in items)
         self.program_reads[value.handle] = replace(read, items=tuple(
             i for i in read.items if i.position in positions))
+        unsupported_fields = [name for name, field in read.fields.items() if not field.cited]
+        limitations = (["Unread requirement items remain."] if cursor else [])
+        if unsupported_fields:
+            limitations.append("Program fields without evidence are discovery only: "
+                               + ", ".join(sorted(unsupported_fields)) + ".")
         return ResearchResult(data={"title": read.pin.title, "handle": value.handle,
+            "binding_status": read.pin.binding_status,
             **_source_metadata(self.scope.sources[read.pin.source_id]),
-            "fields": {k: {"text": v.text, "evidence_ids": evidence(v)} for k, v in read.fields.items()},
+            "fields": {k: {"text": v.text, "evidence_ids": evidence(v),
+                           "discovery_only": not v.cited} for k, v in read.fields.items()},
             "sections": list(dict.fromkeys(i.section for i in read.items)),
             "items": [{"position": i.position, "text": i.line.text, "choose": i.choose,
                        "mentioned_codes": list(i.mentioned_course_codes),
                        "evidence_ids": evidence(i.line), "discovery_only": not i.line.cited} for i in items],
             "evidence_ids": ids}, next_cursor=cursor,
-            limitations=["Unread requirement items remain."] if cursor else [])
+            limitations=limitations)
 
     def courses(self, value, _scope):
         handle_codes = []
@@ -630,7 +642,8 @@ class ResearchSession:
         self.conn.commit()
         chunks = list({c.chunk_id: c for r in reads for c in r.chunks}.values())
         ids = self.acquire(chunks, refs={c.chunk_id: (r.code, r.canonical_code)
-                                        for r in reads for c in r.chunks}, action="read_courses")
+                                        for r in reads for c in r.chunks}, action="read_courses",
+                           progress_key=("read_courses", tuple(sorted(codes))))
         return ResearchResult(data={"courses": [
             {"code": r.code, "title": r.title, "requisites_raw": r.requisites_raw,
              "parse_status": r.parse_status, "canonical_code": r.canonical_code} for r in reads],
@@ -648,7 +661,8 @@ class ResearchSession:
         self.conn.commit()
         if value.handle == self.pending_policy_read:
             self.pending_policy_read = None
-        ids = self.acquire(page.chunks, complete=not page.incomplete, action="read_document")
+        ids = self.acquire(page.chunks, complete=not page.incomplete, action="read_document",
+                           progress_key=("read_document", value.handle, value.cursor, offset))
         cursor = None
         if page.next_chunk is not None:
             cursor = "c_" + uuid5(self.run.run_id, f"{key}:{page.next_chunk}").hex
@@ -725,7 +739,9 @@ class ResearchSession:
                 for code in [*deps(course["prerequisites"]), *deps(course["corequisites"])]:
                     if code not in visited and code not in pending and code not in value.completed_codes:
                         pending.append(code)
-        ids = self.acquire(list(all_chunks.values()), refs=refs, action="check_preparation")
+        ids = self.acquire(list(all_chunks.values()), refs=refs, action="check_preparation",
+                           progress_key=("check_preparation", tuple(value.selected_codes),
+                                         tuple(value.completed_codes)))
         courses = {c["code"]: CourseRequirement(c["code"], c["title"],
                    c["parse_status"] if c["requirements_evidence_complete"] else "unparsed",
                    c["prerequisites"], c["corequisites"], c["requisites_raw"])
@@ -743,7 +759,9 @@ class ResearchSession:
             if reason == "requirements_unparsed" and blocker.code in requirement_blockers:
                 reason = requirement_blockers[blocker.code] or reason
             blockers.append({"code": blocker.code, "reason": reason,
-                             "alternatives": list(blocker.alternatives)})
+                             "alternatives": list(blocker.alternatives),
+                             "alternative_groups": [list(group) for group in blocker.alternative_groups],
+                             "alternative_groups_truncated": blocker.alternative_groups_truncated})
         check_id = "p_" + json_digest(value.model_dump())[:24]
         result = {"check_id": check_id, "selected_codes": value.selected_codes,
                   "completed_codes": value.completed_codes, "stages": list(plan.stages),
@@ -816,7 +834,7 @@ class ResearchSession:
             ("read_courses", "Read one to four exact course records, descriptions and restrictions. Handles must be course handles; for old-memory handles, use advisor_recall with handles only, or pass exact course codes without handles.", CoursesInput, self.courses, ("handles",)),
             ("read_document", "Read source or section evidence; follow cursor for remaining chunks.", ReadInput, self.document, ("handle",)),
             ("compare_mentions", "Compare already read programs; overlap is mentions, never credit savings.", CompareInput, self.compare, ("handles",)),
-            ("check_preparation", "Run deterministic dependency checks on asserted completed courses, never eligibility.", PreparationInput, self.preparation, ()),
+            ("check_preparation", "Run deterministic dependency checks, never eligibility. completed_codes is required and must reflect the student's explicit report; use [] only when the student explicitly reports no completed courses, and ask if history is unknown. In blocker alternative_groups, each inner group requires all entries and the outer list offers alternative paths. If alternative_groups_truncated is true, more paths were omitted; do not treat the shown groups as exhaustive.", PreparationInput, self.preparation, ()),
             ("update_research", "Replace bounded comparison state, set active exact evidence and expected revision.", StateInput, self.update, ()),
             ("finish", "Propose typed final answer. Must be the sole tool call. Cite active evidence IDs, never raw markers.", FinishInput, self.finish, ()),
         ]

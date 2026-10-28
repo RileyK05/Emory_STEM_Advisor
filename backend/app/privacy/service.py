@@ -139,7 +139,7 @@ class PrivacyService:
         inventory = _inventory(conn, workspace_key)
 
         conv_rows = conn.execute(
-            queries.get("list_conversations"),
+            queries.get("list_all_conversations_for_workspace"),
             {"workspace_key": workspace_key},
         ).fetchall()
         conv_store = ConversationStore(conn, workspace_key)

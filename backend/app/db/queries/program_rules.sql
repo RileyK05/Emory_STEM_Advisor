@@ -43,6 +43,20 @@ FROM program_items pi
 WHERE pi.program_id = %(program_id)s
 ORDER BY pi."position";
 
+-- Identity facts must be verified against the exact indexed chunk span at every
+-- rule-release transition. Historical evidence rows intentionally survive
+-- reindexing, so callers also compare these identities with the locked program.
+-- name: list_program_identity_evidence
+SELECT e.field, e.ordinal, e.chunk_id, e.locator_id, e.source_id, e.source_index_revision,
+       e.span_start, e.span_end, e.text_digest,
+       c.source_id AS chunk_source_id, c.start_char AS chunk_start_char,
+       c.text AS chunk_text
+FROM program_field_evidence e
+LEFT JOIN chunks c ON c.chunk_id = e.chunk_id
+WHERE e.program_id = %(program_id)s
+  AND e.field IN ('title', 'degree')
+ORDER BY e.field, e.ordinal;
+
 -- name: insert_program_rule_release
 INSERT INTO program_rule_releases (
     release_id, program_id, collection_id, source_id,

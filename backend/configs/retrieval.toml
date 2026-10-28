@@ -1,4 +1,4 @@
-version = 7
+version = 8
 
 [chunking]
 chunker_version = "2"
@@ -22,7 +22,7 @@ min_similarity = 0.25
 [seams.prereq]
 enabled = true
 decay = 0.8
-directions = ["self", "upstream"]
+directions = ["self", "upstream", "downstream"]
 limit = 40
 
 [fusion]

@@ -69,6 +69,7 @@ class RetrievalTrace(BaseModel):
     modelCall: ModelCallInfo
     warnings: list[str]
     errors: list[str]
+    timings: dict[str, int]
 
 
 class Citation(BaseModel):
@@ -341,6 +342,7 @@ class ConversationSummary(_WireModel):
     contextEpoch: int = 0
     contextBoundarySequence: int = 0
     contextResetAt: str | None = None
+    archivedAt: str | None = None
     createdAt: str
     updatedAt: str
 

@@ -15,6 +15,34 @@ SELECT NOT EXISTS (
         WHERE c.status = 'reserved' AND o.deadline_at > statement_timestamp()
 ) AS ready;
 
+-- name: backup_blockers
+SELECT 'queued_or_running_jobs' AS kind, count(*) AS count,
+       min(job_id::text) AS sample_id
+FROM jobs
+WHERE status = 'queued'
+   OR (status = 'running' AND lease_expires_at > statement_timestamp())
+UNION ALL
+SELECT 'provider_batches', count(*), min(batch_id::text)
+FROM provider_batches
+WHERE state IN ('prepared', 'submitting', 'pending', 'validating', 'in_progress',
+                'finalizing', 'cancel_requested', 'cancelling')
+UNION ALL
+SELECT 'pending_conversation_requests', count(*), min(request_id::text)
+FROM conversation_requests WHERE state = 'pending'
+UNION ALL
+SELECT 'pending_decisions', count(*), min(decision_id::text)
+FROM decisions WHERE state = 'pending'
+UNION ALL
+SELECT 'pending_conversation_summaries', count(*), min(summary_id::text)
+FROM conversation_summaries WHERE state = 'pending'
+UNION ALL
+SELECT 'pending_claim_reviews', count(*), min(review_id::text)
+FROM claim_reviews WHERE state = 'pending'
+UNION ALL
+SELECT 'reserved_operation_calls', count(*), min(c.operation_id::text)
+FROM operation_calls c JOIN operations o USING (operation_id)
+WHERE c.status = 'reserved' AND o.deadline_at > statement_timestamp();
+
 -- name: backup_export_snapshot
 SELECT pg_export_snapshot() AS snapshot_id;
 

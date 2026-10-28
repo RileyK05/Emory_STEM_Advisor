@@ -135,3 +135,40 @@ def test_reindex_endpoint_is_owner_scoped_and_revision_checked(db, collection, t
     sources = client.get("/api/sources", params={"collection": name}).json()
     assert next(item for item in sources if item["id"] == str(shared_id))["canReindex"] is False
     assert next(item for item in sources if item["id"] == str(source_id))["canReindex"] is True
+
+
+def test_continuation_chunks_embed_real_section_headings_without_changing_source_text():
+    from app.ingest.chunker import ChunkSpan
+    from app.ingest.extract import Extracted, LocatorSpan
+    from app.ingest.pipeline import _embedding_texts
+
+    extracted = Extracted("Body text", [LocatorSpan("section", "PROGRAMS OF STUDY", 0, 9)])
+    span = ChunkSpan(locator_ordinal=0, start_char=0, end_char=9, token_count=2)
+    texts = _embedding_texts(extracted, [span], ["Body text"],
+                             count_tokens=len, max_tokens=100)
+    assert texts == ["PROGRAMS OF STUDY\nBody text"]
+
+
+def test_upload_embedding_deadline_is_checked_between_batches(
+    db, collection, tmp_path, monkeypatch,
+):
+    from types import SimpleNamespace
+
+    from app.ingest import pipeline
+
+    clock = {"value": 0.0}
+
+    class AdvancingEmbedder(FakeEmbedder):
+        def embed_documents(self, texts):
+            clock["value"] = 10_000.0
+            return super().embed_documents(texts)
+
+    monkeypatch.setattr(pipeline, "time", SimpleNamespace(monotonic=lambda: clock["value"]))
+    with pytest.raises(ValueError, match="upload time limit"):
+        ingest_text(db, collection, tmp_path, raw=b"alpha beta gamma\n",
+                    embedder=AdvancingEmbedder(dim=8))
+    state = _source(db, db.execute(
+        "SELECT source_id FROM sources WHERE collection_id=%s", (collection,)
+    ).fetchone()["source_id"])
+    assert state["status"] == "failed"
+    assert "upload time limit" in state["error_message"]

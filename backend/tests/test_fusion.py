@@ -305,3 +305,47 @@ def test_dedupe_keeps_real_grounded_identity_on_a_score_tie():
     assert len(fused) == 1
     assert fused[0].chunk_id == grounded.chunk_id
     assert fused[0].seams == ("keyword",)
+
+
+def test_policy_query_caps_reserved_program_slots_and_keeps_policy_evidence():
+    program, policy = uuid4(), uuid4()
+    candidates = [
+        Candidate(_chunk_id(program, i), program, i, "keyword", 10.0 - i,
+                  program_evidence=True)
+        for i in range(6)
+    ]
+    candidates.append(_candidate(policy, 0, "keyword", 5.0))
+    fused = fuse([_seam("keyword", candidates)], cited_set_size=6, embed_only_quota=4,
+                 program_reserve_cap=4)
+    # The reserve cap leaves room for the policy source; the ordinary
+    # diversity allocator may still spend a remaining slot on a stronger
+    # program sibling, but it cannot crowd the policy source out entirely.
+    assert sum(1 for item in fused if item.source_id == program) <= 5
+    assert any(item.source_id == policy for item in fused)
+
+
+def test_reverse_prerequisite_hits_are_reserved_before_program_prose():
+    downstream, program = uuid4(), uuid4()
+    candidates = [
+        Candidate(_chunk_id(downstream, i), downstream, i, "prereq", 0.8,
+                  prereq_downstream=True)
+        for i in range(6)
+    ]
+    candidates.append(Candidate(_chunk_id(program, 0), program, 0, "keyword", 10.0,
+                                program_evidence=True))
+    fused = fuse([_seam("keyword", candidates), _seam("prereq", candidates[:6])],
+                 cited_set_size=6, embed_only_quota=4)
+    assert sum(1 for item in fused if item.source_id == downstream) >= 5
+
+
+def test_policy_term_detection_distinguishes_program_only_questions():
+    from app.retrieval.policy import has_policy_terms, program_reserve_cap
+
+    assert has_policy_terms("How many S/U credit hours can I use?")
+    assert has_policy_terms("Can I still add a minor at 91 hours?")
+    assert has_policy_terms("What is the repeat policy after a C-?")
+    assert not has_policy_terms("What are the requirements for the CS major?")
+    assert not has_policy_terms("List every course in the Data Science minor.")
+    assert program_reserve_cap("What is the S/U limit?", 6) == 4
+    assert program_reserve_cap("What are the CS major requirements?", 6) is None
+    assert program_reserve_cap("What is the S/U limit?", 1) == 0

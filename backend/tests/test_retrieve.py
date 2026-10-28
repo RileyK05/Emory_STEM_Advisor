@@ -56,6 +56,14 @@ def test_retrieve_writes_one_trace(db, collection, tmp_path):
         {"t": outcome.trace.trace_id},
     ).fetchall()
     assert {row["seam"] for row in seams} == {"keyword", "embed", "prereq"}
+    assert {"keyword_ms", "embed_ms", "prereq_ms", "fusion_ms", "total_ms"} <= (
+        outcome.trace.timings.keys())
+    assert "trace_write_ms" in outcome.trace.timings
+    stored = db.execute(
+        "SELECT timings FROM retrieval_traces WHERE trace_id = %(t)s",
+        {"t": outcome.trace.trace_id},
+    ).fetchone()["timings"]
+    assert {"keyword_ms", "embed_ms", "prereq_ms"} <= stored.keys()
 
 
 def test_refusal_on_no_matches(db, collection, tmp_path):

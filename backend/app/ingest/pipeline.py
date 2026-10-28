@@ -47,6 +47,42 @@ def _validate_vectors(vectors: np.ndarray, expected: int) -> np.ndarray:
     return vectors
 
 
+def _embedding_texts(extracted, spans, chunk_texts, *, count_tokens, max_tokens):
+    """Embed real section headings with continuation chunks without changing source text.
+
+    Only section locators carry a heading.  Page/line labels are locators, not
+    subject matter, so they are not prepended.  If the heading would exceed the
+    embedder ceiling, the exact chunk text is used instead; nothing is silently
+    truncated.
+    """
+    texts = []
+    for span, text in zip(spans, chunk_texts, strict=True):
+        locator = extracted.locators[span.locator_ordinal]
+        label = locator.label.strip()
+        if locator.locator_type == "section" and label and not text.lstrip().startswith(label):
+            enriched = f"{label}\n{text}"
+            if count_tokens(enriched) <= max_tokens:
+                texts.append(enriched)
+                continue
+        texts.append(text)
+    return texts
+
+
+def _embed_in_batches(texts, embedder, *, deadline, batch_size: int, enforce: bool):
+    """Embed bounded batches and check the cooperative deadline between them."""
+    if not texts:
+        return embedder.embed_documents([])
+    batches = []
+    for start in range(0, len(texts), batch_size):
+        if enforce and time.monotonic() >= deadline:
+            raise ValueError("source indexing exceeded the upload time limit")
+        batch = texts[start:start + batch_size]
+        batches.append(_validate_vectors(embedder.embed_documents(batch), len(batch)))
+        if enforce and time.monotonic() >= deadline:
+            raise ValueError("source indexing exceeded the upload time limit")
+    return np.vstack(batches).astype(np.float32)
+
+
 def _source_id(collection_id: UUID, file_hash: str,
                workspace_key: str | None = None) -> UUID:
     if workspace_key is None:
@@ -278,10 +314,33 @@ def ingest_file(
 
     chunk_texts = [extracted.text[span.start_char : span.end_char] for span in spans]
     chunk_ids = [_chunk_id(source_id, version, chunk_index) for chunk_index in range(len(spans))]
+    enforce_upload_budget = workspace_key is not None
+    token_counter = getattr(embedder, "count_tokens", None)
+    if not callable(token_counter):
+        token_counter = lambda value: len(value.split())
+    embedding_texts = _embedding_texts(
+        extracted, spans, chunk_texts,
+        count_tokens=token_counter,
+        max_tokens=settings.embedding_max_tokens,
+    )
+    if enforce_upload_budget and any(
+            token_counter(text) > settings.embedding_max_tokens
+            for text in embedding_texts):
+        _mark_failed(conn, source_id, index_revision, ValueError(
+            "source chunk exceeds the embedding token limit"))
+        raise ValueError("source chunk exceeds the embedding token limit")
     try:
         # Finish external embedding work before replacing any prior rows, so the
-        # previous index stays intact if embedding fails.
-        vectors = _validate_vectors(embedder.embed_documents(chunk_texts), len(chunk_texts))
+        # previous index stays intact if embedding fails. Bounded batches make
+        # the configured deadline observable during embedding instead of after
+        # one uninterruptible allocation.
+        vectors = _embed_in_batches(
+            embedding_texts, embedder, deadline=deadline,
+            batch_size=settings.upload_embed_batch_size,
+            enforce=enforce_upload_budget,
+        )
+        if enforce_upload_budget and time.monotonic() >= deadline:
+            raise ValueError("source indexing exceeded the upload time limit")
         _replace_index(conn, source_id, index_revision, version, extracted, spans, chunk_texts,
                        chunk_ids, vectors, embed_model, on_chunk_transaction, origin_key,
                        collection_id, workspace_key, provenance, file_hash)

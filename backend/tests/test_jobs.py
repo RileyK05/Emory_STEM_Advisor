@@ -229,3 +229,85 @@ def test_store_validates_attempts_and_payload_size():
             kind="x", scope_key="x", idempotency_key="y",
             payload={"blob": "x" * MAX_PAYLOAD_BYTES},
         )
+
+
+def test_composed_executor_forwards_failure_and_cancellation_hooks():
+    from types import SimpleNamespace
+
+    from app.jobs.dispatch import KindDispatchingExecutor
+
+    class Target:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, job, context):
+            self.calls.append(("call", job.kind))
+            return {"ok": True}
+
+        def publish_success(self, conn, job, value):
+            self.calls.append(("publish", job.kind))
+            return value
+
+        def on_failure(self, conn, job, exc):
+            self.calls.append(("failure", job.kind))
+
+        def on_cancelled(self, conn, job, exc):
+            self.calls.append(("cancelled", job.kind))
+
+    conversation, artifacts = Target(), Target()
+    executor = KindDispatchingExecutor(conversation=conversation, artifacts=artifacts)
+    turn = SimpleNamespace(kind="conversation.turn")
+    run = SimpleNamespace(kind="artifact.run")
+    executor(turn, None)
+    executor.publish_success(None, run, {"ok": True})
+    executor.on_failure(None, turn, RuntimeError("failed"))
+    executor.on_cancelled(None, run, JobCancelled("cancelled"))
+    assert conversation.calls == [("call", "conversation.turn"),
+                                  ("failure", "conversation.turn")]
+    assert artifacts.calls == [("publish", "artifact.run"),
+                               ("cancelled", "artifact.run")]
+
+
+def test_run_once_invokes_failure_hook_after_terminal_execution_and_publication_failure(
+    migrated_dsn, db,
+):
+    for stage in ("execution", "publication"):
+        store = make_store(migrated_dsn)
+        store.create(kind="conversation.turn", scope_key=f"hook-{stage}",
+                     idempotency_key=f"hook-{stage}", payload={}, max_attempts=1)
+        calls = []
+
+        class Failing:
+            def __call__(self, job, context, *, stage=stage):
+                if stage == "execution":
+                    raise RuntimeError("provider failed")
+                return {"ok": True}
+
+            def publish_success(self, conn, job, value):
+                raise RuntimeError("publication failed")
+
+            def on_failure(self, conn, job, exc, *, calls=calls):
+                calls.append((job.job_id, type(exc).__name__))
+
+        finished = run_once(store, f"worker-{stage}", Failing())
+        assert finished.status is JobStatus.FAILED
+        assert calls == [(finished.job_id, "RuntimeError")]
+
+
+def test_run_once_invokes_cancellation_hook_when_a_late_success_is_fenced(migrated_dsn, db):
+    store = make_store(migrated_dsn)
+    store.create(kind="conversation.turn", scope_key="cancel-hook",
+                 idempotency_key="cancel-hook", payload={}, max_attempts=1)
+    calls = []
+
+    class Late:
+        def __call__(self, job, context):
+            store.cancel(job.job_id)
+            return {"late": True}
+
+        def on_cancelled(self, conn, job, exc):
+            calls.append(job.job_id)
+
+    finished = run_once(store, "worker-cancel-hook", Late())
+    assert finished.status is JobStatus.CANCELLED
+    assert calls == [finished.job_id]

@@ -118,6 +118,7 @@ def fuse(
     min_score: float = 0.0,
     chunk_texts: dict[UUID, str] | None = None,
     canonical_keys: dict[UUID, str] | None = None,
+    program_reserve_cap: int | None = None,
 ) -> list[FusedChunk]:
     normalized: dict[UUID, float] = {}
     provenance: dict[UUID, set[str]] = {}
@@ -202,8 +203,13 @@ def fuse(
     # actual bound chunks before source diversity can strand a continuation.
     # Ordinary topical queries retain the established diversity allocation.
     targeted = {c.chunk_id for result in results for c in result.candidates
-                if c.program_evidence and c.chunk_id in normalized}
-    selected = sorted(targeted, key=lambda cid: _candidate_key(cid, normalized, meta))[:cited_set_size]
+                if (c.program_evidence or c.prereq_downstream) and c.chunk_id in normalized}
+    targeted_limit = cited_set_size
+    if program_reserve_cap is not None:
+        targeted_limit = min(targeted_limit, max(0, program_reserve_cap))
+    selected = sorted(
+        targeted, key=lambda cid: _candidate_key(cid, normalized, meta)
+    )[:targeted_limit]
     remaining_sources = {source: [cid for cid in ids if cid not in selected]
                          for source, ids in by_source.items()}
     remaining_sources = {source: ids for source, ids in remaining_sources.items() if ids}

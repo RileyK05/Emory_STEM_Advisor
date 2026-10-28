@@ -4,6 +4,7 @@ import re
 from uuid import UUID, uuid4
 
 from psycopg import Connection
+from psycopg.types.json import Jsonb
 
 from app.db import queries
 from app.retrieval.fusion import FusedChunk
@@ -26,6 +27,7 @@ def write_trace(
     contributions: list[FusedChunk],
     trace_id: UUID | None = None,
     workspace_key: str | None = None,
+    timings: dict[str, int] | None = None,
 ) -> UUID:
     trace_id = trace_id or uuid4()
     with conn.transaction():
@@ -42,28 +44,35 @@ def write_trace(
                 "refused": refused,
             },
         )
-        for seam in seams:
+        # Seam and contribution rows are independent inserts; one pipeline
+        # round trip keeps trace persistence from becoming chatty.
+        with conn.pipeline():
             conn.execute(
-                queries.get("insert_trace_seam"),
-                {
-                    "trace_id": trace_id,
-                    "seam": seam.name,
-                    "enabled": seam.enabled,
-                    "state": seam.state,
-                    "reason": seam.reason,
-                    "candidate_count": len(seam.candidates),
-                },
+                queries.get("update_trace_timings"),
+                {"trace_id": trace_id, "timings": Jsonb(timings or {})},
             )
-        for contribution in contributions:
-            conn.execute(
-                queries.get("insert_trace_contribution"),
-                {
-                    "trace_id": trace_id,
-                    "chunk_id": contribution.chunk_id,
-                    "seams": list(contribution.seams),
-                    "normalized_score": contribution.normalized_score,
-                    "source_slot": contribution.source_slot,
-                    "rank": contribution.rank,
-                },
-            )
+            for seam in seams:
+                conn.execute(
+                    queries.get("insert_trace_seam"),
+                    {
+                        "trace_id": trace_id,
+                        "seam": seam.name,
+                        "enabled": seam.enabled,
+                        "state": seam.state,
+                        "reason": seam.reason,
+                        "candidate_count": len(seam.candidates),
+                    },
+                )
+            for contribution in contributions:
+                conn.execute(
+                    queries.get("insert_trace_contribution"),
+                    {
+                        "trace_id": trace_id,
+                        "chunk_id": contribution.chunk_id,
+                        "seams": list(contribution.seams),
+                        "normalized_score": contribution.normalized_score,
+                        "source_slot": contribution.source_slot,
+                        "rank": contribution.rank,
+                    },
+                )
     return trace_id

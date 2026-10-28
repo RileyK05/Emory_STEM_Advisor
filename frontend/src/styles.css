@@ -605,6 +605,31 @@ textarea.code {
   overscroll-behavior: contain;
 }
 
+.chat-list-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.chat-list-row > button:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-list .chat-archive {
+  width: auto;
+  flex: none;
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.chat-list .chat-archive:hover,
+.chat-list .chat-archive:focus-visible {
+  opacity: 1;
+}
+
 .chat-list button {
   position: relative;
   display: flex;
@@ -647,6 +672,18 @@ textarea.code {
   background: var(--highlight);
   animation: pulse 1.4s ease-in-out infinite;
   flex: none;
+}
+
+.sidebar-heading-action {
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--muted);
+  border-radius: 4px;
+}
+
+.sidebar-heading-action:hover {
+  color: var(--text);
+  background: var(--surface-2);
 }
 
 .sidebar-empty {

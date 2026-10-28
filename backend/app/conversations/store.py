@@ -126,11 +126,58 @@ class ConversationStore:
         self.conn.commit()
         return public_conversation(row)
 
-    def list(self):
-        rows = self.conn.execute(queries.get("list_conversations"), {
-            "workspace_key": self.workspace_key}).fetchall()
+    def list(self, *, archived: bool = False, limit: int = 500, offset: int = 0):
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        if not 0 <= offset <= 10_000:
+            raise ValueError("offset must be between 0 and 10000")
+        query = "list_archived_conversations" if archived else "list_conversations"
+        rows = self.conn.execute(queries.get(query), {
+            "workspace_key": self.workspace_key, "limit": limit, "offset": offset,
+        }).fetchall()
         self.conn.commit()
         return [public_conversation(row) for row in rows]
+
+    def archive(self, conversation_id: UUID):
+        """Reversibly remove a conversation from the active quota."""
+        self.conn.commit()
+        with self.conn.transaction():
+            conversation = self.get(conversation_id, lock=True)
+            if conversation["archived_at"] is not None:
+                return public_conversation(conversation)
+            if conversation["pending_request_id"] is not None:
+                raise HTTPException(409, "Cannot archive a conversation while a turn is pending.")
+            self._expire_stale_pending_summary(conversation_id)
+            pending = self.conn.execute(queries.get("pending_conversation_summary"), {
+                "conversation_id": conversation_id, "workspace_key": self.workspace_key,
+            }).fetchone()
+            if pending is not None:
+                raise HTTPException(409, "Cannot archive a conversation while its summary is pending.")
+            row = self.conn.execute(queries.get("archive_conversation"),
+                                    self._params(conversation_id)).fetchone()
+            if row is None:
+                raise HTTPException(409, "conversation archive state changed; reload")
+        return public_conversation(row)
+
+    def restore(self, conversation_id: UUID):
+        """Restore an archived conversation only when active capacity exists."""
+        self.conn.commit()
+        with self.conn.transaction():
+            require_live_workspace(self.conn, self.workspace_key, lock=True)
+            conversation = self.get(conversation_id, lock=True)
+            if conversation["archived_at"] is None:
+                return public_conversation(conversation)
+            count = self.conn.execute(
+                queries.get("count_conversations_for_workspace"),
+                {"workspace_key": self.workspace_key},
+            ).fetchone()
+            if count is not None and count["count"] >= self.max_conversations:
+                raise HTTPException(429, "conversation limit reached; archive another conversation first")
+            row = self.conn.execute(queries.get("restore_conversation"),
+                                    self._params(conversation_id)).fetchone()
+            if row is None:
+                raise HTTPException(409, "conversation archive state changed; reload")
+        return public_conversation(row)
 
     def turns(self, conversation_id, *, after=0, limit=200):
         conversation = self.get(conversation_id)
@@ -218,6 +265,8 @@ class ConversationStore:
         inside the caller's transaction.
         """
         row = self.get(conversation_id, lock=True)
+        if row.get("archived_at") is not None:
+            raise HTTPException(409, "conversation is archived; restore it before sending")
         self._expire_stale_pending_summary(conversation_id)
         pending_summary = self.conn.execute(queries.get("pending_conversation_summary"), {
             "conversation_id": conversation_id, "workspace_key": self.workspace_key,
@@ -578,6 +627,7 @@ def public_conversation(row):
         "contextEpoch": row.get("context_epoch", 0),
         "contextBoundarySequence": row.get("context_boundary_sequence", 0),
         "contextResetAt": row["context_reset_at"].isoformat() if row.get("context_reset_at") else None,
+        "archivedAt": row["archived_at"].isoformat() if row.get("archived_at") else None,
         "createdAt": row["created_at"].isoformat(),
         "updatedAt": row["updated_at"].isoformat(),
     }

@@ -27,17 +27,27 @@ export function Sidebar({ chat, sourceCount, open, onClose, onSources, onExplore
         </button>
         <div className="sidebar-section">
           <div className="sidebar-heading">
-            <span>Chats</span>
+            <span>{chat.showArchived ? 'Archived' : 'Chats'}</span>
             {chat.saved && (
-              <button
-                type="button"
-                className="icon-button"
-                aria-label="Refresh chats"
-                onClick={chat.refreshList}
-                disabled={chat.loadingList}
-              >
-                <RefreshIcon size={14} />
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="sidebar-heading-action"
+                  onClick={chat.toggleArchived}
+                  disabled={chat.loadingList}
+                >
+                  {chat.showArchived ? 'Active' : 'Archived'}
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label="Refresh chats"
+                  onClick={chat.refreshList}
+                  disabled={chat.loadingList}
+                >
+                  <RefreshIcon size={14} />
+                </button>
+              </>
             )}
           </div>
           {chat.saved ? (
@@ -47,8 +57,8 @@ export function Sidebar({ chat, sourceCount, open, onClose, onSources, onExplore
                   Loading…
                 </li>
               )}
-              {chat.conversations.map((item) => (
-                <li key={item.conversationId}>
+              {(chat.showArchived ? (chat.archivedConversations ?? []) : chat.conversations).map((item) => (
+                <li key={item.conversationId} className="chat-list-row">
                   <button
                     type="button"
                     aria-current={chat.activeId === item.conversationId ? 'page' : undefined}
@@ -58,11 +68,28 @@ export function Sidebar({ chat, sourceCount, open, onClose, onSources, onExplore
                     <span className="chat-list-title">{item.title}</span>
                     {item.pendingRequestId && <span className="pending-dot" aria-label="answer in progress" />}
                   </button>
+                  {chat.archive && (
+                    <button
+                      type="button"
+                      className="chat-archive"
+                      aria-label="Archive chat"
+                      title="Archive chat"
+                      disabled={!!item.pendingRequestId}
+                      onClick={() =>
+                        chat.showArchived ? chat.restore?.(item.conversationId) : chat.archive?.(item.conversationId)
+                      }
+                    >
+                      {chat.showArchived ? 'Restore' : 'Archive'}
+                    </button>
+                  )}
                 </li>
               ))}
-              {!chat.loadingList && chat.conversations.length === 0 && (
-                <li className="muted sidebar-empty">Your chats will appear here.</li>
-              )}
+              {!chat.loadingList &&
+                (chat.showArchived ? (chat.archivedConversations ?? []) : chat.conversations).length === 0 && (
+                  <li className="muted sidebar-empty">
+                    {chat.showArchived ? 'No archived chats.' : 'Your chats will appear here.'}
+                  </li>
+                )}
             </ul>
           ) : (
             <p className="muted sidebar-empty">Demo mode — chats aren’t saved.</p>

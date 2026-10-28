@@ -1,5 +1,6 @@
 """Retrieval orchestration: run seams, fuse, contract-check, trace, refuse."""
 
+import time
 from dataclasses import replace
 from uuid import UUID
 
@@ -9,9 +10,15 @@ from app.db import queries
 from app.embeddings.base import Embedder
 from app.retrieval.config import RetrievalConfig
 from app.retrieval.fusion import FusedChunk, fuse
+from app.retrieval.policy import program_reserve_cap
 from app.retrieval.seams.embed import embed_seam
 from app.retrieval.seams.keyword import keyword_seam
-from app.retrieval.seams.prereq import prereq_seam
+from app.retrieval.seams.prereq import (
+    REVERSE_CITED_SET_SIZE,
+    course_codes_in_query,
+    is_reverse_query,
+    prereq_seam,
+)
 from app.retrieval.trace import normalize_query, write_trace
 from app.retrieval.types import (
     Candidate,
@@ -26,6 +33,11 @@ from app.util.workspace import is_valid_workspace_key
 
 class ContractViolation(RuntimeError):
     """A fused chunk lacked a locator/grounding. This is a bug, not data."""
+
+
+def _add_timing(timings: dict[str, int] | None, name: str, started: float) -> None:
+    if timings is not None:
+        timings[name] = timings.get(name, 0) + int((time.perf_counter() - started) * 1000)
 
 
 def _run(conn, name: str, func) -> SeamResult:
@@ -51,7 +63,8 @@ def _run(conn, name: str, func) -> SeamResult:
 
 
 def _run_seams(conn, collection_id, query, embed_model, config, source_ids, workspace_key,
-               embedder, *, keyword_off: str | None = None) -> list[SeamResult]:
+               embedder, *, keyword_off: str | None = None,
+               timings: dict[str, int] | None = None) -> list[SeamResult]:
     """Run the keyword, embed, and prereq seams, each isolated so one failure cannot abort retrieval."""
     # The embed seam is always run (guarded), so it appears in the trace even
     # when disabled. The query is embedded before the first SQL read, on an idle
@@ -62,31 +75,40 @@ def _run_seams(conn, collection_id, query, embed_model, config, source_ids, work
     query_vec = None
     embed_failure: str | None = None
     if embed_config.enabled and source_ids != [] and embedder is not None:
+        started = time.perf_counter()
         try:
             query_vec = embedder.embed_query(query)
         except Exception as exc:  # noqa: BLE001 - an embedder failure stays in the embed seam
             embed_failure = f"{type(exc).__name__}: {exc}"
+        _add_timing(timings, "embed_query_ms", started)
     if embed_failure is not None:
         embedding_result = SeamResult(
             name="embed", enabled=True, state="failed", reason=embed_failure
         )
     else:
+        started = time.perf_counter()
         embedding_result = _run(conn, "embed", lambda: embed_seam(
             conn, collection_id, query, embed_model, embed_config,
             source_ids=source_ids, workspace_key=workspace_key, query_vec=query_vec,
         ))
-    return [
-        SeamResult(name="keyword", enabled=True, state="dormant", reason=keyword_off)
-        if keyword_off else _run(conn, "keyword", lambda: keyword_seam(
+        _add_timing(timings, "embed_ms", started)
+    if keyword_off:
+        keyword_result = SeamResult(
+            name="keyword", enabled=True, state="dormant", reason=keyword_off)
+    else:
+        started = time.perf_counter()
+        keyword_result = _run(conn, "keyword", lambda: keyword_seam(
             conn, collection_id, query, config.seams.keyword, source_ids=source_ids,
             workspace_key=workspace_key,
-        )),
-        embedding_result,
-        _run(conn, "prereq", lambda: prereq_seam(
-            conn, collection_id, query, config.seams.prereq, source_ids=source_ids,
-            workspace_key=workspace_key,
-        )),
-    ]
+        ))
+        _add_timing(timings, "keyword_ms", started)
+    started = time.perf_counter()
+    prereq_result = _run(conn, "prereq", lambda: prereq_seam(
+        conn, collection_id, query, config.seams.prereq, source_ids=source_ids,
+        workspace_key=workspace_key,
+    ))
+    _add_timing(timings, "prereq_ms", started)
+    return [keyword_result, embedding_result, prereq_result]
 
 
 def _cite(conn, fused: list[FusedChunk], collection_id, source_ids, workspace_key,
@@ -188,7 +210,8 @@ def _merge_seams(runs: list[SeamResult]) -> list[SeamResult]:
 
 
 def _planned(conn, collection_id, query, plan, embed_model, config: RetrievalConfig, source_ids,
-             workspace_key, embedder) -> tuple[list[SeamResult], list[FusedChunk]]:
+             workspace_key, embedder,
+             timings: dict[str, int] | None = None) -> tuple[list[SeamResult], list[FusedChunk]]:
     """Evidence chosen by a validated plan, in context order, before deduplication.
 
     The question keeps its semantic and exact-code searches; the raw prompt's
@@ -201,12 +224,15 @@ def _planned(conn, collection_id, query, plan, embed_model, config: RetrievalCon
     limits = config.planning
 
     def top(results, size):
+        if is_reverse_query(query):
+            size = max(size, REVERSE_CITED_SET_SIZE)
         return fuse(results, cited_set_size=size, embed_only_quota=config.seams.embed.only_quota,
-                    min_score=config.fusion.min_score)
+                    min_score=config.fusion.min_score,
+                    program_reserve_cap=program_reserve_cap(query, size))
 
     def seams(text, scope, keyword_off=None):
         return _run_seams(conn, collection_id, text, embed_model, config, scope, workspace_key,
-                          embedder, keyword_off=keyword_off)
+                          embedder, keyword_off=keyword_off, timings=timings)
 
     question_runs = seams(query, source_ids, "replaced by planned searches")
     runs = list(question_runs)
@@ -318,22 +344,33 @@ def retrieve(
     planner; `trace_id` lets a planned query share its operation's identity."""
     if workspace_key is not None and not is_valid_workspace_key(workspace_key):
         raise ValueError("workspace_key must contain 1-200 characters")
+    started = time.perf_counter()
+    timings: dict[str, int] = {}
     if plan is not None and not plan.empty:
+        planned_started = time.perf_counter()
         results, planned = _planned(conn, collection_id, query, plan, embed_model, config,
-                                    source_ids, workspace_key, embedder)
+                                    source_ids, workspace_key, embedder, timings=timings)
+        _add_timing(timings, "planned_ms", planned_started)
+        details_started = time.perf_counter()
         details = {
             row["chunk_id"]: row
             for row in conn.execute(queries.get("cited_chunk_details_many"), {
                 "chunk_ids": [item.chunk_id for item in planned], "workspace_key": workspace_key,
             }).fetchall()
         } if planned else {}
+        _add_timing(timings, "details_ms", details_started)
+        limit_started = time.perf_counter()
         fused = _limit_planned(planned, details, config.planning.context_size)
+        _add_timing(timings, "limit_ms", limit_started)
         return _finish(conn, collection_id, query, embed_model, config, source_ids, workspace_key,
-                       results, fused, details, trace_id)
+                       results, fused, details, trace_id, timings, started)
+    seams_started = time.perf_counter()
     results = _run_seams(conn, collection_id, query, embed_model, config, source_ids,
-                         workspace_key, embedder)
+                         workspace_key, embedder, timings=timings)
+    _add_timing(timings, "seams_wall_ms", seams_started)
     details = None
     if config.fusion.dedupe:
+        details_started = time.perf_counter()
         chunk_ids = sorted({c.chunk_id for result in results for c in result.candidates}, key=str)
         details = {
             row["chunk_id"]: row
@@ -341,9 +378,13 @@ def retrieve(
                 "chunk_ids": chunk_ids, "workspace_key": workspace_key,
             }).fetchall()
         } if chunk_ids else {}
+        _add_timing(timings, "details_ms", details_started)
+    cited_set_size = (REVERSE_CITED_SET_SIZE if is_reverse_query(query)
+                      else config.fusion.cited_set_size)
+    fusion_started = time.perf_counter()
     fused = fuse(
         results,
-        cited_set_size=config.fusion.cited_set_size,
+        cited_set_size=cited_set_size,
         embed_only_quota=config.seams.embed.only_quota,
         min_score=config.fusion.min_score,
         chunk_texts={cid: row["text"] for cid, row in details.items()}
@@ -352,28 +393,43 @@ def retrieve(
             cid: row["canonical_code"]
             for cid, row in (details or {}).items() if row.get("canonical_code")
         } if details is not None else None,
+        program_reserve_cap=program_reserve_cap(query, cited_set_size),
     )
+    _add_timing(timings, "fusion_ms", fusion_started)
     return _finish(conn, collection_id, query, embed_model, config, source_ids, workspace_key,
-                   results, fused, details, trace_id)
+                   results, fused, details, trace_id, timings, started)
 
 
 def _finish(conn, collection_id, query, embed_model, config, source_ids, workspace_key,
-            results, fused, details, trace_id) -> Retrieved | Refusal:
+            results, fused, details, trace_id, timings: dict[str, int] | None = None,
+            started: float | None = None) -> Retrieved | Refusal:
     held = set()
+    held_codes: set[str] = set()
     if fused:
-        held = {row["chunk_id"] for row in conn.execute(
+        held_started = time.perf_counter()
+        held_rows = conn.execute(
             queries.get("held_atlas_context_chunks"), {
                 "chunk_ids": [item.chunk_id for item in fused],
                 "collection_id": collection_id,
             },
-        ).fetchall()}
+        ).fetchall()
+        held = {row["chunk_id"] for row in held_rows}
+        held_codes = {row["course_code"] for row in held_rows}
         fused = [item for item in fused if item.chunk_id not in held]
+        _add_timing(timings, "held_ms", held_started)
+
+    cite_started = time.perf_counter()
     cited, contributions = _cite(conn, fused, collection_id, source_ids, workspace_key,
                                  config.fusion.dedupe, details)
     if details:
         cited = _alias_labels(conn, collection_id, cited, details)
+    _add_timing(timings, "cite_ms", cite_started)
 
-    refused = not cited
+    asked_held_codes = sorted(held_codes & set(course_codes_in_query(query)))
+    refused = not cited or bool(asked_held_codes)
+    if timings is not None and started is not None:
+        timings["total_ms"] = int((time.perf_counter() - started) * 1000)
+    trace_started = time.perf_counter()
     trace_id = write_trace(
         conn,
         trace_id=trace_id,
@@ -385,7 +441,9 @@ def _finish(conn, collection_id, query, embed_model, config, source_ids, workspa
         seams=results,
         contributions=contributions,
         workspace_key=workspace_key,
+        timings=timings,
     )
+    _add_timing(timings, "trace_write_ms", trace_started)
     trace = RetrievalTrace(
         trace_id=trace_id,
         collection_id=collection_id,
@@ -395,13 +453,26 @@ def _finish(conn, collection_id, query, embed_model, config, source_ids, workspa
         embed_model=embed_model,
         refused=refused,
         seams=tuple(results),
-        warnings=([f"Withheld {len(held)} master course excerpt(s) pending source conflict review."]
-                  if held else []),
+        warnings=(
+            [
+                (
+                    f"Withheld {len(held)} master course excerpt(s) pending source "
+                    f"conflict review for {', '.join(sorted(held_codes))}."
+                )
+            ]
+            if held else []),
+        timings=dict(timings or {}),
     )
     if refused:
-        return Refusal(
-            reason=("relevant course requirements are awaiting source conflict review"
-                    if held else "no relevant material found"),
-            trace=trace,
-        )
+        if asked_held_codes:
+            reason = (
+                "The requirement for " + ", ".join(asked_held_codes)
+                + " is under review because source evidence conflicts. "
+                "Confirm it with an advisor before relying on it."
+            )
+        elif held:
+            reason = ("relevant course requirements are awaiting source conflict review")
+        else:
+            reason = "no relevant material found"
+        return Refusal(reason=reason, trace=trace)
     return Retrieved(chunks=cited, trace=trace)

@@ -20,6 +20,7 @@ _MAX_SELECTED = 50
 _MAX_COMPLETED = 100
 _MAX_REQ_NODES = 2_000
 _MAX_REQ_DEPTH = 64
+_MAX_CHOICE_GROUPS = 128
 _GRADE_RE = re.compile(
     r"\b(?:grade\s+of\s+[A-D][+-]?|[A-D][+-]?\s+or\s+(?:better|higher))\b",
     re.IGNORECASE,
@@ -42,6 +43,8 @@ class SequenceBlocker:
     code: str
     reason: str
     alternatives: tuple[str, ...] = ()
+    alternative_groups: tuple[tuple[str, ...], ...] = ()
+    alternative_groups_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,50 @@ def _course_refs(req: Req) -> tuple[str, ...]:
     return tuple(node.code for node in _walk(req) if isinstance(node, CourseRef))
 
 
+def _choice_groups(req: Req) -> tuple[tuple[tuple[str, ...], ...], bool]:
+    """Describe OR branches as AND groups, retaining unresolved conditions."""
+    def expand(node: Req):
+        if isinstance(node, CourseRef):
+            return ((node.code,),), False
+        if isinstance(node, Condition):
+            return ((node.text,),), False
+        if isinstance(node, AnyOf):
+            groups: set[tuple[str, ...]] = set()
+            truncated = False
+            for child in node.items:
+                child_groups, child_truncated = expand(child)
+                truncated |= child_truncated
+                for group in child_groups:
+                    if group not in groups and len(groups) == _MAX_CHOICE_GROUPS:
+                        return tuple(sorted(groups)), True
+                    groups.add(group)
+            return tuple(sorted(groups)), truncated
+        if isinstance(node, AllOf):
+            groups: set[tuple[str, ...]] = {()}
+            truncated = False
+            for child in node.items:
+                child_groups, child_truncated = expand(child)
+                truncated |= child_truncated
+                combined: set[tuple[str, ...]] = set()
+                overflow = False
+                for left in sorted(groups):
+                    for right in child_groups:
+                        group = left + right
+                        if group not in combined and len(combined) == _MAX_CHOICE_GROUPS:
+                            overflow = True
+                            break
+                        combined.add(group)
+                    if overflow:
+                        break
+                groups = combined
+                if overflow:
+                    truncated = True
+            return tuple(sorted(groups)), truncated
+        raise TypeError(f"unsupported requisite node: {type(node).__name__}")
+
+    return expand(req)
+
+
 def _evaluate(
     req: Req | None,
     owner: str,
@@ -137,13 +184,26 @@ def _evaluate(
             for item in req.items
         ]
         blockers = tuple(blocker for result in results for blocker in result.blockers)
+        choice_blockers = tuple(
+            blocker for blocker in blockers
+            if blocker.reason in {"alternative_required", "multiple_alternatives_selected"}
+        )
+        if choice_blockers:
+            groups, truncated = _choice_groups(req)
+            options = (tuple(sorted({item for group in groups for item in group}))
+                       if not truncated and all(len(group) == 1 for group in groups) else ())
+            reason = ("multiple_alternatives_selected"
+                      if any(b.reason == "multiple_alternatives_selected" for b in choice_blockers)
+                      else "alternative_required")
+            blockers = tuple(b for b in blockers if b not in choice_blockers) + (
+                SequenceBlocker(owner, reason, options, groups, truncated),
+            )
         return _Evaluation(
             all(result.ready for result in results),
             frozenset(code for result in results for code in result.dependencies),
             blockers,
         )
     if isinstance(req, AnyOf):
-        refs = tuple(sorted({code for item in req.items for code in _course_refs(item)}))
         if any(_satisfied_by_completed(item, completed) for item in req.items):
             return _Evaluation(True)
         results = [
@@ -154,25 +214,24 @@ def _evaluate(
         if len(viable) == 1:
             return viable[0]
         if len(viable) > 1:
+            groups, truncated = _choice_groups(req)
+            flat = tuple(sorted({choice for group in groups for choice in group})) \
+                if not truncated and all(len(group) == 1 for group in groups) else ()
             return _Evaluation(
                 False,
-                blockers=(SequenceBlocker(owner, "multiple_alternatives_selected", refs),),
+                blockers=(SequenceBlocker(owner, "multiple_alternatives_selected", flat,
+                                          groups, truncated),),
             )
-        # A single explicitly selected alternative can still be blocked by an
-        # unresolved condition. Preserve that actionable reason; otherwise ask
-        # the user to select an alternative rather than picking one.
-        chosen = [item for item in req.items if _is_explicitly_selected(item, selected, completed)]
-        if len(chosen) == 1:
-            result = _evaluate(chosen[0], owner, selected=selected, completed=completed, courses=courses)
-            if result.blockers:
-                return result
-        return _Evaluation(False, blockers=(SequenceBlocker(owner, "alternative_required", refs),))
+        # Keep every viable route visible. Flattening these values would make
+        # (A AND B) OR C look like three interchangeable options.
+        groups, truncated = _choice_groups(req)
+        # Keep the legacy flat field only when every path is a single choice;
+        # otherwise it falsely suggests that compound prerequisites are ORs.
+        options = (tuple(sorted({choice for group in groups for choice in group}))
+                   if not truncated and all(len(group) == 1 for group in groups) else ())
+        return _Evaluation(False, blockers=(SequenceBlocker(
+            owner, "alternative_required", options, groups, truncated),))
     raise TypeError(f"unsupported requisite node: {type(req).__name__}")
-
-
-def _is_explicitly_selected(req: Req, selected: set[str], completed: set[str]) -> bool:
-    refs = _course_refs(req)
-    return bool(refs) and any(code in selected or code in completed for code in refs)
 
 
 def _satisfied_by_completed(req: Req, completed: set[str]) -> bool:
@@ -285,6 +344,8 @@ def plan_sequence(
                                 blocker.code,
                                 "missing_corequisite" if blocker.reason == "missing_prerequisite" else blocker.reason,
                                 blocker.alternatives,
+                                blocker.alternative_groups,
+                                blocker.alternative_groups_truncated,
                             )
                             for blocker in result.blockers
                         )

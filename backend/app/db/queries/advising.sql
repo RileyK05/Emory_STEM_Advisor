@@ -49,7 +49,20 @@ SELECT co.course_id, co.code, co.title, co.source_id, co.locator_id,
        EXISTS (
            SELECT 1 FROM chunks evidence
            WHERE evidence.source_id = co.source_id AND evidence.locator_id = co.locator_id
-             AND evidence.text ~* '\m(pre|co)[ -]?requisites?[[:space:]]*:'
+             AND regexp_replace(evidence.text,
+                 '\m(counts[[:space:]]+as|it[[:space:]]+is)[[:space:]]+(a[[:space:]]+)?(pre|co)[ -]?requisites?\M'
+                 '(?=[[:space:]]+for[[:space:]]+(many[[:space:]]+)?(other\M|[0-9]{3}-level\M))'
+                 '|\mno[[:space:]]+(pre|co)[ -]?requisites?[[:space:]]+(are[[:space:]]+)?(necessary|required)\M'
+                 '(?=[[:space:]]*([.!?]|$))'
+                 '|\mhas[[:space:]]+no[[:space:]]+(pre|co)[ -]?requisites?[[:space:]]*([.!?]|$)',
+                 '', 'gi') ~* ('\m(pre|co)[ -]?requisites?\M'
+                 '|\mpre[[:space:]]+and[[:space:]]+co[ -]?requisites?\M'
+                 '|\msuccessfully[[:space:]]+completed[[:space:]]+[a-z]{2,}(_ox)?[[:space:]]*[0-9]{3}'
+                 '|\mmust[[:space:]]+have[[:space:]]+completed[[:space:]]+[a-z]{2,}(_ox)?[[:space:]]*[0-9]{3}'
+                 '|\m(must[[:space:]]+have[[:space:]]+permission[[:space:]]+of[[:space:]]+(the[[:space:]]+)?instructor'
+                 '|(written[[:space:]]+)?permission[[:space:]]+of[[:space:]]+(the[[:space:]]+)?instructor[[:space:]]+(is[[:space:]]+)?required'
+                 '|requires?[[:space:]]+(the[[:space:]]+)?(written[[:space:]]+)?permission[[:space:]]+of[[:space:]]+(the[[:space:]]+)?instructor'
+                 '|and/or[[:space:]]+(the[[:space:]]+)?instructor[[:space:]]+permission)\M')
        ) AS description_has_requirements
 FROM scope sc
 JOIN courses co ON co.source_id = sc.source_id AND co.locator_id = sc.locator_id
@@ -148,7 +161,7 @@ FOR UPDATE;
 -- name: held_atlas_context_chunks
 -- Source reads and historical citations stay available for review. Automatic
 -- generation must not receive a curator-held master rule through another seam.
-SELECT DISTINCT ch.chunk_id
+SELECT DISTINCT ch.chunk_id, co.code AS course_code
 FROM chunks ch
 JOIN sources src ON src.source_id = ch.source_id
 JOIN courses co ON co.source_id = ch.source_id AND co.locator_id = ch.locator_id

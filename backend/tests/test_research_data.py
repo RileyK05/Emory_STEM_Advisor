@@ -255,13 +255,16 @@ def test_mention_comparison_is_overlap_only_and_keeps_raw_lines(db, collection, 
         compare_mentions([read_program(db, scope, corpus["bs"])])
 
 
-def test_program_cursor_cannot_be_transferred_to_another_program(db, collection, tmp_path):
+def test_program_read_marks_unverified_fields_and_rejects_foreign_cursors(db, collection, tmp_path):
     from app.config import load_settings
     from app.generation.research_tools import ReadInput, ResearchSession
     from tests.fakes import FakeEmbedder
     from tests.helpers import MODEL, lenient_config
 
     corpus = _corpus(db, collection, tmp_path)
+    db.execute("UPDATE program_field_evidence SET text_digest = 'stale' "
+               "WHERE program_id = %(p)s AND field = 'degree'", {"p": corpus["bs"]})
+    db.commit()
     scope, store = _scope(db, collection), ResearchStore(db, "development")
     run, _ = store.start(scope, run_id=uuid4(), prompt_version="test", config_version="6")
     session = ResearchSession(db, scope, store, run,
@@ -269,6 +272,11 @@ def test_program_cursor_cannot_be_transferred_to_another_program(db, collection,
         config=lenient_config(), embedder=FakeEmbedder(8))
     session.handles["h_bs"] = ("program", corpus["bs"])
     session.handles["h_minor"] = ("program", corpus["minor"])
+    read = session.program(ReadInput(handle="h_bs"), None)
+    assert read.data["fields"]["degree"]["discovery_only"] is True
+    assert read.data["fields"]["degree"]["evidence_ids"] == []
+    assert read.data["fields"]["title"]["discovery_only"] is False
+    assert any("degree" in limitation for limitation in read.limitations)
     # Seed a cursor for the minor handle without needing a long fixture.
     _, cursor = session.page(list(range(20)), ReadInput(handle="h_minor"), 8, "program")
     assert cursor
@@ -839,7 +847,7 @@ def _research_provider(monkeypatch, script):
     return provider
 
 
-@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "program_paging", "program_paging_budget", "factual_evidence_retention"])
+@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "program_paging", "program_paging_budget", "factual_evidence_retention"])
 def test_research_answers_progressively_and_persists_its_decision(
         db, collection, tmp_path, monkeypatch, scenario):
     from app.api.query_service import query_response
@@ -891,7 +899,8 @@ def test_research_answers_progressively_and_persists_its_decision(
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
         tools_enabled=True, advising_research_enabled=True, routing_enabled=False,
         embedding_model_id=MODEL, db_pool_max_size=0,
-        research_max_tool_calls=8 if scenario == "program_read_before_preparation" else 24)
+        research_max_tool_calls=8 if scenario in {"program_read_before_preparation", "preparation_after_state_rejection"} else 24,
+        research_max_calls=8 if scenario == "preparation_after_state_rejection" else load_settings().research_max_calls)
     if scenario == "program_paging_budget":
         settings = replace(settings, research_max_calls=5)
     observed = {}
@@ -929,6 +938,38 @@ def test_research_answers_progressively_and_persists_its_decision(
             return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
                 "blocks": [{"kind": "fact", "text": "ECON 101 is Principles of Macroeconomics.",
                             "evidence_ids": [observed["target"]]}]}})
+        if scenario == "preparation_after_state_rejection":
+            if index == 0:
+                return call("read_courses", {"course_codes": ["ECON 201"]})
+            if index == 1:
+                assert context["state_update_requested"]
+                return call("update_research", {"expected_revision": 0, "state": {
+                    "revision": 0, "decision_question": "Plan ECON 201 prerequisites",
+                    "active_evidence_ids": [e["evidence_id"] for e in context["exact_evidence_untrusted"]],
+                    "candidates": [{"id": "h_" + "a" * 32, "course_codes": ["ECON 201"],
+                                    "description": "Plan ECON 201", "status": "conditional"}]}})
+            if index == 2:
+                assert context["state_update_requested"]
+                assert "advisor_check_preparation" in {tool.name for tool in request.tools}
+                assert context["executed_preparation_checks"] == []
+                observed["malformed_state_rejected"] = "32 characters" in context["instruction"]
+                # The user explicitly reported no completions, so an empty list
+                # is an asserted input here, not a default for unknown history.
+                return call("check_preparation", {
+                    "selected_codes": ["ECON 201"], "completed_codes": []})
+            check = context["executed_preparation_checks"][0]
+            assert check["completed_codes"] == []
+            assert check["selected_codes"] == ["ECON 201"]
+            observed["context_preparation_check"] = check
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            return call("finish", {"decision": {
+                "outcome": "information", "completeness": "complete",
+                "preparation_check_ids": [check["check_id"]],
+                "preparation_claims": [{"check_id": check["check_id"],
+                    "selected_codes": check["selected_codes"],
+                    "completed_codes": check["completed_codes"], "conclusion": check["conclusion"]}],
+                "blocks": [{"kind": "fact", "text": "The deterministic check reports ECON 201 preparation details.",
+                    "evidence_ids": ids}]}})
         if scenario == "program_read_before_preparation":
             observed.setdefault("actions", [])
             available = {tool.name for tool in request.tools}
@@ -1018,6 +1059,24 @@ def test_research_answers_progressively_and_persists_its_decision(
                 return call("update_research", {"expected_revision": 0, "state": {
                     "revision": 0, "decision_question": "What does this policy cover?",
                     "active_evidence_ids": ids, "candidates": []}})
+            return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+                "blocks": [{"kind": "fact", "text": "The policy describes letter grades.",
+                            "evidence_ids": ids}]}})
+        if scenario == "repeated_read_no_progress":
+            if index == 0:
+                return call("search", {"query": "letter grades", "kind": "document"})
+            handle = next(h["handle"] for h in context["issued_handles"]
+                          if h["kind"] == "document" and h.get("title") == "grading-policy.txt")
+            if index == 1:
+                return call("read_document", {"handle": handle})
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            if index == 2:
+                return call("update_research", {"expected_revision": 0, "state": {
+                    "revision": 0, "decision_question": "What does this policy cover?",
+                    "active_evidence_ids": ids, "candidates": []}})
+            if index in {3, 4}:
+                return call("read_document", {"handle": handle})
+            assert context["finish_required"] is True
             return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
                 "blocks": [{"kind": "fact", "text": "The policy describes letter grades.",
                             "evidence_ids": ids}]}})
@@ -1227,6 +1286,8 @@ def test_research_answers_progressively_and_persists_its_decision(
         conversation_args = {"conversation_id": conversation_id, "conversation_request_id": request_id}
     question = ("I have a 3.7 GPA and a Chemistry major. Does that guarantee admission to Emory MD?"
                 if scenario == "finish_feedback_roundtrip" else
+                "Use the deterministic sequence tool to plan ECON 201 alone. I have completed no courses."
+                if scenario == "preparation_after_state_rejection" else
                 "What is ECON 201?" if scenario == "truncated_research_repair" else
                 "Describe ECON 101 Principles of Macroeconomics." if scenario == "factual_evidence_retention"
                 else "Help choose a path")
@@ -1245,13 +1306,22 @@ def test_research_answers_progressively_and_persists_its_decision(
     assert response.type == "answer"
     assert response.research.completeness == (
         "partial" if scenario in {"factual_evidence_retention", "program_paging_budget", "cached_read_priority", "program_read_before_preparation", "finish_feedback_roundtrip",
-                                  "truncated_research_repair"} else "complete")
+                                  "truncated_research_repair", "repeated_read_no_progress"} else "complete")
     if scenario in {"program_paging", "program_paging_budget"}:
         read, total = observed["coverage"]
         assert (read == total) == (scenario == "program_paging")
         if scenario == "program_paging_budget":
             assert f"{read} of {total} items read" in response.answer
             assert response.research.unresolvedQuestions
+    if scenario == "preparation_after_state_rejection":
+        assert len(provider.requests) <= settings.research_max_calls
+        assert observed["malformed_state_rejected"]
+        recovery_steps = ResearchStore(db, "development").steps(UUID(response.research.runId))
+        assert len(recovery_steps) <= settings.research_max_tool_calls + 1
+        persisted_check = next(step["details"] for step in recovery_steps
+                               if step["action_kind"] == "preparation_check")
+        assert persisted_check == observed["context_preparation_check"]
+        assert observed["context_preparation_check"]["completed_codes"] == []
     run = ResearchStore(db, "development").get(UUID(response.research.runId))
     if scenario == "program_read_before_preparation":
         assert observed["program_read_preceded_preparation"]
@@ -1313,7 +1383,7 @@ def test_research_answers_progressively_and_persists_its_decision(
                           else "insufficient_evidence" if scenario in {"finish_feedback_roundtrip",
                                                                        "truncated_research_repair"}
                           else "partial" if scenario in {"factual_evidence_retention", "program_paging_budget", "cached_read_priority",
-                                                         "program_read_before_preparation"}
+                                                         "program_read_before_preparation", "repeated_read_no_progress"}
                           else "completed")
     if scenario in {"clarification", "saved_clarification", "finish_feedback_roundtrip",
                     "truncated_research_repair"}:
@@ -1390,7 +1460,11 @@ def test_research_rejects_inactive_evidence_and_allows_one_correction(
     run, _ = store.start(scope, run_id=uuid4(), prompt_version="test", config_version="6")
     session = ResearchSession(db, scope, store, run, settings=load_settings(),
                               config=lenient_config(), embedder=FakeEmbedder(8))
-    checked = session.preparation(PreparationInput(selected_codes=["ECON 201"]), None)
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="completed_codes"):
+        PreparationInput(selected_codes=["ECON 201"])
+    checked = session.preparation(PreparationInput(selected_codes=["ECON 201"], completed_codes=[]), None)
     check = checked.data
     assert check["check_id"] in session.checks and check["evidence_ids"]
     session.unavailable_preparation_check_ids.add(check["check_id"])

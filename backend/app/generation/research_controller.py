@@ -205,6 +205,16 @@ def _conversation_progress(session):
     return json_digest(page.get("data", {}).get("turns_untrusted", []))
 
 
+def _requests_preparation(question):
+    """Recognize explicit requests for the deterministic course sequence check.
+
+    This only controls whether the existing check tool remains available while
+    state is being initialized; it never supplies courses or asserts history.
+    """
+    words = set(_tokens(question, 2))
+    return bool(words & {"sequence", "prerequisite", "prerequisites", "preparation"})
+
+
 def _finish_text_call(text):
     """Recognize a whole terminal JSON envelope, never prose or other tools.
 
@@ -509,10 +519,10 @@ class ResearchController:
             after = (session.new_evidence, session.read_count, session.discovery_count,
                      session.state.model_dump_json(exclude={"revision"}) if session.state else "",
                      tuple(session.active), _conversation_progress(session))
-            if session.read_count > before[1] or any(call.name in {
-                    "advisor_read_program", "advisor_read_document", "advisor_read_courses", "advisor_read_conversation"}
-                    or call.name == "advisor_recall" and call.arguments.get("handles")
-                    for call in result.tool_calls):
+            # A re-read of the same document reactivates known evidence but is
+            # not progress: counting it made the controller loop until the
+            # provider budget was gone instead of forcing a partial finish.
+            if session.read_count > before[1] or session.new_evidence > before[0] or tuple(session.active) != before[4]:
                 discovery_rounds = 0
             elif any(call.name in {"advisor_search", "advisor_list_programs", "advisor_recall"}
                      for call in result.tool_calls):
@@ -559,7 +569,10 @@ class ResearchController:
         tools = tuple(t for t in registry.definitions if not finishing or t.name == "advisor_finish")
         empty_scope = not session.scope.sources and not records
         if state_required:
-            tools = tuple(t for t in tools if t.name in {"advisor_update_research", "advisor_finish"})
+            allowed = {"advisor_update_research", "advisor_finish"}
+            if _requests_preparation(question):
+                allowed.add("advisor_check_preparation")
+            tools = tuple(t for t in tools if t.name in allowed)
         elif program_required:
             tools = tuple(t for t in tools if t.name in {"advisor_read_program", "advisor_finish"})
         elif read_required:

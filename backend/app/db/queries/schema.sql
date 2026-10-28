@@ -44,6 +44,12 @@ CREATE DATABASE baseline_check;
 -- name: schema_drop_baseline_check_database
 DROP DATABASE baseline_check;
 
+-- name: schema_clear_fresh_feature_flags
+DELETE FROM feature_flags;
+
+-- name: schema_clear_fresh_quota_policies
+DELETE FROM quota_policies;
+
 -- name: schema_source_lifecycle
 SELECT source_id, origin_key, is_current FROM sources ORDER BY source_id;
 

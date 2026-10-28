@@ -82,8 +82,25 @@ def create(body: CreateConversation, conn: Conn, workspace: Workspace):
 
 
 @router.get("", response_model=list[ConversationSummary])
-def listing(conn: Conn, workspace: Workspace):
-    return ConversationStore(conn, workspace).list()
+def listing(
+    conn: Conn,
+    workspace: Workspace,
+    archived: bool = Query(default=False),
+    limit: int = Query(default=500, ge=1, le=500),
+    offset: int = Query(default=0, ge=0, le=10_000),
+):
+    return ConversationStore(conn, workspace).list(
+        archived=archived, limit=limit, offset=offset)
+
+
+@router.post("/{conversation_id}/archive", response_model=ConversationSummary)
+def archive(conversation_id: UUID, conn: Conn, workspace: Workspace):
+    return ConversationStore(conn, workspace).archive(conversation_id)
+
+
+@router.post("/{conversation_id}/restore", response_model=ConversationSummary)
+def restore(conversation_id: UUID, conn: Conn, workspace: Workspace):
+    return ConversationStore(conn, workspace).restore(conversation_id)
 
 
 @router.get("/{conversation_id}", response_model=ConversationRecord)

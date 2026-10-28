@@ -40,12 +40,13 @@ def public_payload(value, principal):
             "traceId": trace["traceId"], "query": "", "normalizedQuery": "",
             "seams": [], "contributions": [],
             "contextBlock": [item if item.get("chunkId") in cited else {
-                **item, "sourceName": "", "locatorLabel": "", "text": "",
+                **item, "chunkId": "", "sourceId": "",
+                "sourceName": "", "locatorLabel": "", "text": "",
             } for item in (trace.get("contextBlock") or [])],
             "prompt": {"system": "", "user": ""},
             "modelCall": {"provider": "", "modelId": "", "promptTokens": None,
                           "completionTokens": None, "usageSource": "unknown", "latencyMs": 0},
-            "warnings": [], "errors": [],
+            "warnings": [], "errors": [], "timings": {},
         }
     return result
 
@@ -134,6 +135,7 @@ def answer_response(
             modelCall=_model_call(settings, answer, latency_ms),
             warnings=warnings,
             errors=[],
+            timings=dict(retrieved.trace.timings),
         ),
         applicability=applicability,
     )
@@ -154,5 +156,6 @@ def refusal_response(refusal: Refusal, *, settings, latency_ms: int) -> RefusalR
             modelCall=_model_call(settings, None, latency_ms),
             warnings=["refusal: zero grounded candidates; model was not called"] + list(trace.warnings),
             errors=[],
+            timings=dict(trace.timings),
         ),
     )

@@ -394,3 +394,58 @@ def test_rate_limit_is_not_retried_without_a_spare_call_or_time():
             _answer_with_provider_retry(generate, remaining_calls=remaining_calls,
                                         remaining_seconds=remaining_seconds,
                                         check_cancelled=lambda: None)
+
+
+def test_guard_accepts_reports_suffix_lists_denials_and_reviewed_qtm_aliases():
+    context = [
+        CitedChunk(uuid4(), uuid4(), 0, "requirements.md", "Requirements",
+                   "CHEM 202Z + 202ZL; MATH 411-412; QTM 220.",
+                   ("keyword",), 1.0, 1, 1),
+    ]
+    subjects = {"CHEM", "MATH", "QTM", "DATASCI", "CS"}
+    for draft in (
+        "CHEM 202ZL and MATH 412 are listed [1].",
+        "DATASCI 220 is listed under its former QTM code [1].",
+        "The passage does not include CS 101 [1].",
+        "There is no course numbered CS 999 [1].",
+    ):
+        assert answer_from_context(context, "What is listed?", provider=FakeProvider(draft),
+                                   course_subjects=subjects).citations
+    for query, draft in (
+        ("I took CS 170 and CS 171.", "Unverified student report: you took CS 170 and CS 171 [1]."),
+        ("I've taken CS 170.", "Unverified student report: you've taken CS 170 [1]."),
+        ("I have CS 170.", "Unverified student report: you have CS 170 [1]."),
+        ("Done: CS 170.", "Unverified student report: CS 170 is reported [1]."),
+    ):
+        assert answer_from_context(context, query, provider=FakeProvider(draft),
+                                   course_subjects=subjects).citations
+    with pytest.raises(GenerationRejected, match="CS 999"):
+        answer_from_context(context, "What is required?", provider=FakeProvider(
+            "CS 999 is required [1]."), course_subjects=subjects)
+
+
+def test_obfuscated_prompt_echoes_and_vacuous_cited_replies_are_withheld():
+    prompt_words = SYSTEM_PROMPT.split()
+    every_tenth = [("z" if index % 10 == 0 else word)
+                   for index, word in enumerate(prompt_words)]
+    with_citations = []
+    for index, word in enumerate(prompt_words):
+        with_citations.append(word)
+        if index % 8 == 7:
+            with_citations.append("[1]")
+    import base64
+    outputs = [
+        " ".join(every_tenth) + " [1].",
+        " ".join(with_citations) + " [1].",
+        "_".join(prompt_words) + " [1].",
+        base64.b64encode(SYSTEM_PROMPT.encode()).decode() + " [1].",
+    ]
+    for output in outputs:
+        with pytest.raises(GenerationRejected, match="echoed"):
+            answer_from_context(chunks(1), "question", provider=FakeProvider(output))
+    for output, reason in (
+        ("[1].", "substantive"),
+        ("The requirement is stated in the source [1].", "content-free"),
+    ):
+        with pytest.raises(GenerationRejected, match=reason):
+            answer_from_context(chunks(1), "question", provider=FakeProvider(output))

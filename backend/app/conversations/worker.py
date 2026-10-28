@@ -231,23 +231,34 @@ class ConversationTurnExecutor:
         Without this, `pending_request_id` stays set forever and every later
         turn is rejected with 409 until the student manually abandons it.
         """
+        cls._settle(conn, job, state="failed", reason=(
+            "The answer could not be completed. You can retry this turn."
+        ))
+
+    @classmethod
+    def on_cancelled(cls, conn, job: Job, exc: Exception) -> None:
+        """Settle a cancelled streamed turn without publishing a partial answer."""
+        cls._settle(conn, job, state="abandoned", reason=(
+            "The request was cancelled. Any already-started provider call may "
+            "still incur usage; its result cannot replace this turn."
+        ))
+
+    @classmethod
+    def _settle(cls, conn, job: Job, *, state: str, reason: str) -> None:
         conversation_id, request_id = _request_ids(job)
         try:
             store = ConversationStore(conn, job.scope_key)
             store.finish(
                 conversation_id,
                 request_id,
-                {
-                    "type": "failed",
-                    "reason": "The answer could not be completed. You can retry this turn.",
-                },
-                state="failed",
+                {"type": state, "reason": reason},
+                state=state,
             )
         except HTTPException:
             # The request was already settled or abandoned concurrently.
             pass
         except Exception:
-            logger.exception("conversation failure cleanup did not settle %s", request_id)
+            logger.exception("conversation cleanup did not settle %s", request_id)
 
     @classmethod
     def publish_success(cls, conn, job: Job, value: ConversationTurnResult) -> dict[str, Any]:

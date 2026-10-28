@@ -4,8 +4,22 @@ VALUES (%(conversation_id)s, %(workspace_key)s, %(title)s)
 RETURNING *;
 
 -- name: list_conversations
+SELECT * FROM conversations
+WHERE workspace_key = %(workspace_key)s
+  AND archived_at IS NULL
+ORDER BY updated_at DESC, conversation_id
+LIMIT %(limit)s OFFSET %(offset)s;
+
+-- name: list_all_conversations_for_workspace
 SELECT * FROM conversations WHERE workspace_key = %(workspace_key)s
-ORDER BY updated_at DESC, conversation_id LIMIT 200;
+ORDER BY created_at, conversation_id;
+
+-- name: list_archived_conversations
+SELECT * FROM conversations
+WHERE workspace_key = %(workspace_key)s
+  AND archived_at IS NOT NULL
+ORDER BY archived_at DESC, conversation_id
+LIMIT %(limit)s OFFSET %(offset)s;
 
 -- name: get_conversation
 SELECT * FROM conversations
@@ -132,4 +146,42 @@ WHERE t.conversation_id = %(conversation_id)s
 ORDER BY t.sequence ASC;
 
 -- name: count_conversations_for_workspace
-SELECT count(*) AS count FROM conversations WHERE workspace_key = %(workspace_key)s;
+SELECT count(*) AS count FROM conversations
+WHERE workspace_key = %(workspace_key)s AND archived_at IS NULL;
+
+-- name: archive_conversation
+UPDATE conversations
+SET archived_at = now(), updated_at = now()
+WHERE conversation_id = %(conversation_id)s
+  AND workspace_key = %(workspace_key)s
+  AND archived_at IS NULL
+RETURNING *;
+
+-- name: restore_conversation
+UPDATE conversations
+SET archived_at = NULL, updated_at = now()
+WHERE conversation_id = %(conversation_id)s
+  AND workspace_key = %(workspace_key)s
+  AND archived_at IS NOT NULL
+RETURNING *;
+
+-- A pending request is reconcilable when its job is terminal, its job row is
+-- missing, or it never had a job and has outlived the synchronous deadline.
+-- A live queued/running lease is deliberately not selected.
+-- name: reconcile_pending_conversation_requests
+SELECT r.conversation_id, r.request_id, r.job_id, c.workspace_key,
+       j.status AS job_status
+FROM conversation_requests r
+JOIN conversations c ON c.conversation_id = r.conversation_id
+LEFT JOIN jobs j ON j.job_id = r.job_id
+WHERE r.state = 'pending'
+  AND (
+      (r.job_id IS NULL
+       AND r.created_at <= %(now)s - (%(older_than_seconds)s * interval '1 second'))
+      OR (r.job_id IS NOT NULL AND j.job_id IS NULL)
+      OR j.status IN ('succeeded', 'failed', 'cancelled')
+      OR (j.status = 'running' AND j.lease_expires_at <= %(now)s)
+  )
+ORDER BY r.created_at, r.request_id
+FOR UPDATE OF r SKIP LOCKED
+LIMIT %(limit)s;

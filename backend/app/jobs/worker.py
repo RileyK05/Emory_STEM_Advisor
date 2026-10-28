@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from threading import Event, Lock, Thread
 from typing import Any
 
 from app.jobs.store import JobCancelled, JobStore, LeaseLost, SafeJobError
 from app.jobs.types import Job, JobEvent, JobStatus
+
+logger = logging.getLogger(__name__)
 
 
 class JobContext:
@@ -83,68 +86,82 @@ def run_once(
     context = JobContext(store, job, lease_seconds)
     context.start_heartbeats()
 
-    def finish_if_cancelled() -> Job:
+    def invoke_hook(name: str, exc: Exception) -> None:
+        """Run an executor settlement hook without letting it wedge the worker."""
+        hook = getattr(executor, name, None)
+        if not callable(hook):
+            return
+        try:
+            with store._transaction() as conn:
+                hook(conn, job, exc)
+        except Exception:
+            logger.exception("executor %s hook failed for job %s", name, job.job_id)
+
+    def finish_cancelled(exc: Exception) -> Job:
         try:
             context.check_cancelled()
         except JobCancelled:
             pass
-        return store._finish_cancelled(job, job.lease_token)
+        finished = store._finish_cancelled(job, job.lease_token)
+        invoke_hook("on_cancelled", exc)
+        return finished
+
+    def finish_failed(exc: Exception, *, stage: str, retryable: bool) -> Job:
+        if isinstance(exc, SafeJobError):
+            error = {"type": exc.code, "message": exc.safe_message}
+        else:
+            error = {"type": "execution_failed", "message": "Job execution failed."}
+        logger.warning("job %s (%s) failed during %s: %s",
+                       job.job_id, job.kind, stage, type(exc).__name__)
+        finished = store._finish_failure(
+            job, job.lease_token, error,
+            retryable=retryable,
+        )
+        if finished.status is JobStatus.FAILED:
+            invoke_hook("on_failure", exc)
+        return finished
 
     try:
         try:
             result = executor(job, context)
-        except JobCancelled:
+        except JobCancelled as exc:
             context.stop_heartbeats()
-            return finish_if_cancelled()
+            return finish_cancelled(exc)
         except Exception as exc:  # noqa: BLE001 - executor boundary records arbitrary failures
             context.stop_heartbeats()
             try:
                 context.check_cancelled()
-            except JobCancelled:
-                return store._finish_cancelled(job, job.lease_token)
-            if isinstance(exc, SafeJobError):
-                error = {"type": exc.code, "message": exc.safe_message}
-            else:
-                error = {"type": "execution_failed", "message": "Job execution failed."}
-            finished = store._finish_failure(
-                job, job.lease_token, error,
+            except JobCancelled as cancelled:
+                return finish_cancelled(cancelled)
+            return finish_failed(
+                exc, stage="execution",
                 retryable=not isinstance(exc, SafeJobError) or exc.retryable,
             )
-            if finished.status is JobStatus.FAILED:
-                failure_hook = getattr(executor, "on_failure", None)
-                if callable(failure_hook):
-                    with store._transaction() as conn:
-                        failure_hook(conn, job, exc)
-            return finished
         context.stop_heartbeats()
         try:
             context.check_cancelled()
             # Publication can wait on row locks; refresh the lease immediately
             # before entering the finish transaction.
             context.heartbeat()
-        except JobCancelled:
-            return store._finish_cancelled(job, job.lease_token)
+        except JobCancelled as exc:
+            return finish_cancelled(exc)
         publisher = getattr(executor, "publish_success", None)
         try:
             if callable(publisher):
-                return store._finish_success(job, job.lease_token, result, publisher=publisher)
-            return store._finish_success(job, job.lease_token, result)
-        except JobCancelled:
-            return store._finish_cancelled(job, job.lease_token)
+                finished = store._finish_success(
+                    job, job.lease_token, result, publisher=publisher)
+            else:
+                finished = store._finish_success(job, job.lease_token, result)
+            if finished.status is JobStatus.CANCELLED:
+                invoke_hook("on_cancelled", JobCancelled(str(job.job_id)))
+            return finished
+        except JobCancelled as exc:
+            return finish_cancelled(exc)
         except LeaseLost:
             raise
         except SafeJobError as exc:
-            return store._finish_failure(
-                job,
-                job.lease_token,
-                {"type": exc.code, "message": exc.safe_message},
-                retryable=exc.retryable,
-            )
-        except Exception:  # noqa: BLE001 - publication boundary must redact arbitrary failures
-            return store._finish_failure(
-                job,
-                job.lease_token,
-                {"type": "execution_failed", "message": "Job execution failed."},
-            )
+            return finish_failed(exc, stage="publication", retryable=exc.retryable)
+        except Exception as exc:  # noqa: BLE001 - publication boundary redacts failures
+            return finish_failed(exc, stage="publication", retryable=True)
     finally:
         context.stop_heartbeats()

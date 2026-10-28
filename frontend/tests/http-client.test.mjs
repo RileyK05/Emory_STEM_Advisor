@@ -211,6 +211,7 @@ test('conversation requests use owner-scoped routes and an explicit abandon', as
     if (url === '/api/conversations') return Response.json([summary]);
     if (url.includes('/abandon'))
       return Response.json({ type: 'abandoned', reason: 'Abandoned', conversationId: 'conv-1', sequence: 3 });
+    if (url.endsWith('/archive') || url.endsWith('/restore')) return Response.json(summary);
     return Response.json({ ...summary, lastSequence: 1, turns: [] });
   };
   await withStubbedFetch(handler, async () => {
@@ -219,11 +220,16 @@ test('conversation requests use owner-scoped routes and an explicit abandon', as
     await client.createConversation({ title: 'Basis' });
     await client.getConversation('conv-1', 4, 25);
     await client.abandonConversationTurn('conv-1', 'request-uuid');
+    await client.archiveConversation('conv-1');
+    await client.restoreConversation('conv-1');
     assert.equal(calls[0].url, '/api/conversations');
     assert.deepEqual(JSON.parse(calls[1].init.body), { title: 'Basis' });
     assert.equal(calls[2].url, '/api/conversations/conv-1?after=4&limit=25');
     assert.equal(calls[3].url, '/api/conversations/conv-1/turns/request-uuid/abandon');
     assert.equal(calls[3].init.credentials, 'same-origin');
+    assert.equal(calls[4].url, '/api/conversations/conv-1/archive');
+    assert.equal(calls[4].init.method, 'POST');
+    assert.equal(calls[5].url, '/api/conversations/conv-1/restore');
   });
 });
 

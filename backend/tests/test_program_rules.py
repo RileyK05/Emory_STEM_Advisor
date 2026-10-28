@@ -1,7 +1,10 @@
-import uuid
+import hashlib
+import json
+from uuid import uuid4
 
 import pytest
 
+from app.db import queries
 from app.programs.rules import RuleNode, RuleValidationError, validate_rule_structure
 from tests.helpers import api_client
 
@@ -45,73 +48,33 @@ def test_rule_course_codes_accept_atlas_shapes_without_equivalence(code, expecte
 
 
 @pytest.fixture
-def bound_program(db, collection):
-    source_id = uuid.uuid4()
-    # Insert source
-    db.execute(
-        """
-        INSERT INTO sources (source_id, collection_id, filename, content_type, file_hash, raw_path, status, index_revision, is_current)
-        VALUES (%s, %s, 'cs_catalog.md', 'text/markdown', %s, '/tmp/cs.md', 'indexed', 1, true)
-        """,
-        (source_id, collection, "b" * 64),
+def bound_program(db, collection, tmp_path):
+    from app.programs.importer import import_programs, program_id
+    from app.programs.requirements import parse_program, to_record
+    from tests.test_programs import _ingest_catalog_file
+
+    title = "Computer Science BA"
+    source_text = (
+        f"{title}\nDEGREE AWARDED BA\nHOURS TO COMPLETE 56\n"
+        "COURSES REQUIRED 18\nDEPARTMENT CONTACT Computer Science\n"
+        "Take CS 170 Intro to CS\n"
+        "Choose 2 courses from CS 255, CS 326, CS 370\n"
+        "A grade of C or better is required in all major courses\n"
     )
-    # Insert program
-    prog_id = uuid.uuid4()
-    db.execute(
-        """
-        INSERT INTO programs (
-            program_id, collection_id, title, kind, catalog, source_url,
-            first_page, last_page, parser_version, source_id, source_index_revision,
-            source_sha256, origin_key, binding_status
-        ) VALUES (
-            %s, %s, 'Computer Science BA', 'major', 'emory_college', 'https://college.emory.edu/cs-ba',
-            10, 12, '1', %s, 1, %s, 'origin-cs', 'bound'
-        )
-        """,
-        (prog_id, collection, source_id, "b" * 64),
-    )
-    # Insert program items
-    # item 0: core course
-    db.execute(
-        """
-        INSERT INTO program_items (program_id, "position", section, text, choose)
-        VALUES (%s, 0, 'Core', 'Take CS 170 Intro to CS', null)
-        """,
-        (prog_id,),
-    )
-    db.execute(
-        """
-        INSERT INTO program_course_mentions (program_id, "position", target_code)
-        VALUES (%s, 0, 'CS 170')
-        """,
-        (prog_id,),
-    )
-    # item 1: choose elective
-    db.execute(
-        """
-        INSERT INTO program_items (program_id, "position", section, text, choose)
-        VALUES (%s, 1, 'Electives', 'Choose 2 courses from CS 255, CS 326, CS 370', 2)
-        """,
-        (prog_id,),
-    )
-    for code in ("CS 255", "CS 326", "CS 370"):
-        db.execute(
-            """
-            INSERT INTO program_course_mentions (program_id, "position", target_code)
-            VALUES (%s, 1, %s)
-            """,
-            (prog_id, code),
-        )
-    # item 2: general policy clause (grade threshold)
-    db.execute(
-        """
-        INSERT INTO program_items (program_id, "position", section, text, choose)
-        VALUES (%s, 2, 'Policies', 'A grade of C or better is required in all major courses', null)
-        """,
-        (prog_id,),
-    )
-    db.commit()
-    return prog_id, source_id
+    identity = _ingest_catalog_file(db, collection, tmp_path, title, source_text,
+                                    name="cs_catalog.md")
+    record = to_record(parse_program(title, source_text), catalog="emory_college",
+                       source_url="https://college.emory.edu/cs-ba", first_page=10,
+                       last_page=12)
+    record["source"] = identity
+    path = tmp_path / "programs.jsonl"
+    path.write_text(json.dumps(record) + "\n", encoding="utf-8")
+    import_programs(db, collection_id=collection, path=path)
+    source = db.execute(queries.get("resolve_program_source"), {
+        "collection_id": collection, "origin_key": identity["origin_key"],
+        "file_hash": identity["content_sha256"],
+    }).fetchone()
+    return program_id(collection, title), source["source_id"]
 
 
 def test_get_program_inspection(db, collection, bound_program):
@@ -169,6 +132,52 @@ def test_create_rule_draft_auto_and_validation(db, collection, bound_program):
     )
     assert resp_invalid.status_code == 422
     assert "Missing raw positions" in resp_invalid.text
+
+
+def test_rule_identity_evidence_can_span_adjacent_chunks(db, collection, bound_program):
+    from app.programs.review_service import ProgramReviewService
+
+    prog_id, source_id = bound_program
+    evidence = db.execute(queries.get("list_program_identity_evidence"), {
+        "program_id": prog_id,
+    }).fetchall()
+    next_chunk_index = db.execute(
+        "SELECT COALESCE(MAX(chunk_index), -1) + 1 AS next_index FROM chunks WHERE source_id = %s",
+        (source_id,),
+    ).fetchone()["next_index"]
+
+    for field in ("title", "degree"):
+        row = next(item for item in evidence if item["field"] == field)
+        start, end = row["span_start"], row["span_end"]
+        span = row["chunk_text"][start:end]
+        split = span.index(" ") + 1
+        prefix, suffix = span[:split], span[split:]
+        chunk_id = uuid4()
+        chunk_start = row["chunk_start_char"] + start + split
+        db.execute(
+            "UPDATE program_field_evidence SET span_end = %s, text_digest = %s "
+            "WHERE program_id = %s AND field = %s AND ordinal = %s",
+            (start + split, hashlib.sha256(prefix.encode()).hexdigest(),
+             prog_id, field, row["ordinal"]),
+        )
+        db.execute(
+            "INSERT INTO chunks (chunk_id, source_id, locator_id, chunk_index, start_char, "
+            "end_char, token_count, text) VALUES (%s, %s, %s, %s, %s, %s, 1, %s)",
+            (chunk_id, source_id, row["locator_id"], next_chunk_index,
+             chunk_start, chunk_start + len(suffix), suffix),
+        )
+        db.execute(
+            "INSERT INTO program_field_evidence (program_id, field, ordinal, chunk_id, "
+            "locator_id, source_id, source_index_revision, span_start, span_end, text_digest) "
+            "VALUES (%s, %s, 1, %s, %s, %s, %s, 0, %s, %s)",
+            (prog_id, field, chunk_id, row["locator_id"], source_id,
+             row["source_index_revision"], len(suffix),
+             hashlib.sha256(suffix.encode()).hexdigest()),
+        )
+        next_chunk_index += 1
+
+    release = ProgramReviewService.create_rule_draft(db, prog_id, None)
+    assert release["status"] == "draft"
 
 
 @pytest.mark.parametrize("mutation", ["superseded", "reindexed", "parsed", "metadata"])

@@ -8,6 +8,90 @@ stays until its R1–R11 acceptance pass is re-run.
 [security-attack-notes.md](security-attack-notes.md) records the adversarial
 input pass and its open denial-of-service limits.
 
+## Round 4 remediation (2026-10-25)
+
+R4 is now implemented at the code/contract level; its live 976-answer set has not
+been regraded. Work was split by the remediation plan and verified with the
+offline suite, not a claim that every live failure is gone.
+
+| Finding | Disposition |
+| --- | --- |
+| EMO-054 | Fixed for the composed worker. `KindDispatchingExecutor` forwards `on_failure` and `on_cancelled`; `run_once` invokes settlement on terminal execution and publication failure, logs only the safe failure type, and never settles live queued/running work. Cases extend `test_jobs.py`. |
+| EMO-056 | Partially fixed, deliberately narrower than the report's suggestion. Student reports ("I took", "I've taken", "I have", "Done:"), absence/refutation clauses, suffix/printed-range shorthand and the reviewed QTM↔DATASCI identity are recognized; missing identities are repaired only when another supplied block names them. A fabricated positive claim still fails. Cases extend `test_generation.py`. |
+| EMO-043 | Fixed for the reported transformations. Prompt-overlap checks normalize citations, punctuation, Unicode and underscore joins, compare bounded word shingles, and decode plausible base64 blocks; bare citation-only and stock content-free replies are withheld. Cases extend `test_generation.py`. |
+| EMO-044 | Partially fixed. `UPLOAD_MAX_CHUNKS` is 300, embedding runs in bounded batches (`UPLOAD_EMBED_BATCH_SIZE=64`), the deadline is checked between batches and before publication, and oversized embedder inputs are rejected rather than truncated. A single native embedding call is still not preemptible; process isolation remains open. Cases extend `test_ingest_revision.py`. |
+| EMO-057 | Fixed for mixed policy/program queries. Policy terms cap reserved program slots at `cited_set_size - 2` and lower the keyword program band, so policy evidence survives. Program-only questions keep exact-program allocation. Cases extend `test_fusion.py` and `test_keyword_seam.py`. |
+| EMO-058 / EMO-047 | Partially fixed. Backup reconciles only terminal/missing-job or aged synchronous requests before its read-only snapshot and names blocking kinds/sample IDs. A live queued/running request still blocks backup by design. |
+| EMO-055 | Fixed for the backend and sidebar. Active conversations are capped at 500, the list is paginated (active or archived), and owner-scoped archive/restore endpoints free and recheck capacity atomically. The sidebar exposes an archive action that disables on a pending turn; archive never deletes turns. |
+| EMO-053 residue | Fixed. Student trace payloads blank `chunkId`/`sourceId` for non-cited context entries as well as text/names. |
+| EMO-038 | Fixed for the ordinary retrieval path. A query naming a held Atlas course returns an explicit "requirement is under review" refusal instead of "not stated"; held chunks stay excluded from generation. |
+| EMO-009 | Improved. Section headings are included in continuation embedding inputs and keyword search; existing sources need a reindex to gain the new vectors/search text. Live S/U deadline and 90-hour cases still need a real-corpus retest. |
+| Partially cited drafts | Fixed. The one bounded repair now runs for a draft with at least one valid citation but a missing paragraph citation; completely uncited or malformed drafts still do not get a second call. This removed a false refusal on the DS 350 inclusion check. |
+| EMO-034/035 | Improved. Research progress is keyed by the actual read page/cursor, so a repeated page is no-progress while a legitimate page advance still counts. The controller now forces a partial finish after the configured no-progress window. A full research budget still runs long: `research-clarify` took 78s/7 calls and `research-beginner` 48s/4 calls after the fix, both partial; the deadline/read-completeness tail remains open. |
+| Reverse prerequisites | Fixed for the reported shape. Downstream graph hits are enabled for reverse-intent questions only, prioritized over program prose, and given a 12-citation budget. A live `CS 253` probe now lists all 11 downstream courses with their additional conditions instead of one. |
+| EMO-019 / EMO-013 parser data | Code fixed for the numeric-degree metadata case (`DEGREE AWARDED 85` -> title marker `BS`) and long spelled-out subjects (`Anthropology 201` -> `ANT 201`). The existing `programs.jsonl` still contains the old values until a reviewed program re-import/publication. |
+
+### Live post-fix smoke (2026-10-25)
+
+The configured provider was `openai-compatible` / `LongCat-2.5-Preview` against
+the development corpus. These are bounded terminal checks, not a same-model R4
+regrade.
+
+| Case | Mode | Result | Time / calls / tokens |
+| --- | --- | --- | --- |
+| `career-security` | baseline | Found CS 453 and BIOS 584 with topic-fit caveats; no invented security course or guarantee. | 10.8s / 1 / 1,994 |
+| `lookup-cs171` | baseline | Correct CS 170 / CS_OX 170 alternatives, with the catalog/Atlas distinction. | 6.4s / 2 / 4,209 |
+| `sequence-econ` | tools | Correct ECON 101 -> ECON 112 order, no blockers, FIN 201 restriction disclosed. | 19.6s / 3 / 20,236 |
+| `research-clarify` | research | Partial answer with the declaration window and two student questions. Before the progress fix it exhausted 8 calls without an answer. | 77.7s / 7 / 80,386 |
+| `research-beginner` | research | Partial beginner shortlist with source applicability and catalog-fallback limits. Before the fix it exhausted 10 calls / 112k tokens without an answer. | 48.1s / 4 / 33,614 |
+| `reverse-cs253` | baseline | Listed all 11 courses that name CS 253, with the additional conditions for each; no registration-clearance claim. | 28.0s / 1 / 2,920 |
+| `false-inclusion-ds350` | baseline | Correctly says DATASCI 350 is not in the Data Science BS required-course lists; cites the Atlas record only as a course description. | 13.5s / 1 / 2,412 |
+| `course-content-cs326-cs350` | baseline | Correctly separates CS 326 algorithms/complexity from CS 350 systems programming; no swap. | 5.9s / 1 / 2,201 |
+| `oxford-cs253` | baseline | Correctly treats CS_OX 171 as an explicit CS 253 alternative while keeping Oxford and Atlanta identities separate. | 9.8s / 2 / 4,967 |
+
+The research cases still run long and end partial by design when the remaining
+gap is a campus/term or interest question. No data publication or deployment was
+performed.
+
+### Retrieval performance (2026-10-26)
+
+Measured on the development corpus (11,669 chunks, 768-dimension embeddings),
+not a substitute for a production load test.
+
+| Stage | Result |
+| --- | --- |
+| Course-code keyword lookup | ~47 ms median; program-intent gating removed the per-chunk program-title lateral for ordinary course questions, and the title score is computed per locator |
+| Program keyword query | ~220 ms median |
+| Broad policy keyword query | ~310 ms median, down from ~588 ms; the title vector is built once per candidate locator instead of once per title pair |
+| Vector seam | ~29 ms median |
+| Prerequisite seam | ~5 ms median |
+| Live answer latency for comparison | 5.9–28 s |
+
+Kept: per-stage `trace.timings` (migration 077), one pipelined trace write per
+call, the program-intent gate, and a bounded 128-entry per-process
+query-embedding cache in `GraniteEmbedder` (about 24 ms saved on a repeated
+exact query; document vectors are not cached). `EMBEDDER_WARMUP_ON_STARTUP=true`
+loads the embedding model in a daemon thread at startup for cold local
+processes. The trace row remains one row per `retrieve()`; `timings` is
+diagnostic metadata and is redacted from student traces.
+
+Kept: the materialized title-score CTE. It preserves the tested rankings and
+cuts broad policy/program queries substantially. Tried and reverted: a
+locator-label GIN index plus a candidate `UNION` keyword query. It improved the
+narrow course lookup but regressed broad policy/program queries, so that shape
+is not used. A pgvector HNSW index is not a
+safe drop-in today: `chunk_embeddings.embedding` is a dimension-less `vector`,
+and HNSW requires a fixed dimension; adding it needs dimension-specific
+expression indexes or a schema change. No generic row/result cache was added:
+the measured DB stages are a small fraction of model latency, and a cache would
+need publication-revision and workspace/source keys to avoid stale advising
+answers.
+
+Still open after this pass: a real R4 regrade, semantic prompt injection,
+in-process PDF extraction, byte/storage quotas, research read/deadline tail
+(EMO-034/035), QTM mapping publication, and the broader data/frontend/operations
+items in the remediation plan.
+
 ## Round 3 implementation review (2026-10-22)
 
 [REPORT-round3.md](REPORT-round3.md) is retained as the external QA observation,
@@ -15,13 +99,15 @@ not rewritten as a claim about the repaired tree. Its raw `r3/` captures are not
 in this repository. The offline checks below establish code behavior; the live
 advising pass rates and reported model-specific incidents have not been rerun.
 
-Validation: the full offline backend suite passed **1,405 tests**, with two
+Validation: the full offline backend suite passed **1,433 tests**, with two
 platform-specific skips (symlink support and POSIX directory permissions), on a
 disposable SCRAM-authenticated Postgres with `PGPASSWORD` unset. No database test
-was skipped, and the run completed in 352 seconds. The final feedback-alias and
+was skipped, and the run completed in 282 seconds. The final feedback-alias and
 atomic-capture refinements passed a 75-case focused batch. Ruff, frontend type
-checking, all 42 frontend unit tests, and Compose/CI YAML parsing passed. Docker
-containers and broad browser/live-model advising certification remain unexercised;
+checking, formatting, all 42 frontend unit tests and all 56 browser checks passed
+in the latest full frontend run; one later full run hit a transient workbook
+timeout that passed on targeted rerun. Docker containers and broad live-model
+advising certification remain unexercised;
 the bounded current-provider probes are recorded below. The earlier 2,360-second
 teardown was not reproduced; it remains an unexplained intermittent cleanup delay,
 not a diagnosed issue.

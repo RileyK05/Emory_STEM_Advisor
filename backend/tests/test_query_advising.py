@@ -24,7 +24,7 @@ from app.db.connection import connection_dsn
 from app.llm.base import GenerationResult, ToolCall, ToolResultMessage, Usage
 from app.retrieval.config import load_retrieval_config
 from app.retrieval.retrieve import retrieve
-from app.retrieval.types import CitedChunk, Refusal, Retrieved
+from app.retrieval.types import CitedChunk, Refusal
 from app.simgraph.build import build_simgraph
 from tests.fakes import whitespace_tokens
 from tests.helpers import collection_name, lenient_config
@@ -177,13 +177,36 @@ def _import_atlas(db, collection, tmp_path):
     return source_id
 
 
-def test_description_only_requirements_block_sequence_without_inventing_edges(db, collection, tmp_path):
+@pytest.mark.parametrize(("description", "unresolved"), [
+    ("Prerequisite: CS 120. Algorithm analysis.", True),
+    ("For non-majors who have successfully completed PHYS 115 or 116.", True),
+    ("Must have completed NBB495A, permission of NBB honors coordinator.", True),
+    ("Must have permission of instructor and faculty research mentor.", True),
+    ("Written permission of the instructor is required before registration.", True),
+    ("Requires permission of instructor.", True),
+    ("No permission of instructor required.", True),
+    ("Permission of instructor required only for visiting students.", True),
+    ("Pre and co requisites depend on the topic offered.", True),
+    ("Students who withdraw should withdraw from the co-requisite lecture course as well.", True),
+    ("Counts as a prerequisite for 300-level intermediate workshops.", False),
+    ("It is a prerequisite for many other music courses.", False),
+    ("No prerequisites are necessary.", False),
+    ("This course has no prerequisites.", False),
+    ("No prerequisites are necessary. Corequisite: CHEM 150.", True),
+    ("No prerequisites are required except CS 170.", True),
+    ("It is a prerequisite for admission to this course to complete CS 170.", True),
+    ("EPI 530, 545, and 550 and/or instructor permission. This course covers methods.", True),
+    ("Algorithm analysis and data structures.", False),
+])
+def test_description_only_requirements_block_sequence_without_inventing_edges(
+    db, collection, tmp_path, description, unresolved
+):
     from app.db import queries
 
     path = tmp_path / "description-requirements.jsonl"
     path.write_text(json.dumps({
         "code": "CS 220", "title": "Algorithms",
-        "description": "Prerequisite: CS 120. Algorithm analysis.", "requisites": None,
+        "description": description, "requisites": None,
     }), encoding="utf-8")
     import_atlas(db, collection_id=collection, path=path,
         embedder=_PlantedAtlasEmbedder(), embed_model=_MODEL,
@@ -202,13 +225,18 @@ def test_description_only_requirements_block_sequence_without_inventing_edges(db
     context = load_advising_context(db, collection_id=collection, chunks=chunks)
     course = context["courses"][0]
     assert course["stored_parse_status"] == "none"
-    assert course["parse_status"] == "unparsed"
-    assert course["blocker_reason"] == "requirements_evidence_missing"
+    assert course["parse_status"] == ("unparsed" if unresolved else "none")
+    assert course["blocker_reason"] == ("description_requirement_unparsed" if unresolved else None)
     assert course["prerequisites"] is None
+    plan = plan_sequence({"CS 220": CourseRequirement(
+        "CS 220", "Algorithms", course["parse_status"],
+        course["prerequisites"], course["corequisites"], course["requisites_raw"],
+    )}, ["CS 220"])
+    assert plan.complete is not unresolved
     # Metadata must still block if retrieval selected a later description fragment.
     later = [replace(chunk, text="Algorithm analysis.") for chunk in chunks]
     assert load_advising_context(db, collection_id=collection, chunks=later)["courses"][0][
-        "parse_status"] == "unparsed"
+        "parse_status"] == ("unparsed" if unresolved else "none")
     assert _prerequisite_snapshot(db, collection) == before
 
 
@@ -367,10 +395,11 @@ def test_source_scoped_requirement_hold_keeps_evidence_and_blocks_verified_graph
             db, collection_id=collection, query="CS 171 algorithms",
             embedder=_PlantedAtlasEmbedder(), embed_model=_MODEL, config=retrieval_config,
         )
-        assert isinstance(retrieved, (Retrieved, Refusal))
+        assert isinstance(retrieved, Refusal)
         assert retrieved.trace.warnings
-        if isinstance(retrieved, Retrieved):
-            assert not held_chunks.intersection(chunk.chunk_id for chunk in retrieved.chunks)
+        assert "under review" in retrieved.reason
+        assert not held_chunks.intersection(
+            chunk.chunk_id for chunk in getattr(retrieved, "chunks", ()))
 
     released = release_requirement_hold(
         db, hold_id=hold["hold_id"], source_id=source_id, course_code="CS 171",
