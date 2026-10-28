@@ -91,11 +91,21 @@ url = "https://datascience.emory.edu/undergraduate/majors-requirements/joint-maj
 programs = ["MTAPSTBS"]
 
 [[page]]
-# Biology-track checklist; the core is shared across tracks.
-url = "https://datascience.emory.edu/documents/checklists/fillable-QSS_major_checklist_biol_2022-10-03.pdf"
+# The Data Science (formerly QSS) major page: core flow, math, electives, tracks
+# (reviewed 2026-10-28; replaces the 2022 Biology-track checklist).
+url = "https://datascience.emory.edu/undergraduate/majors-requirements/index.html"
 programs = ["QSSBS"]
 
 [[page]]
+url = "https://datascience.emory.edu/documents/2026_major_checklist.pdf"
+programs = ["QSSBS"]
+
+[[page]]
+url = "https://datascience.emory.edu/undergraduate/majors-requirements/data-science-minor.html"
+programs = ["QSSMIN"]
+
+[[page]]
+# The page's 2026 minor checklist link returns 404 (2026-10-28); keep the 2024 one.
 url = "https://datascience.emory.edu/documents/checklists/word-qss_minor_checklist_2024-3-22.pdf"
 programs = ["QSSMIN"]
 
@@ -109,7 +119,7 @@ programs = ["QPPAMIN"]
 
 # --- Physics
 [[page]]
-url = "https://physics.emory.edu/documents/2023oct-degree-table.pdf"
+url = "https://physics.emory.edu/documents/fall2025degreetable.pdf"
 programs = ["PHYSICSBA", "PHYSICSBS", "PHYSASTBA", "PHYSASTBS", "BIOPHYSBS", "ENGSCIBS"]
 
 [[page]]

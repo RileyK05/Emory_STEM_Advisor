@@ -46,7 +46,8 @@ def test_reconcile_verified_legacy_program_versions_keeps_history(
         f"Source: {url}\nRetrieved: 2026-10-07\n"
         "Programs: Chemistry BS (CHEMBS)\n\nCopied content.\n"
     ).encode()
-    new = old.replace(b"2026-10-07", b"2026-10-08")
+    # The scraper's current header moved the acquisition date to the ingest manifest.
+    new = old.replace(b"Retrieved: 2026-10-07\n", b"")
     suffix = ".md"
     if content_type == "application/pdf":
         old, new = make_pdf(["Earlier requirements."]), make_pdf(["Later requirements."])

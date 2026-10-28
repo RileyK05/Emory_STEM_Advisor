@@ -39,7 +39,10 @@ from scripts import scrape_programs
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _DEPARTMENT_HEADER = re.compile(
     r"\A# Program requirements: [^\n]+\n\n"
-    r"Source: (https?://[^\n]+)\nRetrieved: (\d{4}-\d{2}-\d{2})\n"
+    r"Source: (https?://[^\n]+)\n"
+    # Legacy acquisition header, or the scraper's current canonical header
+    # (acquisition details moved to the ingest manifest).
+    r"(?:Retrieved: (\d{4}-\d{2}-\d{2})|Programs: [^\n]+)\n"
 )
 _CATALOG_HEADER = re.compile(
     r"\A# ([^\n]+)\n\n"
@@ -65,7 +68,8 @@ def provenance_origin_key(raw: bytes) -> str | None:
     department = _DEPARTMENT_HEADER.match(text)
     if department is not None:
         url, acquired = department.groups()
-        date.fromisoformat(acquired)
+        if acquired is not None:
+            date.fromisoformat(acquired)
         host = urlparse(url).hostname
         if host is None or not (host == "emory.edu" or host.endswith(".emory.edu")):
             return None
