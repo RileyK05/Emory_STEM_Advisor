@@ -205,6 +205,35 @@ def test_description_requirements_are_extracted_only_when_explicit():
                               "corequisite": CourseRef("MATH 111")}
 
 
+@pytest.mark.parametrize(("description", "extracted", "status", "trees"), [
+    ("Workshop. ENGCW 270 or 271 required as prerequisite. May be repeated for credit.",
+     "ENGCW 270 or 271 required as prerequisite. May be repeated for credit.",
+     "parsed", {"prerequisite": AnyOf(_c("ENGCW 270", "ENGCW 271"))}),
+    # An earlier restriction is kept, so the requirement fails closed.
+    ("Workshop. Permission of instructor required. ENGCW 270 required as prerequisite.",
+     "Permission of instructor required. ENGCW 270 required as prerequisite.",
+     "unparsed", {}),
+    ("Prerequisite/Concurrent: EPI 504 or EPI 530.",
+     "Prerequisite/Concurrent: EPI 504 or EPI 530.",
+     "parsed", {"corequisite": AnyOf(_c("EPI 504", "EPI 530"))}),
+    ("Prerequisites EPI 530 and BIOS 500.", "Prerequisites EPI 530 and BIOS 500.",
+     "parsed", {"prerequisite": AllOf(_c("EPI 530", "BIOS 500"))}),
+    ("Oncology care. Successful completion of DPT 935 is a prerequisite to take this elective.",
+     "Successful completion of DPT 935 is a prerequisite to take this elective.",
+     "unparsed", {}),
+    # Forward references, and codes with no label at all, are not requirements.
+    ("CHEM 150 is a prerequisite for CHEM 202.", None, "none", {}),
+    ("This course is required as a prerequisite for CHEM 202.", None, "none", {}),
+    ("EPI 530, 545, and 550 and/or instructor permission.", None, "none", {}),
+])
+def test_description_requirement_forms(description, extracted, status, trees):
+    text = requisite_text(None, description)
+    assert text == extracted
+    result = parse_requisites(text)
+    assert result.status == status
+    assert result.trees == trees
+
+
 def test_ordinary_long_words_before_numbers_are_not_subjects():
     assert all(m.code != "COMPLETE 101" for m in parse_requisites("Complete 101 credits").mentions)
 

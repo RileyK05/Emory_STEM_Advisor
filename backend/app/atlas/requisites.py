@@ -16,7 +16,7 @@ from app.programs.requirements import (
     _is_level_descriptor,
 )
 
-PARSER_VERSION = "13"
+PARSER_VERSION = "14"
 
 # A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
 # uppercase, so ordinary words and "111or" are not read as codes. Spelled-out
@@ -43,7 +43,9 @@ _GRADE_RE2 = re.compile(
     r"with\s+(?:a\s+)?[A-D][+-]?\s+or\s+(?:better|higher)", re.IGNORECASE
 )
 _LABEL_RE = re.compile(
-    r"\b(recommended\s+preparation|recommended|co[ -]?requisites?|pre[ -]?requisites?)\s*:\s*",
+    r"\b(?:(recommended\s+preparation|recommended|co[ -]?requisites?|pre[ -]?requisites?)\s*:\s*"
+    # A colon-less label counts only when a course code follows it directly.
+    r"|(pre[ -]?requisites?)\s+(?=(?-i:[A-Z][A-Z0-9]{0,5}[A-Z](?:_OX)?\s?\d)))",
     re.IGNORECASE,
 )
 _CONDITIONS = [
@@ -75,6 +77,9 @@ _EXCLUSION_RE = re.compile(
 )
 _PROHIBITS_RE = re.compile(r"\bPROHIBITS\s*:.*", re.IGNORECASE | re.DOTALL)
 _USED_FOR_RE = re.compile(r"\bUsed\s+for\s*:.*", re.IGNORECASE | re.DOTALL)
+# "May be repeated for a maximum of eight hours credit." limits repeats, not entry.
+_REPEAT_RE = re.compile(
+    r"(?:^|(?<=[.!?])\s*)May\s+be\s+repeated\b[^.!?]*[.!?]?", re.IGNORECASE)
 
 
 _ALIAS_LOWER = {key.lower(): value for key, value in SUBJECT_ALIASES.items()}
@@ -127,8 +132,38 @@ def requisite_text(raw: str | None, description: str) -> str | None:
     """
     if raw and raw.strip():
         return raw
-    match = re.search(r"\b(?:pre|co)[ -]?requisites?\s*:", description, re.IGNORECASE)
-    return description[match.start():].strip() if match else raw
+    starts = [match.start() for pattern in (_DESCRIPTION_LABEL_RE, _DESCRIPTION_CLOSING_RE)
+              if (match := pattern.search(description))]
+    if not starts:
+        return raw
+    start = min(starts)
+    # A restriction stated before the requirement ("written permission of
+    # instructor required before registration.") is kept, so it fails parsing
+    # rather than disappearing.
+    restriction = _DESCRIPTION_RESTRICTION_RE.search(description, 0, start)
+    return description[restriction.start() if restriction else start:].strip()
+
+
+# A course code's start, case-sensitive inside otherwise case-insensitive labels.
+_CODE_AHEAD = r"(?-i:[A-Z][A-Z0-9]{0,5}[A-Z](?:_OX)?\s?\d)"
+# "Prerequisite: X", "Prerequisites/concurrent: X", or a colon-less label that
+# runs straight into a course code ("Prerequisites EPI 530, ...").
+_DESCRIPTION_LABEL_RE = re.compile(
+    r"\b(?:pre|co)[ -]?requisites?(?:\s*/\s*(?:concurrent|co[ -]?requisites?))?\s*:"
+    rf"|\bpre[ -]?requisites?\s+(?={_CODE_AHEAD})",
+    re.IGNORECASE)
+# A sentence naming courses and closing with a label that binds them to this
+# course ("ENGCW 270, 271, or 272 required as prerequisite."). Forward
+# references ("... is a prerequisite for CHEM 202") never match.
+_DESCRIPTION_CLOSING_RE = re.compile(
+    rf"(?:^|(?<=[.!?])\s+)(?=[^.!?]*{_CODE_AHEAD})[^.!?]*?(?:"
+    r"\brequired\s+as\s+(?:an?\s+)?pre[ -]?requisites?\b(?!\s+for\b)"
+    r"|\bis\s+(?:a\s+)?pre[ -]?requisite\s+(?:to|for)\s+(?:tak(?:e|ing)\s+)?this\b)",
+    re.IGNORECASE)
+_DESCRIPTION_RESTRICTION_RE = re.compile(
+    # "Offered as required" schedules the course; it restricts no one.
+    r"(?:^|(?<=[.!?;])\s*)(?=[^.!?;]*\b(?:permission|consent|(?<!as )required|restricted|must)\b)",
+    re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -202,6 +237,7 @@ def split_requisite_segments(
     stripped = re.sub(r"\s+&\s+", " and ", stripped)
     stripped = _RUN_TOGETHER_RE.sub(r"\1 \2 ", stripped)
     stripped = _PRE_CO_SLASH_RE.sub("prerequisite or co-requisite", stripped)
+    stripped = _REQUIRED_AS_RE.sub("", stripped)
     self_code = normalize_code(course_code) if course_code else None
     stripped = _ENROLL_TOGETHER_RE.sub(lambda match: _enroll_together(match, self_code),
                                        stripped)
@@ -214,6 +250,7 @@ def split_requisite_segments(
     stripped = _PROHIBITS_RE.sub("", stripped)
     stripped = _EXCLUSION_RE.sub("", stripped)
     stripped = _USED_FOR_RE.sub("", stripped)
+    stripped = _REPEAT_RE.sub("", stripped)
     labels = list(_LABEL_RE.finditer(stripped))
     segments: list[tuple[str, str]] = []
     if not labels:
@@ -223,7 +260,7 @@ def split_requisite_segments(
         if prefix:
             segments.extend(_split_inline("prerequisite", prefix))
         for index, label in enumerate(labels):
-            kind = _kind_for_label(label.group(1))
+            kind = _kind_for_label(label.group(1) or label.group(2))
             end = labels[index + 1].start() if index + 1 < len(labels) else len(stripped)
             content = _trim_separators(stripped[label.end():end])
             if content:
@@ -256,7 +293,11 @@ _COMBINED_LABEL_RE = re.compile(
 _COMBINED_INLINE_RE = re.compile(
     r"\s+as\s+(?:an?\s+)?pre[ -]?requisites?\s+or\s+co[ -]?requisites?\b(?!\s*:)",
     re.IGNORECASE)
-_PRE_CO_SLASH_RE = re.compile(r"\bpre\s*/\s*co[ -]?requisites?\b", re.IGNORECASE)
+_PRE_CO_SLASH_RE = re.compile(
+    r"\bpre(?:[ -]?requisites?)?\s*/\s*(?:co[ -]?requisites?|concurrent)\b", re.IGNORECASE)
+# "ENGCW 270, 271, or 272 required as prerequisite" is the inline "as prerequisite" form.
+_REQUIRED_AS_RE = re.compile(
+    r"\s+required(?=\s+as\s+(?:an?\s+)?pre[ -]?requisites?\b(?!\s+for\b))", re.IGNORECASE)
 # "Students must enroll in CHEM_OX 202 and CHEM_OX 202L together." states
 # concurrent enrollment explicitly.
 _CODE_ONLY_RE = re.compile(rf"[A-Z][A-Z0-9]{{0,5}}[A-Z](?:_OX)?\s?{_DIGITS}")
