@@ -196,22 +196,32 @@ def test_context_is_exactly_cited_current_atlas_scope_and_restores_graph(db, col
     )
 
 
-def test_missing_stored_tree_blocks_parsed_requisite_claim(db, collection):
+_EXCLUSION_ONLY = ("Students completing MATH 119 or equivalent cannot enroll for MATH 111. "
+                   "For concerns, please contact the Mathematics department.")
+
+
+@pytest.mark.parametrize(("stored", "raw", "status", "valid"), [
+    ("parsed", "CHEM 150", "unparsed", False),  # the stored tree is missing
+    ("none", "Prerequisite: CHEM 150", "unparsed", False),  # the text states a requirement
+    ("none", _EXCLUSION_ONLY, "none", True),  # an exclusion is not a requirement (MATH 111)
+])
+def test_stored_status_is_trusted_only_when_tree_and_text_agree(
+        db, collection, stored, raw, status, valid):
     source_id = _add_source(db, collection, filename="atlas.jsonl")
     _add_course(
         db, collection, source_id, "BIOL 100", label="BIOL 100",
-        parse_status="parsed", raw="CHEM 150",
+        parse_status=stored, raw=raw,
     )
     db.commit()
 
     course = load_advising_context(
         db, collection_id=collection,
-        chunks=[_cited(source_id, "BIOL 100", text="CHEM 150")],
+        chunks=[_cited(source_id, "BIOL 100", text=raw)],
     )["courses"][0]
     assert course["prerequisites"] is None
-    assert course["trees_valid"] is False
-    assert course["parse_status"] == "unparsed"
-    assert course["stored_parse_status"] == "parsed"
+    assert course["trees_valid"] is valid
+    assert course["parse_status"] == status
+    assert course["stored_parse_status"] == stored
 
 
 def test_description_only_citation_cannot_support_stored_prerequisite_or_ready_plan(db, collection):

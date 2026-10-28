@@ -271,9 +271,12 @@ def test_inline_requisite_labels_supply_the_kind(text, kind, code):
 @pytest.mark.parametrize("text", [
     "PROHIBITS: Enrollment PE 150",
     "Students completing MATH 119 or equivalent cannot enroll for MATH 111.",
+    ("Students completing PSYC_OX 100 or equivalent cannot enroll in PSYC 111. "
+     "For concerns, please contact the Psychology department."),
 ])
 def test_prohibitions_and_exclusions_are_not_requirements(text):
     result = parse_requisites(text)
+    assert result.status == "none"
     assert result.mentions == ()
     assert result.trees == {}
 

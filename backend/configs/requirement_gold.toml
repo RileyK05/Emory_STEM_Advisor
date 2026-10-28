@@ -83,6 +83,13 @@ prerequisite = "any(CS 253, cond:equivalent transfer credit)"
 reviewed = false
 
 [[course]]
+code = "MATH 111"
+text = "Students completing MATH 119 or equivalent cannot enroll for MATH 111. For concerns, please contact the Mathematics department."
+status = "none"
+note = "an exclusion and a contact pointer; no prerequisite"
+reviewed = false
+
+[[course]]
 code = "MATH 112"
 text = "This course requires MATH 111 OR MATH_OX111 OR MATH 115 OR MATH 119 OR MATH_OX119 or equivalent transfer credit as a prerequisite."
 status = "parsed"

@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from typing import Any
 from uuid import UUID
 
-from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef, Req
+from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef, Req, parse_requisites
 from app.db import queries
 from app.retrieval.types import CitedChunk
 
@@ -280,7 +280,8 @@ def load_advising_context(
         valid = True
         try:
             if stored_status == "none":
-                valid = not (raw and raw.strip()) and not nodes
+                # Text holding only exclusions or pointers (MATH 111) states no requirement.
+                valid = not nodes and parse_requisites(raw).status == "none"
             elif stored_status == "parsed":
                 if not raw or not raw.strip() or not nodes:
                     raise ValueError("parsed requisite record is missing its tree")

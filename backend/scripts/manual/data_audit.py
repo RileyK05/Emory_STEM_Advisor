@@ -168,9 +168,10 @@ def main() -> None:
 
     # 2. Coverage
     with_text = [c for c in courses if (c["requisites_raw"] or "").strip()]
-    usable = [c for c in with_text if c["parse_status"] == "parsed"]
-    print(f"\nCoverage: {len(usable)} of {len(with_text)} courses with requirement text have a "
-          f"usable tree ({len(courses)} current courses in all)")
+    # "none" with text means the text holds only exclusions or pointers.
+    usable = [c for c in with_text if c["parse_status"] in {"parsed", "none"}]
+    print(f"\nCoverage: {len(usable)} of {len(with_text)} courses with requirement text are "
+          f"usable by the planner ({len(courses)} current courses in all)")
     print("  all:", dict(Counter(c["parse_status"] for c in courses)))
     for subject in args.subjects.split(","):
         rows = [c for c in courses if c["subject"] in (subject, f"{subject}_OX")]

@@ -16,7 +16,7 @@ from app.programs.requirements import (
     _is_level_descriptor,
 )
 
-PARSER_VERSION = "14"
+PARSER_VERSION = "15"
 
 # A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
 # uppercase, so ordinary words and "111or" are not read as codes. Spelled-out
@@ -77,6 +77,11 @@ _EXCLUSION_RE = re.compile(
 )
 _PROHIBITS_RE = re.compile(r"\bPROHIBITS\s*:.*", re.IGNORECASE | re.DOTALL)
 _USED_FOR_RE = re.compile(r"\bUsed\s+for\s*:.*", re.IGNORECASE | re.DOTALL)
+# "For concerns, please contact the Mathematics department." follows an exclusion
+# (MATH 111, PSYC 111); it points to help, it is not a requirement.
+_CONTACT_RE = re.compile(
+    r"(?:^|(?<=[.!?]))\s*For\s+(?:concerns|questions)\s*,\s*please\s+contact\s+the\s+"
+    r"[^.!?]*?\bdepartment\s*\.?", re.IGNORECASE)
 # "May be repeated for a maximum of eight hours credit." limits repeats, not entry.
 _REPEAT_RE = re.compile(
     r"(?:^|(?<=[.!?])\s*)May\s+be\s+repeated\b[^.!?]*[.!?]?", re.IGNORECASE)
@@ -251,6 +256,7 @@ def split_requisite_segments(
     stripped = _EXCLUSION_RE.sub("", stripped)
     stripped = _USED_FOR_RE.sub("", stripped)
     stripped = _REPEAT_RE.sub("", stripped)
+    stripped = _CONTACT_RE.sub("", stripped)
     labels = list(_LABEL_RE.finditer(stripped))
     segments: list[tuple[str, str]] = []
     if not labels:
