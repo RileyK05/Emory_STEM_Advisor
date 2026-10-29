@@ -581,6 +581,32 @@ def test_metadata_repair_preserves_manual_course_corrections(db, collection, tmp
     assert row["requisites_raw"] == "MATH 119"
 
 
+def test_metadata_repair_keeps_reviewed_corrections(db, collection, tmp_path):
+    from app.admin.course_maintenance import CourseMaintenanceService
+
+    _import(db, collection, tmp_path)
+    state = db.execute(queries.get("get_course_by_code"), {
+        "collection_id": collection, "code": "ECON 350",
+    }).fetchone()
+    change = CourseMaintenanceService.create_change(db, collection_id=collection, payload={
+        "code": "ECON 350", "changeKind": "update", "title": state["title"],
+        "requisitesRaw": "Prerequisite: ECON 101.", "reason": "Reviewed reading.",
+        "expectedRevision": 0,
+    }, actor_user_id=None)
+    CourseMaintenanceService.publish_change(db, change_id=change["change_id"], actor_user_id=None)
+    db.execute("UPDATE courses SET parser_version = '0' WHERE collection_id = %(c)s "
+               "AND authority <> 'admin_correction'", {"c": collection})
+    db.commit()
+
+    assert refresh_atlas_requisites(db, collection_id=collection,
+                                   path=tmp_path / "atlas.jsonl") == len(_SAMPLE.splitlines()) - 1
+    corrected = db.execute(queries.get("get_course_by_code"), {
+        "collection_id": collection, "code": "ECON 350",
+    }).fetchone()
+    assert (corrected["requisites_raw"], corrected["parse_status"]) == (
+        "Prerequisite: ECON 101.", "parsed")
+
+
 def test_import_creates_courses_and_parse_status(db, collection, tmp_path):
     source_id = _import(db, collection, tmp_path)
     rows = db.execute(

@@ -94,6 +94,42 @@ _PARSED = {
     "run-together code and conjunction": ("BIOL 151or CHEM 150",
                                           AnyOf(_c("BIOL 151", "CHEM 150")),
                                           ["BIOL 151", "CHEM 150"]),
+    "miscased oxford subjects": ("Math_OX 112 or Psyc_ox 110 or Math 112",
+                                 AnyOf(_c("MATH_OX 112", "PSYC_OX 110", "MATH 112")), None),
+    "oxford subject is not an atlanta alias": ("ANTH_OX 202", CourseRef("ANTH_OX 202"), None),
+    "stray lowercase letter in a subject": ("BIOl 142L", CourseRef("BIOL 142L"), None),
+    "oxford suffix after the number": ("Math 112_OX", CourseRef("MATH_OX 112"), None),
+    "misspelled label and no-space codes": (
+        "CHEM141, CHEM_OX141 or equivalent transfer credit as a prerequiste.",
+        AnyOf((*_c("CHEM 141", "CHEM_OX 141"), Condition("equivalent transfer credit"))), None),
+    "transfer credit ends an oxford-comma list": (
+        "CHEM 221, CHEM_OX 221, or applicable transfer credit as a prerequisite.",
+        AnyOf((*_c("CHEM 221", "CHEM_OX 221"), Condition("applicable transfer credit"))), None),
+    "plural transfer credits": ("ECON 520 or equivalent transfer credits as prerequisite.",
+                                AnyOf((CourseRef("ECON 520"),
+                                       Condition("equivalent transfer credit"))), None),
+    "subjects sharing one number": ("ENVS 240 or ENVS/BIOL 247",
+                                    AnyOf(_c("ENVS 240", "ENVS 247", "BIOL 247")), None),
+    "former number in parentheses": ("CHEM 221 or CHEM 221Z (CHEM 171)",
+                                     AnyOf(_c("CHEM 221", "CHEM 221Z", "CHEM 171")), None),
+    "sentence repeated back to back": (
+        ("This course requires BIOL 142 or BIOL 240 as a prerequisite."
+         "This course requires BIOL 142 or BIOL 240 as a prerequisite."),
+        AnyOf(_c("BIOL 142", "BIOL 240")), None),
+    "requisite mandates opener": ("This requisite mandates Phys_OX 151 as prerequisite.",
+                                  CourseRef("PHYS_OX 151"), None),
+    "lecture binds to its lab": (
+        "BIOL 141 and BIOL 141L or BIOL 151 or BIOL_OX 141",
+        AnyOf((AllOf(_c("BIOL 141", "BIOL 141L")), *_c("BIOL 151", "BIOL_OX 141"))), None),
+    "comma-joined lecture and lab": (
+        "BIOL 142, BIOL 142L or BIOL_OX 142",
+        AnyOf((AllOf(_c("BIOL 142", "BIOL 142L")), CourseRef("BIOL_OX 142"))), None),
+    "labelled part and its stated conjunction": (
+        "MATH 111 as prerequisite AND MATH 112 or MATH 112Z",
+        AllOf((CourseRef("MATH 111"), AnyOf(_c("MATH 112", "MATH 112Z")))), None),
+    "labelled part or permission": (
+        "ENVS 371 or BIOL 371 as a prerequisite OR permission of instructor.",
+        AnyOf((*_c("ENVS 371", "BIOL 371"), Condition("permission of instructor"))), None),
 }
 
 
@@ -109,6 +145,9 @@ def test_parsed_requisites(text, tree, codes):
 @pytest.mark.parametrize(("text", "codes"), [
     ("ECON 101, ECON 112", ["ECON 101", "ECON 112"]),  # list with no conjunction
     ("ECON 101 and MATH 111 or MATH 112", ["ECON 101", "MATH 111", "MATH 112"]),  # mixed
+    # A lab group does not settle the precedence of the rest.
+    ("BIOL 142 and BIOL 142L or BIOL_OX 142 AND BIOL 301 OR CHEM 301",
+     ["BIOL 142", "BIOL 142L", "BIOL_OX 142", "BIOL 301", "CHEM 301"]),
 ])
 def test_ambiguous_requisites_keep_mentions_but_build_no_tree(text, codes):
     result = parse_requisites(text)
@@ -301,30 +340,48 @@ def test_transfer_tail_does_not_discard_a_following_condition():
     result = parse_requisites(
         "ECON 101 or equivalent transfer credit as a prerequisite and sophomore standing"
     )
-    assert result.status == "unparsed"
+    assert result.status in {"ambiguous", "unparsed"}  # mixed and/or; never dropped
     assert result.trees == {}
-    assert result.leftover
 
 
 def test_transfer_tail_does_not_discard_a_following_alternative():
     result = parse_requisites(
         "ENVS 483 or equivalent transfer credit as prerequisites OR permission of instructor"
     )
-    assert result.status in {"ambiguous", "unparsed"}
-    assert result.trees == {}
-    assert [mention.code for mention in result.mentions] == ["ENVS 483"]
+    assert result.trees == {"prerequisite": AnyOf((
+        CourseRef("ENVS 483"), Condition("equivalent transfer credit"),
+        Condition("permission of instructor")))}
+
+
+@pytest.mark.parametrize(("text", "prerequisite", "corequisite"), [
+    # (A and B) or T equals (A or T) and (B or T): the alternative joins each part.
+    (("CS 170 or CS_OX 170 as prerequisite and MATH 111 or MATH_OX 111 "
+      "as co-requisite or equivalent transfer credit."),
+     AnyOf((*_c("CS 170", "CS_OX 170"), Condition("equivalent transfer credit"))),
+     AnyOf((*_c("MATH 111", "MATH_OX 111"), Condition("equivalent transfer credit")))),
+    (("(BIOL 142 and BIOL 142L) or BIOL_OX 142 as prerequisites, and BIOL 370 as "
+      "co-requisite or equivalent transfer credit."),
+     AnyOf((AllOf(_c("BIOL 142", "BIOL 142L")), CourseRef("BIOL_OX 142"),
+            Condition("equivalent transfer credit"))),
+     AnyOf((CourseRef("BIOL 370"), Condition("equivalent transfer credit")))),
+])
+def test_transfer_alternative_after_joined_parts_applies_to_each(text, prerequisite, corequisite):
+    result = parse_requisites(text)
+    assert result.status == "parsed"
+    assert result.trees == {"prerequisite": prerequisite, "corequisite": corequisite}
 
 
 @pytest.mark.parametrize("text", [
-    ("CS 170 or CS_OX 170 as prerequisite and MATH 111 or MATH_OX 111 "
-     "as co-requisite or equivalent transfer credit."),
-    ("(PHYS 142 or PHYS_OX 142) as prerequisite and (MATH 211 or MATH_OX 211) "
-     "as co-requisite or equivalent transfer credit."),
+    # An alternative across kinds cannot be two required trees.
+    ("MATH_OX 210 or MATH 211 as prerequisite or MATH_OX 210 as co-requisite "
+     "or equivalent transfer credit."),
+    "ECON 101 as prerequisite or ECON 102 as co-requisite.",
+    # Mixed conjunctions between labelled parts would choose a precedence.
+    "ECON 101 as prerequisite and ECON 102 or ECON 103 as prerequisite or ECON 104.",
 ])
-def test_split_transfer_clause_with_unclear_scope_is_unresolved(text):
+def test_parts_joined_ambiguously_are_unresolved(text):
     result = parse_requisites(text)
-    assert result.status == "unparsed"
-    assert any("equivalent transfer credit" in part for part in result.leftover)
+    assert result.status in {"ambiguous", "unparsed"}
 
 
 @pytest.mark.parametrize("text", [

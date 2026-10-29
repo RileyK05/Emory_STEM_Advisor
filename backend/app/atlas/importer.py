@@ -155,7 +155,10 @@ def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Pat
             row["code"] for row in rows
             if row["authority"] not in _ADMIN_CONTROLLED
         }
-        if baseline != {course.code for course in courses}:
+        # A reviewed correction keeps its Atlas code in the file; only codes
+        # with no admin-controlled row must match the stored baseline.
+        controlled = {code for code, row in stored.items() if row["authority"] in _ADMIN_CONTROLLED}
+        if baseline != {course.code for course in courses} - controlled:
             raise ValueError("stored atlas course set differs; re-import the atlas")
         for course in courses:
             row = stored[course.code]
@@ -173,6 +176,8 @@ def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Pat
         canonical = canonical_code_map(courses)
         for course in courses:
             row = stored[course.code]
+            if course.code in controlled:
+                continue
             if (row["parser_version"] != PARSER_VERSION
                     or row["requisites_raw"] != requisite_text(course.requisites, course.description)):
                 # Reparse updates derived requirements, not the published course's

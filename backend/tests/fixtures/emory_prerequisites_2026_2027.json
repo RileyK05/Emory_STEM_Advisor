@@ -118,13 +118,13 @@
       "code": "BIOL 142",
       "requisites": "This course requires BIOL 141 and BIOL 141L or BIOL 151or BIOL_OX141 or equivalent transfer credit as a prerequisite.",
       "url": "https://college.catalog.emory.edu/courses/0043011",
-      "expected_status": "ambiguous"
+      "expected_status": "parsed"
     },
     {
       "code": "BIOL 241",
       "requisites": "BIOL 142 and BIOL 142L, or BIOL_OX 142 or BIOL_OX 142X, or equivalent transfer credit as prerequisite.",
       "url": "https://college.catalog.emory.edu/courses/0043661",
-      "expected_status": "ambiguous"
+      "expected_status": "parsed"
     },
     {
       "code": "BIOL 347",

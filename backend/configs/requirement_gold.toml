@@ -127,8 +127,9 @@ reviewed = false
 [[course]]
 code = "MATH 250"
 text = "This course requires MATH 111 as prerequisite AND MATH 112 or MATH_OX112 or MATH 112Z or MATH_OX112Z or equivalent transfer credit."
-status = "ambiguous"
-note = "the second clause has no label and the transfer alternative's scope is unstated; needs a curator reading"
+status = "parsed"
+prerequisite = "all(MATH 111, any(MATH 112, MATH_OX 112, MATH 112Z, MATH_OX 112Z, cond:equivalent transfer credit))"
+note = "the label closes the first clause; the stated AND joins the second; the transfer alternative belongs to the clause it ends"
 reviewed = false
 
 [[course]]
@@ -198,8 +199,10 @@ reviewed = false
 [[course]]
 code = "CHEM 203L"
 text = "CHEM 202L or CHEM_OX 202L or CHEM 202ZL as prerequisite and CHEM 203 or CHEM_OX 203 as prerequisite or co-requisite, or equivalent transfer credit."
-status = "unparsed"
-note = "the closing transfer alternative could qualify either part"
+status = "parsed"
+prerequisite = "any(CHEM 202L, CHEM_OX 202L, CHEM 202ZL, cond:equivalent transfer credit)"
+corequisite = "any(CHEM 203, CHEM_OX 203, cond:equivalent transfer credit)"
+note = "(A and B) or T equals (A or T) and (B or T); a condition never satisfies on its own"
 reviewed = false
 
 [[course]]
@@ -212,8 +215,10 @@ reviewed = false
 [[course]]
 code = "CHEM 204L"
 text = "CHEM 203L or CHEM_OX 203L or CHEM 203ZL or CHEM 222L or CHEM_OX 222L as prerequisite and CHEM 204 or CHEM_OX 204 as prerequisite or co-requisite or equivalent transfer credit."
-status = "unparsed"
-note = "the closing transfer alternative could qualify either part"
+status = "parsed"
+prerequisite = "any(CHEM 203L, CHEM_OX 203L, CHEM 203ZL, CHEM 222L, CHEM_OX 222L, cond:equivalent transfer credit)"
+corequisite = "any(CHEM 204, CHEM_OX 204, cond:equivalent transfer credit)"
+note = "(A and B) or T equals (A or T) and (B or T); a condition never satisfies on its own"
 reviewed = false
 
 [[course]]
@@ -232,8 +237,9 @@ reviewed = false
 [[course]]
 code = "BIOL 142"
 text = "This course requires BIOL 141 and BIOL 141L or BIOL 151or BIOL_OX141 or equivalent transfer credit as a prerequisite."
-status = "ambiguous"
-note = "mixed and/or without brackets; the likely reading (BIOL 141 and 141L) or BIOL 151 or BIOL_OX 141 needs a curator"
+status = "parsed"
+prerequisite = "any(all(BIOL 141, BIOL 141L), BIOL 151, BIOL_OX 141, cond:equivalent transfer credit)"
+note = "a lab binds to its lecture (user decision, 2026-10-29)"
 reviewed = false
 
 [[course]]
@@ -246,8 +252,9 @@ reviewed = false
 [[course]]
 code = "BIOL 240"
 text = "This course requires BIOL 141, and BIOL 141L or BIOL 151or BIOL_OX141 or equivalent transfer credit as a prerequisite."
-status = "ambiguous"
-note = "mixed and/or without brackets"
+status = "parsed"
+prerequisite = "any(all(BIOL 141, BIOL 141L), BIOL 151, BIOL_OX 141, cond:equivalent transfer credit)"
+note = "a lab binds to its lecture (user decision, 2026-10-29)"
 reviewed = false
 
 [[course]]
@@ -287,8 +294,10 @@ reviewed = false
 [[course]]
 code = "PHYS 151"
 text = "(MATH 111 or MATH_OX 111) as prerequisites and (MATH 112 or MATH_OX 112 or MATH 112Z or MATH 210 or MATH_OX 210) as co-requisites, or equivalent transfer credit."
-status = "unparsed"
-note = "the closing transfer alternative could qualify either part"
+status = "parsed"
+prerequisite = "any(MATH 111, MATH_OX 111, cond:equivalent transfer credit)"
+corequisite = "any(MATH 112, MATH_OX 112, MATH 112Z, MATH 210, MATH_OX 210, cond:equivalent transfer credit)"
+note = "(A and B) or T equals (A or T) and (B or T); a condition never satisfies on its own"
 reviewed = false
 
 [[course]]

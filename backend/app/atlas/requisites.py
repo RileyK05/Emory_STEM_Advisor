@@ -16,13 +16,16 @@ from app.programs.requirements import (
     _is_level_descriptor,
 )
 
-PARSER_VERSION = "16"
+PARSER_VERSION = "18"
 
 # A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
 # uppercase, so ordinary words and "111or" are not read as codes. Spelled-out
 # subjects ("Physics 151") and the catalog's spaced Oxford form ("ENVS OX 230")
-# are resolved through the program parser's shared aliases. A subject that is
-# not recognized is never emitted as a code.
+# are resolved through the program parser's shared aliases. Two miscased forms
+# are read as codes: a title-case subject before an Oxford suffix ("Psyc_ox 110",
+# "Math_OX 112"), and an uppercase subject with a stray lowercase last letter
+# right before its number ("BIOl 142L"). A subject that is not recognized is
+# never emitted as a code.
 _DIGITS = r"\d{2,4}(?:[A-Z][A-Z0-9]{0,7}|[a-z][A-Z]?)?"
 _SPELLING_ALIASES = "|".join(
     re.escape(alias)
@@ -32,8 +35,9 @@ _SPELLING_ALIASES = "|".join(
         reverse=True,
     )
 )
-_SUBJECT = (rf"(?:[A-Z][A-Z0-9]{{0,5}}[A-Z]|(?:{_SPELLING_ALIASES}))"
-            r"(?:_OX|\s+OX(?=\s?\d))?")
+_SUBJECT = (rf"(?:[A-Z][A-Z0-9]{{0,5}}[A-Z]|[A-Z]{{3,6}}[a-z](?=\s?\d)"
+            rf"|[A-Z][a-z]{{2,6}}(?=_(?:OX|ox)\b)|(?:{_SPELLING_ALIASES}))"
+            r"(?:_(?:OX|ox)|\s+OX(?=\s?\d))?")
 _CODE_RE = re.compile(rf"\b({_SUBJECT})\s?({_DIGITS})\b|\b({_DIGITS})\b")
 _GRADE_RE = re.compile(
     r"with\s+(?:a\s+)?(?:minimum\s+)?grade\s+of\s+[A-D][+-]?\s+or\s+(?:better|higher)",
@@ -51,8 +55,15 @@ _LABEL_RE = re.compile(
 _CONDITIONS = [
     (re.compile(r"(permission|consent)\s+of\s+(the\s+)?instructor", re.IGNORECASE),
      "permission of instructor"),
-    (re.compile(r"equivalent\s+transfer\s+credit\s+as\s+(?:a\s+)?prerequisites?\b", re.IGNORECASE),
+    (re.compile(r"equivalent\s+transfer\s+credits?\s+as\s+(?:a\s+)?prerequisites?\b",
+                re.IGNORECASE),
      "equivalent transfer credit"),
+    # As a plain operand, so "CHEM 221, CHEM 221Z, CHEM_OX 221, or equivalent
+    # transfer credit" reads as one Oxford-comma list.
+    (re.compile(r"equivalent\s+transfer\s+credits?\b", re.IGNORECASE),
+     "equivalent transfer credit"),
+    (re.compile(r"applicable\s+transfer\s+credits?\b", re.IGNORECASE),
+     "applicable transfer credit"),
     (re.compile(r"equivalent", re.IGNORECASE), "equivalent"),
     (re.compile(r"(freshman|sophomore|junior|senior)\s+standing", re.IGNORECASE),
      None),  # canonical text is the matched phrase, so the year is kept
@@ -68,7 +79,7 @@ _INLINE_LABEL_RE = re.compile(
     r"co[ -]?requisites?|pre[ -]?requisites?)\b"
     # Oxford's bare form, "CHEM_OX 150 prerequisites & CHEM_OX 202L co-requisite",
     # counts only where the label closes a clause.
-    r"|\s+(co[ -]?requisites?|pre[ -]?requisites?)(?=\s*(?:[.,;&]|\band\b|$))",
+    r"|\s+(co[ -]?requisites?|pre[ -]?requisites?)(?=\s*(?:[.,;&]|\b(?:and|or)\b|$))",
     re.IGNORECASE,
 )
 _EXCLUSION_RE = re.compile(
@@ -92,16 +103,22 @@ _ALIAS_LOWER = {key.lower(): value for key, value in SUBJECT_ALIASES.items()}
 
 def _resolve_subject(word: str) -> str | None:
     """Resolve a catalog subject or alias; unknown words are never codes."""
-    word = re.sub(r"\s+OX$", "_OX", word.strip())
-    if word.upper() in _NOT_SUBJECTS:
+    word = re.sub(r"(?:_|\s+)OX$", "_OX", word.strip(), flags=re.IGNORECASE)
+    base, oxford = (word[:-3], "_OX") if word.endswith("_OX") else (word, "")
+    if base.upper() in _NOT_SUBJECTS:
         return None
-    if word in SUBJECT_ALIASES:
-        return SUBJECT_ALIASES[word]
-    alias = _ALIAS_LOWER.get(word.lower())
-    if alias is not None:
-        return alias
-    if re.fullmatch(r"[A-Z][A-Z0-9]{0,5}[A-Z](?:_OX)?", word):
+    if oxford and re.fullmatch(r"[A-Z][A-Z0-9]{0,5}[A-Z]", base):
+        # Oxford keeps its own subjects (ANTH_OX, not the Atlanta ANT).
         return word
+    if base in SUBJECT_ALIASES:
+        return SUBJECT_ALIASES[base] + oxford
+    alias = _ALIAS_LOWER.get(base.lower())
+    if alias is not None:
+        return alias + oxford
+    if re.fullmatch(r"[A-Z][A-Z0-9]{0,5}[A-Z]", base) or re.fullmatch(r"[A-Z]{3,6}[a-z]", base):
+        return base.upper() + oxford
+    if oxford and re.fullmatch(r"[A-Z][a-z]{2,6}", base):
+        return base.upper() + oxford
     return None
 
 
@@ -203,30 +220,51 @@ def _trim_separators(text: str) -> str:
     return re.sub(r"^(?:and|or|[,;&])\s+", "", text.strip(), flags=re.IGNORECASE).strip(" ,.;")
 
 
-def _split_inline(kind: str, content: str) -> list[tuple[str, str]]:
+# The conjunction that joins a part to the one before it ("..., and BIOL 370").
+_JOINER_RE = re.compile(r"[\s,;&]*(?:(and|or)\b)?", re.IGNORECASE)
+
+
+def _joined(text: str) -> tuple[str, str]:
+    match = _JOINER_RE.match(text)
+    return (match.group(1) or "").lower(), _trim_separators(text[match.end():])
+
+
+def _split_inline(kind: str, content: str) -> list[tuple[str, str, str]]:
+    """Split inline labels into (kind, text, joiner) parts.
+
+    The joiner is the and/or that connects a part to the previous one, or "".
+    """
     matches = list(_INLINE_LABEL_RE.finditer(content))
     if not matches:
-        return [(kind, content)]
-    output: list[tuple[str, str]] = []
+        return [(kind, content, "")]
+    output: list[tuple[str, str, str]] = []
     start = 0
     for match in matches:
-        chunk = _trim_separators(content[start:match.start()])
+        joiner, chunk = _joined(content[start:match.start()])
         if chunk:
-            output.append((_kind_for_label(match.group(1) or match.group(2)), chunk))
+            output.append((_kind_for_label(match.group(1) or match.group(2)), chunk, joiner))
         start = match.end()
-    tail = _trim_separators(content[start:])
+    joiner, tail = _joined(content[start:])
     if len(output) == 1 and _TRANSFER_ONLY_RE.fullmatch(tail):
         # "ENVS 240 as co-requisite, or equivalent transfer credit": with one
-        # labelled part the alternative modifies it. After several parts its
-        # scope is unclear and it stays an unresolved segment.
-        last_kind, last = output[-1]
-        output[-1] = (last_kind, f"{last} or equivalent transfer credit")
+        # labelled part the alternative modifies it.
+        last_kind, last, last_joiner = output[-1]
+        output[-1] = (last_kind, f"{last} {joiner or 'or'} equivalent transfer credit",
+                      last_joiner)
+    elif (len(output) > 1 and joiner == "or" and _TRANSFER_ONLY_RE.fullmatch(tail)
+          and all(part[2] == "and" for part in output[1:])):
+        # "A as prerequisite and B as co-requisite, or equivalent transfer credit":
+        # (A and B) or T equals (A or T) and (B or T), so the alternative joins
+        # every part. A condition never satisfies a requirement by itself, so
+        # each course-only path is the same under any reading of its scope.
+        output = [(part_kind, f"{text} or equivalent transfer credit", part_joiner)
+                  for part_kind, text, part_joiner in output]
     elif tail:
-        output.append((kind, tail))
+        output.append((kind, tail, joiner))
     return output
 
 
-_TRANSFER_ONLY_RE = re.compile(r"(?:or\s+)?equivalent\s+transfer\s+credit", re.IGNORECASE)
+_TRANSFER_ONLY_RE = re.compile(r"(?:or\s+)?equivalent\s+transfer\s+credits?", re.IGNORECASE)
 
 
 def split_requisite_segments(
@@ -238,7 +276,17 @@ def split_requisite_segments(
     form. Prohibitions, enrollment exclusions, and ``Used for:`` block trailers
     are not requirements and are removed before scanning.
     """
-    stripped = re.sub(r"^This course requires\s+", "", text.strip(), flags=re.IGNORECASE)
+    return tuple(dict.fromkeys(
+        (kind, content) for kind, content, _joiner in _requisite_parts(text, course_code)))
+
+
+def _requisite_parts(text: str, course_code: str | None) -> tuple[tuple[str, str, str], ...]:
+    stripped = _REPEATED_SENTENCE_RE.sub(r"\1", text.strip())
+    stripped = _OPENER_RE.sub("", stripped)
+    stripped = _MISSPELLED_LABEL_RE.sub(r"prerequisite\1", stripped)
+    stripped = _OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", stripped)
+    stripped = _SHARED_NUMBER_RE.sub(r"\1 \3/\2 \3", stripped)
+    stripped = _FORMER_NUMBER_RE.sub(r"\1 or \2", stripped)
     stripped = re.sub(r"\s+&\s+", " and ", stripped)
     stripped = _RUN_TOGETHER_RE.sub(r"\1 \2 ", stripped)
     stripped = _PRE_CO_SLASH_RE.sub("prerequisite or co-requisite", stripped)
@@ -258,7 +306,7 @@ def split_requisite_segments(
     stripped = _REPEAT_RE.sub("", stripped)
     stripped = _CONTACT_RE.sub("", stripped)
     labels = list(_LABEL_RE.finditer(stripped))
-    segments: list[tuple[str, str]] = []
+    segments: list[tuple[str, str, str]] = []
     if not labels:
         segments.extend(_split_inline("prerequisite", stripped))
     else:
@@ -272,13 +320,34 @@ def split_requisite_segments(
             if content:
                 segments.extend(_split_inline(kind, content))
     # The same requirement stated twice (a label and an enrollment sentence) is one.
-    return tuple(dict.fromkeys((kind, content) for kind, content in segments if content))
+    parts: dict[tuple[str, str], str] = {}
+    for kind, content, joiner in segments:
+        if content:
+            parts.setdefault((kind, content), joiner)
+    return tuple((kind, content, joiner) for (kind, content), joiner in parts.items())
+
+
+# A requirement stated twice back to back (BIOL 260) is stated once.
+_REPEATED_SENTENCE_RE = re.compile(r"^(.{20,}?[.!?])\s*\1\s*$", re.DOTALL)
+_OPENER_RE = re.compile(r"^(?:This\s+course\s+requires|This\s+requisite\s+mandates)\s+",
+                        re.IGNORECASE)
+_MISSPELLED_LABEL_RE = re.compile(r"\bprerequiste(s?)\b", re.IGNORECASE)
+# "Math 112_OX" puts Oxford's suffix after the number; the code is MATH_OX 112.
+_OX_AFTER_NUMBER_RE = re.compile(r"\b([A-Za-z]{2,8})\s+(\d{3}[A-Z]{0,4})_OX\b")
+# "BIOL/ENVS 247" names one cross-listed number under two subjects.
+_SHARED_NUMBER_RE = re.compile(
+    r"\b([A-Z]{2,7}(?:_OX)?)/([A-Z]{2,7}(?:_OX)?)\s?(\d{3}[A-Z]{0,4})\b")
+# "CHEM 221Z (CHEM 171)": a parenthesized code right after a code is its former
+# number, an alternative. Anywhere else a parenthesis groups as usual.
+_FORMER_NUMBER_RE = re.compile(
+    rf"\b([A-Z][A-Z0-9]{{0,5}}[A-Z](?:_OX)?\s?{_DIGITS})\s*"
+    rf"\(\s*([A-Z][A-Z0-9]{{0,5}}[A-Z](?:_OX)?\s?{_DIGITS})\s*\)")
 
 
 # "BIOL 151or", "PHYS 461or": a missing space glues a code to the conjunction.
 _RUN_TOGETHER_RE = re.compile(r"(\d{3}[A-Za-z]?)(and|or)(?=\d|\b)", re.IGNORECASE)
 _TRANSFER_AS_LABEL_RE = re.compile(
-    r"(equivalent\s+transfer\s+credit)\s+as\s+(?:an?\s+)?"
+    r"(equivalent\s+transfer\s+credits?)\s+as\s+(?:an?\s+)?"
     r"prerequisites?(\s+or\s+co[ -]?requisites?)?\b",
     re.IGNORECASE,
 )
@@ -331,7 +400,7 @@ def _enroll_together(match: re.Match, self_code: str | None) -> str:
 # Only a clause that ends the segment qualifies, so a following restriction
 # sentence (CHEM 340) is never dropped.
 _TRANSFER_TAIL_RE = re.compile(
-    r"\s*(?:[,;]\s*)?(?P<connector>or|and)?\s*equivalent\s+transfer\s+credit"
+    r"\s*(?:[,;]\s*)?(?P<connector>or|and)?\s*equivalent\s+transfer\s+credits?"
     r"(?:\s+as\s+(?:a\s+)?prerequisites?"
     r"(?:\s+or\s+co[ -]?requisites?)?)?\s*\.?\s*\Z",
     re.IGNORECASE)
@@ -494,6 +563,50 @@ class _Parser:
         raise _Ambiguous(f"unexpected token {token!r}")
 
 
+def _parse_tokens(tokens: list[tuple[str, str]]) -> Req:
+    # A comma never makes a lab an alternative to its own lecture.
+    tokens = _group_labs(tokens, separators=(["comma"], ["comma", "and"]))
+    try:
+        return _Parser(tokens).parse()
+    except _Ambiguous:
+        grouped = _group_labs(tokens, separators=(["and"],))
+        if grouped == tokens:
+            raise
+        return _Parser(grouped).parse()
+
+
+def _group_labs(tokens: list[tuple[str, str]], *,
+                separators: tuple[list[str], ...]) -> list[tuple[str, str]]:
+    """Bind a lecture to its own lab: "BIOL 141 and BIOL 141L", "BIOL 142, BIOL 142L".
+
+    A lab is taken together with its lecture (user decision, 2026-10-29), so
+    the pair is one group before any other and/or applies. A comma-joined pair
+    is always grouped ("BIOL 142, BIOL 142L or BIOL_OX142" is not three
+    alternatives); an and-joined pair only when the ungrouped tokens are
+    ambiguous, so a plain AND list keeps its shape. The rest of the expression
+    must still parse without choosing a precedence.
+    """
+    output: list[tuple[str, str]] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token[0] == "code":
+            # Separators between the pair: "and", ",", or ", and".
+            end = index + 1
+            between = []
+            while end < len(tokens) and tokens[end][0] == "op" and tokens[end][1] in {"and", "comma"}:
+                between.append(tokens[end][1])
+                end += 1
+            if (between in separators and end < len(tokens)
+                    and tokens[end] == ("code", f"{token[1]}L")):
+                output.extend([("paren", "("), token, ("op", "and"), tokens[end], ("paren", ")")])
+                index = end + 1
+                continue
+        output.append(token)
+        index += 1
+    return output
+
+
 def _parse_with_transfer_tail(segment: str) -> Req | None:
     """Retry a segment whose only ambiguity is a trailing transfer-credit clause.
 
@@ -513,10 +626,28 @@ def _parse_with_transfer_tail(segment: str) -> Req | None:
     if any(ttype == "leftover" for ttype, _ in tokens):
         return None
     try:
-        tree = _Parser(tokens).parse()
+        tree = _parse_tokens(tokens)
     except _Ambiguous:
         return None
     return _attach_transfer_condition(tree, tail.group("connector"))
+
+
+def _parse_whole(segment: str) -> Req | None:
+    tokens = _scan(segment)
+    if any(ttype == "leftover" for ttype, _ in tokens):
+        return None
+    try:
+        return _parse_tokens(tokens)
+    except _Ambiguous:
+        return None
+
+
+def _combine(joiner: str, left: Req, right: Req) -> Req:
+    group = AllOf if joiner == "and" else AnyOf
+    items: list[Req] = []
+    for tree in (left, right):
+        items.extend(tree.items if isinstance(tree, group) else (tree,))
+    return group(tuple(items))
 
 
 def _attach_transfer_condition(tree: Req, connector: str | None) -> Req:
@@ -541,22 +672,26 @@ def parse_requisites(
     single_transfer = _SINGLE_LABELED_TRANSFER_RE.fullmatch(text)
     if single_transfer:
         text = f"{single_transfer.group('course')} or equivalent transfer credit as prerequisite"
-    segments = split_requisite_segments(text, course_code=course_code)
+    segments = _requisite_parts(text, course_code)
     if not segments:
         return ParsedRequisites("none", (), {}, ())
 
     mentions: list[Mention] = []
     seen: set[tuple[str, str]] = set()
     trees: dict[str, Req] = {}
+    joined_by: dict[str, str] = {}
     leftover: list[str] = []
     ambiguous = False
     unparsed = False
     self_code = normalize_code(course_code) if course_code else None
+    previous_kind: str | None = None
 
-    for kind, raw in segments:
+    for kind, raw, joiner in segments:
+        before, previous_kind = previous_kind, kind
         segment = _strip_grades(raw).strip().strip(".").strip()
         if not segment:
             continue
+        whole = segment
         transfer_tail = _TRANSFER_TAIL_RE.search(segment)
         if transfer_tail is not None:
             prefix = segment[:transfer_tail.start()].strip()
@@ -594,17 +729,34 @@ def parse_requisites(
             unparsed = True
             continue
         try:
-            tree = _Parser(tokens).parse()
+            tree = _parse_tokens(tokens)
         except _Ambiguous:
             tree = _parse_with_transfer_tail(segment)
+            if tree is None and transfer_tail is not None:
+                # "CHEM 221, CHEM 221Z, CHEM_OX 221, or equivalent transfer credit":
+                # the clause is the last item of the list, not a modifier of it.
+                tree = _parse_whole(whole)
+                transfer_tail = None
             if tree is None:
                 ambiguous = True
                 continue
-        if kind in trees:
-            ambiguous = True
-            continue
         if transfer_tail is not None:
             tree = _attach_transfer_condition(tree, transfer_tail.group("connector"))
+        if joiner == "or" and before is not None and before != kind:
+            # An alternative between a prerequisite and a corequisite has no
+            # representation as two required trees.
+            ambiguous = True
+            continue
+        if kind in trees:
+            # "MATH 111 as prerequisite AND MATH 112 or ...", "ENVS 371 as a
+            # prerequisite OR permission of instructor": the label closes the
+            # first part, so the stated conjunction joins two groups. Mixing
+            # conjunctions across parts would choose a precedence; never do that.
+            if (joiner not in {"and", "or"} or before != kind
+                    or joined_by.setdefault(kind, joiner) != joiner):
+                ambiguous = True
+                continue
+            tree = _combine(joiner, trees[kind], tree)
         trees[kind] = tree
 
     if unparsed:

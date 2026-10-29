@@ -76,8 +76,11 @@ def test_transfer_credit_tail_is_a_modifier_but_true_mixed_operators_stay_ambigu
     ))
     # A real unparenthesized mix (no trailing clause to blame) stays ambiguous.
     assert parse_requisites(by_code["MATH 345"]["requisites"]).status == "ambiguous"
-    # The run-together conjunction is repaired, but the and/or mix remains.
-    assert parse_requisites(by_code["BIOL 142"]["requisites"]).status == "ambiguous"
+    # The run-together conjunction is repaired and the lab binds to its lecture.
+    assert parse_requisites(by_code["BIOL 142"]["requisites"]).trees["prerequisite"] == AnyOf((
+        AllOf((CourseRef("BIOL 141"), CourseRef("BIOL 141L"))), CourseRef("BIOL 151"),
+        CourseRef("BIOL_OX 141"), Condition("equivalent transfer credit"),
+    ))
     # The explicit cannot-take exclusion remains in the source text but must
     # not invent BIOL 301 as a prerequisite or suppress the legitimate rule.
     chemistry = parse_requisites(by_code["CHEM 340"]["requisites"])
