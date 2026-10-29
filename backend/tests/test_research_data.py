@@ -847,7 +847,7 @@ def _research_provider(monkeypatch, script):
     return provider
 
 
-@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "program_paging", "program_paging_budget", "factual_evidence_retention"])
+@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "truncated_research_exhausted", "program_paging", "program_paging_budget", "factual_evidence_retention"])
 def test_research_answers_progressively_and_persists_its_decision(
         db, collection, tmp_path, monkeypatch, scenario):
     from app.api.query_service import query_response
@@ -1171,14 +1171,22 @@ def test_research_answers_progressively_and_persists_its_decision(
                     assert "judgment" in context["instruction"].lower()
             return GenerationResult(text=json.dumps({"decision": valid}), finish_reason="stop",
                                     usage=provider.result.usage)
-        if scenario == "truncated_research_repair":
-            if index == 0:
+        if scenario in {"truncated_research_repair", "truncated_research_exhausted"}:
+            # A cut-off reply retries the same round with a doubled allowance; only
+            # after the retries run out does the correction path demand a finish.
+            retries = 2 if scenario == "truncated_research_exhausted" else 0
+            if index <= retries:
                 return GenerationResult(text='{"partial":', tool_calls=(
                     ToolCall("partial-read", "advisor_read_courses", {"course_codes": ["ECON 201"]}),
                 ), finish_reason="length", usage=provider.result.usage)
-            if index == 1:
+            if index == 1 and scenario == "truncated_research_repair":
+                assert not context["finish_required"]
+                assert "advisor_read_courses" in {tool.name for tool in request.tools}
+                assert "output allowance" in context["instruction"]
+                assert request.max_output_tokens == 2 * provider.requests[0].max_output_tokens
+            if scenario == "truncated_research_exhausted":
                 assert context["finish_required"]
-                assert "truncat" in context["instruction"].lower() or "incomplete" in context["instruction"].lower()
+                assert "truncat" in context["instruction"].lower()
                 assert {tool.name for tool in request.tools} == {"advisor_finish"}
             return GenerationResult(text=json.dumps({"decision": {
                 "outcome": "insufficient_evidence", "completeness": "partial",
@@ -1288,7 +1296,7 @@ def test_research_answers_progressively_and_persists_its_decision(
                 if scenario == "finish_feedback_roundtrip" else
                 "Use the deterministic sequence tool to plan ECON 201 alone. I have completed no courses."
                 if scenario == "preparation_after_state_rejection" else
-                "What is ECON 201?" if scenario == "truncated_research_repair" else
+                "What is ECON 201?" if scenario in {"truncated_research_repair", "truncated_research_exhausted"} else
                 "Describe ECON 101 Principles of Macroeconomics." if scenario == "factual_evidence_retention"
                 else "Help choose a path")
     if scenario == "finish_rejects_unsupported_references":
@@ -1306,7 +1314,7 @@ def test_research_answers_progressively_and_persists_its_decision(
     assert response.type == "answer"
     assert response.research.completeness == (
         "partial" if scenario in {"factual_evidence_retention", "program_paging_budget", "cached_read_priority", "program_read_before_preparation", "finish_feedback_roundtrip",
-                                  "truncated_research_repair", "repeated_read_no_progress"} else "complete")
+                                  "truncated_research_repair", "truncated_research_exhausted", "repeated_read_no_progress"} else "complete")
     if scenario in {"program_paging", "program_paging_budget"}:
         read, total = observed["coverage"]
         assert (read == total) == (scenario == "program_paging")
@@ -1381,19 +1389,20 @@ def test_research_answers_progressively_and_persists_its_decision(
         assert evidence["research"]["outcome"] == "clarification"
     assert run.status == ("clarification" if scenario in {"clarification", "saved_clarification"}
                           else "insufficient_evidence" if scenario in {"finish_feedback_roundtrip",
-                                                                       "truncated_research_repair"}
+                                                                       "truncated_research_repair",
+                                                                       "truncated_research_exhausted"}
                           else "partial" if scenario in {"factual_evidence_retention", "program_paging_budget", "cached_read_priority",
                                                          "program_read_before_preparation", "repeated_read_no_progress"}
                           else "completed")
     if scenario in {"clarification", "saved_clarification", "finish_feedback_roundtrip",
-                    "truncated_research_repair"}:
+                    "truncated_research_repair", "truncated_research_exhausted"}:
         assert response.citations == [] and response.trace.contextBlock == []
         if scenario == "finish_feedback_roundtrip":
             assert response.research.outcome == "insufficient_evidence"
             assert {block.kind for block in response.research.blocks} >= {"assumption", "limitation"}
             assert not any(block.kind == "fact" for block in response.research.blocks)
-        if scenario == "truncated_research_repair":
-            assert len(provider.requests) == 2
+        if scenario in {"truncated_research_repair", "truncated_research_exhausted"}:
+            assert len(provider.requests) == (2 if scenario == "truncated_research_repair" else 4)
             assert response.research.outcome == "insufficient_evidence"
             steps = ResearchStore(db, "development").steps(run.run_id)
             assert not any(step["action_kind"] == "read_courses" for step in steps)

@@ -199,6 +199,9 @@ class Settings:
     research_operation_token_budget: int = 640_000
     research_max_prompt_bytes: int = 48_000
     research_max_output_tokens: int = 4096
+    # A reply cut off at the output limit is retried with a doubled allowance up
+    # to this ceiling: reasoning models spend hidden tokens before any tool call.
+    research_truncation_max_output_tokens: int = 16_384
     audit_max_search_states: int = 50_000
     office_enabled: bool = False
     sandbox_remote_url: str | None = None
@@ -304,7 +307,8 @@ class Settings:
                 or self.research_operation_timeout_seconds <= 0
                 or not 1_000 <= self.research_operation_token_budget <= 20_000_000
                 or not 1_024 <= self.research_max_prompt_bytes <= 8_000_000
-                or self.research_max_output_tokens <= 0):
+                or self.research_max_output_tokens <= 0
+                or self.research_truncation_max_output_tokens < self.research_max_output_tokens):
             raise ValueError("research limits are invalid")
         if self.advising_research_enabled and not self.tools_enabled:
             raise ValueError("ADVISING_RESEARCH_ENABLED requires TOOLS_ENABLED=true")
@@ -495,6 +499,7 @@ def load_settings() -> Settings:
         research_operation_token_budget=_int("RESEARCH_OPERATION_TOKEN_BUDGET", 640_000),
         research_max_prompt_bytes=_int("RESEARCH_MAX_PROMPT_BYTES", 48_000),
         research_max_output_tokens=_int("RESEARCH_MAX_OUTPUT_TOKENS", 4096),
+        research_truncation_max_output_tokens=_int("RESEARCH_TRUNCATION_MAX_OUTPUT_TOKENS", 16_384),
         audit_max_search_states=_int("AUDIT_MAX_SEARCH_STATES", 50_000),
         office_enabled=_bool("OFFICE_ENABLED", False),
         sandbox_remote_url=_optional("SANDBOX_REMOTE_URL"),

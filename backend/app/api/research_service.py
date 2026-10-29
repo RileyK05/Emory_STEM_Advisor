@@ -26,7 +26,7 @@ from app.generation.research_final import (
 from app.generation.research_tools import ResearchSession
 from app.jobs.store import JobCancelled, LeaseLost
 from app.llm.base import ProviderError
-from app.operations.budget import OperationBudgetError
+from app.operations.budget import OperationBudgetError, OperationLimits
 from app.retrieval.trace import normalize_query, write_trace
 from app.retrieval.types import RetrievalTrace, Retrieved
 from app.tools.executions import ToolExecutionLedger, ToolLedgerError
@@ -66,7 +66,16 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
     conn.commit()
     conn.execute(queries.get("mark_research_trace"), {"trace_id": trace_id})
     conn.commit()
-    operation = GenerationOperation(conn, settings, trace_id, workspace_key)
+    # Rounds request the ordinary allowance; the per-call cap admits the larger
+    # allowance a truncated round retries with (research_controller).
+    operation = GenerationOperation(conn, settings, trace_id, workspace_key, limits=OperationLimits(
+        active_budget_seconds=settings.operation_timeout_seconds,
+        max_calls=settings.operation_max_calls,
+        total_token_budget=settings.operation_token_budget,
+        per_call_output_cap=max(settings.llm_max_output_tokens,
+                                settings.research_truncation_max_output_tokens),
+        per_call_timeout_seconds=settings.llm_timeout_seconds,
+    ))
     if on_operation_created:
         on_operation_created(operation.operation_id)
     store = ResearchStore(conn, workspace_key)

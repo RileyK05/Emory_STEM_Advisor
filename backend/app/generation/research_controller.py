@@ -280,6 +280,23 @@ def _finish_repair_hint(reason, state=None):
     )
 
 
+_TRUNCATION_RETRIES = 2
+_TRUNCATED_RETRY_NOTE = ("Your previous reply used its whole output allowance before any tool call. "
+                         "Keep internal deliberation brief and make the tool call.")
+
+
+def _with_retry_allowance(request, truncations, settings):
+    """Double the output allowance per truncated attempt, up to the configured ceiling.
+
+    The larger allowance stays for the rest of the run: a model that needed it once
+    is likely to need it again.
+    """
+    if not truncations:
+        return request
+    ceiling = settings.research_truncation_max_output_tokens
+    return replace(request, max_output_tokens=min(ceiling, request.max_output_tokens * 2 ** truncations))
+
+
 class ResearchController:
     def run(self, session, provider, operation, *, ledger, check_cancelled,
             on_progress, on_attempt, question, history_context=None, selection_identity=None,
@@ -297,6 +314,11 @@ class ResearchController:
         tools_used = no_progress = 0
         discovery_rounds = 0
         corrections_used = 0
+        # A reply cut off at the output limit is not a malformed answer: reasoning
+        # models can spend the whole allowance on hidden deliberation. Retry the
+        # same round with a larger allowance before falling back to corrections.
+        truncations = 0
+        retry_truncated = False
         repairing = False
         hint = ""
         # Small configured budgets still get a research action before finishing;
@@ -364,11 +386,15 @@ class ResearchController:
                               + ". These pages remain unread; an opening page is not the entire checklist.")
             if hint and (state_required or read_required):
                 round_hint += " Previous validation feedback: " + hint
+            if retry_truncated:
+                round_hint = (round_hint + " " + _TRUNCATED_RETRY_NOTE).strip()
+                retry_truncated = False
             request, user = self.request(session, registry, question, history_context,
                                          last_round, round_hint, finishing, state_required=state_required,
                                          read_required=read_required, program_required=program_required,
                                          continuation_required=continuation_required,
                                          policy_required=policy_required)
+            request = _with_retry_allowance(request, truncations, settings)
             # Reserve an actual serialized final request/output allowance using the
             # same estimator as operation.prepare. Research gets no hidden budget.
             final_request, _ = self.request(session, registry, question, history_context, [], "", True)
@@ -381,6 +407,7 @@ class ResearchController:
                 finishing = True
                 request, user = self.request(session, registry, question, history_context,
                                              [], "Budget requires finishing now.", True)
+                request = _with_retry_allowance(request, truncations, settings)
             request_context = json.loads(request.messages[1].content)
             session.supplied = {e["evidence_id"] for e in request_context["exact_evidence_untrusted"]}
             session.unavailable_preparation_check_ids = set(
@@ -405,6 +432,14 @@ class ResearchController:
                 # Account the attempt, but never execute a partial tool batch or
                 # publish JSON that merely happens to parse before truncation.
                 result = replace(result, tool_calls=())
+                if truncations < _TRUNCATION_RETRIES:
+                    truncations += 1
+                    retry_truncated = True
+                    session.store.record_action(session.run.run_id, action_kind="rejected_finish", details={
+                        "reason": "output limit reached before a complete tool call; retrying the round "
+                                  "with a larger output allowance",
+                        "text": result.text[:16_000], "finish_reason": result.finish_reason})
+                    continue  # Same round state and context; only the allowance grows.
             if not result.tool_calls and not incomplete:
                 parsed_finish = _finish_text_call(result.text)
                 if parsed_finish is not None:
