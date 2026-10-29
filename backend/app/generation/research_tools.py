@@ -43,6 +43,7 @@ from app.tools.registry import (
     ToolRegistry,
     ToolScope,
     ToolSpec,
+    repair_arguments,
 )
 from app.util.digest import json_digest
 
@@ -111,6 +112,7 @@ def _coerce_embedded_json(value, model, *, unwrap_key: str):
         value = value[unwrap_key]
         if isinstance(value, str):
             value = json.loads(value)
+    value = repair_arguments(value, model)
     # Route through JSON parsing: the strict models require tuple fields, and
     # strict JSON input accepts an array for a tuple where `model_validate`
     # would not.

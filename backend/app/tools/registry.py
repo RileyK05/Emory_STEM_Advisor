@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+import types
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Annotated, Any, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -68,6 +69,55 @@ class ToolScope:
 
 ToolHandler = Callable[[BaseModel, ToolScope], Any]
 
+# An OpenAI-compatible provider (deepseek via Ollama) re-encodes tool arguments:
+# a field's value arrives as {"item": value}, and an empty array as "". These are
+# serialization artifacts, not the model's choices, so they are undone exactly,
+# guided by the input schema. No value the model did not send is ever invented;
+# anything else is left for validation to accept or reject.
+_WRAPPER_KEY = "item"
+
+
+def _concrete(annotation: Any) -> Any:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _concrete(get_args(annotation)[0])
+    if origin in (Union, types.UnionType):
+        options = [arg for arg in get_args(annotation) if arg is not type(None)]
+        return _concrete(options[0]) if len(options) == 1 else annotation
+    return annotation
+
+
+def repair_arguments(value: Any, annotation: Any) -> Any:
+    """Undo provider re-encodings of a tool argument against its declared type."""
+    annotation = _concrete(annotation)
+    is_model = isinstance(annotation, type) and issubclass(annotation, BaseModel)
+    wrapped = (isinstance(value, dict) and set(value) == {_WRAPPER_KEY}
+               and not (is_model and _WRAPPER_KEY in annotation.model_fields))
+    if wrapped:
+        value = value[_WRAPPER_KEY]
+    origin = get_origin(annotation)
+    if origin in (tuple, list):
+        args = get_args(annotation)
+        if value == "":
+            value = []
+        elif wrapped and not isinstance(value, (list, tuple)):
+            value = [value]
+        if not isinstance(value, (list, tuple)):
+            return value
+        if origin is tuple and args and args[-1] is not Ellipsis:
+            items = [repair_arguments(item, arg) for item, arg in zip(value, args, strict=False)]
+            items += list(value[len(args):])
+        else:
+            element = args[0] if args else Any
+            items = [repair_arguments(item, element) for item in value]
+        # Strict models accept a JSON array for a tuple only in JSON mode.
+        return tuple(items) if origin is tuple else items
+    if is_model and isinstance(value, dict):
+        fields = annotation.model_fields
+        return {key: repair_arguments(item, fields[key].annotation) if key in fields else item
+                for key, item in value.items()}
+    return value
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -123,7 +173,8 @@ class ToolRegistry:
         if spec.capability not in scope.capabilities:
             raise ToolPermissionDenied(f"Tool capability {spec.capability.value!r} is not granted.")
         try:
-            parsed = spec.input_model.model_validate(arguments)
+            parsed = spec.input_model.model_validate(
+                repair_arguments(dict(arguments), spec.input_model))
         except ValidationError as exc:
             raise ToolInputError("Tool arguments failed schema validation.") from exc
 

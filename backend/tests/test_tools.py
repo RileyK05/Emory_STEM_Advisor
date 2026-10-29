@@ -35,6 +35,11 @@ def test_schema_rejects_extra_fields_and_malformed_arguments():
     scope = ToolScope("user:1", frozenset({ToolCapability.CALCULATE}))
     with pytest.raises(Exception, match="schema validation"):
         registry.invoke("advisor_calculate", {"expression": "1+1", "shell": True}, scope)
+    with pytest.raises(Exception, match="schema validation"):
+        registry.invoke("advisor_calculate", {"expression": {"item": "1+1", "shell": True}}, scope)
+    # A provider's {"item": value} re-encoding is undone, not rejected.
+    assert registry.invoke("advisor_calculate", {"expression": {"item": "1+1"}}, scope) == (
+        CalculatorOutput(result="2"))
 
 
 def test_injected_source_tool_requires_resource_scope_and_validates_output():

@@ -424,17 +424,27 @@ def test_state_input_allows_an_omitted_expected_revision(notes, valid):
     assert parsed.state.decision_question == "Which path?"
 
 
-def test_finish_input_accepts_json_encoded_and_double_wrapped_decision():
-    """EMO-006: MiMo sends the decision as a JSON string, sometimes double-wrapped."""
+_DECISION = {"outcome": "information", "completeness": "complete",
+             "recommended_course_codes": ["ECON 315"], "blocks": [
+                 {"kind": "fact", "text": "ECON 315 counts [1].", "evidence_ids": ["e1"]}]}
+
+
+@pytest.mark.parametrize("sent", [
+    # EMO-006: MiMo sends the decision as a JSON string, sometimes double-wrapped.
+    json.dumps(_DECISION),
+    json.dumps({"decision": _DECISION}),
+    # deepseek via Ollama wraps field values as {"item": ...} and sends "" for [].
+    {**_DECISION, "blocks": {"item": [{"kind": "fact", "text": "ECON 315 counts [1].",
+                                       "evidence_ids": {"item": "e1"}}]},
+     "recommended_course_codes": {"item": "ECON 315"}, "candidate_ids": "",
+     "unresolved_questions": ""},
+])
+def test_finish_input_undoes_provider_encodings_of_the_same_decision(sent):
     from app.generation.research_tools import FinishInput
 
-    decision = {"outcome": "information", "completeness": "complete", "blocks": [
-        {"kind": "fact", "text": "ECON 315 counts [1].", "evidence_ids": ["e1"]}]}
-    direct = FinishInput.model_validate({"decision": decision})
-    encoded = FinishInput.model_validate({"decision": json.dumps(decision)})
-    wrapped = FinishInput.model_validate({"decision": json.dumps({"decision": decision})})
-    assert direct.decision == encoded.decision == wrapped.decision
-    assert direct.decision.blocks[0].text == "ECON 315 counts [1]."
+    expected = FinishInput.model_validate({"decision": _DECISION}).decision
+    assert FinishInput.model_validate({"decision": sent}).decision == expected
+    assert expected.blocks[0].evidence_ids == ("e1",)
 
 
 @pytest.mark.parametrize("transport", ["direct", "wrapped", "encoded", "fenced", "bare_fenced"])
