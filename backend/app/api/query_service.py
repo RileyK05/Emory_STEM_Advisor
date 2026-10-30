@@ -15,7 +15,7 @@ from app.admin.prompt_registry import PromptRegistry
 from app.advising.catalog import load_advising_context
 from app.api import deps
 from app.api.schemas import AnswerResponse, QueryRequest, RefusalResponse
-from app.api.serialize import answer_response, refusal_response
+from app.api.serialize import answer_response, provider_failure_detail, refusal_response
 from app.config import Settings
 from app.connections.models import (
     ConnectionUnavailable,
@@ -36,11 +36,15 @@ from app.generation.answer import (
     citation_repair_hint,
 )
 from app.generation.answer_tools import ToolAnswerProvider, answer_tool_context
-from app.generation.controller import ToolConversationController, ToolConversationError
+from app.generation.controller import (
+    ToolConversationController,
+    ToolConversationError,
+    retry_transient,
+)
 from app.generation.evidence import persist_response, record_attempt
 from app.generation.operation import GenerationOperation
 from app.generation.query_plan import PlanRejected, parse_plan, planning_request
-from app.llm.base import Provider, ProviderError, RateLimitError, TransientProviderError
+from app.llm.base import Provider, ProviderError
 from app.operations.budget import OperationBudgetError
 from app.retrieval.config import RetrievalConfig
 from app.retrieval.directory import load_directory
@@ -53,8 +57,6 @@ def _noop(*args):
     pass
 
 
-_DEFAULT_RETRY_DELAY_SECONDS = 1.0
-_MAX_RETRY_DELAY_SECONDS = 30.0
 logger = logging.getLogger(__name__)
 
 
@@ -102,30 +104,6 @@ def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) ->
             )
     except Exception:
         logger.exception("post-call quota settlement failed for %s", workspace_key)
-
-
-def _answer_with_provider_retry(generate_answer, *, remaining_calls: int,
-                                remaining_seconds: float, check_cancelled,
-                                max_retries: int = 1):
-    """Re-run a rate-limited or transient provider call inside the operation fence.
-
-    A provider rate limit used to surface immediately as a 503 that blamed the
-    settings (EMO-029). Retry once within the remaining call/time budget, honoring
-    ``retry_after``; anything else still propagates.
-    """
-    retries = 0
-    while True:
-        try:
-            return generate_answer()
-        except (RateLimitError, TransientProviderError) as exc:
-            retries += 1
-            delay = min(float(getattr(exc, "retry_after", None)
-                              or _DEFAULT_RETRY_DELAY_SECONDS), _MAX_RETRY_DELAY_SECONDS)
-            if retries > max_retries or remaining_calls - 1 < retries or remaining_seconds <= delay:
-                raise
-            check_cancelled()
-            time.sleep(delay)
-            remaining_seconds -= delay
 
 
 def _requests_course_sequence(query: str) -> bool:
@@ -556,7 +534,7 @@ def query_response(
     try:
         operation_status = operation.controller.get(operation.conn, operation.operation_id)
         try:
-            answer = _answer_with_provider_retry(
+            answer = retry_transient(
                 generate_answer,
                 remaining_calls=operation_status.remaining_calls,
                 remaining_seconds=operation_status.remaining_seconds,
@@ -604,13 +582,7 @@ def query_response(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ProviderError as exc:
         persist_response(conn, outcome, status="failed", reason=type(exc).__name__)
-        if isinstance(exc, RateLimitError):
-            retry_after = getattr(exc, "retry_after", None)
-            detail = ("the model is rate-limited"
-                      + (f"; retry in {round(retry_after)}s" if retry_after else "; retry shortly"))
-        else:
-            detail = "model connection failed; check provider settings"
-        raise HTTPException(status_code=503, detail=detail) from exc
+        raise HTTPException(status_code=503, detail=provider_failure_detail(exc, "The model")) from exc
     except (ToolConversationError, ToolLedgerError) as exc:
         persist_response(conn, outcome, status="failed", reason=type(exc).__name__)
         raise HTTPException(status_code=422, detail="native tool execution could not be completed safely") from exc

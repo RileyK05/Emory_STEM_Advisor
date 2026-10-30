@@ -424,6 +424,23 @@ def test_state_input_allows_an_omitted_expected_revision(notes, valid):
     assert parsed.state.decision_question == "Which path?"
 
 
+_STATE = {"revision": 3, "decision_question": "Which path?", "notes": []}
+
+
+@pytest.mark.parametrize("sent", [
+    {**_STATE, "revision": "3"},
+    {**_STATE, "revision": {"item": "3"}},
+    [_STATE],
+])
+def test_state_input_undoes_provider_encodings_of_the_same_state(sent):
+    from app.generation.research_tools import StateInput
+    from app.tools.registry import repair_arguments
+
+    expected = StateInput.model_validate(repair_arguments({"state": _STATE}, StateInput))
+    assert StateInput.model_validate(repair_arguments({"state": sent}, StateInput)) == expected
+    assert expected.state.revision == 3
+
+
 _DECISION = {"outcome": "information", "completeness": "complete",
              "recommended_course_codes": ["ECON 315"], "blocks": [
                  {"kind": "fact", "text": "ECON 315 counts [1].", "evidence_ids": ["e1"]}]}

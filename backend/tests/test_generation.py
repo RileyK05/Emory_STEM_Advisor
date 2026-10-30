@@ -366,7 +366,7 @@ def test_stream_invalid_completion_is_a_typed_provider_failure():
 
 
 def test_rate_limited_provider_is_retried_once_within_the_operation_budget():
-    from app.api.query_service import _answer_with_provider_retry
+    from app.generation.controller import retry_transient
     from app.llm.base import RateLimitError
 
     calls = []
@@ -377,13 +377,13 @@ def test_rate_limited_provider_is_retried_once_within_the_operation_budget():
             raise RateLimitError("slow down", provider="fake", retry_after=0.01)
         return "ok"
 
-    result = _answer_with_provider_retry(generate, remaining_calls=2, remaining_seconds=30,
+    result = retry_transient(generate, remaining_calls=2, remaining_seconds=30,
                                          check_cancelled=lambda: None)
     assert result == "ok" and len(calls) == 2
 
 
 def test_rate_limit_is_not_retried_without_a_spare_call_or_time():
-    from app.api.query_service import _answer_with_provider_retry
+    from app.generation.controller import retry_transient
     from app.llm.base import RateLimitError
 
     def generate():
@@ -391,7 +391,7 @@ def test_rate_limit_is_not_retried_without_a_spare_call_or_time():
 
     for remaining_calls, remaining_seconds in [(1, 30), (2, 0.0)]:
         with pytest.raises(RateLimitError):
-            _answer_with_provider_retry(generate, remaining_calls=remaining_calls,
+            retry_transient(generate, remaining_calls=remaining_calls,
                                         remaining_seconds=remaining_seconds,
                                         check_cancelled=lambda: None)
 

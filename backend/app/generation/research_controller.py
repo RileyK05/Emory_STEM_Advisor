@@ -17,6 +17,7 @@ from app.generation.controller import (
     _attempt,
     _canonical_arguments,
     _validate_call,
+    retry_transient,
 )
 from app.generation.research_final import RESEARCH_PROMPT_VERSION
 from app.generation.research_tools import RESEARCH_TOOLS_VERSION
@@ -413,15 +414,22 @@ class ResearchController:
             session.unavailable_preparation_check_ids = set(
                 request_context.get("unavailable_preparation_check_ids", []))
             on_progress({"stage": "finalizing" if finishing else "researching"})
-            prepared = operation.prepare(request)
-            session.store.record_action(session.run.run_id, action_kind="provider_context", details={
-                "evidence_ids": sorted(session.supplied),
-                "state_revision": session.state.revision if session.state else None,
-                "prompt_digest": json_digest({"system": prepared.messages[0].content, "user": user}),
-                "finish_required": finishing})
-            result = _attempt(provider, prepared, operation, on_attempt=on_attempt,
-                              on_provisional_text=None, on_provisional_reset=None,
-                              before_provider_call=before_provider_call)
+
+            def call(request=request, user=user, finishing=finishing):
+                # Each attempt, including a retry after a rate limit or dropped
+                # connection, is prepared and accounted as its own provider call.
+                prepared = operation.prepare(request)
+                session.store.record_action(session.run.run_id, action_kind="provider_context", details={
+                    "evidence_ids": sorted(session.supplied),
+                    "state_revision": session.state.revision if session.state else None,
+                    "prompt_digest": json_digest({"system": prepared.messages[0].content, "user": user}),
+                    "finish_required": finishing})
+                return prepared, _attempt(provider, prepared, operation, on_attempt=on_attempt,
+                                          on_provisional_text=None, on_provisional_reset=None,
+                                          before_provider_call=before_provider_call)
+            prepared, result = retry_transient(call, remaining_calls=status.remaining_calls,
+                                               remaining_seconds=status.remaining_seconds,
+                                               check_cancelled=check_cancelled)
             usages.append(result.usage)
             check_cancelled()
             finish_reason = (result.finish_reason or "").lower()

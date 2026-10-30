@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
+import queue
+import threading
+import time
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
@@ -307,7 +311,7 @@ class OpenAIProvider(_SDKProvider):
         if request.response_schema:
             payload["text"] = _openai_text_format(request.response_schema)
         try:
-            response = self.client.responses.create(**payload, **_timeout(request))
+            response = _bounded(request, lambda: self.client.responses.create(**payload, **_timeout(request)))
         except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
             raise _error("openai", exc) from None
         calls, refusal, texts = [], None, []
@@ -342,7 +346,8 @@ class OpenAIProvider(_SDKProvider):
         try:
             parts = []
             final = None
-            for event in self.client.responses.create(**payload, **_timeout(request)):
+            for event in _bounded_stream(request, lambda: self.client.responses.create(
+                    **payload, **_timeout(request))):
                 if _get(event, "type") == "response.output_text.delta":
                     delta = _get(event, "delta", "")
                     parts.append(delta)
@@ -386,7 +391,7 @@ class AnthropicProvider(_SDKProvider):
         if request.response_schema:
             payload["output_config"] = _anthropic_output_config(request.response_schema)
         try:
-            response = self.client.messages.create(**payload, **_timeout(request))
+            response = _bounded(request, lambda: self.client.messages.create(**payload, **_timeout(request)))
         except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
             raise _error("anthropic", exc) from None
         calls, texts, refusal = [], [], None
@@ -418,7 +423,8 @@ class AnthropicProvider(_SDKProvider):
             parts = []
             prompt_tokens = completion_tokens = None
             stop_reason = request_id = model = None
-            for event in self.client.messages.create(**payload, **_timeout(request)):
+            for event in _bounded_stream(request, lambda: self.client.messages.create(
+                    **payload, **_timeout(request))):
                 event_type = _get(event, "type")
                 if event_type == "message_start":
                     message = _get(event, "message")
@@ -465,9 +471,9 @@ class GoogleProvider(_SDKProvider):
                 timeout=max(1, round(request.timeout_seconds * 1000)),
                 retry_options=types.HttpRetryOptions(attempts=1))
         try:
-            response = self.client.models.generate_content(
+            response = _bounded(request, lambda: self.client.models.generate_content(
                 model=request.model or self.model, contents=contents,
-                config=types.GenerateContentConfig(**config) if config else None)
+                config=types.GenerateContentConfig(**config) if config else None))
         except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
             raise _error("google", exc) from None
         candidate = (getattr(response, "candidates", None) or [None])[0]
@@ -505,9 +511,9 @@ class GoogleProvider(_SDKProvider):
         try:
             parts = []
             usage = final_candidate = None
-            stream = self.client.models.generate_content_stream(
+            stream = _bounded_stream(request, lambda: self.client.models.generate_content_stream(
                 model=request.model or self.model, contents=contents,
-                config=types.GenerateContentConfig(**config) if config else None)
+                config=types.GenerateContentConfig(**config) if config else None))
             for chunk in stream:
                 usage = getattr(chunk, "usage_metadata", None) or usage
                 candidates = getattr(chunk, "candidates", None) or ()
@@ -563,7 +569,8 @@ class OpenAICompatibleProvider(OpenAIProvider):
             payload["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": "response", "strict": True, "schema": dict(request.response_schema)}}
         try:
-            response = self.client.chat.completions.create(**payload, **_timeout(request))
+            response = _bounded(request, lambda: self.client.chat.completions.create(
+                **payload, **_timeout(request)))
         except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
             raise _error("openai-compatible", exc) from None
         if not response.choices:
@@ -595,7 +602,8 @@ class OpenAICompatibleProvider(OpenAIProvider):
             finish_reason = "unknown"
             usage = Usage(source="unknown")
             model = None
-            for chunk in self.client.chat.completions.create(**payload, **_timeout(request)):
+            for chunk in _bounded_stream(request, lambda: self.client.chat.completions.create(
+                    **payload, **_timeout(request))):
                 observed = getattr(chunk, "usage", None)
                 if observed is not None:
                     usage = _chat_usage(observed)
@@ -653,6 +661,78 @@ def _parse_args(raw: Any) -> Mapping[str, Any]:
     if not isinstance(parsed, Mapping):
         raise InvalidRequestError("provider returned non-object tool arguments", provider="openai-compatible")
     return parsed
+
+
+# SDK timeouts bound each socket read, not the call: a service that sends
+# keep-alive bytes holds a request open far past its timeout (907 s against
+# 120 s). These bound the whole call; the short grace lets the SDK's own
+# timeout, which carries more detail, win when it fires on time.
+_DEADLINE_GRACE_SECONDS = 1.0
+_STREAM_END = object()
+
+
+def _bounded(request: GenerationRequest, call):
+    """Run one SDK call within the request's wall-clock timeout.
+
+    Past the deadline the caller gets a timeout at once; the abandoned call
+    finishes on its daemon thread and its result is discarded.
+    """
+    if request.timeout_seconds is None:
+        return call()
+    outcome: dict[str, Any] = {}
+
+    def run():
+        try:
+            outcome["value"] = call()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=run, name="provider-call", daemon=True)
+    worker.start()
+    worker.join(request.timeout_seconds + _DEADLINE_GRACE_SECONDS)
+    if worker.is_alive():
+        raise TimeoutError("provider call exceeded its wall-clock deadline")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["value"]
+
+
+def _bounded_stream(request: GenerationRequest, open_stream):
+    """Iterate an SDK stream within the request's wall-clock timeout, closing it on exit."""
+    if request.timeout_seconds is None:
+        yield from open_stream()
+        return
+    deadline = time.monotonic() + request.timeout_seconds + _DEADLINE_GRACE_SECONDS
+    items: queue.Queue = queue.Queue()
+    opened: dict[str, Any] = {}
+
+    def run():
+        try:
+            opened["stream"] = open_stream()
+            for item in opened["stream"]:
+                items.put((None, item))
+            items.put((None, _STREAM_END))
+        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
+            items.put((exc, None))
+
+    threading.Thread(target=run, name="provider-stream", daemon=True).start()
+    try:
+        while True:
+            try:
+                error, item = items.get(timeout=max(0.0, deadline - time.monotonic()))
+            except queue.Empty:
+                raise TimeoutError("provider stream exceeded its wall-clock deadline") from None
+            if error is not None:
+                raise error
+            if item is _STREAM_END:
+                return
+            yield item
+    finally:
+        close = getattr(opened.get("stream"), "close", None)
+        if callable(close):
+            # Aborts an abandoned stream instead of reading it to the end.
+            with contextlib.suppress(Exception):
+                close()
 
 
 def _timeout(request: GenerationRequest) -> dict[str, float]:

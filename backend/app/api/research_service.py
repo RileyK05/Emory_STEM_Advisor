@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from app.advising.research_repository import ScopeChanged, build_scope, verify_manifest
 from app.advising.research_store import ResearchStore, RunClosed
 from app.api.schemas import ClaimReviewUnit, ResearchDecisionInfo
-from app.api.serialize import answer_response
+from app.api.serialize import answer_response, provider_failure_detail
 from app.connections.models import required_data_scopes
 from app.connections.selection import StaleProfileSelection
 from app.db import queries
@@ -166,7 +166,7 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
         if isinstance(exc, (ScopeChanged, StaleProfileSelection)):
             raise HTTPException(409, "Research sources or model connection changed; refresh and retry.") from exc
         if isinstance(exc, ProviderError):
-            raise HTTPException(503, "Research model connection failed; check provider settings.") from exc
+            raise HTTPException(503, provider_failure_detail(exc, "Research model")) from exc
         if isinstance(exc, (OperationBudgetError, ToolConversationError, ToolLedgerError)):
             raise HTTPException(422, "Research could not finish safely: " + str(exc)) from exc
         raise

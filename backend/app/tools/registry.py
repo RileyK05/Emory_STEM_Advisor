@@ -75,6 +75,7 @@ ToolHandler = Callable[[BaseModel, ToolScope], Any]
 # guided by the input schema. No value the model did not send is ever invented;
 # anything else is left for validation to accept or reject.
 _WRAPPER_KEY = "item"
+_INTEGER_RE = re.compile(r"-?\d{1,18}")
 
 
 def _concrete(annotation: Any) -> Any:
@@ -112,6 +113,12 @@ def repair_arguments(value: Any, annotation: Any) -> Any:
             items = [repair_arguments(item, element) for item in value]
         # Strict models accept a JSON array for a tuple only in JSON mode.
         return tuple(items) if origin is tuple else items
+    # A whole number sent as a string ("3") and one object sent as a one-element
+    # array are the same value; strict validation would reject both.
+    if annotation is int and isinstance(value, str) and _INTEGER_RE.fullmatch(value):
+        return int(value)
+    if is_model and isinstance(value, list) and len(value) == 1 and isinstance(value[0], dict):
+        value = value[0]
     if is_model and isinstance(value, dict):
         fields = annotation.model_fields
         return {key: repair_arguments(item, fields[key].annotation) if key in fields else item

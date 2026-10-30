@@ -423,6 +423,41 @@ def test_sdk_adapters_forward_request_timeouts_and_google_uses_milliseconds():
     google_http.close()
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_a_call_kept_alive_past_its_timeout_fails_at_the_deadline(monkeypatch, stream):
+    """SDK timeouts bound each read, so keep-alive bytes could hold a call for 15 minutes."""
+    import threading
+
+    monkeypatch.setattr("app.llm.adapters._DEADLINE_GRACE_SECONDS", 0.0)
+    release, closed = threading.Event(), []
+
+    class KeptAlive:
+        def __iter__(self):
+            yield SimpleNamespace(usage=None, model="m", choices=[])
+            release.wait(10)
+
+        def close(self):
+            closed.append(True)
+
+    def create(**payload):
+        if payload.get("stream"):
+            return KeptAlive()
+        release.wait(10)
+
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    provider = OpenAICompatibleProvider(client, "m")
+    request = GenerationRequest([{"role": "user", "content": "x"}], timeout_seconds=0.05)
+    try:
+        with pytest.raises(ProviderTimeoutError):
+            if stream:
+                list(provider.stream(request))
+            else:
+                provider.generate(request)
+    finally:
+        release.set()
+    assert closed == ([True] if stream else [])
+
+
 def test_generation_request_rejects_invalid_budgets_and_maps_timeout_errors():
     import pytest
 

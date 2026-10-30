@@ -312,12 +312,37 @@ def test_inline_requisite_labels_supply_the_kind(text, kind, code):
     "Students completing MATH 119 or equivalent cannot enroll for MATH 111.",
     ("Students completing PSYC_OX 100 or equivalent cannot enroll in PSYC 111. "
      "For concerns, please contact the Psychology department."),
+    # Who may enroll, not what must be completed first.
+    "HPMMPH or HPMMPHOL or HPMMSPH students only.",
+    "This section is reserved for students in the One-Year or Two-Year MBA program.",
+    "Only BSHEMPH and BSHEMPHOL have permission to enroll in this class.",
+    "MB program students",
+    "Program restrictions apply",
+    "Students enrolled in the NDBU program not allowed to enroll in this course.",
+    "No GH 500D - Students can enroll only in a non-D version or a D version of the same course.",
+    "Varies by section",
 ])
 def test_prohibitions_and_exclusions_are_not_requirements(text):
     result = parse_requisites(text)
     assert result.status == "none"
     assert result.mentions == ()
     assert result.trees == {}
+
+
+@pytest.mark.parametrize(("text", "status"), [
+    (("ACT 200 or equivalent transfer credit as prerequisite. "
+      "This section is reserved for students in the BBA program."), "parsed"),
+    ("BIOS 580 as prerequisite. BIOSMPH or BIOSMSPH students only.", "parsed"),
+    # A restriction sentence that names a course is never dropped as one.
+    ("Prerequisite: CHEM 150; BS students only.", "parsed"),
+    # Requirements without a course code are still requirements.
+    ("Prerequisite: approval of the Director of Undergraduate Studies.", "unparsed"),
+    ("Two PHIL courses as prerequisites", "unparsed"),
+    (("Atlas section restrictions differ; prerequisite status is unresolved. "
+      "(no restriction text captured); HPMMPH or HPMMPHOL students only."), "unparsed"),
+])
+def test_enrollment_restriction_removes_only_itself(text, status):
+    assert parse_requisites(text).status == status
 
 
 def test_cannot_take_exclusion_removes_only_its_sentence():

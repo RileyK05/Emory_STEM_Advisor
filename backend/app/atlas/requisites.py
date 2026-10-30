@@ -16,7 +16,7 @@ from app.programs.requirements import (
     _is_level_descriptor,
 )
 
-PARSER_VERSION = "18"
+PARSER_VERSION = "19"
 
 # A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
 # uppercase, so ordinary words and "111or" are not read as codes. Spelled-out
@@ -83,9 +83,26 @@ _INLINE_LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _EXCLUSION_RE = re.compile(
-    r"(?:^|(?<=[.!?])\s*)[^.!?]*\bcannot\s+(?:enroll|take)\b[^.!?]*[.!?]?",
+    r"(?:^|(?<=[.!?])\s*)[^.!?]*\b(?:cannot\s+(?:enroll|take)|may\s+not\s+enroll"
+    r"|not\s+allowed\s+to\s+enroll|can\s+enroll\s+only\s+in)\b[^.!?]*[.!?]?",
     re.IGNORECASE,
 )
+# Who may enroll is an enrollment restriction, not a course requirement:
+# "HPMMPH or HPMMPHOL students only.", "This section is reserved for students in
+# the Executive MBA program.", "MB program students". A sentence with a digit
+# may name a course and is never removed by this.
+_PROGRAM_ONLY_RE = re.compile(
+    r"(?:^|(?<=[.!?;])\s*)(?:"
+    r"[^.!?;\d]*\bstudents\s+only"
+    r"|This\s+section\s+is\s+reserved\s+for\s+students\s+in\s+the\s+[^.!?;\d]*\bprograms?"
+    r"|Only\s+[^.!?;\d]*\bhave\s+permission\s+to\s+enroll\b[^.!?;\d]*"
+    r"|[^.!?;\d]*\bprogram\s+students"
+    r"|Program\s+restrictions\s+apply"
+    r")\s*(?:[.!?]|$)",
+    re.IGNORECASE,
+)
+# Atlas's placeholder when a course's sections state their own requirements.
+_VARIES_RE = re.compile(r"^\s*Varies\s+by\s+section\s*\.?\s*$", re.IGNORECASE)
 _PROHIBITS_RE = re.compile(r"\bPROHIBITS\s*:.*", re.IGNORECASE | re.DOTALL)
 _USED_FOR_RE = re.compile(r"\bUsed\s+for\s*:.*", re.IGNORECASE | re.DOTALL)
 # "For concerns, please contact the Mathematics department." follows an exclusion
@@ -273,8 +290,9 @@ def split_requisite_segments(
     """Split a requisites blob into (kind, text) segments.
 
     Handles both colon labels and the catalog's trailing ``as a corequisite``
-    form. Prohibitions, enrollment exclusions, and ``Used for:`` block trailers
-    are not requirements and are removed before scanning.
+    form. Prohibitions, enrollment exclusions, program-only enrollment
+    restrictions, and ``Used for:`` block trailers are not requirements and are
+    removed before scanning.
     """
     return tuple(dict.fromkeys(
         (kind, content) for kind, content, _joiner in _requisite_parts(text, course_code)))
@@ -302,6 +320,8 @@ def _requisite_parts(text: str, course_code: str | None) -> tuple[tuple[str, str
     stripped = _COMBINED_LABEL_RE.sub("co-requisite: ", stripped)
     stripped = _PROHIBITS_RE.sub("", stripped)
     stripped = _EXCLUSION_RE.sub("", stripped)
+    stripped = _PROGRAM_ONLY_RE.sub("", stripped)
+    stripped = _VARIES_RE.sub("", stripped)
     stripped = _USED_FOR_RE.sub("", stripped)
     stripped = _REPEAT_RE.sub("", stripped)
     stripped = _CONTACT_RE.sub("", stripped)
