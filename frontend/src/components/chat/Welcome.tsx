@@ -1,5 +1,3 @@
-import { CompassIcon, DocumentIcon } from '../icons';
-
 const SAVED_SUGGESTIONS = [
   'What do I need before taking Organic Chemistry?',
   'What are the requirements for the Biology major?',
@@ -18,18 +16,16 @@ const DEMO_SUGGESTIONS = [
 interface Props {
   demo: boolean;
   onSuggest: (text: string) => void;
-  onExplore: () => void;
-  onCreate?: () => void;
 }
 
-export function Welcome({ demo, onSuggest, onExplore, onCreate }: Props) {
+export function Welcome({ demo, onSuggest }: Props) {
   return (
     <section className="welcome" aria-labelledby="welcome-title">
       <p className="welcome-kicker">Emory STEM Advisor</p>
       <h2 id="welcome-title">What are you planning?</h2>
       <p className="welcome-lede">
-        Ask about courses, prerequisites, and program requirements. Every answer shows the exact passage it came from —
-        and you can turn any answer into a document, spreadsheet, or web page.
+        Ask about courses, prerequisites, and program requirements. Answers cite their sources, and you can ask for a
+        plan, checklist or table to keep.
       </p>
       <div className="suggestions">
         {(demo ? DEMO_SUGGESTIONS : SAVED_SUGGESTIONS).map((text) => (
@@ -38,20 +34,10 @@ export function Welcome({ demo, onSuggest, onExplore, onCreate }: Props) {
           </button>
         ))}
       </div>
-      <div className="welcome-actions">
-        <button type="button" className="ghost-button" onClick={onExplore}>
-          <CompassIcon size={16} /> Explore courses by interest
-        </button>
-        {onCreate && (
-          <button type="button" className="ghost-button" onClick={onCreate}>
-            <DocumentIcon size={16} /> Start a document
-          </button>
-        )}
-      </div>
       {demo && (
         <p className="demo-note">
           Demo mode: answers come from a small sample library and chats aren’t saved. Connect the backend to save chats
-          and build documents.
+          and keep artifacts.
         </p>
       )}
     </section>

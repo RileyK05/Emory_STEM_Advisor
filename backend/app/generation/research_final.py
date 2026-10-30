@@ -57,7 +57,8 @@ class DecisionRejected(ValueError):
 
 def validate_final(decision: FinalDecision, state: ResearchState | None,
                    evidence: list[EvidenceRecord], supplied: set[str],
-                   checks: dict[str, dict], entity_evidence: dict[str, set[str]] | None = None) -> None:
+                   checks: dict[str, dict], entity_evidence: dict[str, set[str]] | None = None,
+                   artifact_references: set[tuple[str, str]] | None = None) -> None:
     candidates = {c.id: c for c in state.candidates} if state else {}
     records = {e.evidence_id: e for e in evidence}
     problems = (validate_decision_limits(decision) + validate_fact_support(decision)
@@ -145,6 +146,11 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
             problems.append(f"preparation claim does not match executed check {claim.check_id}")
         elif not set(check["evidence_ids"]) <= supplied:
             problems.append(f"reactivate evidence for preparation check {claim.check_id}")
+    if decision.artifact is not None and decision.artifact.purpose == "revise":
+        revises = decision.artifact.revises
+        referenced = artifact_references or set()
+        if revises is None or (str(revises.artifact_id), str(revises.revision_id)) not in referenced:
+            problems.append("artifact revision was not referenced by this turn")
     if problems:
         raise DecisionRejected("; ".join(problems))
 

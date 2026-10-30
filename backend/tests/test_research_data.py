@@ -76,6 +76,88 @@ def _scope(db, collection, source_ids=None, **kwargs):
                        source_ids=source_ids, **kwargs)
 
 
+@pytest.mark.parametrize("admits", [True, False])
+def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, collection, admits):
+    from app.config import load_settings
+    from app.conversations.store import ConversationStore
+    from app.conversations.worker import ConversationTurnExecutor, ConversationTurnResult
+    from app.jobs.store import JobStore
+
+    store = ConversationStore(db, "development")
+    conversation_id = UUID(store.create("Artifact turn")["conversationId"])
+    request_id = uuid4()
+    snapshot = {"request": {"query": "Make a plan"}, "query": "Make a plan",
+                "effective": {}, "context": {}}
+    accepted = store.begin_stream(conversation_id, request_id, 0, snapshot)
+    jobs = JobStore(lambda: connect(migrated_dsn))
+    job = jobs.get(accepted["job_id"])
+    run, _ = ResearchStore(db, "development").start(
+        _scope(db, collection), run_id=uuid4(), prompt_version="test", config_version="6",
+        conversation_id=conversation_id, request_id=request_id)
+    artifact = {
+        "kind": "document", "title": "Four-semester plan",
+        "brief": "Make a plan for the student's next four semesters.", "purpose": "create",
+    }
+    research = {"runId": str(run.run_id), "outcome": "information", "completeness": "complete",
+                "blocks": [], "artifact": artifact, "unresolvedQuestions": []}
+    result = ConversationTurnResult(
+        response={"type": "answer", "answer": "A plan is being made [1].",
+                  "citations": [], "trace": {"traceId": str(uuid4()), "contextBlock": []},
+                  "research": research},
+        source_snapshot={}, collection_id=collection, operation_id=None,
+        profile_selections=(),
+        # Without a job store the run cannot be admitted; the answer still publishes.
+        job_store=jobs if admits else None, settings=load_settings(),
+    )
+
+    published = ConversationTurnExecutor.publish_success(db, job, result)
+    assert published["type"] == "answer"
+    turn = store.turns(conversation_id)["turns"][-1]
+    runs = db.execute(
+        "SELECT payload FROM jobs WHERE kind = 'artifact.run' ORDER BY created_at"
+    ).fetchall()
+    if not admits:
+        assert "artifactRun" not in turn
+        assert turn["artifactNotice"] == "The answer is saved, but the artifact could not be started."
+        assert runs == []
+        return
+    queued = turn["artifactRun"]
+    assert (queued["kind"], queued["title"], queued["purpose"]) == (
+        "document", "Four-semester plan", "create")
+    assert queued["runId"]
+    assert len(runs) == 1
+    payload = runs[0]["payload"]
+    assert payload["kind"] == "document"
+    assert payload["inputs"]["mode"] == "grounded"
+    assert "Published answer:" in payload["inputs"]["prompt"]
+
+
+@pytest.mark.parametrize("referenced,accepted", [
+    (lambda artifact, revision: set(), False),
+    (lambda artifact, revision: {(artifact, str(uuid4()))}, False),
+    (lambda artifact, revision: {(artifact, revision)}, True),
+])
+def test_artifact_revision_must_name_the_exact_referenced_revision(referenced, accepted):
+    from app.advising.research_types import ArtifactRequest, ArtifactRevisionReference
+    from app.generation.research_final import DecisionRejected, validate_final
+
+    artifact_id, revision_id = uuid4(), uuid4()
+    decision = FinalDecision(
+        outcome="information", completeness="complete",
+        blocks=(DecisionBlock(kind="limitation", text="Revision requested."),),
+        artifact=ArtifactRequest(
+            kind="document", title="Plan", brief="Revise the plan.", purpose="revise",
+            revises=ArtifactRevisionReference(artifact_id=artifact_id, revision_id=revision_id),
+        ),
+    )
+    refs = referenced(str(artifact_id), str(revision_id))
+    if accepted:
+        validate_final(decision, None, [], set(), {}, artifact_references=refs)
+    else:
+        with pytest.raises(DecisionRejected, match="not referenced"):
+            validate_final(decision, None, [], set(), {}, artifact_references=refs)
+
+
 def test_scope_pins_accessible_current_sources_and_their_bound_programs(db, collection, tmp_path):
     corpus = _corpus(db, collection, tmp_path)
     everything = _scope(db, collection)

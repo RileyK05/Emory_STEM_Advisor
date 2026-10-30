@@ -1,5 +1,6 @@
 import type {
   ArtifactRevisionReference,
+  ArtifactRunInfo,
   Citation,
   ContextItem,
   ConversationSummary,
@@ -20,6 +21,8 @@ export interface Attachment extends ArtifactRevisionReference {
 
 interface UserEntry {
   key: string;
+  /** The saved turn's sequence; absent for demo and in-progress entries. */
+  sequence?: number;
   role: 'user';
   text: string;
   attachments: Attachment[];
@@ -27,6 +30,8 @@ interface UserEntry {
 
 export interface AssistantEntry {
   key: string;
+  /** The saved turn's sequence; absent for demo and in-progress entries. */
+  sequence?: number;
   role: 'assistant';
   kind: 'answer' | 'refusal' | 'error' | 'thinking';
   text: string;
@@ -34,9 +39,14 @@ export interface AssistantEntry {
   /** The numbered passages the answer was written from; `[n]` in the text is `context[n - 1]`. */
   context: ContextItem[];
   trace?: RetrievalTrace;
+  responseId?: string | null;
   research?: ResearchDecisionInfo | null;
   applicability?: ApplicabilityNotice | null;
-  /** The question this answers, for turning the answer into an artifact. */
+  /** The artifact run this answer started, if any. */
+  artifactRun?: ArtifactRunInfo | null;
+  /** A saved notice when the answer published but its artifact could not start. */
+  artifactNotice?: string | null;
+  /** The question this answers. */
   question?: string;
   /** The source scope that question searched. */
   scope?: SourceScope;
@@ -136,6 +146,7 @@ export function entriesFromTurns(turns: ConversationTurn[]): ChatEntry[] {
       const references = 'effective' in evidence ? evidence.effective.artifactReferences : [];
       return {
         key,
+        sequence: turn.sequence,
         role: 'user',
         text: turn.text,
         attachments: references.map((ref) => ({
@@ -157,13 +168,17 @@ export function entriesFromTurns(turns: ConversationTurn[]): ChatEntry[] {
           : 'answer';
     return {
       key,
+      sequence: turn.sequence,
       role: 'assistant',
       kind,
       text: turn.text,
       citations: assistantEvidence?.citations ?? [],
       context: assistantEvidence?.contextBlock ?? [],
+      responseId: assistantEvidence?.traceId,
       research: assistantEvidence?.research,
       applicability: assistantEvidence?.applicability,
+      artifactRun: turn.artifactRun ?? assistantEvidence?.artifactRun ?? null,
+      artifactNotice: turn.artifactNotice ?? assistantEvidence?.artifactNotice ?? null,
       question: question?.text,
       scope: questionEvidence ? questionEvidence.effective.sourceIds : undefined,
     };

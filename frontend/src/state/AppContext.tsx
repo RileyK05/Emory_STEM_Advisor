@@ -16,9 +16,6 @@ interface AppState {
   flags: Record<string, boolean> | null;
   flagsError: string | null;
   refreshFlags: () => Promise<void>;
-  /** Show retrieval traces under answers (developer detail). */
-  showDetails: boolean;
-  toggleShowDetails: () => void;
   sources: SourceDoc[];
   sourcesError: string | null;
   refreshSources: () => Promise<SourceDoc[]>;
@@ -36,7 +33,6 @@ export function useApp(): AppState {
 }
 
 export function AppProvider({ session, children }: { session: AuthSession; children: ReactNode }) {
-  const [showDetails, setShowDetails] = useState(false);
   const [sources, setSources] = useState<SourceDoc[]>([]);
   const [sourcesError, setSourcesError] = useState<string | null>(null);
   const [scope, setScope] = useState<SourceScope>(null);
@@ -103,16 +99,12 @@ export function AppProvider({ session, children }: { session: AuthSession; child
     });
   }, [refreshSources]);
 
-  const toggleShowDetails = useCallback(() => setShowDetails((v) => !v), []);
-
   const value = useMemo<AppState>(
     () => ({
       session,
       flags,
       flagsError,
       refreshFlags,
-      showDetails,
-      toggleShowDetails,
       sources,
       sourcesError,
       refreshSources,
@@ -120,19 +112,7 @@ export function AppProvider({ session, children }: { session: AuthSession; child
       scope,
       setScope,
     }),
-    [
-      session,
-      flags,
-      flagsError,
-      refreshFlags,
-      showDetails,
-      toggleShowDetails,
-      sources,
-      sourcesError,
-      refreshSources,
-      uploadSource,
-      scope,
-    ],
+    [session, flags, flagsError, refreshFlags, sources, sourcesError, refreshSources, uploadSource, scope],
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

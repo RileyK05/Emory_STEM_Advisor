@@ -9,10 +9,13 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
 from app.advising.research_types import (
+    ArtifactRequest,
+    ArtifactRevisionReference,
     DecisionBlock,
     FinalDecision,
     validate_candidate_references,
@@ -26,6 +29,24 @@ def _decision(**kwargs) -> FinalDecision:
     kwargs.setdefault("outcome", "recommendation")
     kwargs.setdefault("completeness", "complete")
     return FinalDecision(**kwargs)
+
+
+@pytest.mark.parametrize("purpose,revises,error", [
+    ("create", {"artifact_id": uuid4(), "revision_id": uuid4()}, "create forbids revises"),
+    ("revise", None, "revise requires revises"),
+    ("summary", None, "summary requires a document"),
+])
+def test_artifact_request_requires_a_consistent_purpose(purpose, revises, error):
+    with pytest.raises(ValueError, match=error):
+        ArtifactRequest(kind="workbook" if purpose == "summary" else "document",
+                        title="Plan", brief="Make it.", purpose=purpose, revises=revises)
+
+
+def test_artifact_request_accepts_referenced_revision():
+    revises = ArtifactRevisionReference(artifact_id=uuid4(), revision_id=uuid4())
+    request = ArtifactRequest(kind="document", title="Plan", brief="Revise it.",
+                              purpose="revise", revises=revises)
+    assert request.revises == revises
 
 
 def test_research_preparation_serializes_bounded_grouped_alternatives(monkeypatch):

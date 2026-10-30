@@ -93,11 +93,25 @@ class ResearchBlock(BaseModel):
     candidateIds: list[str]
 
 
+class ArtifactRevisesInfo(BaseModel):
+    artifactId: str
+    revisionId: str
+
+
+class ArtifactRequestInfo(BaseModel):
+    kind: Literal["document", "workbook", "html"]
+    title: str
+    brief: str
+    purpose: Literal["create", "revise", "summary"] = "create"
+    revises: ArtifactRevisesInfo | None = None
+
+
 class ResearchDecisionInfo(BaseModel):
     runId: str
     outcome: Literal["recommendation", "information", "clarification", "insufficient_evidence"]
     completeness: Literal["complete", "partial"]
     blocks: list[ResearchBlock]
+    artifact: ArtifactRequestInfo | None = None
     unresolvedQuestions: list[str]
 
 
@@ -347,6 +361,13 @@ class ConversationSummary(_WireModel):
     updatedAt: str
 
 
+class ArtifactRunInfo(_WireModel):
+    runId: str
+    kind: Literal["document", "workbook", "html"]
+    title: str
+    purpose: Literal["create", "revise", "summary"]
+
+
 class ConversationTurn(_WireModel):
     sequence: int
     requestId: str
@@ -354,6 +375,8 @@ class ConversationTurn(_WireModel):
     text: str
     status: _TurnStatus
     evidence: dict[str, Any]
+    artifactRun: ArtifactRunInfo | None = None
+    artifactNotice: str | None = None
     createdAt: str
 
 
@@ -458,6 +481,8 @@ class ConversationTurnResponse(_WireModel):
     type: Literal["answer", "refusal", "history", "failed", "abandoned"]
     conversationId: str
     sequence: int
+    artifactRun: ArtifactRunInfo | None = None
+    artifactNotice: str | None = None
 
 
 class AuthSession(_WireModel):

@@ -3,7 +3,7 @@ import { getClient } from '../../api/client';
 import type {
   ArtifactRun,
   ArtifactRunEvent,
-  ArtifactRunRequest,
+  ArtifactRunInfo,
   NativeArtifactKind,
   NativeArtifactRecord,
 } from '../../api/types';
@@ -31,14 +31,6 @@ export interface RunItem {
   run: ArtifactRun;
   events: ArtifactRunEvent[];
   pollError: string | null;
-  /** The existing artifact this job revises. */
-  revises?: { artifactId: string; title: string };
-}
-
-export interface StartRunInput extends ArtifactRunRequest {
-  chatKey: string;
-  label: string;
-  revises?: RunItem['revises'];
 }
 
 const isActive = (item: RunItem) => !FINISHED.includes(item.run.state);
@@ -81,8 +73,13 @@ export function useArtifactWorkspace(workspaceKey: string, chatKey: string | nul
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [record, setRecord] = useState<NativeArtifactRecord | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const [artifactChanged, setArtifactChanged] = useState(0);
   const runsRef = useRef(runs);
   runsRef.current = runs;
+  // Demo chats have no id; their runs belong to the one unsaved chat.
+  const currentChat = chatKey ?? '';
+  const currentChatRef = useRef(currentChat);
+  currentChatRef.current = currentChat;
   const mounted = useMountedRef();
 
   useEffect(() => {
@@ -106,23 +103,31 @@ export function useArtifactWorkspace(workspaceKey: string, chatKey: string | nul
   /** Link a finished run's artifacts to its chat, then retire the run card if anything was published. */
   const settle = async (item: RunItem) => {
     const outputs = runOutputs(item.run, item.events);
+    let opened: NativeArtifactRecord | null = null;
     for (const output of outputs) {
       try {
-        const opened = await getClient().getArtifact(output.artifactId, output.revisionId);
+        const record = await getClient().getArtifact(output.artifactId, output.revisionId);
+        opened = record;
         link(item.chatKey, {
           artifactId: output.artifactId,
           revisionId: output.revisionId,
-          kind: opened.kind,
-          title: opened.title,
+          kind: record.kind,
+          title: record.title,
         });
       } catch {
         link(item.chatKey, {
           artifactId: output.artifactId,
           revisionId: output.revisionId,
           kind: item.kind,
-          title: item.revises?.title ?? item.label,
+          title: item.label,
         });
       }
+    }
+    // A run that finishes after its chat was left is linked to that chat but does not take over this one.
+    if (opened && mounted.current && item.chatKey === currentChatRef.current) {
+      setRecord(opened);
+      setPanelOpen(true);
+      setArtifactChanged((value) => value + 1);
     }
     if (outputs.length && mounted.current)
       setRuns((current) => current.filter((existing) => existing.localId !== item.localId));
@@ -170,22 +175,23 @@ export function useArtifactWorkspace(workspaceKey: string, chatKey: string | nul
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActive]);
 
-  /** Queue a generation job. Throws (with the HTTP status) if the server refuses it. */
-  const startRun = async ({ chatKey: key, label, revises, ...request }: StartRunInput) => {
-    const run = await getClient().createArtifactRun(request);
+  /**
+   * Track a server-started run (the turn's artifactRun) and open its progress card. The card starts
+   * as queued and the poll loop reads the real state, so a failed first check is shown and retried
+   * like any other.
+   */
+  const trackRun = (info: ArtifactRunInfo, key: string | null) => {
     const item: RunItem = {
-      localId: crypto.randomUUID(),
-      chatKey: key,
-      kind: request.kind,
-      label,
-      run,
+      localId: info.runId,
+      chatKey: key ?? '',
+      kind: info.kind,
+      label: info.title,
+      run: { runId: info.runId, state: 'queued' },
       events: [],
       pollError: null,
-      revises,
     };
-    setRuns((current) => [item, ...current]);
+    setRuns((current) => [item, ...current.filter((existing) => existing.localId !== item.localId)]);
     setPanelOpen(true);
-    if (run.state === 'succeeded') void settle(item);
   };
 
   const cancelRun = async (localId: string) => {
@@ -210,6 +216,7 @@ export function useArtifactWorkspace(workspaceKey: string, chatKey: string | nul
     if (!mounted.current) return result;
     setRecord(result);
     setPanelOpen(true);
+    setArtifactChanged((value) => value + 1);
     if (chatKey)
       link(chatKey, {
         artifactId: result.artifactId,
@@ -224,6 +231,7 @@ export function useArtifactWorkspace(workspaceKey: string, chatKey: string | nul
   const showRecord = (next: NativeArtifactRecord, key: string | null = chatKey) => {
     setRecord(next);
     setPanelOpen(true);
+    setArtifactChanged((value) => value + 1);
     if (key)
       link(key, { artifactId: next.artifactId, revisionId: next.revisionId, kind: next.kind, title: next.title });
   };
@@ -240,7 +248,7 @@ export function useArtifactWorkspace(workspaceKey: string, chatKey: string | nul
     return [...own, ...fromMessages];
   }, [links, chatKey, referenced]);
 
-  const chatRuns = runs.filter((item) => item.chatKey === chatKey);
+  const chatRuns = runs.filter((item) => item.chatKey === currentChat);
 
   return {
     links: chatLinks,
@@ -248,7 +256,8 @@ export function useArtifactWorkspace(workspaceKey: string, chatKey: string | nul
     record,
     panelOpen,
     setPanelOpen,
-    startRun,
+    artifactChanged,
+    trackRun,
     cancelRun,
     dismissRun,
     openArtifact,

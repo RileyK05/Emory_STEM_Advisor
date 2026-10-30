@@ -449,11 +449,20 @@ export interface ResearchBlock {
   candidateIds: string[];
 }
 
+export interface ArtifactRequestInfo {
+  kind: NativeArtifactKind;
+  title: string;
+  brief: string;
+  purpose?: 'create' | 'revise' | 'summary';
+  revises?: { artifactId: string; revisionId: string } | null;
+}
+
 export interface ResearchDecisionInfo {
   runId: string;
   outcome: 'recommendation' | 'information' | 'clarification' | 'insufficient_evidence';
   completeness: 'complete' | 'partial';
   blocks: ResearchBlock[];
+  artifact?: ArtifactRequestInfo | null;
   unresolvedQuestions: string[];
 }
 
@@ -489,6 +498,8 @@ export type QueryResponse =
       claims?: ParagraphClaimReviewUnit[];
       research?: ResearchDecisionInfo | null;
       applicability?: ApplicabilityNotice | null;
+      artifactRun?: ArtifactRunInfo | null;
+      artifactNotice?: string | null;
     }
   | { type: 'refusal'; reason: string; trace?: RetrievalTrace };
 
@@ -531,8 +542,17 @@ export interface ConversationAssistantTurnEvidence {
   turnReferences: number[];
   research?: ResearchDecisionInfo;
   applicability?: ApplicabilityNotice;
+  artifactRun?: ArtifactRunInfo | null;
+  artifactNotice?: string | null;
 }
 export type ConversationTurnEvidence = ConversationUserTurnEvidence | ConversationAssistantTurnEvidence;
+
+export interface ArtifactRunInfo {
+  runId: string;
+  kind: NativeArtifactKind;
+  title: string;
+  purpose: 'create' | 'revise' | 'summary';
+}
 
 export interface ConversationTurn {
   sequence: number;
@@ -541,6 +561,8 @@ export interface ConversationTurn {
   text: string;
   status: 'input' | 'answer' | 'refusal' | 'history' | 'failed' | 'abandoned';
   evidence: ConversationTurnEvidence;
+  artifactRun?: ArtifactRunInfo | null;
+  artifactNotice?: string | null;
   createdAt: string;
 }
 
@@ -756,6 +778,7 @@ export interface AdvisorClient {
   createArtifact(spec: NativeArtifactSpec): Promise<NativeArtifactRecord>;
   importArtifact(file: File): Promise<NativeArtifactRecord>;
   getArtifact(id: string, revisionId?: string): Promise<NativeArtifactRecord>;
+  listArtifactRevisions(id: string): Promise<ArtifactRevisionSummary[]>;
   saveArtifactRevision(id: string, request: ArtifactRevisionRequest): Promise<NativeArtifactRecord>;
   previewArtifact(id: string, revisionId?: string): Promise<ArtifactPreview>;
   downloadArtifact(
@@ -816,6 +839,7 @@ export interface AdvisorClient {
   listPrivacyExports(): Promise<PrivacyExportResponse[]>;
   createPrivacyExport(): Promise<PrivacyExportResponse>;
   downloadPrivacyExport(exportId: string, token: string): Promise<PrivacyExportDownloadResponse>;
+  deleteMyData(body: PrivacyDeletionRequest): Promise<PrivacyDeletionResponse>;
 }
 
 export interface AdminOverview {

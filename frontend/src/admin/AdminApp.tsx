@@ -6,6 +6,8 @@ import { TopBar } from '../components/shell/TopBar';
 import { SessionGate } from '../app/SessionGate';
 import { ArtifactsPanel } from './ArtifactsPanel';
 import { AuditPanel } from './AuditPanel';
+import { ConnectionSettings } from './connection/ConnectionSettings';
+import { GapReviewPanel } from './gap/GapReviewPanel';
 import { CatalogRefreshPanel } from './CatalogRefreshPanel';
 import { ChatsPanel } from './ChatsPanel';
 import { CollectionsPanel } from './CollectionsPanel';
@@ -37,7 +39,9 @@ type Tab =
   | 'refresh'
   | 'triage'
   | 'experiments'
-  | 'prompts';
+  | 'prompts'
+  | 'connections'
+  | 'gaps';
 
 const TABS: Array<[Tab, string]> = [
   ['overview', 'Overview'],
@@ -56,6 +60,8 @@ const TABS: Array<[Tab, string]> = [
   ['triage', 'Feedback triage'],
   ['experiments', 'Experiments'],
   ['prompts', 'Prompt promotion'],
+  ['connections', 'Model connections'],
+  ['gaps', 'Unanswered questions'],
 ];
 
 /** The read-only tabs an auditor may open. */
@@ -145,6 +151,10 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
         return isAdmin && <ExperimentPanel />;
       case 'prompts':
         return isAdmin && <PromptPromotionPanel />;
+      case 'connections':
+        return isAdmin && <ConnectionSettings />;
+      case 'gaps':
+        return isAdmin && <GapReviewPanel />;
     }
   })();
 

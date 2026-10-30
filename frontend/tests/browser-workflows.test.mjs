@@ -409,6 +409,7 @@ async function setupPage({
   );
   let conversationTurnFailures = 0;
   let conversationProviderCalls = 0;
+  let demoRunPolls = 0;
   const gapRows = structuredClone(initialGaps);
   const capturedGapResolutions = [];
   let failGapConflict = gapConflictOnce;
@@ -1137,6 +1138,7 @@ async function setupPage({
       const refusal = body.sourceIds?.length === 0;
       const status = failed ? 'failed' : refusal ? 'refusal' : 'answer';
       const sameName = sameNameCitation && /shared notes/i.test(body.query ?? '');
+      const wantsArtifact = !failed && !refusal && /make|plan/i.test(body.query ?? '');
       const answer = failed
         ? 'Conversation request failed. Saved turns were retained.'
         : refusal
@@ -1182,6 +1184,9 @@ async function setupPage({
           traceId: 'trace-browser',
           turnReferences: [],
         },
+        ...(wantsArtifact
+          ? { artifactRun: { runId: 'demo-artifact-run', kind: 'document', title: 'Demo study plan', purpose: 'create' } }
+          : {}),
         createdAt: '2026-10-08T00:01:01Z',
       });
       record.pendingRequestId = null;
@@ -1962,6 +1967,30 @@ async function setupPage({
       });
     if (apiUrl.pathname === '/api/runs/run-1/cancel' && req.method() === 'POST')
       return route.fulfill({ json: { runId: 'run-1', state: 'cancelled' } });
+    if (apiUrl.pathname === '/api/runs/demo-artifact-run' && req.method() === 'GET') {
+      demoRunPolls += 1;
+      const ready = demoRunPolls > 1;
+      return route.fulfill({
+        json: {
+          runId: 'demo-artifact-run',
+          state: ready ? 'succeeded' : 'running',
+          ...(ready
+            ? {
+                artifactIds: ['artifact-1'],
+                artifactRevisions: [
+                  { artifactId: 'artifact-1', revisionId: pinnedRunRevision ? 'published-r1' : 'rev-1' },
+                ],
+              }
+            : {}),
+        },
+      });
+    }
+    if (apiUrl.pathname === '/api/runs/demo-artifact-run/events' && req.method() === 'GET')
+      return route.fulfill({ json: [] });
+    if (apiUrl.pathname === '/api/artifacts/artifact-1/revisions' && req.method() === 'GET')
+      return route.fulfill({
+        json: [{ revisionId: 'rev-1', parentRevisionId: null, title: 'Generated draft', createdAt: '2026-10-30T12:00:00Z' }],
+      });
     if (apiUrl.pathname === '/api/artifacts/artifact-1' && req.method() === 'GET') {
       const revisionId = apiUrl.searchParams.get('revisionId');
       if (revisionId) openedRunRevisions.push(revisionId);
@@ -2115,132 +2144,13 @@ async function send(page, text) {
   await page.getByRole('button', { name: 'Send', exact: true }).click();
 }
 
-/** Open "Search in" and limit questions to exactly `included` source names. */
-async function searchOnly(page, included) {
-  await page.getByRole('button', { name: /^Search in:/ }).click();
-  await page.getByRole('radio', { name: /Only these sources/ }).check();
-  for (const name of ['Linear Algebra Primer', 'Lab Safety Manual']) {
-    const box = page.getByRole('checkbox', { name: `Include ${name} in questions` });
-    if ((await box.isChecked()) !== included.includes(name)) await box.click();
-  }
-  await page.keyboard.press('Escape');
-}
-
-async function openSidebar(page, name) {
-  await page.getByRole('navigation', { name: 'Chats and library' }).getByRole('button', { name }).click();
-}
-
-async function openTool(page, tab) {
-  await openSidebar(page, 'Tools');
-  await page.getByRole('tab', { name: tab }).click();
-}
-
-async function createMenu(page, item) {
-  await page.getByRole('button', { name: 'Create or import' }).click();
-  await page.getByRole('menuitem', { name: item }).click();
-}
-
-async function importArtifact(page, file) {
-  await createMenu(page, /^Import a Word/);
-  await page.locator('input[type=file][aria-label="Choose a Markdown, DOCX, or XLSX file"]').setInputFiles(file);
-  await page.getByRole('region', { name: 'Artifact editor' }).waitFor();
-}
-
-async function download(page, format) {
-  await page.getByRole('button', { name: 'Download', exact: true }).click();
-  const event = page.waitForEvent('download');
-  await page.getByRole('menuitem', { name: `Download .${format}` }).click();
-  return (await event).suggestedFilename();
-}
-
 const revisionShown = (page, revisionId) => page.locator(`.canvas-footer [title$="revision ${revisionId}"]`).waitFor();
 
-test('browser keeps empty source scope explicit, cites the displayed passage, and renders recommendations', async () => {
-  const { context, page, capturedConversationStreams } = await setupPage();
-  try {
-    await openSidebar(page, 'Tools');
-    await page.getByRole('tab', { name: 'Developer' }).waitFor();
-    assert.equal(
-      await page.getByRole('tab', { name: 'Model connections' }).count(),
-      0,
-      'local settings stay hidden when the endpoint is disabled',
-    );
-    await page.keyboard.press('Escape');
+const adminSession = { mode: 'development', authenticated: true, role: 'admin', workspaceKey: 'admin-ws' };
 
-    await searchOnly(page, []);
-    await page.getByRole('button', { name: 'Search in: No sources' }).waitFor();
-    await send(page, 'What is a basis?');
-    await page.getByText('I couldn’t answer that from your sources.').waitFor();
-    assert.deepEqual(capturedConversationStreams.at(-1)?.body.sourceIds, []);
-
-    await searchOnly(page, ['Linear Algebra Primer']);
-    await send(page, 'What is a basis?');
-    await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
-    assert.deepEqual(capturedConversationStreams.at(-1)?.body.sourceIds, ['source-1']);
-    await page.getByRole('button', { name: 'Linear Algebra Primer section 2.1' }).click();
-    assert.equal(
-      await page.getByRole('figure', { name: 'Cited passage' }).locator('blockquote').innerText(),
-      'A basis spans the vector space and is linearly independent.',
-    );
-
-    await openSidebar(page, 'Explore courses');
-    await page.getByLabel('Interest or career goal').fill('linear algebra');
-    await page.getByRole('button', { name: 'Find' }).click();
-    await page.getByText('MATH 221').waitFor();
-    await page.getByText('Mathematics › Linear Algebra').waitFor();
-    await page.getByText('Retired Topics').waitFor();
-    await page.getByRole('button', { name: 'Ask about MATH 221' }).click();
-    assert.match(await message(page).inputValue(), /MATH 221 \(Linear Algebra\)/);
-  } finally {
-    await context.close();
-  }
-});
-
-test('failed source replacement refreshes revision diagnostics and keeps citations available', async () => {
-  const { context, page, capturedReindexes } = await setupPage();
-  try {
-    await openSidebar(page, /^Sources/);
-    const row = page.locator('.source-row').filter({ hasText: 'Linear Algebra Primer' });
-    await row.getByText('Details').click();
-    const button = page.getByRole('button', { name: 'Reindex Linear Algebra Primer' });
-    await button.click();
-    await page.waitForFunction(() =>
-      Array.from(document.querySelectorAll('.source-reindex-button')).some(
-        (item) => item.textContent === 'Reindexing…',
-      ),
-    );
-    assert.equal(await button.isDisabled(), true, 'duplicate clicks are disabled while the request is active');
-    try {
-      await page
-        .getByRole('alert')
-        .getByText(/Reindex failed: API request failed \(422\): source reindex failed/)
-        .waitFor({ timeout: 5000 });
-    } catch {
-      throw new Error(
-        `Expected reindex failure was not rendered. Calls=${JSON.stringify(capturedReindexes)} Body=${await page.locator('body').innerText()}`,
-      );
-    }
-    assert.deepEqual(capturedReindexes, [{ expectedIndexRevision: 2 }]);
-    await row.getByText('Index revision 3', { exact: true }).waitFor();
-    await row.getByText('RuntimeError: test replacement failed', { exact: true }).waitFor();
-    await page
-      .getByRole('alert')
-      .getByText(/previously ready index remains available/)
-      .waitFor();
-    assert.equal(await button.isDisabled(), false, 'the button is re-enabled after failure');
-    await page.getByRole('button', { name: 'Close', exact: true }).click();
-
-    await send(page, 'What does a basis do?');
-    await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
-    await page.locator('.source-chip').filter({ hasText: 'Linear Algebra Primer' }).click();
-    assert.match(
-      await page.getByRole('figure', { name: 'Cited passage' }).locator('blockquote').innerText(),
-      /basis spans the vector space/,
-    );
-  } finally {
-    await context.close();
-  }
-});
+async function openAdminTab(page, name) {
+  await page.getByRole('tab', { name, exact: true }).click();
+}
 
 test('saved conversation reloads exact citation context and inherits its scope', async () => {
   const state = await setupPage();
@@ -2428,146 +2338,6 @@ test('reopened pending conversation resumes stored stream events without posting
   }
 });
 
-test('saved conversation preserves explicit empty scope and exposes pending requests for explicit abandonment', async () => {
-  const pendingSummary = {
-    conversationId: 'pending-1',
-    title: 'Pending conversation',
-    lastSequence: 1,
-    pendingRequestId: 'pending-request',
-    createdAt: '2026-10-08T00:00:00Z',
-    updatedAt: '2026-10-08T00:00:00Z',
-  };
-  const pendingRecord = {
-    ...pendingSummary,
-    turns: [
-      {
-        sequence: 1,
-        requestId: 'pending-request',
-        role: 'user',
-        text: 'Unfinished question',
-        status: 'input',
-        evidence: {
-          request: { query: 'Unfinished question' },
-          query: 'Unfinished question',
-          effective: {
-            collectionId: 'browser-test',
-            sourceIds: null,
-            retrievalQuery: 'Unfinished question',
-            artifactReferences: [],
-          },
-        },
-        createdAt: '2026-10-08T00:00:01Z',
-      },
-    ],
-  };
-  const { context, page, capturedConversationTurns, conversationRecords } = await setupPage({
-    initialConversations: [pendingSummary],
-    initialConversationRecords: [pendingRecord],
-  });
-  const stop = page.getByRole('button', { name: 'Stop answering' });
-  try {
-    await page.getByText('Unfinished question', { exact: true }).waitFor();
-    await stop.click();
-    await page.getByText(/^Stopped\./).waitFor();
-    assert.equal(conversationRecords.get('pending-1').pendingRequestId, null);
-    assert.equal(
-      capturedConversationTurns.length,
-      0,
-      'opening and abandoning pending work never replay its model call',
-    );
-
-    let notifyLateRead, releaseLateRead;
-    const lateReadStarted = new Promise((resolve) => {
-      notifyLateRead = resolve;
-    });
-    const release = new Promise((resolve) => {
-      releaseLateRead = resolve;
-    });
-    let heldRequestId;
-    await page.route('**/api/conversations/*/turns/*/events**', async (route) => {
-      const requestUrl = new URL(route.request().url());
-      const requestId = requestUrl.pathname.split('/').at(-2);
-      heldRequestId ??= requestId;
-      const after = Number(requestUrl.searchParams.get('afterEventId'));
-      if (requestId === heldRequestId && after > 0) {
-        notifyLateRead();
-        await release;
-        return route.fulfill({
-          json: {
-            events: [{ eventId: 2, type: 'provisional_delta', text: 'Late stale text' }],
-            nextEventId: 2,
-            requestState: 'pending',
-            jobState: 'running',
-            done: false,
-          },
-        });
-      }
-      return route.fulfill({
-        json: {
-          events: [{ eventId: 1, type: 'provisional_delta', text: 'Still generating' }].filter(
-            (event) => event.eventId > after,
-          ),
-          nextEventId: 1,
-          requestState: 'pending',
-          jobState: 'running',
-          done: false,
-        },
-      });
-    });
-    await send(page, 'Cancel this newly submitted turn.');
-    await lateReadStarted;
-    assert.equal(await stop.isEnabled(), true, 'polling does not disable cancellation');
-    await stop.click();
-    await page.getByText(/^Stopped\./).waitFor();
-    await page.waitForFunction(() => !document.querySelector('.composer button[type=submit]').disabled);
-    assert.equal(await message(page).inputValue(), 'Cancel this newly submitted turn.');
-
-    await send(page, 'A different new request.');
-    await page.getByLabel('Unverified provisional answer').getByText('Still generating').waitFor();
-    const lateResponse = page.waitForResponse(
-      (response) => response.url().includes(heldRequestId) && response.url().includes('afterEventId=1'),
-    );
-    releaseLateRead();
-    await (await lateResponse).finished();
-    await page.evaluate(() => new Promise(requestAnimationFrame));
-    assert.equal(await page.getByText('Late stale text', { exact: true }).count(), 0);
-    assert.equal(
-      await page.getByRole('button', { name: 'Send', exact: true }).isDisabled(),
-      true,
-      'old poll cleanup cannot unlock the new pending request',
-    );
-    assert.equal(capturedConversationTurns.length, 2);
-    await stop.click();
-    await page.getByText(/^Stopped\./).waitFor();
-  } finally {
-    await context.close();
-  }
-
-  const state = await setupPage();
-  try {
-    await searchOnly(state.page, ['Linear Algebra Primer']);
-    await send(state.page, 'Use only the primer.');
-    await state.page
-      .locator('.message-assistant')
-      .getByText('A basis spans the vector space.', { exact: true })
-      .waitFor();
-    await state.page.waitForFunction(() => document.querySelector('.composer textarea').value === '');
-    assert.deepEqual(state.capturedConversationTurns[0].body.sourceIds, ['source-1']);
-    await state.page.getByRole('button', { name: 'Search in: 1 source' }).waitFor();
-    await searchOnly(state.page, []);
-    await send(state.page, 'Do not use any source.');
-    await state.page.getByText(/No sources were selected for this question/).waitFor();
-    assert.deepEqual(
-      state.capturedConversationTurns[1].body.sourceIds,
-      [],
-      'empty selection stays distinct from inherited or all-source scope',
-    );
-    assert.equal(state.conversationProviderCalls, 0, 'an explicit empty source scope never reaches generation');
-  } finally {
-    await state.context.close();
-  }
-});
-
 test('saved conversation opens on the latest bounded page and explicitly loads older turns', async () => {
   const createdAt = '2026-10-08T00:00:00Z';
   const pendingSummary = {
@@ -2651,6 +2421,8 @@ test('the mascot face switches between the Swoop and Dooley themes and the choic
   const { context, page } = await setupPage();
   try {
     const startTheme = await page.evaluate(() => document.documentElement.dataset.theme);
+    const account = page.locator('.account-trigger');
+    await account.click();
     const toDark = page.getByRole('button', { name: 'Switch to dark mode (Dooley)' });
     const toLight = page.getByRole('button', { name: 'Switch to light mode (Swoop)' });
     if (startTheme === 'dark') await toLight.click();
@@ -2661,6 +2433,7 @@ test('the mascot face switches between the Swoop and Dooley themes and the choic
       'rgb(0, 0, 0)',
     );
     await page.reload();
+    await page.locator('.account-trigger').click();
     await toLight.waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
     await toLight.click();
@@ -2706,7 +2479,7 @@ test('desktop, phone, and tablet viewports keep long chat lists separate from re
     initialConversationRecords: initialConversations.map((item) => ({ ...item, turns: [] })),
   });
   try {
-    const navigation = page.getByRole('navigation', { name: 'Chats and library' });
+    const navigation = page.getByRole('navigation', { name: 'Chats and artifacts' });
     const chats = navigation.getByRole('list', { name: 'Recent chats' });
     await chats.getByRole('button').last().waitFor({ state: 'attached' });
     for (const size of [
@@ -2717,11 +2490,7 @@ test('desktop, phone, and tablet viewports keep long chat lists separate from re
       { width: 320, height: 568 },
     ]) {
       await page.setViewportSize(size);
-      const scope = page.getByRole('button', { name: /^Search in:/ });
-      await scope.focus();
-      await scope.press('Enter');
-      await page.getByRole('checkbox', { name: 'Include Lab Safety Manual in questions' }).waitFor();
-      await page.keyboard.press('Escape');
+      if (size.width < 900) await page.getByRole('button', { name: 'Open menu' }).click();
       assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).isVisible(), true);
       const viewport = await page.evaluate(() => ({
         width: window.innerWidth,
@@ -2729,579 +2498,21 @@ test('desktop, phone, and tablet viewports keep long chat lists separate from re
       }));
       assert.ok(viewport.scrollWidth <= viewport.width, `overflow at ${size.width}px: ${JSON.stringify(viewport)}`);
 
-      if (size.width < 900) await page.getByRole('button', { name: 'Open menu' }).click();
       await navigation.getByRole('button', { name: 'New chat', exact: true }).hover();
-      const links = navigation.locator('.sidebar-links');
+      const links = navigation.locator('.sidebar-lower');
       const linksBefore = await links.boundingBox();
       const listBounds = await chats.boundingBox();
       assert.ok(listBounds.y + listBounds.height <= linksBefore.y, `chats overlap navigation at ${size.width}px`);
       assert.ok(linksBefore.y + linksBefore.height <= size.height, `navigation is offscreen at ${size.width}px`);
       await chats.getByRole('button').last().scrollIntoViewIfNeeded();
       assert.equal((await links.boundingBox()).y, linksBefore.y, 'scrolling chats keeps navigation in place');
-      for (const button of await links.getByRole('button').all()) {
-        assert.equal(
-          await button.evaluate((el) => {
-            const rect = el.getBoundingClientRect();
-            return el.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
-          }),
-          true,
-          `${await button.innerText()} is covered at ${size.width}px`,
-        );
-      }
+      assert.equal(
+        await links.locator('.sidebar-advising').isVisible(),
+        true,
+        `advising link is reachable at ${size.width}px`,
+      );
       await chats.locator('.chat-list-row > button:first-child').last().click();
-      if (size.width < 900) await page.getByRole('button', { name: 'Open menu' }).click();
-      await openSidebar(page, /^Sources/);
-      await page.getByRole('heading', { name: 'Your sources' }).waitFor();
-      await page.keyboard.press('Escape');
     }
-  } finally {
-    await context.close();
-  }
-});
-
-test('current-revision document exports use the open revision id and suggested filename', async () => {
-  const { context, page, downloadedArtifacts } = await setupPage({ importedRecord: documentRecord });
-  try {
-    const tempFile = path.join(os.tmpdir(), `notes-export-${Date.now()}.md`);
-    tempFiles.push(tempFile);
-    await writeFile(tempFile, '# fixture');
-    await importArtifact(page, tempFile);
-    assert.equal(await download(page, 'md'), 'notes-r1.md');
-    assert.equal(await download(page, 'docx'), 'notes-r1.docx');
-    assert.deepEqual(downloadedArtifacts, [
-      { format: 'md', revisionId: 'doc-r1' },
-      { format: 'docx', revisionId: 'doc-r1' },
-    ]);
-  } finally {
-    await context.close();
-  }
-});
-
-test('browser edits a supported imported workbook cell by stable ID and keeps the original available', async () => {
-  const { context, page, capturedRevisions } = await setupPage({ saveDelayMs: 450 });
-  try {
-    const tempFile = path.join(os.tmpdir(), `metrics-${Date.now()}.xlsx`);
-    tempFiles.push(tempFile);
-    await writeFile(tempFile, 'mock xlsx bytes');
-    await importArtifact(page, tempFile);
-    await page.getByLabel('Cell B1').fill('450');
-    await page.getByLabel('Cell B2').fill('2026-01-05');
-    await page.getByRole('tab', { name: 'Summary' }).click();
-    await page.getByLabel('Cell B1').fill('900');
-    await page.getByRole('button', { name: 'Save changes' }).click();
-    assert.equal(
-      await page.getByLabel('Cell B1').isDisabled(),
-      true,
-      'workbook cells are frozen while the save is pending',
-    );
-    assert.equal(
-      await page.getByLabel('Title', { exact: true }).isDisabled(),
-      true,
-      'workbook title is frozen while the save is pending',
-    );
-    await revisionShown(page, 'wb-r2');
-    assert.deepEqual(capturedRevisions[0].operations, [
-      {
-        type: 'set_cell',
-        sheet_id: 'sheet-main',
-        cell_id: 'cell-value',
-        cell: { id: 'cell-value', row: 1, column: 2, value: 450, formula: null, style: {} },
-      },
-      {
-        type: 'set_cell',
-        sheet_id: 'sheet-main',
-        cell_id: 'cell-date',
-        cell: {
-          id: 'cell-date',
-          row: 2,
-          column: 2,
-          value: '2026-01-05',
-          value_type: 'date',
-          formula: null,
-          style: { number_format: 'yyyy-mm-dd' },
-        },
-      },
-      {
-        type: 'set_cell',
-        sheet_id: 'sheet-summary',
-        cell_id: 'cell-value',
-        cell: { id: 'cell-value', row: 1, column: 2, value: 900, formula: null, style: { bold: true } },
-      },
-    ]);
-    assert.equal(await page.getByLabel('Cell A1').inputValue(), 'Visits');
-    assert.equal(await page.getByLabel('Cell B1').inputValue(), '450');
-    assert.equal(await page.getByLabel('Cell B2').inputValue(), '2026-01-05');
-    await page.getByRole('tab', { name: 'Summary' }).click();
-    assert.equal(await page.getByLabel('Cell B1').inputValue(), '900');
-    await page.getByRole('button', { name: 'Download', exact: true }).click();
-    const originalDownload = page.waitForEvent('download');
-    await page.getByRole('menuitem', { name: /Original file/ }).click();
-    assert.equal((await originalDownload).suggestedFilename(), 'metrics.xlsx');
-  } finally {
-    await context.close();
-  }
-});
-
-test('imported document block edits preserve IDs, code blank lines, table pipes, multiline cells, and evidence', async () => {
-  const { context, page, capturedRevisions } = await setupPage({ importedRecord: documentRecord, saveDelayMs: 450 });
-  try {
-    const tempFile = path.join(os.tmpdir(), `notes-${Date.now()}.md`);
-    tempFiles.push(tempFile);
-    await writeFile(tempFile, '# fixture');
-    await importArtifact(page, tempFile);
-    const code = page.getByLabel('Block code-42');
-    assert.equal(await code.inputValue(), 'first line\n\nthird line');
-    assert.equal(await page.getByLabel('Rows table-77').inputValue(), 'A|B\ttop line\nbottom line');
-    await code.fill('revised code\n\nwith blank line');
-    await page.getByText(/Edited · unverified — its source link will be removed/).waitFor();
-    await page.getByRole('button', { name: 'Save changes' }).click();
-    assert.equal(await code.isDisabled(), true, 'document blocks are frozen while the save is pending');
-    assert.equal(
-      await page.getByLabel('Title', { exact: true }).isDisabled(),
-      true,
-      'document title is frozen while the save is pending',
-    );
-    await revisionShown(page, 'doc-r2');
-    const saved = capturedRevisions.at(-1).spec;
-    assert.deepEqual(
-      saved.blocks.map((block) => block.id),
-      ['code-42', 'table-77', 'paragraph-9'],
-    );
-    assert.equal(saved.blocks[0].text, 'revised code\n\nwith blank line');
-    assert.equal(saved.blocks[1].rows[0][0], 'A|B');
-    assert.equal(saved.blocks[1].rows[0][1], 'top line\nbottom line');
-    assert.deepEqual(Object.keys(saved.evidence), ['paragraph-9']);
-    assert.deepEqual(JSON.parse(saved.provenance.unverifiedElements), ['code-42']);
-    assert.equal(saved.page_layout.margin_top, 1);
-    await page.getByText(/Edited · unverified — no longer tied to a source/).waitFor();
-    await page.getByText('Source: Linear Algebra Primer · page 5').waitFor();
-  } finally {
-    await context.close();
-  }
-});
-
-test('workbook title and cell edits publish together, and title-only changes create a revision', async () => {
-  const { context, page, capturedRevisions } = await setupPage();
-  try {
-    const tempFile = path.join(os.tmpdir(), `metrics-title-${Date.now()}.xlsx`);
-    tempFiles.push(tempFile);
-    await writeFile(tempFile, 'mock xlsx bytes');
-    await importArtifact(page, tempFile);
-    await page.getByLabel('Title', { exact: true }).fill('Visits by term');
-    await page.getByLabel('Cell B1').fill('450');
-    await page.getByRole('button', { name: 'Save changes' }).click();
-    await revisionShown(page, 'wb-r2');
-    const combined = capturedRevisions[0];
-    assert.ok(combined.spec, 'title changes use a full spec revision with cell edits applied');
-    assert.equal(combined.spec.title, 'Visits by term');
-    assert.equal(combined.spec.sheets[0].cells.find((cell) => cell.id === 'cell-value').value, 450);
-    assert.deepEqual(
-      combined.spec.sheets.map((sheet) => sheet.id),
-      ['sheet-main', 'sheet-summary'],
-    );
-    assert.equal(combined.spec.sheets[0].cells[0].style.bold, true);
-    assert.equal(combined.spec.sheets[1].cells[0].value, 20);
-
-    await page.getByLabel('Title', { exact: true }).fill('Visits by semester');
-    await page.getByRole('button', { name: 'Save changes' }).click();
-    await revisionShown(page, 'wb-r3');
-    const titleOnly = capturedRevisions[1];
-    assert.ok(titleOnly.spec, 'a title-only change creates a revision');
-    assert.equal(titleOnly.spec.title, 'Visits by semester');
-    assert.equal(titleOnly.spec.sheets[0].cells.find((cell) => cell.id === 'cell-value').value, 450);
-    assert.equal(titleOnly.spec.sheets[0].cells[0].style.bold, true);
-  } finally {
-    await context.close();
-  }
-});
-
-test('an answer becomes a grounded artifact job in its chat, which opens the returned artifact', async () => {
-  const { context, page, capturedRuns } = await setupPage();
-  try {
-    await searchOnly(page, ['Linear Algebra Primer']);
-    await send(page, 'What is a basis?');
-    await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Make a spreadsheet from this answer' }).click();
-    const request = page.getByLabel('What should it contain?');
-    assert.match(await request.inputValue(), /What is a basis\?/);
-    await request.fill('Write a short study guide about eigenvectors.');
-    await page.getByText('Grounded in 1 source, with each claim tied to a passage.').waitFor();
-    await page.getByRole('button', { name: 'Create spreadsheet' }).click();
-    const artifacts = page.getByRole('complementary', { name: 'Artifacts' });
-    await artifacts.getByRole('button', { name: /Generated draft/ }).waitFor({ timeout: 6000 });
-    assert.equal(capturedRuns[0].kind, 'workbook');
-    assert.deepEqual(capturedRuns[0].inputs, {
-      prompt: 'Write a short study guide about eigenvectors.',
-      sourceIds: ['source-1'],
-      mode: 'grounded',
-    });
-    assert.ok(typeof capturedRuns[0].idempotencyKey === 'string' && capturedRuns[0].idempotencyKey.length > 0);
-    await artifacts.getByRole('button', { name: /Generated draft/ }).click();
-    await revisionShown(page, 'rev-1');
-    assert.equal(await page.getByLabel('Title', { exact: true }).inputValue(), 'Generated draft');
-    await page.getByText('Drafted from your instructions — not checked against your sources.').waitFor();
-
-    await page.getByRole('button', { name: 'Back to artifacts' }).click();
-    await artifacts.getByRole('button', { name: 'New', exact: true }).click();
-    await page.getByRole('checkbox', { name: /Use my sources/ }).uncheck();
-    await page.getByText('Written from your instructions only — not checked against your sources.').waitFor();
-  } finally {
-    await context.close();
-  }
-});
-
-test('generation opens the pinned published revision even after the artifact head advances', async () => {
-  const { context, page, openedRunRevisions } = await setupPage({ pinnedRunRevision: true });
-  try {
-    await createMenu(page, 'New document');
-    await page.getByLabel('What should it contain?').fill('Draft a lesson note.');
-    await page.getByRole('button', { name: 'Create document' }).click();
-    const card = page
-      .getByRole('complementary', { name: 'Artifacts' })
-      .getByRole('button', { name: /Generated draft/ });
-    await card.waitFor({ timeout: 6000 });
-    await card.click();
-    await revisionShown(page, 'published-r1');
-    assert.ok(openedRunRevisions.length > 0 && openedRunRevisions.every((revision) => revision === 'published-r1'));
-  } finally {
-    await context.close();
-  }
-});
-
-test('dependent workbook generation sends typed columns, quota bounds, selected sources, and exact revision parent', async () => {
-  const { context, page, capturedRuns } = await setupPage({
-    initialArtifacts: [{ artifactId: 'artifact-wb', revisionId: 'wb-r1', kind: 'workbook', title: 'Metrics' }],
-  });
-  try {
-    await openSidebar(page, 'All artifacts');
-    await page
-      .getByRole('dialog')
-      .getByRole('button', { name: /Metrics/ })
-      .click();
-    await page.getByRole('button', { name: 'Ask for changes' }).click();
-    await page.getByText('Advanced: plan it section by section').click();
-    await page.getByText('Plan a document or workbook in sections').click();
-    await page.getByRole('button', { name: 'Add worksheet' }).click();
-    await page.getByLabel('Total workbook cells, including headers').fill('52');
-    await page.getByLabel('What should change?').fill('Create a small visit summary.');
-    await page.getByRole('button', { name: 'Make these changes' }).click();
-    await page
-      .getByRole('complementary', { name: 'Artifacts' })
-      .getByRole('button', { name: /Generated draft/ })
-      .waitFor({ timeout: 6000 });
-    const body = capturedRuns[0];
-    assert.equal(body.kind, 'workbook');
-    assert.deepEqual(body.inputs.sourceIds, null);
-    assert.equal(body.inputs.artifactId, 'artifact-wb');
-    assert.equal(body.inputs.expectedRevisionId, 'wb-r1');
-    assert.deepEqual(body.inputs.outputPlan, {
-      kind: 'workbook',
-      title: 'Metrics',
-      sheets: [
-        {
-          key: 'sheet-1',
-          name: 'Data',
-          columns: [
-            { key: 'item', label: 'Item', value_type: 'text' },
-            { key: 'value', label: 'Value', value_type: 'number' },
-          ],
-          min_rows: 8,
-          target_rows: 10,
-          max_rows: 12,
-        },
-        {
-          key: 'sheet-2',
-          name: 'Sheet 2',
-          columns: [{ key: 'item', label: 'Item', value_type: 'text' }],
-          min_rows: 8,
-          target_rows: 10,
-          max_rows: 12,
-        },
-      ],
-      max_total_cells: 52,
-      max_output_tokens_per_unit: 1200,
-      max_repairs_per_unit: 1,
-      max_checkpoint_bytes: 4000000,
-    });
-  } finally {
-    await context.close();
-  }
-});
-
-test('impossible dependent quotas are rejected locally and preserve the generation draft', async () => {
-  const { context, page, capturedRuns } = await setupPage();
-  try {
-    await createMenu(page, 'New document');
-    await page.getByText('Advanced: plan it section by section').click();
-    await page.getByLabel('Plan a document or workbook in sections').check();
-    await page.getByText(/Current allowance:/).waitFor();
-    await page.getByLabel('Total document blocks, including heading').fill('2');
-    await page.getByLabel('What should it contain?').fill('Write a short guide.');
-    await page.getByRole('button', { name: 'Create document' }).click();
-    await page
-      .getByRole('alert')
-      .getByText(/blocks must include each section heading/)
-      .waitFor();
-    assert.equal(capturedRuns.length, 0);
-    assert.equal(await page.getByLabel('What should it contain?').inputValue(), 'Write a short guide.');
-  } finally {
-    await context.close();
-  }
-});
-
-test('stale artifact generation retains prompt and plan and waits for explicit head reload and resubmission', async () => {
-  const { context, page, capturedApiRequests } = await setupPage({
-    initialArtifacts: [{ artifactId: 'artifact-wb', revisionId: 'wb-r1', kind: 'workbook', title: 'Metrics' }],
-    faults: { 'POST /api/runs': [409, 'artifact head changed'] },
-  });
-  const runSubmissions = () =>
-    capturedApiRequests.filter((request) => request.method === 'POST' && request.path === '/api/runs').length;
-  try {
-    await openSidebar(page, 'All artifacts');
-    await page
-      .getByRole('dialog')
-      .getByRole('button', { name: /Metrics/ })
-      .click();
-    await page.getByRole('button', { name: 'Ask for changes' }).click();
-    await page.getByLabel('What should change?').fill('Refresh the metrics workbook.');
-    await page.getByRole('button', { name: 'Make these changes' }).click();
-    await page.getByRole('alert').getByText('Metrics changed since you opened it.').waitFor();
-    assert.equal(runSubmissions(), 1);
-    assert.equal(await page.getByLabel('What should change?').inputValue(), 'Refresh the metrics workbook.');
-    await page.getByRole('button', { name: 'Load latest version' }).click();
-    await page.getByRole('alert').waitFor({ state: 'detached' });
-    assert.equal(await page.getByLabel('What should change?').inputValue(), 'Refresh the metrics workbook.');
-    assert.equal(runSubmissions(), 1, 'head reload does not resubmit the generation job');
-  } finally {
-    await context.close();
-  }
-});
-
-test('generation polling recovers after a temporary HTTP failure', async () => {
-  const { context, page, capturedRuns } = await setupPage({
-    faults: { 'GET /api/runs/run-1': [503, 'temporary job status outage'] },
-  });
-  try {
-    await createMenu(page, 'New document');
-    await page.getByLabel('What should it contain?').fill('Draft a worksheet about derivatives.');
-    await page.getByRole('button', { name: 'Create document' }).click();
-    await page.getByText(/Status check failed, retrying: .*temporary job status outage/).waitFor();
-    await page
-      .getByRole('complementary', { name: 'Artifacts' })
-      .getByRole('button', { name: /Generated draft/ })
-      .waitFor({ timeout: 6000 });
-    assert.equal(capturedRuns.length, 1);
-  } finally {
-    await context.close();
-  }
-});
-
-test('native batches inspect unknown submission without retry, poll explicitly, reopen exact revision, and cancel explicitly', async () => {
-  const state = await setupPage({ failBatchSubmitOnce: true });
-  const { context, page } = state;
-  try {
-    await searchOnly(page, ['Linear Algebra Primer']);
-    await openTool(page, 'Bulk drafts');
-    await page.getByLabel('Batch prompt 1').fill('Create a short guide from the selected lecture notes.');
-    await page.getByRole('button', { name: 'Submit batch' }).click();
-    await page.getByText(/Submission outcome may be unknown/).waitFor();
-    assert.equal(state.capturedBatchSubmissions.length, 1);
-    const firstSubmission = state.capturedBatchSubmissions[0];
-    assert.match(firstSubmission.batchId, /^[0-9a-f-]{36}$/i);
-    assert.equal(firstSubmission.kind, 'document');
-    assert.equal(firstSubmission.items.length, 1);
-    assert.match(firstSubmission.items[0].itemId, /^[0-9a-f-]{36}$/i);
-    assert.deepEqual(firstSubmission.items[0].inputs, {
-      prompt: 'Create a short guide from the selected lecture notes.',
-      mode: 'grounded',
-      sourceIds: ['source-1'],
-    });
-    await page.getByText('Batch · Outcome unknown · 0/1', { exact: true }).waitFor();
-    assert.equal(await page.getByRole('button', { name: 'Submit batch' }).isDisabled(), true);
-
-    await page.reload();
-    await openTool(page, 'Bulk drafts');
-    await page.getByText('Batch · Outcome unknown · 0/1', { exact: true }).waitFor();
-    assert.equal(
-      state.capturedBatchSubmissions.length,
-      1,
-      'reopen performs reads only and does not resubmit an uncertain intent',
-    );
-    await page.getByRole('button', { name: 'Poll provider status' }).click();
-    await page.getByText('Selected batch · Completed · 1/1 complete · 0 failed', { exact: true }).waitFor();
-    assert.deepEqual(state.capturedBatchPolls, [firstSubmission.batchId]);
-    await page.getByRole('button', { name: 'Open published revision' }).click();
-    await revisionShown(page, 'revision-published-1');
-    assert.deepEqual(state.openedArtifactRevisions, ['revision-published-1']);
-
-    await openTool(page, 'Bulk drafts');
-    await page.getByLabel('Batch prompt 1').fill('Create another guide to cancel.');
-    await page.getByLabel('Batch request mode').selectOption('authoring');
-    await page.getByRole('button', { name: 'Submit batch' }).click();
-    await page.getByText('Selected batch · In progress · 0/1 complete · 0 failed', { exact: true }).waitFor();
-    const secondBatchId = state.capturedBatchSubmissions[1].batchId;
-    assert.deepEqual(state.capturedBatchSubmissions[1].items[0].inputs, {
-      prompt: 'Create another guide to cancel.',
-      mode: 'authoring',
-      sourceIds: [],
-    });
-    await page.getByRole('button', { name: 'Cancel batch' }).click();
-    await page
-      .getByText(/Remote provider usage may still incur charges; already published revisions are retained/)
-      .waitFor();
-    assert.deepEqual(state.capturedBatchCancels, [secondBatchId]);
-    await page.keyboard.press('Escape');
-    await revisionShown(page, 'revision-published-1');
-  } finally {
-    await context.close();
-  }
-});
-
-test('browser exposes upload diagnostics and isolates HTML artifact preview', async () => {
-  const { context, page } = await setupPage();
-  try {
-    await openSidebar(page, /^Sources/);
-    const tempFile = path.join(os.tmpdir(), `broken-${Date.now()}.pdf`);
-    tempFiles.push(tempFile);
-    await writeFile(tempFile, 'mock pdf');
-    await page.locator('input[type=file][aria-label="Choose a PDF, text, or Markdown source"]').setInputFiles(tempFile);
-    await page.getByText('No readable pages were found.', { exact: true }).waitFor();
-    await page.locator('input[type=file][aria-label="Choose a PDF, text, or Markdown source"]').setInputFiles({
-      name: 'oversize.pdf',
-      mimeType: 'application/pdf',
-      buffer: Buffer.from('large upload fixture'),
-    });
-    await page.getByRole('alert').getByText('upload exceeds configured size limit').waitFor();
-    await page.getByRole('button', { name: 'Close', exact: true }).click();
-
-    await createMenu(page, 'New web page');
-    await page.getByRole('tab', { name: 'Start blank' }).click();
-    await page.getByLabel('Title').fill('Browser draft');
-    await page.getByLabel('HTML content').fill('<p>Safe preview</p>');
-    await page.getByRole('button', { name: 'Create', exact: true }).click();
-    await revisionShown(page, 'rev-1');
-    await page.getByLabel('HTML content').fill('<p>Safe preview, edited</p>');
-    await page.getByRole('button', { name: 'Save changes' }).click();
-    await page.getByRole('alert').getByText('Stale parent revision.').waitFor();
-    assert.equal(await page.getByLabel('HTML content').inputValue(), '<p>Safe preview, edited</p>');
-    await page.getByRole('button', { name: 'Preview' }).click();
-    const frame = page.locator('iframe[title="Isolated artifact preview"]');
-    await frame.waitFor();
-    assert.equal(await frame.getAttribute('sandbox'), '');
-    const csp = await frame.evaluate((el) => el.getAttribute('srcdoc') ?? '', undefined);
-    assert.match(csp, /Content-Security-Policy/);
-    assert.match(csp, /connect-src 'none'/);
-    assert.match(csp, /script-src 'none'/);
-    assert.match(csp, /worker-src 'none'/);
-    assert.match(csp, /form-action 'none'/);
-    assert.equal(await download(page, 'html'), 'browser-draft.html');
-
-    await createMenu(page, 'New spreadsheet');
-    await page.getByRole('tab', { name: 'Start blank' }).click();
-    await page.getByRole('button', { name: 'Create', exact: true }).click();
-    await page.getByRole('region', { name: 'Workbook editor' }).waitFor();
-  } finally {
-    await context.close();
-  }
-});
-
-test('local connection panel sends exact DTOs and keeps credentials transient and masked', async () => {
-  const { context, page, capturedConnectionWrites } = await setupPage({ connectionAdmin: true });
-  try {
-    await openTool(page, 'Model connections');
-    await page.getByLabel('Name', { exact: true }).fill('Local OpenAI');
-    await page.locator('.connection-settings-panel form select').selectOption('openai');
-    await page.getByLabel('Model ID').fill('gpt-test');
-    await page.getByLabel('Provider credential').fill('super-secret-test-value');
-    await page.getByRole('checkbox', { name: 'standard' }).check();
-    await page.getByRole('checkbox', { name: 'institutional_corpus' }).check();
-    await page.getByRole('button', { name: 'Create profile' }).click();
-    await page.getByText(/current evaluation: not passed/).waitFor();
-    assert.deepEqual(capturedConnectionWrites[0], {
-      name: 'Local OpenAI',
-      provider: 'openai',
-      model_id: 'gpt-test',
-      roles: ['standard'],
-      capabilities: [],
-      data_scopes: ['institutional_corpus'],
-      base_url: null,
-      account_id: null,
-      provider_options: {},
-      enabled: true,
-      priority: 100,
-      secret: { api_key: 'super-secret-test-value' },
-    });
-    assert.equal(await page.getByLabel('Provider credential').inputValue(), '');
-    assert.equal(
-      await page.evaluate(() =>
-        [...Object.values(localStorage), ...Object.values(sessionStorage)].some((value) =>
-          /super-secret-test-value|second-secret-value/.test(value),
-        ),
-      ),
-      false,
-    );
-    assert.equal(await page.getByText('super-secret-test-value', { exact: true }).count(), 0);
-    await page.getByRole('button', { name: 'Replace credential' }).click();
-    await page.getByLabel(/Replace API key for/).fill('second-secret-value');
-    await page.getByRole('button', { name: 'Replace credential' }).last().click();
-    assert.deepEqual(capturedConnectionWrites[1], { expected_revision: 1, secret: { api_key: 'second-secret-value' } });
-    assert.equal(
-      capturedConnectionWrites.some((body) => 'eval_passed' in body),
-      false,
-    );
-    await page.keyboard.press('Escape');
-    await openTool(page, 'Model connections');
-    assert.equal(
-      await page.getByLabel('Provider credential').inputValue(),
-      '',
-      'closing the panel discards any typed credential',
-    );
-  } finally {
-    await context.close();
-  }
-});
-
-test('provider change drops hidden account state and a credential draft cannot move profiles', async () => {
-  const clef = {
-    ...profileFixture,
-    profile_id: 'profile-cf',
-    name: 'Campus Clef',
-    provider: 'cloudflare-clef',
-    model_id: 'clef-test',
-    account_id: 'acct-hidden',
-    roles: ['decision'],
-  };
-  const other = {
-    ...profileFixture,
-    profile_id: 'profile-b',
-    name: 'Other OpenAI',
-    model_id: 'gpt-other',
-  };
-  const { context, page, capturedConnectionWrites } = await setupPage({
-    connectionAdmin: true,
-    seedConnectionProfiles: [clef, other],
-  });
-  try {
-    await openTool(page, 'Model connections');
-    const cards = page.locator('article.connection-profile');
-    await cards.filter({ hasText: 'Campus Clef' }).getByRole('button', { name: 'Edit profile' }).click();
-    await page.getByLabel('Account ID').waitFor();
-    await page.getByLabel('Provider').selectOption('openai');
-    assert.equal(await page.getByLabel('Account ID').count(), 0);
-    await page.getByRole('button', { name: 'Save profile' }).click();
-    await page.getByText('Profile saved. Routing remains evaluation-gated.').waitFor();
-    const saved = capturedConnectionWrites.at(-1);
-    assert.equal(saved.provider, 'openai');
-    assert.equal(saved.account_id, null);
-    assert.deepEqual(saved.roles, ['standard']);
-
-    await cards.filter({ hasText: 'Other OpenAI' }).getByRole('button', { name: 'Replace credential' }).click();
-    await page.getByLabel(/Replace API key for/).fill('secret-for-other');
-    assert.equal(
-      await cards.filter({ hasText: 'Campus Clef' }).getByRole('button', { name: 'Replace credential' }).isDisabled(),
-      true,
-    );
-    assert.equal(capturedConnectionWrites.some((body) => body.secret?.api_key === 'secret-for-other'), false);
   } finally {
     await context.close();
   }
@@ -3338,7 +2549,7 @@ test('new chat during the first list load does not reopen the previous chat', as
     initialConversationRecords: [{ ...summary, turns: [] }],
   });
   try {
-    const nav = page.getByRole('navigation', { name: 'Chats and library' });
+    const nav = page.getByRole('navigation', { name: 'Chats and artifacts' });
     await nav.getByText('Loading…', { exact: true }).waitFor();
     await nav.getByRole('button', { name: 'New chat' }).click();
     await nav.getByRole('button', { name: 'Existing chat' }).waitFor();
@@ -3356,7 +2567,7 @@ test('OIDC signed-out session hides workspace and navigates only to the fixed lo
   });
   try {
     await page.getByRole('heading', { name: 'Sign in required' }).waitFor();
-    assert.equal(await page.getByRole('navigation', { name: 'Chats and library' }).count(), 0);
+    assert.equal(await page.getByRole('navigation', { name: 'Chats and artifacts' }).count(), 0);
     assert.equal(sourcesRequested, 0);
     const loginRequest = page.waitForRequest((request) => new URL(request.url()).pathname === '/api/auth/login');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
@@ -3378,12 +2589,10 @@ test('authenticated OIDC logout clears the workspace before reloading the sessio
   });
   try {
     await page.getByText('Ada Student', { exact: true }).waitFor();
-    await openSidebar(page, /^Sources/);
-    await page.getByText('Linear Algebra Primer', { exact: true }).waitFor();
-    await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: 'Sign out' }).click();
+    await page.locator('.account-trigger').click();
+    await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await page.getByRole('heading', { name: 'Sign in required' }).waitFor();
-    assert.equal(await page.getByRole('navigation', { name: 'Chats and library' }).count(), 0);
+    assert.equal(await page.getByRole('navigation', { name: 'Chats and artifacts' }).count(), 0);
     assert.equal(await page.getByText('Linear Algebra Primer', { exact: true }).count(), 0);
   } finally {
     await context.close();
@@ -3397,32 +2606,36 @@ test('session check errors show a retry and recover without a blank workspace', 
   try {
     await page.getByRole('alert').getByText('session temporarily unavailable').waitFor();
     await page.getByRole('button', { name: 'Retry session check' }).click();
-    await page.getByRole('navigation', { name: 'Chats and library' }).waitFor();
+    await page.getByRole('navigation', { name: 'Chats and artifacts' }).waitFor();
     await page.getByText('Local development', { exact: true }).waitFor();
   } finally {
     await context.close();
   }
 });
 
-test('saved artifacts reload from the server list after page refresh', async () => {
+test('saved artifacts reload from the server list and preview in an isolated frame', async () => {
   const { context, page } = await setupPage({
     initialArtifacts: [
       { artifactId: 'artifact-1', revisionId: 'rev-1', kind: 'document', title: 'Generated draft', status: 'ready' },
     ],
   });
   try {
-    await openSidebar(page, 'All artifacts');
-    await page
-      .getByRole('dialog')
-      .getByRole('button', { name: /Generated draft/ })
-      .waitFor();
+    const navigation = page.getByRole('navigation', { name: 'Chats and artifacts' });
+    await navigation.getByRole('button', { name: /Generated draft/ }).waitFor();
+    await navigation.getByRole('button', { name: /Generated draft/ }).click();
+    await page.locator('.canvas-title').getByText('Generated draft').waitFor();
+    const frame = page.locator('iframe[title="Isolated artifact preview"]');
+    await frame.waitFor();
+    assert.equal(await frame.getAttribute('sandbox'), '');
+    const csp = await frame.evaluate((el) => el.getAttribute('srcdoc') ?? '', undefined);
+    assert.match(csp, /Content-Security-Policy/);
+    assert.match(csp, /connect-src 'none'/);
+    assert.match(csp, /script-src 'none'/);
+    assert.match(csp, /worker-src 'none'/);
+    assert.match(csp, /form-action 'none'/);
     await page.reload();
-    await openSidebar(page, 'All artifacts');
-    await page
-      .getByRole('dialog')
-      .getByRole('button', { name: /Generated draft/ })
-      .click();
-    await page.waitForFunction(() => document.querySelector('.canvas-title')?.value === 'Generated draft');
+    await page.getByRole('navigation', { name: 'Chats and artifacts' }).getByRole('button', { name: /Generated draft/ }).click();
+    await page.locator('.canvas-title').getByText('Generated draft').waitFor();
   } finally {
     await context.close();
   }
@@ -3435,55 +2648,7 @@ test('a protected API 401 clears the active workspace and returns to sign in', a
   });
   try {
     await page.getByRole('heading', { name: 'Sign in required' }).waitFor();
-    assert.equal(await page.getByRole('navigation', { name: 'Chats and library' }).count(), 0);
-  } finally {
-    await context.close();
-  }
-});
-
-test('human gap attestation is explicit, scope-limited, and retains draft across a stale revision', async () => {
-  const gap = {
-    gapId: 'gap-1',
-    collectionId: 'collection-1',
-    query: 'How do I register for MATH 221?',
-    sourceIds: ['source-1'],
-    state: 'open',
-    revision: 1,
-    occurrenceCount: 4,
-    recurrenceCount: 2,
-    successfulRecurrenceCount: 1,
-    firstSeenAt: '2026-10-01T00:00:00Z',
-    lastSeenAt: '2026-10-08T00:00:00Z',
-    resolution: null,
-  };
-  const { context, page, capturedGapResolutions } = await setupPage({ initialGaps: [gap], gapConflictOnce: true });
-  try {
-    await openTool(page, 'Unanswered questions');
-    const details = page.locator('.gap-review-item').filter({ hasText: 'How do I register for MATH 221?' });
-    await details.locator('summary').click();
-    await page.getByRole('checkbox', { name: 'Linear Algebra Primer', exact: true }).check();
-    assert.equal(
-      await page.getByRole('checkbox', { name: 'Lab Safety Manual', exact: true }).count(),
-      0,
-      'explicitly scoped gaps only offer sources from their recorded source scope',
-    );
-    await page.getByLabel('Optional reviewer note').fill('The registration steps are in this source.');
-    await page.getByRole('button', { name: 'Record human source attestation' }).click();
-    await page.getByRole('alert').getByText('This gap changed').waitFor();
-    assert.equal(await page.getByRole('checkbox', { name: 'Linear Algebra Primer', exact: true }).isChecked(), true);
-    assert.equal(
-      await page.getByLabel('Optional reviewer note').inputValue(),
-      'The registration steps are in this source.',
-    );
-    assert.deepEqual(capturedGapResolutions[0], {
-      id: 'gap-1',
-      body: { expectedRevision: 1, sourceIds: ['source-1'], note: 'The registration steps are in this source.' },
-    });
-    await page.getByRole('button', { name: 'Record human source attestation' }).click();
-    await page.getByText('Reviewer note: The registration steps are in this source.', { exact: true }).waitFor();
-    assert.equal(capturedGapResolutions[1].body.expectedRevision, 2);
-    assert.equal((await page.getByText('Human source attestation', { exact: true }).count()) > 0, true);
-    assert.equal(await page.getByText(/does not prove that a generated answer is factually correct/).count(), 1);
+    assert.equal(await page.getByRole('navigation', { name: 'Chats and artifacts' }).count(), 0);
   } finally {
     await context.close();
   }
@@ -3740,151 +2905,6 @@ test('admin inspects telemetry usage metrics and model price schedules', async (
   }
 });
 
-test('saved chat inspects exact memory references, recovers reset conflicts, and exports a summary artifact', async () => {
-  const createdAt = '2026-10-19T12:00:00Z';
-  const summary = {
-    conversationId: 'memory-1',
-    title: 'Memory and summary',
-    lastSequence: 2,
-    pendingRequestId: null,
-    createdAt,
-    updatedAt: createdAt,
-  };
-  const reference = {
-    sourceId: 'source-1',
-    sourceName: 'Linear Algebra Primer',
-    locatorLabel: 'section 2.1',
-    chunkId: 'memory-chunk-1',
-  };
-  const notice = {
-    level: 'warning',
-    headline: 'Check your applicable catalog cohort.',
-    hasConflicts: false,
-    conflicts: [],
-    sources: [],
-    unknownScope: true,
-  };
-  const record = {
-    ...summary,
-    turns: [
-      {
-        sequence: 1,
-        requestId: 'memory-request',
-        role: 'user',
-        text: 'Explain this basis.',
-        status: 'input',
-        evidence: { request: { query: 'Explain this basis.' } },
-        createdAt,
-      },
-      {
-        sequence: 2,
-        requestId: 'memory-request',
-        role: 'assistant',
-        text: 'A basis spans the space [1].',
-        status: 'answer',
-        evidence: {
-          type: 'answer',
-          citations: [reference],
-          contextBlock: [{ ...reference, text: 'A basis spans the space.' }],
-          applicability: notice,
-        },
-        createdAt,
-      },
-    ],
-  };
-  const effectiveFlags = { memory_inspector: true, advising_summary_export: true };
-  const { context, page } = await setupPage({
-    initialConversations: [summary],
-    initialConversationRecords: [record],
-    effectiveFlags,
-  });
-  let resets = 0;
-  let exports = 0;
-  let epoch = 0;
-  await page.route('**/api/conversations/memory-1/memory**', async (route) => {
-    if (route.request().method() === 'POST') {
-      if (++resets === 1) return route.fulfill({ status: 409, json: { detail: 'A turn request is pending.' } });
-      epoch = 1;
-      return route.fulfill({
-        json: {
-          conversationId: 'memory-1',
-          contextEpoch: 1,
-          contextBoundarySequence: 2,
-          contextResetAt: createdAt,
-          message: 'Conversation context memory reset.',
-        },
-      });
-    }
-    return route.fulfill({
-      json: {
-        conversationId: 'memory-1',
-        contextEpoch: epoch,
-        contextBoundarySequence: epoch ? 2 : 0,
-        contextResetAt: epoch ? createdAt : null,
-        researchNotebook: null,
-        checkpoints: [
-          {
-            summaryId: 'checkpoint-1',
-            conversationId: 'memory-1',
-            state: 'completed',
-            contextEpoch: 0,
-            expectedSequence: 2,
-            candidateCoveredThrough: 2,
-            coveredThrough: 2,
-            fingerprint: 'snapshot-1',
-            text: 'Discussing vector spaces.',
-            referenceMetadata: [
-              { sequence: 2, role: 'assistant', status: 'answer', citations: [reference], contextBlock: [] },
-            ],
-            failureCode: null,
-            profileId: null,
-            profileRevision: null,
-            createdAt,
-            updatedAt: createdAt,
-          },
-        ],
-      },
-    });
-  });
-  await page.route('**/api/conversations/memory-1/export-summary', async (route) => {
-    exports++;
-    return route.fulfill({ json: documentRecord });
-  });
-  try {
-    await page.getByText('Check your applicable catalog cohort.', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('Source applicability and freshness notice').count(), 1);
-    const openMemory = page.getByRole('button', { name: 'Inspect conversation memory and context' });
-    await openMemory.click();
-    const dialog = page.getByRole('dialog', { name: 'Conversation Memory & Context' });
-    await dialog.getByText('Discussing vector spaces.', { exact: true }).waitFor();
-    await dialog.getByText('Exact References (1 turns)').click();
-    await dialog.getByText('1 citations', { exact: true }).click();
-    await dialog.getByText('memory-chunk-1', { exact: true }).waitFor();
-    await dialog.getByRole('button', { name: 'Reset Context Memory', exact: true }).click();
-    await dialog.getByRole('button', { name: 'Confirm Reset', exact: true }).click();
-    await dialog
-      .getByRole('alert')
-      .getByText(/turn request is pending/)
-      .waitFor();
-    await dialog.getByRole('button', { name: 'Confirm Reset', exact: true }).click();
-    await dialog.getByText('Historical or unpublished checkpoint; excluded from current context').waitFor();
-    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-    assert.equal(await openMemory.evaluate((button) => button === document.activeElement), true);
-    await page.getByRole('button', { name: 'Export advising summary document' }).click();
-    await page.getByText('Unchanged passage.', { exact: true }).waitFor();
-    assert.equal(resets, 2);
-    assert.equal(exports, 1);
-    assert.equal(await page.getByText('Explain this basis.', { exact: true }).count(), 1);
-    effectiveFlags.memory_inspector = false;
-    effectiveFlags.advising_summary_export = false;
-    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    await openMemory.waitFor({ state: 'hidden' });
-    await page.getByRole('button', { name: 'Export advising summary document' }).waitFor({ state: 'hidden' });
-  } finally {
-    await context.close();
-  }
-});
-
 test('auditor sees only audit and telemetry and lands outside mutation workflows', async () => {
   const session = { mode: 'development', authenticated: true, role: 'auditor', workspaceKey: 'auditor-ws' };
   const main = await setupPage({ initialSession: session });
@@ -4035,127 +3055,6 @@ test('admin reviews a source and publishes a program release with visible failur
   }
 });
 
-test('student keeps a record draft, commits one reviewed import, and reads an older revision', async () => {
-  const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
-  const { context, page } = await setupPage({
-    initialSession: session,
-    faults: {
-      'GET /api/academic-record': [500, 'Record list failed.'],
-      'POST /api/academic-record/imports/batch-1/rows': [
-        409,
-        'record revision conflict: expected revision does not match current record',
-      ],
-    },
-  });
-  try {
-    await openTool(page, 'Academic record');
-    await page.getByText('Loading academic record...', { exact: true }).waitFor();
-    await page
-      .getByRole('alert')
-      .getByText(/Record list failed/)
-      .waitFor();
-    await page.getByRole('button', { name: 'Retry record', exact: true }).click();
-    await page.getByText('Loading academic record...', { exact: true }).waitFor();
-    await page.getByText('No course attempts.', { exact: true }).waitFor();
-    await page.getByLabel('Course code', { exact: true }).fill('CS 170');
-    await page.getByLabel('Term', { exact: true }).fill('Fall 2023');
-    await page.getByLabel('Grade', { exact: true }).fill('A');
-    await page.getByRole('button', { name: 'Save attempt', exact: true }).click();
-    await page.getByText('Course attempt saved.', { exact: true }).waitFor();
-    await page.getByText(/student_manual/).waitFor();
-    await page.getByRole('button', { name: 'Show prior revision', exact: true }).click();
-    await page.getByText('CS 170 A', { exact: true }).waitFor();
-    await page
-      .getByLabel('CSV import', { exact: true })
-      .fill('Course,Term,Credits,Grade\nCHEM 150,Spring 2024,3.0,A\n');
-    await page.getByRole('button', { name: 'Preview import', exact: true }).click();
-    await page.getByText('Import preview ready.', { exact: true }).waitFor();
-    await page.getByLabel('Reviewed grade', { exact: true }).fill('A-');
-    assert.equal(await page.getByRole('button', { name: 'Commit import', exact: true }).isDisabled(), true);
-    await page.getByRole('button', { name: 'Save import rows', exact: true }).click();
-    await page
-      .getByRole('alert')
-      .getByText(/record revision conflict/)
-      .waitFor();
-    assert.equal(await page.getByLabel('Reviewed grade', { exact: true }).inputValue(), 'A-');
-    assert.equal(await page.getByRole('button', { name: 'Commit import', exact: true }).isDisabled(), true);
-    await page.getByRole('button', { name: 'Save import rows', exact: true }).click();
-    await page.getByText('Import rows saved.', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Commit import', exact: true }).click();
-    await page.getByText('Import committed 1 attempt.', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Commit import', exact: true }).click();
-    await page.getByRole('listitem').filter({ hasText: 'CHEM 150' }).waitFor();
-    assert.equal(await page.getByRole('listitem').filter({ hasText: 'CHEM 150' }).count(), 1);
-  } finally {
-    await context.close();
-  }
-});
-
-test('student runs a program audit, keeps it after a stale recompute, and exports the same staleness', async () => {
-  const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
-  const { context, page } = await setupPage({
-    initialSession: session,
-    faults: { 'GET /api/audits': [500, 'Program audit list failed.'] },
-  });
-  try {
-    await openTool(page, 'Program audit');
-    await page.getByText('Loading program audits...', { exact: true }).waitFor();
-    await page.getByText('Program audit list failed.').waitFor();
-    await page.getByRole('button', { name: 'Retry program audits', exact: true }).click();
-    await page.getByText('No saved program audits.', { exact: true }).waitFor();
-    await page.getByText('Coverage is a program audit, not a degree audit.', { exact: true }).waitFor();
-    await page.getByLabel('Program').selectOption('CS Minor');
-    await page.getByRole('button', { name: 'Run program audit', exact: true }).click();
-    await page.getByText('Program audit saved.', { exact: true }).waitFor();
-    await page.getByText('Status outstanding', { exact: true }).waitFor();
-    assert.equal(await page.getByText('This program audit is stale.', { exact: true }).count(), 0);
-    await page.getByRole('button', { name: 'Refresh program audits', exact: true }).click();
-    await page.getByText('This program audit is stale.', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Export program audit', exact: true }).click();
-    await page.getByText('Exported program audit is stale.', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Recompute program audit', exact: true }).click();
-    await page.getByRole('alert').getByText('program evidence is retired or superseded').waitFor();
-    await page.getByText('This program audit is stale.', { exact: true }).waitFor();
-    assert.equal(await page.getByLabel('Program').inputValue(), '11111111-1111-4111-8111-111111111111');
-    await page.getByRole('button', { name: 'Recompute program audit', exact: true }).click();
-    await page.getByText('Program audit saved.', { exact: true }).waitFor();
-    assert.equal(await page.getByText('This program audit is stale.', { exact: true }).count(), 0);
-  } finally {
-    await context.close();
-  }
-});
-
-test('student compares programs without treating mention overlap as saved credit', async () => {
-  const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
-  const { context, page } = await setupPage({
-    initialSession: session,
-    faults: {
-      'GET /api/comparisons': [500, 'Program comparison list failed.'],
-      'POST /api/comparisons': [409, 'comparison revision conflict'],
-    },
-  });
-  try {
-    await openTool(page, 'Program comparison');
-    await page.getByText('Loading program comparisons...', { exact: true }).waitFor();
-    await page.getByText('Program comparison list failed.').waitFor();
-    await page.getByRole('button', { name: 'Retry program comparisons', exact: true }).click();
-    await page.getByText('No saved program comparisons.', { exact: true }).waitFor();
-    await page.getByLabel('First program').selectOption('CS Minor');
-    await page.getByLabel('Second program').selectOption('Open Minor');
-    await page.getByLabel('Overlay course').fill('CHEM 150');
-    await page.getByRole('button', { name: 'Compare programs', exact: true }).click();
-    await page.getByRole('alert').getByText('comparison revision conflict').waitFor();
-    assert.equal(await page.getByLabel('Overlay course').inputValue(), 'CHEM 150');
-    await page.getByRole('button', { name: 'Compare programs', exact: true }).click();
-    await page.getByText('Sharing policy is unknown.', { exact: true }).waitFor();
-    await page.getByText('No credit savings are claimed.', { exact: true }).waitFor();
-    await page.getByText('Shared mentions: CS 170', { exact: true }).waitFor();
-    await page.getByText('unequal unresolved coverage', { exact: true }).waitFor();
-  } finally {
-    await context.close();
-  }
-});
-
 test('admin stages, cancels, and publishes a catalog edition', async () => {
   const session = { mode: 'development', authenticated: true, role: 'admin', workspaceKey: 'admin-ws' };
   const { context, page } = await setupPage({
@@ -4192,33 +3091,6 @@ test('admin stages, cancels, and publishes a catalog edition', async () => {
     assert.equal(await auditor.page.getByRole('tab', { name: 'Catalog refresh' }).count(), 0);
   } finally {
     await auditor.context.close();
-  }
-});
-
-test('student replaces a feedback vote without adding another current vote', async () => {
-  const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
-  const responseId = '11111111-1111-4111-8111-111111111111';
-  const { context, page } = await setupPage({
-    initialSession: session,
-    faults: { 'POST /api/feedback': [409, 'feedback conflict'] },
-  });
-  try {
-    await openTool(page, 'Response feedback');
-    await page.getByText('No feedback submitted.', { exact: true }).waitFor();
-    await page.getByLabel('Response id').fill(responseId);
-    await page.getByLabel('Reason code').fill('helpful');
-    await page.getByLabel('Comment').fill('Clear answer');
-    await page.getByRole('button', { name: 'Save feedback', exact: true }).click();
-    await page.getByRole('alert').getByText('feedback conflict').waitFor();
-    assert.equal(await page.getByLabel('Comment').inputValue(), 'Clear answer');
-    await page.getByRole('button', { name: 'Retry feedback', exact: true }).click();
-    await page.getByText('Revision 1. Current votes 1.', { exact: true }).waitFor();
-    await page.getByLabel('Vote').selectOption('down');
-    await page.getByLabel('Reason code').fill('missing-evidence');
-    await page.getByRole('button', { name: 'Save feedback', exact: true }).click();
-    await page.getByText('Revision 2. Current votes 1.', { exact: true }).waitFor();
-  } finally {
-    await context.close();
   }
 });
 
@@ -4373,32 +3245,341 @@ test('admin cannot promote a prompt until review and a fixture exist', async () 
   }
 });
 
-test('student exports private data without leaving the download token on screen', async () => {
-  const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
-  const { context, page } = await setupPage({
-    initialSession: session,
-    faults: { 'GET /api/privacy/exports': [500, 'Privacy export list failed.'] },
+test('a demo make-a-plan turn opens the artifact panel and auto-attaches the revision', async () => {
+  const { context, page } = await setupPage();
+  try {
+    await send(page, 'make a plan for next semester');
+    const panel = page.getByRole('complementary', { name: 'Artifact' });
+    await panel.locator('.artifact-card').waitFor();
+    await panel.locator('.canvas-title').getByText('Generated draft').waitFor({ timeout: 6000 });
+    await page.getByRole('button', { name: 'Remove Generated draft from this message' }).waitFor();
+    await page.getByRole('button', { name: 'Close artifact', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove Generated draft from this message' }).waitFor({ state: 'detached' });
+  } finally {
+    await context.close();
+  }
+});
+
+test('thumbs feedback posts and shows the selected vote', async () => {
+  const { context, page } = await setupPage();
+  try {
+    await send(page, 'What is a basis?');
+    await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
+    const up = page.getByRole('button', { name: 'Helpful answer', exact: true });
+    await up.click();
+    await page.waitForFunction(
+      () => document.querySelector('[aria-label="Helpful answer"]')?.getAttribute('aria-pressed') === 'true',
+    );
+    const down = page.getByRole('button', { name: 'Not a helpful answer', exact: true });
+    await down.click();
+    await page.waitForFunction(
+      () => document.querySelector('[aria-label="Not a helpful answer"]')?.getAttribute('aria-pressed') === 'true',
+    );
+    assert.equal(await up.getAttribute('aria-pressed'), 'false');
+  } finally {
+    await context.close();
+  }
+});
+
+test('saved conversation exposes pending requests for explicit abandonment', async () => {
+  const pendingSummary = {
+    conversationId: 'pending-1',
+    title: 'Pending conversation',
+    lastSequence: 1,
+    pendingRequestId: 'pending-request',
+    createdAt: '2026-10-08T00:00:00Z',
+    updatedAt: '2026-10-08T00:00:00Z',
+  };
+  const pendingRecord = {
+    ...pendingSummary,
+    turns: [
+      {
+        sequence: 1,
+        requestId: 'pending-request',
+        role: 'user',
+        text: 'Unfinished question',
+        status: 'input',
+        evidence: {
+          request: { query: 'Unfinished question' },
+          query: 'Unfinished question',
+          effective: {
+            collectionId: 'browser-test',
+            sourceIds: null,
+            retrievalQuery: 'Unfinished question',
+            artifactReferences: [],
+          },
+        },
+        createdAt: '2026-10-08T00:00:01Z',
+      },
+    ],
+  };
+  const { context, page, capturedConversationTurns, conversationRecords } = await setupPage({
+    initialConversations: [pendingSummary],
+    initialConversationRecords: [pendingRecord],
+  });
+  const stop = page.getByRole('button', { name: 'Stop answering' });
+  try {
+    await page.getByText('Unfinished question', { exact: true }).waitFor();
+    await stop.click();
+    await page.getByText(/^Stopped\./).waitFor();
+    assert.equal(conversationRecords.get('pending-1').pendingRequestId, null);
+    assert.equal(
+      capturedConversationTurns.length,
+      0,
+      'opening and abandoning pending work never replay its model call',
+    );
+
+    let notifyLateRead, releaseLateRead;
+    const lateReadStarted = new Promise((resolve) => {
+      notifyLateRead = resolve;
+    });
+    const release = new Promise((resolve) => {
+      releaseLateRead = resolve;
+    });
+    let heldRequestId;
+    await page.route('**/api/conversations/*/turns/*/events**', async (route) => {
+      const requestUrl = new URL(route.request().url());
+      const requestId = requestUrl.pathname.split('/').at(-2);
+      heldRequestId ??= requestId;
+      const after = Number(requestUrl.searchParams.get('afterEventId'));
+      if (requestId === heldRequestId && after > 0) {
+        notifyLateRead();
+        await release;
+        return route.fulfill({
+          json: {
+            events: [{ eventId: 2, type: 'provisional_delta', text: 'Late stale text' }],
+            nextEventId: 2,
+            requestState: 'pending',
+            jobState: 'running',
+            done: false,
+          },
+        });
+      }
+      return route.fulfill({
+        json: {
+          events: [{ eventId: 1, type: 'provisional_delta', text: 'Still generating' }].filter(
+            (event) => event.eventId > after,
+          ),
+          nextEventId: 1,
+          requestState: 'pending',
+          jobState: 'running',
+          done: false,
+        },
+      });
+    });
+    await send(page, 'Cancel this newly submitted turn.');
+    await lateReadStarted;
+    assert.equal(await stop.isEnabled(), true, 'polling does not disable cancellation');
+    await stop.click();
+    await page.getByText(/^Stopped\./).waitFor();
+    await page.waitForFunction(() => !document.querySelector('.composer button[type=submit]').disabled);
+    assert.equal(await message(page).inputValue(), 'Cancel this newly submitted turn.');
+
+    await send(page, 'A different new request.');
+    await page.getByLabel('Unverified provisional answer').getByText('Still generating').waitFor();
+    const lateResponse = page.waitForResponse(
+      (response) => response.url().includes(heldRequestId) && response.url().includes('afterEventId=1'),
+    );
+    releaseLateRead();
+    await (await lateResponse).finished();
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    assert.equal(await page.getByText('Late stale text', { exact: true }).count(), 0);
+    assert.equal(
+      await page.getByRole('button', { name: 'Send', exact: true }).isDisabled(),
+      true,
+      'old poll cleanup cannot unlock the new pending request',
+    );
+    assert.equal(capturedConversationTurns.length, 2);
+    await stop.click();
+    await page.getByText(/^Stopped\./).waitFor();
+  } finally {
+    await context.close();
+  }
+});
+
+test("an answer's artifact run survives a status outage and opens the exact revision it published", async () => {
+  const { context, page, openedRunRevisions } = await setupPage({
+    pinnedRunRevision: true,
+    faults: { 'GET /api/runs/demo-artifact-run': [503, 'temporary job status outage'] },
   });
   try {
-    await openTool(page, 'Privacy');
-    await page.getByText('Loading privacy exports...', { exact: true }).waitFor();
-    page.releaseNextPrivacyList();
-    await page
-      .getByRole('alert')
-      .getByText(/Privacy export list failed/)
-      .waitFor();
-    await page.getByRole('button', { name: 'Retry privacy export', exact: true }).click();
-    await page.getByText('Loading privacy exports...', { exact: true }).waitFor();
-    page.releaseNextPrivacyList();
-    await page.getByText('No privacy export is saved.', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Create privacy export', exact: true }).click();
-    await page.getByText('Export ready. Download expires 2026-10-21T00:00:00+00:00.', { exact: true }).waitFor();
-    assert.equal(await page.getByText('once-token').count(), 0);
-    await page.getByRole('button', { name: 'Download privacy export', exact: true }).click();
-    await page.getByText('Export digest digest-1.', { exact: true }).waitFor();
+    await send(page, 'make a plan for next semester');
+    await page.getByText(/Status check failed, retrying: .*temporary job status outage/).waitFor();
+    await page.locator('.canvas-title').getByText('Generated draft').waitFor({ timeout: 6000 });
+    await revisionShown(page, 'published-r1');
+    assert.ok(openedRunRevisions.length > 0 && openedRunRevisions.every((revision) => revision === 'published-r1'));
+  } finally {
+    await context.close();
+  }
+});
+
+test('a student downloads their data from the account menu without the token reaching the screen', async () => {
+  const session = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
+  const { context, page } = await setupPage({ initialSession: session });
+  try {
+    await page.getByRole('button', { name: /Local development/ }).click();
+    const download = page.waitForEvent('download');
+    await page.getByRole('menuitem', { name: 'Download my data' }).click();
+    assert.match((await download).suggestedFilename(), /^emory-advising-data-.*\.json$/);
+    await page.getByText('Your data export was downloaded.', { exact: true }).waitFor();
     assert.equal(await page.getByText('once-token').count(), 0);
   } finally {
     await context.close();
   }
 });
 
+test('local connection panel sends exact DTOs and keeps credentials transient and masked', async () => {
+  const { context, page, capturedConnectionWrites } = await setupPage({
+    entry: '/admin.html',
+    initialSession: adminSession, connectionAdmin: true });
+  try {
+    await openAdminTab(page, 'Model connections');
+    await page.getByLabel('Name', { exact: true }).fill('Local OpenAI');
+    await page.locator('.connection-settings-panel form select').selectOption('openai');
+    await page.getByLabel('Model ID').fill('gpt-test');
+    await page.getByLabel('Provider credential').fill('super-secret-test-value');
+    await page.getByRole('checkbox', { name: 'standard' }).check();
+    await page.getByRole('checkbox', { name: 'institutional_corpus' }).check();
+    await page.getByRole('button', { name: 'Create profile' }).click();
+    await page.getByText(/current evaluation: not passed/).waitFor();
+    assert.deepEqual(capturedConnectionWrites[0], {
+      name: 'Local OpenAI',
+      provider: 'openai',
+      model_id: 'gpt-test',
+      roles: ['standard'],
+      capabilities: [],
+      data_scopes: ['institutional_corpus'],
+      base_url: null,
+      account_id: null,
+      provider_options: {},
+      enabled: true,
+      priority: 100,
+      secret: { api_key: 'super-secret-test-value' },
+    });
+    assert.equal(await page.getByLabel('Provider credential').inputValue(), '');
+    assert.equal(
+      await page.evaluate(() =>
+        [...Object.values(localStorage), ...Object.values(sessionStorage)].some((value) =>
+          /super-secret-test-value|second-secret-value/.test(value),
+        ),
+      ),
+      false,
+    );
+    assert.equal(await page.getByText('super-secret-test-value', { exact: true }).count(), 0);
+    await page.getByRole('button', { name: 'Replace credential' }).click();
+    await page.getByLabel(/Replace API key for/).fill('second-secret-value');
+    await page.getByRole('button', { name: 'Replace credential' }).last().click();
+    assert.deepEqual(capturedConnectionWrites[1], { expected_revision: 1, secret: { api_key: 'second-secret-value' } });
+    assert.equal(
+      capturedConnectionWrites.some((body) => 'eval_passed' in body),
+      false,
+    );
+    await openAdminTab(page, 'Overview');
+    await openAdminTab(page, 'Model connections');
+    assert.equal(
+      await page.getByLabel('Provider credential').inputValue(),
+      '',
+      'closing the panel discards any typed credential',
+    );
+  } finally {
+    await context.close();
+  }
+});
+
+test('provider change drops hidden account state and a credential draft cannot move profiles', async () => {
+  const clef = {
+    ...profileFixture,
+    profile_id: 'profile-cf',
+    name: 'Campus Clef',
+    provider: 'cloudflare-clef',
+    model_id: 'clef-test',
+    account_id: 'acct-hidden',
+    roles: ['decision'],
+  };
+  const other = {
+    ...profileFixture,
+    profile_id: 'profile-b',
+    name: 'Other OpenAI',
+    model_id: 'gpt-other',
+  };
+  const { context, page, capturedConnectionWrites } = await setupPage({
+    entry: '/admin.html',
+    initialSession: adminSession,
+    connectionAdmin: true,
+    seedConnectionProfiles: [clef, other],
+  });
+  try {
+    await openAdminTab(page, 'Model connections');
+    const cards = page.locator('article.connection-profile');
+    await cards.filter({ hasText: 'Campus Clef' }).getByRole('button', { name: 'Edit profile' }).click();
+    await page.getByLabel('Account ID').waitFor();
+    await page.getByLabel('Provider').selectOption('openai');
+    assert.equal(await page.getByLabel('Account ID').count(), 0);
+    await page.getByRole('button', { name: 'Save profile' }).click();
+    await page.getByText('Profile saved. Routing remains evaluation-gated.').waitFor();
+    const saved = capturedConnectionWrites.at(-1);
+    assert.equal(saved.provider, 'openai');
+    assert.equal(saved.account_id, null);
+    assert.deepEqual(saved.roles, ['standard']);
+
+    await cards.filter({ hasText: 'Other OpenAI' }).getByRole('button', { name: 'Replace credential' }).click();
+    await page.getByLabel(/Replace API key for/).fill('secret-for-other');
+    assert.equal(
+      await cards.filter({ hasText: 'Campus Clef' }).getByRole('button', { name: 'Replace credential' }).isDisabled(),
+      true,
+    );
+    assert.equal(capturedConnectionWrites.some((body) => body.secret?.api_key === 'secret-for-other'), false);
+  } finally {
+    await context.close();
+  }
+});
+
+test('human gap attestation is explicit, scope-limited, and retains draft across a stale revision', async () => {
+  const gap = {
+    gapId: 'gap-1',
+    collectionId: 'collection-1',
+    query: 'How do I register for MATH 221?',
+    sourceIds: ['source-1'],
+    state: 'open',
+    revision: 1,
+    occurrenceCount: 4,
+    recurrenceCount: 2,
+    successfulRecurrenceCount: 1,
+    firstSeenAt: '2026-10-01T00:00:00Z',
+    lastSeenAt: '2026-10-08T00:00:00Z',
+    resolution: null,
+  };
+  const { context, page, capturedGapResolutions } = await setupPage({
+    entry: '/admin.html',
+    initialSession: adminSession, initialGaps: [gap], gapConflictOnce: true });
+  try {
+    await openAdminTab(page, 'Unanswered questions');
+    const details = page.locator('.gap-review-item').filter({ hasText: 'How do I register for MATH 221?' });
+    await details.locator('summary').click();
+    await page.getByRole('checkbox', { name: 'Linear Algebra Primer', exact: true }).check();
+    assert.equal(
+      await page.getByRole('checkbox', { name: 'Lab Safety Manual', exact: true }).count(),
+      0,
+      'explicitly scoped gaps only offer sources from their recorded source scope',
+    );
+    await page.getByLabel('Optional reviewer note').fill('The registration steps are in this source.');
+    await page.getByRole('button', { name: 'Record human source attestation' }).click();
+    await page.getByRole('alert').getByText('This gap changed').waitFor();
+    assert.equal(await page.getByRole('checkbox', { name: 'Linear Algebra Primer', exact: true }).isChecked(), true);
+    assert.equal(
+      await page.getByLabel('Optional reviewer note').inputValue(),
+      'The registration steps are in this source.',
+    );
+    assert.deepEqual(capturedGapResolutions[0], {
+      id: 'gap-1',
+      body: { expectedRevision: 1, sourceIds: ['source-1'], note: 'The registration steps are in this source.' },
+    });
+    await page.getByRole('button', { name: 'Record human source attestation' }).click();
+    await page.getByText('Reviewer note: The registration steps are in this source.', { exact: true }).waitFor();
+    assert.equal(capturedGapResolutions[1].body.expectedRevision, 2);
+    assert.equal((await page.getByText('Human source attestation', { exact: true }).count()) > 0, true);
+    assert.equal(await page.getByText(/does not prove that a generated answer is factually correct/).count(), 1);
+  } finally {
+    await context.close();
+  }
+});

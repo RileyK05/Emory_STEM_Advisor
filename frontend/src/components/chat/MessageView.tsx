@@ -1,15 +1,12 @@
 import { memo, useState } from 'react';
-import type { NativeArtifactKind } from '../../api/types';
-import { useApp } from '../../state/AppContext';
-import { CheckIcon, CopyIcon, KIND_LABEL, KindIcon, StopIcon } from '../icons';
+import { getClient } from '../../api/client';
+import { CheckIcon, CopyIcon, KindIcon, StopIcon, ThumbDownIcon, ThumbUpIcon } from '../icons';
 import { AnswerText } from './AnswerText';
 import { ApplicabilityBanner } from './ApplicabilityBanner';
 import { DebugPanel } from './DebugPanel';
 import { SourceList } from './SourceList';
 import { streamStageLabel } from './model';
 import type { AssistantEntry, ChatEntry, StreamPreview } from './model';
-
-const MAKE_KINDS: NativeArtifactKind[] = ['document', 'workbook', 'html'];
 
 function Dots() {
   return (
@@ -40,14 +37,62 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-interface AssistantProps {
-  entry: AssistantEntry;
-  /** Offer "make a document/spreadsheet/web page" from this answer. */
-  onMake?: (kind: NativeArtifactKind, entry: AssistantEntry) => void;
+function VoteButtons({ entry }: { entry: AssistantEntry }) {
+  const [vote, setVote] = useState<'up' | 'down' | null>(null);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const traceId = entry.responseId ?? entry.trace?.traceId;
+  if (!traceId) return null;
+  const submit = async (next: 'up' | 'down') => {
+    if (sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      await getClient().submitResponseFeedback({
+        responseId: traceId,
+        vote: next,
+        reasonCode: next === 'up' ? 'helpful' : 'not_helpful',
+      });
+      setVote(next);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Feedback could not be saved.');
+    } finally {
+      setSending(false);
+    }
+  };
+  return (
+    <span className="vote-buttons">
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="Helpful answer"
+        aria-pressed={vote === 'up'}
+        disabled={sending}
+        onClick={() => void submit('up')}
+      >
+        <ThumbUpIcon size={16} />
+      </button>
+      <button
+        type="button"
+        className="icon-button"
+        aria-label="Not a helpful answer"
+        aria-pressed={vote === 'down'}
+        disabled={sending}
+        onClick={() => void submit('down')}
+      >
+        <ThumbDownIcon size={16} />
+      </button>
+      {error && <span className="form-error">{error}</span>}
+    </span>
+  );
 }
 
-function AssistantMessage({ entry, onMake }: AssistantProps) {
-  const { showDetails } = useApp();
+interface AssistantProps {
+  entry: AssistantEntry;
+  showDetails?: boolean;
+}
+
+function AssistantMessage({ entry, showDetails = false }: AssistantProps) {
   const [openPassage, setOpenPassage] = useState<number | null>(null);
 
   if (entry.kind === 'thinking')
@@ -71,9 +116,6 @@ function AssistantMessage({ entry, onMake }: AssistantProps) {
         <div className="callout callout-refusal">
           <strong>I couldn’t answer that from your sources.</strong>
           <p>{entry.text}</p>
-          {Array.isArray(entry.scope) && entry.scope.length === 0 && (
-            <p className="muted">No sources were selected. Choose some under “Search in” below the message box.</p>
-          )}
         </div>
       )}
       {entry.kind === 'answer' && (
@@ -93,6 +135,11 @@ function AssistantMessage({ entry, onMake }: AssistantProps) {
             context={entry.context}
             onCite={(n) => setOpenPassage((current) => (current === n ? null : n))}
           />
+          {entry.artifactNotice && (
+            <p className="callout callout-info" role="status">
+              {entry.artifactNotice}
+            </p>
+          )}
           <SourceList
             citations={entry.citations}
             context={entry.context}
@@ -101,23 +148,7 @@ function AssistantMessage({ entry, onMake }: AssistantProps) {
           />
           <div className="message-actions">
             <CopyButton text={entry.text} />
-            {onMake && (
-              <div className="make-group" role="group" aria-label="Make something from this answer">
-                <span className="make-label">Make a</span>
-                {MAKE_KINDS.map((kind) => (
-                  <button
-                    key={kind}
-                    type="button"
-                    className="ghost-button"
-                    aria-label={`Make a ${KIND_LABEL[kind].toLowerCase()} from this answer`}
-                    onClick={() => onMake(kind, entry)}
-                  >
-                    <KindIcon kind={kind} size={16} />
-                    {KIND_LABEL[kind].toLowerCase()}
-                  </button>
-                ))}
-              </div>
-            )}
+            <VoteButtons entry={entry} />
           </div>
         </>
       )}
@@ -128,10 +159,10 @@ function AssistantMessage({ entry, onMake }: AssistantProps) {
 
 export const MessageView = memo(function MessageView({
   entry,
-  onMake,
+  showDetails,
 }: {
   entry: ChatEntry;
-  onMake?: AssistantProps['onMake'];
+  showDetails?: boolean;
 }) {
   if (entry.role === 'user')
     return (
@@ -149,7 +180,7 @@ export const MessageView = memo(function MessageView({
         )}
       </div>
     );
-  return <AssistantMessage entry={entry} onMake={onMake} />;
+  return <AssistantMessage entry={entry} showDetails={showDetails} />;
 });
 
 /** The answer to a saved question that is still being written: unverified text, and a way to stop it. */

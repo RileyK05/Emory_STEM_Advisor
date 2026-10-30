@@ -12,6 +12,11 @@ import type {
   Recommendation,
   RetiredCourse,
   AuthSession,
+  ArtifactPreview,
+  ArtifactRevisionSummary,
+  ArtifactRun,
+  ArtifactRunEvent,
+  NativeArtifactRecord,
   NativeArtifactSummary,
 } from './types';
 import { chunk, MOCK_SOURCES } from './corpus';
@@ -161,6 +166,29 @@ const CONNECTIONS = 'Local connection settings are not enabled by this mock back
 const RECORDS = 'Academic records require the HTTP backend.';
 const AUDITS = 'Program audits require the HTTP backend.';
 const PRIVACY = 'Privacy export requires the HTTP backend.';
+const DEMO_ARTIFACT: NativeArtifactRecord = {
+  artifactId: 'demo-artifact',
+  revisionId: 'demo-r1',
+  parentRevisionId: null,
+  kind: 'document',
+  title: 'Demo study plan',
+  status: 'ready',
+  spec: {
+    kind: 'document',
+    title: 'Demo study plan',
+    blocks: [
+      { id: 'demo-h1', type: 'heading', text: 'A small plan to keep', level: 1 },
+      { id: 'demo-p1', type: 'paragraph', text: 'This demo artifact shows how a chat answer becomes a preview.' },
+      { id: 'demo-l1', type: 'list', ordered: false, items: ['Review the cited passage', 'Ask for a revision'] },
+    ],
+  },
+};
+const DEMO_RUN: ArtifactRun = {
+  runId: 'demo-run-1',
+  state: 'succeeded',
+  artifactIds: [DEMO_ARTIFACT.artifactId],
+  artifactRevisions: [{ artifactId: DEMO_ARTIFACT.artifactId, revisionId: DEMO_ARTIFACT.revisionId }],
+};
 
 export class MockClient implements AdvisorClient {
   async query(req: QueryRequest): Promise<QueryResponse> {
@@ -197,6 +225,17 @@ export class MockClient implements AdvisorClient {
       }
     }
 
+    if (response.type === 'answer' && (q.includes('make') || q.includes('plan'))) {
+      response = {
+        ...response,
+        artifactRun: {
+          runId: DEMO_RUN.runId,
+          kind: 'document',
+          title: DEMO_ARTIFACT.title,
+          purpose: 'create',
+        },
+      };
+    }
     await sleep(wait);
     return response;
   }
@@ -231,7 +270,15 @@ export class MockClient implements AdvisorClient {
     /* The mock deliberately stays in local development mode. */
   }
   async listArtifacts(): Promise<NativeArtifactSummary[]> {
-    return [];
+    return [
+      {
+        artifactId: DEMO_ARTIFACT.artifactId,
+        revisionId: DEMO_ARTIFACT.revisionId,
+        kind: DEMO_ARTIFACT.kind,
+        title: DEMO_ARTIFACT.title,
+        status: 'ready',
+      },
+    ];
   }
 
   listCollections = unavailable('Collections are unavailable in mock mode.');
@@ -254,18 +301,56 @@ export class MockClient implements AdvisorClient {
   listGaps = unavailable(GAPS);
   resolveGap = unavailable(GAPS);
 
-  createArtifact = unavailable(ARTIFACTS);
-  importArtifact = unavailable(ARTIFACTS);
-  getArtifact = unavailable(ARTIFACTS);
-  saveArtifactRevision = unavailable(ARTIFACTS);
-  previewArtifact = unavailable(ARTIFACTS);
-  downloadArtifact = unavailable(ARTIFACTS);
-  downloadOriginalArtifact = unavailable(ARTIFACTS);
-  createArtifactRun = unavailable(ARTIFACTS);
-  getArtifactRunLimits = unavailable(ARTIFACTS);
-  getArtifactRun = unavailable(ARTIFACTS);
-  listArtifactRunEvents = unavailable(ARTIFACTS);
-  cancelArtifactRun = unavailable(ARTIFACTS);
+  async createArtifact(): Promise<NativeArtifactRecord> {
+    throw new Error(ARTIFACTS);
+  }
+  async importArtifact(): Promise<NativeArtifactRecord> {
+    throw new Error(ARTIFACTS);
+  }
+  async getArtifact(): Promise<NativeArtifactRecord> {
+    return DEMO_ARTIFACT;
+  }
+  async listArtifactRevisions(): Promise<ArtifactRevisionSummary[]> {
+    return [
+      {
+        revisionId: DEMO_ARTIFACT.revisionId,
+        parentRevisionId: null,
+        title: DEMO_ARTIFACT.title,
+        createdAt: '2026-10-30T12:00:00Z',
+      },
+    ];
+  }
+  async saveArtifactRevision(): Promise<NativeArtifactRecord> {
+    throw new Error(ARTIFACTS);
+  }
+  async previewArtifact(): Promise<ArtifactPreview> {
+    return {
+      kind: 'document',
+      title: DEMO_ARTIFACT.title,
+      html: '<h1>Demo study plan</h1><p>This demo artifact shows how a chat answer becomes a preview.</p>',
+    };
+  }
+  async downloadArtifact(): Promise<{ blob: Blob; filename: string }> {
+    return { blob: new Blob(['# Demo study plan'], { type: 'text/markdown' }), filename: 'demo-study-plan.md' };
+  }
+  async downloadOriginalArtifact(): Promise<{ blob: Blob; filename: string }> {
+    throw new Error(ARTIFACTS);
+  }
+  async createArtifactRun(): Promise<ArtifactRun> {
+    return DEMO_RUN;
+  }
+  async getArtifactRunLimits() {
+    return { maxCalls: 8, totalTokenBudget: 10_000, perCallOutputCap: 2_000 };
+  }
+  async getArtifactRun(): Promise<ArtifactRun> {
+    return DEMO_RUN;
+  }
+  async listArtifactRunEvents(): Promise<ArtifactRunEvent[]> {
+    return [];
+  }
+  async cancelArtifactRun(): Promise<ArtifactRun> {
+    return { ...DEMO_RUN, state: 'cancelled' };
+  }
   listArtifactBatches = unavailable(ARTIFACTS);
   createArtifactBatch = unavailable(ARTIFACTS);
   getArtifactBatch = unavailable(ARTIFACTS);
@@ -294,11 +379,39 @@ export class MockClient implements AdvisorClient {
   exportProgramAudit = unavailable(AUDITS);
   listProgramComparisons = unavailable(AUDITS);
   createProgramComparison = unavailable(AUDITS);
-  submitResponseFeedback = unavailable(AUDITS);
+  async submitResponseFeedback(body: {
+    responseId: string;
+    vote: 'up' | 'down';
+    reasonCode: string;
+    comment?: string | null;
+  }): Promise<{
+    feedbackId: string;
+    workspaceKey: string;
+    responseId: string;
+    revision: number;
+    vote: 'up' | 'down';
+    reasonCode: string;
+    comment?: string | null;
+    currentVotes: number;
+    createdAt: string;
+  }> {
+    return {
+      feedbackId: 'demo-feedback',
+      workspaceKey: 'mock-local',
+      responseId: body.responseId,
+      revision: 1,
+      vote: body.vote,
+      reasonCode: body.reasonCode,
+      comment: body.comment ?? null,
+      currentVotes: 1,
+      createdAt: '2026-10-30T12:00:00Z',
+    };
+  }
 
   listPrivacyExports = unavailable(PRIVACY);
   createPrivacyExport = unavailable(PRIVACY);
   downloadPrivacyExport = unavailable(PRIVACY);
+  deleteMyData = unavailable(PRIVACY);
 }
 
 function noSelectedSourceResponse(query: string, wait: number): QueryResponse {

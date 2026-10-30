@@ -1,7 +1,5 @@
 import { useState } from 'react';
-import type { NativeArtifactRecord } from '../../api/types';
-import { errorMessage } from '../../lib/errors';
-import { CloseIcon, FolderIcon, KIND_LABEL, KindIcon, PlusIcon } from '../icons';
+import { CloseIcon, KIND_LABEL, KindIcon } from '../icons';
 import { ArtifactEditor } from './ArtifactEditor';
 import { readableStage } from './labels';
 import type { ArtifactWorkspace, RunItem } from './useArtifactWorkspace';
@@ -13,7 +11,7 @@ function RunCard({ item, onCancel, onDismiss }: { item: RunItem; onCancel: () =>
   const active = state === 'queued' || state === 'running';
   const nothingSaved = state === 'succeeded' && runOutputs(item.run, item.events).length === 0;
   return (
-    <li className={'artifact-card run-card' + (active ? ' run-active' : ' run-done')} role="status">
+    <div className={'artifact-card run-card' + (active ? ' run-active' : ' run-done')} role="status">
       <span className="artifact-card-icon">
         <KindIcon kind={item.kind} />
       </span>
@@ -45,119 +43,64 @@ function RunCard({ item, onCancel, onDismiss }: { item: RunItem; onCancel: () =>
           <CloseIcon size={16} />
         </button>
       )}
-    </li>
+    </div>
   );
 }
 
-interface Props {
-  workspace: ArtifactWorkspace;
-  onNew: () => void;
-  onLibrary: () => void;
-  onAskChanges: (record: NativeArtifactRecord) => void;
-  onDiscuss?: (record: NativeArtifactRecord) => void;
-}
-
-/** The chat's artifacts: jobs in progress, finished artifacts, and the canvas for the one that is open. */
-export function ArtifactPanel({ workspace, onNew, onLibrary, onAskChanges, onDiscuss }: Props) {
+/** The one artifact beside the chat: progress while it is made, then its preview. */
+export function ArtifactPanel({ workspace }: { workspace: ArtifactWorkspace }) {
   const [openError, setOpenError] = useState<string | null>(null);
-  const [opening, setOpening] = useState<string | null>(null);
+  const run = workspace.runs[0] ?? null;
 
-  if (workspace.record)
-    return (
-      <aside className="artifact-panel artifact-panel-canvas" aria-label="Artifacts">
-        <ArtifactEditor
-          record={workspace.record}
-          onRecord={(next) => workspace.showRecord(next)}
-          onBack={workspace.closeArtifact}
-          onClose={() => {
-            workspace.closeArtifact();
-            workspace.setPanelOpen(false);
-          }}
-          onAskChanges={onAskChanges}
-          onDiscuss={onDiscuss}
-        />
-      </aside>
-    );
-
-  const open = async (artifactId: string, revisionId?: string) => {
-    setOpening(artifactId);
-    setOpenError(null);
-    try {
-      await workspace.openArtifact(artifactId, revisionId);
-    } catch (cause) {
-      setOpenError(errorMessage(cause));
-    } finally {
-      setOpening(null);
-    }
+  const close = () => {
+    workspace.closeArtifact();
+    workspace.setPanelOpen(false);
   };
 
-  const empty = workspace.links.length === 0 && workspace.runs.length === 0;
   return (
-    <aside className="artifact-panel" aria-label="Artifacts">
-      <header className="panel-header">
-        <div>
-          <h2>Artifacts</h2>
-          <p className="muted">Made in this chat</p>
-        </div>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Close artifacts"
-          onClick={() => workspace.setPanelOpen(false)}
-        >
-          <CloseIcon />
-        </button>
-      </header>
-      <div className="panel-body">
-        {empty && (
-          <div className="panel-empty">
-            <FolderIcon size={28} />
-            <p>Nothing here yet.</p>
-            <p className="muted">Use “Make a document” under an answer, or the + button next to the message box.</p>
+    <aside className={'artifact-panel' + (workspace.record ? ' artifact-panel-canvas' : '')} aria-label="Artifact">
+      {workspace.record ? (
+        <ArtifactEditor
+          record={workspace.record}
+          onOpenVersion={async (artifactId, revisionId) => {
+            setOpenError(null);
+            try {
+              await workspace.openArtifact(artifactId, revisionId);
+            } catch (cause) {
+              setOpenError(cause instanceof Error ? cause.message : 'That version could not be opened.');
+            }
+          }}
+          onClose={close}
+        />
+      ) : (
+        <>
+          <header className="panel-header">
+            <div>
+              <h2>Artifact</h2>
+              <p className="muted">Making something to keep</p>
+            </div>
+            <button type="button" className="icon-button" aria-label="Close artifact panel" onClick={close}>
+              <CloseIcon />
+            </button>
+          </header>
+          <div className="panel-body">
+            {run ? (
+              <RunCard
+                item={run}
+                onCancel={() => void workspace.cancelRun(run.localId)}
+                onDismiss={() => workspace.dismissRun(run.localId)}
+              />
+            ) : (
+              <p className="muted">Pick an artifact from the sidebar or ask the chat to make one.</p>
+            )}
+            {openError && (
+              <p className="form-error" role="alert">
+                {openError}
+              </p>
+            )}
           </div>
-        )}
-        <ul className="artifact-list">
-          {workspace.runs.map((item) => (
-            <RunCard
-              key={item.localId}
-              item={item}
-              onCancel={() => void workspace.cancelRun(item.localId)}
-              onDismiss={() => workspace.dismissRun(item.localId)}
-            />
-          ))}
-          {workspace.links.map((link) => (
-            <li key={link.artifactId}>
-              <button
-                type="button"
-                className="artifact-card"
-                disabled={opening !== null}
-                onClick={() => void open(link.artifactId, link.revisionId)}
-              >
-                <span className="artifact-card-icon">
-                  <KindIcon kind={link.kind} />
-                </span>
-                <span className="artifact-card-text">
-                  <strong>{link.title}</strong>
-                  <span className="muted">{opening === link.artifactId ? 'Opening…' : KIND_LABEL[link.kind]}</span>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-        {openError && (
-          <p className="form-error" role="alert">
-            {openError}
-          </p>
-        )}
-      </div>
-      <footer className="panel-footer">
-        <button type="button" className="secondary-button" onClick={onNew}>
-          <PlusIcon size={16} /> New
-        </button>
-        <button type="button" className="link-button" onClick={onLibrary}>
-          All artifacts
-        </button>
-      </footer>
+        </>
+      )}
     </aside>
   );
 }

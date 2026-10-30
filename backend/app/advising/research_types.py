@@ -23,8 +23,16 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 # --- Bounds ------------------------------------------------------------------
 
@@ -254,6 +262,38 @@ class PreparationClaim(_Strict):
     conclusion: PreparationConclusion
 
 
+class ArtifactRevisionReference(_Strict):
+    """An exact artifact revision the turn referenced."""
+
+    artifact_id: UUID
+    revision_id: UUID
+
+
+class ArtifactRequest(_Strict):
+    """One artifact the answer asks the server to make or revise.
+
+    The answer text still stands on its own; this is a follow-on request, not a
+    substitute for the cited answer. The worker validates the referenced
+    revision before it queues a run.
+    """
+
+    kind: Literal["document", "workbook", "html"]
+    title: str = Field(min_length=1, max_length=200)
+    brief: str = Field(min_length=1, max_length=4_000)
+    purpose: Literal["create", "revise", "summary"] = "create"
+    revises: ArtifactRevisionReference | None = None
+
+    @model_validator(mode="after")
+    def valid_purpose(self):
+        if self.purpose == "revise" and self.revises is None:
+            raise ValueError("revise requires revises")
+        if self.purpose == "create" and self.revises is not None:
+            raise ValueError("create forbids revises")
+        if self.purpose == "summary" and (self.kind != "document" or self.revises is not None):
+            raise ValueError("summary requires a document and no revises")
+        return self
+
+
 class FinalDecision(_Strict):
     """The typed final answer proposal.
 
@@ -272,6 +312,7 @@ class FinalDecision(_Strict):
     recommended_course_codes: tuple[str, ...] = Field(default=(), max_length=30)
     preparation_check_ids: tuple[str, ...] = ()
     preparation_claims: tuple[PreparationClaim, ...] = ()
+    artifact: ArtifactRequest | None = None
     unresolved_questions: tuple[str, ...] = Field(
         default=(), max_length=MAX_UNRESOLVED_QUESTIONS
     )

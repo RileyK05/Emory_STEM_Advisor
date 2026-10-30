@@ -47,7 +47,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "10"
+RESEARCH_TOOLS_VERSION = "11"
 
 
 class SearchInput(ToolInputModel):
@@ -264,9 +264,16 @@ class ResearchRegistry(ToolRegistry):
 
 
 class ResearchSession:
-    def __init__(self, conn, scope, store, run, *, settings, config, embedder):
+    def __init__(self, conn, scope, store, run, *, settings, config, embedder,
+                 artifact_references=()):
         self.conn, self.scope, self.store, self.run = conn, scope, store, run
         self.settings, self.config, self.embedder = settings, config, embedder
+        # Tuples, not model objects: the pure validator only needs exact identities.
+        self.artifact_references = {
+            (str(item[0]), str(item[1])) if isinstance(item, (tuple, list))
+            else (str(item.artifactId), str(item.revisionId))
+            for item in artifact_references
+        }
         self.handles: dict[str, tuple[str, Any]] = {}
         self.cursors: dict[str, tuple[str, Any]] = {}
         self.program_reads = {}
@@ -809,7 +816,8 @@ class ResearchSession:
         finishable_checks = {check_id: check for check_id, check in self.checks.items()
                              if check_id not in self.unavailable_preparation_check_ids}
         validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
-                       self.supplied, finishable_checks, self.entity_evidence)
+                       self.supplied, finishable_checks, self.entity_evidence,
+                       self.artifact_references)
         self.decision = value.decision
         return ResearchResult(data={"accepted": True})
 
@@ -838,7 +846,7 @@ class ResearchSession:
             ("compare_mentions", "Compare already read programs; overlap is mentions, never credit savings.", CompareInput, self.compare, ("handles",)),
             ("check_preparation", "Run deterministic dependency checks, never eligibility. completed_codes is required and must reflect the student's explicit report; use [] only when the student explicitly reports no completed courses, and ask if history is unknown. In blocker alternative_groups, each inner group requires all entries and the outer list offers alternative paths. If alternative_groups_truncated is true, more paths were omitted; do not treat the shown groups as exhaustive.", PreparationInput, self.preparation, ()),
             ("update_research", "Replace bounded comparison state, set active exact evidence and expected revision.", StateInput, self.update, ()),
-            ("finish", "Propose typed final answer. Must be the sole tool call. Cite active evidence IDs, never raw markers.", FinishInput, self.finish, ()),
+            ("finish", "Propose typed final answer. Must be the sole tool call. Cite active evidence IDs, never raw markers. Optional artifact requests a follow-on document/workbook/page only when the student asks to keep or export something; revise requires the exact referenced revision.", FinishInput, self.finish, ()),
         ]
         if self.workspace is not None:
             entries[0:0] = [

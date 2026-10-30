@@ -28,6 +28,21 @@ export const PlusIcon = (p: P) => (
     <path d="M12 5v14M5 12h14" />
   </Icon>
 );
+export const ChevronDownIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="m6 9 6 6 6-6" />
+  </Icon>
+);
+export const ThumbUpIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="M7 10v10H4V10zM7 20h9l3-9h-7l1-6a2 2 0 0 0-2-2l-4 7z" />
+  </Icon>
+);
+export const ThumbDownIcon = (p: P) => (
+  <Icon {...p}>
+    <path d="M17 14V4h3v10zM17 4H8L5 13h7l-1 6a2 2 0 0 0 2 2l4-7z" />
+  </Icon>
+);
 export const SendIcon = (p: P) => (
   <Icon {...p}>
     <path d="M12 19V5M5 12l7-7 7 7" />

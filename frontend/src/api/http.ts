@@ -19,6 +19,7 @@ import type {
   ArtifactBatchRequest,
   ArtifactBatchRecord,
   ArtifactBatchSummary,
+  ArtifactRevisionSummary,
   ConnectionDiagnostic,
   ConnectionProfile,
   ConnectionProfileWrite,
@@ -52,6 +53,8 @@ import type {
   ProgramComparisonCreateRequest,
   ProgramComparisonResponse,
   ProgramComparisonSummary,
+  PrivacyDeletionRequest,
+  PrivacyDeletionResponse,
   PrivacyExportDownloadResponse,
   PrivacyExportResponse,
   ResponseFeedbackRequest,
@@ -324,6 +327,10 @@ export class HttpClient implements AdvisorClient {
     return request<NativeArtifactRecord>(`/api/artifacts/${encodeURIComponent(id)}${query}`);
   }
 
+  async listArtifactRevisions(id: string): Promise<ArtifactRevisionSummary[]> {
+    return request<ArtifactRevisionSummary[]>(`/api/artifacts/${encodeURIComponent(id)}/revisions`);
+  }
+
   async saveArtifactRevision(id: string, body: ArtifactRevisionRequest): Promise<NativeArtifactRecord> {
     return request<NativeArtifactRecord>(`/api/artifacts/${encodeURIComponent(id)}/revisions`, {
       method: 'POST',
@@ -540,6 +547,12 @@ export class HttpClient implements AdvisorClient {
   async downloadPrivacyExport(exportId: string, token: string): Promise<PrivacyExportDownloadResponse> {
     return request<PrivacyExportDownloadResponse>(`/api/privacy/exports/${encodeURIComponent(exportId)}/download`, {
       headers: { 'X-Export-Token': token },
+    });
+  }
+  async deleteMyData(body: PrivacyDeletionRequest): Promise<PrivacyDeletionResponse> {
+    return request<PrivacyDeletionResponse>('/api/privacy/deletions', {
+      method: 'POST',
+      body: JSON.stringify(body),
     });
   }
 }

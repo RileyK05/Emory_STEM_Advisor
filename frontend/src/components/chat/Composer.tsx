@@ -1,63 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import type { KeyboardEvent } from 'react';
-import type { NativeArtifactKind } from '../../api/types';
-import { useApp } from '../../state/AppContext';
-import { useDismiss } from '../../lib/useDismiss';
-import { CloseIcon, KIND_LABEL, KindIcon, PlusIcon, SendIcon, UploadIcon } from '../icons';
-import { ScopePicker } from './ScopePicker';
+import { CloseIcon, KindIcon, SendIcon } from '../icons';
 import type { Attachment, ChatController } from './model';
 
 interface Props {
   chat: ChatController;
   attachments: Attachment[];
   onRemoveAttachment: (attachment: Attachment) => void;
-  /** Start a new artifact (saved mode only). */
-  onCreate?: (kind: NativeArtifactKind) => void;
-  onImport?: () => void;
-  onManageSources: () => void;
 }
 
-function CreateMenu({ onCreate, onImport }: { onCreate: (kind: NativeArtifactKind) => void; onImport: () => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useDismiss(ref, open, close);
-  const choose = (action: () => void) => {
-    setOpen(false);
-    action();
-  };
-  return (
-    <div className="create-menu" ref={ref}>
-      <button
-        type="button"
-        className="icon-button round"
-        aria-label="Create or import"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <PlusIcon />
-      </button>
-      {open && (
-        <div className="popover menu" role="menu">
-          {(['document', 'workbook', 'html'] as NativeArtifactKind[]).map((kind) => (
-            <button key={kind} type="button" role="menuitem" onClick={() => choose(() => onCreate(kind))}>
-              <KindIcon kind={kind} />
-              New {KIND_LABEL[kind].toLowerCase()}
-            </button>
-          ))}
-          <button type="button" role="menuitem" onClick={() => choose(onImport)}>
-            <UploadIcon />
-            Import a Word, Excel, or Markdown file
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function Composer({ chat, attachments, onRemoveAttachment, onCreate, onImport, onManageSources }: Props) {
-  const { scope, sources } = useApp();
+export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const canSend = !chat.busy && chat.draft.trim().length > 0;
 
@@ -115,8 +67,6 @@ export function Composer({ chat, attachments, onRemoveAttachment, onCreate, onIm
         placeholder="Ask about courses, prerequisites, or program requirements…"
       />
       <div className="composer-bar">
-        {onCreate && onImport && <CreateMenu onCreate={onCreate} onImport={onImport} />}
-        <ScopePicker scope={scope} sources={sources} onChange={chat.changeScope} onManage={onManageSources} />
         <button type="submit" className="send-button" aria-label="Send" disabled={!canSend}>
           <SendIcon />
         </button>

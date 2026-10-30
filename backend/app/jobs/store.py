@@ -86,6 +86,18 @@ class JobStore:
     def _transaction(self):
         return connection_transaction(self._connect)
 
+    @staticmethod
+    def _validate_create(*, kind, scope_key, idempotency_key, payload, max_attempts):
+        if not kind or len(kind) > 100:
+            raise ValueError("kind must contain 1 to 100 characters")
+        if not scope_key or len(scope_key) > 200:
+            raise ValueError("scope_key must contain 1 to 200 characters")
+        if not idempotency_key or len(idempotency_key) > 200:
+            raise ValueError("idempotency_key must contain 1 to 200 characters")
+        if not 1 <= max_attempts <= 20:
+            raise ValueError("max_attempts must be between 1 and 20")
+        _bounded_json(payload, MAX_PAYLOAD_BYTES, "payload")
+
     def create(
         self,
         *,
@@ -96,15 +108,36 @@ class JobStore:
         max_attempts: int = 3,
         admission=None,
     ) -> Job:
-        if not kind or len(kind) > 100:
-            raise ValueError("kind must contain 1 to 100 characters")
-        if not scope_key or len(scope_key) > 200:
-            raise ValueError("scope_key must contain 1 to 200 characters")
-        if not idempotency_key or len(idempotency_key) > 200:
-            raise ValueError("idempotency_key must contain 1 to 200 characters")
-        if not 1 <= max_attempts <= 20:
-            raise ValueError("max_attempts must be between 1 and 20")
-        _bounded_json(payload, MAX_PAYLOAD_BYTES, "payload")
+        self._validate_create(
+            kind=kind, scope_key=scope_key, idempotency_key=idempotency_key,
+            payload=payload, max_attempts=max_attempts,
+        )
+        with self._transaction() as conn:
+            return self.create_uncommitted(
+                conn, kind=kind, scope_key=scope_key, idempotency_key=idempotency_key,
+                payload=payload, max_attempts=max_attempts, admission=admission,
+            )
+
+    def create_uncommitted(
+        self,
+        conn: Connection,
+        *,
+        kind: str,
+        scope_key: str,
+        idempotency_key: str,
+        payload: Mapping[str, Any],
+        max_attempts: int = 3,
+        admission=None,
+    ) -> Job:
+        """Insert one job inside the caller's transaction, with the same admission.
+
+        Conversation publication uses this so the answer turn and its dependent
+        artifact run commit or roll back together.
+        """
+        self._validate_create(
+            kind=kind, scope_key=scope_key, idempotency_key=idempotency_key,
+            payload=payload, max_attempts=max_attempts,
+        )
         now = _timestamp(self._clock())
         args = {
             "job_id": uuid4(),
@@ -115,43 +148,42 @@ class JobStore:
             "max_attempts": max_attempts,
             "available_at": now,
         }
-        with self._transaction() as conn:
-            require_live_workspace(conn, scope_key, lock=True)
-            if kind == "artifact.run":
-                existing = conn.execute(
-                    queries.get("get_job_by_idempotency"),
-                    {"scope_key": scope_key, "idempotency_key": idempotency_key},
-                ).fetchone()
-                if existing is not None:
-                    return Job.from_row(existing)
-                from app.quotas.service import QuotaService
+        require_live_workspace(conn, scope_key, lock=True)
+        if kind == "artifact.run":
+            existing = conn.execute(
+                queries.get("get_job_by_idempotency"),
+                {"scope_key": scope_key, "idempotency_key": idempotency_key},
+            ).fetchone()
+            if existing is not None:
+                return Job.from_row(existing)
+            from app.quotas.service import QuotaService
 
-                QuotaService.check_and_consume(
-                    conn, workspace_key=scope_key, check_concurrency=True, commit=False
-                )
-            if admission is not None:
-                # An idempotent replay is not new work and must not be rejected
-                # by a full queue. The count and insert share this transaction.
-                existing = conn.execute(
-                    queries.get("get_job_by_idempotency"),
-                    {"scope_key": scope_key, "idempotency_key": idempotency_key},
-                ).fetchone()
-                if existing is not None:
-                    return Job.from_row(existing)
-                admission.check(conn, scope_key)
-            row = conn.execute(queries.get("insert_job"), args).fetchone()
-            created = row is not None
-            if row is None:
-                row = conn.execute(
-                    queries.get("get_job_by_idempotency"),
-                    {"scope_key": scope_key, "idempotency_key": idempotency_key},
-                ).fetchone()
-            if row is None:
-                raise RuntimeError("job idempotency conflict did not resolve to a job")
-            job = Job.from_row(row)
-            if created:
-                self._append_event(conn, job.job_id, "queued", {"status": "queued"}, now)
-            return job
+            QuotaService.check_and_consume(
+                conn, workspace_key=scope_key, check_concurrency=True, commit=False
+            )
+        if admission is not None:
+            # An idempotent replay is not new work and must not be rejected
+            # by a full queue. The count and insert share this transaction.
+            existing = conn.execute(
+                queries.get("get_job_by_idempotency"),
+                {"scope_key": scope_key, "idempotency_key": idempotency_key},
+            ).fetchone()
+            if existing is not None:
+                return Job.from_row(existing)
+            admission.check(conn, scope_key)
+        row = conn.execute(queries.get("insert_job"), args).fetchone()
+        created = row is not None
+        if row is None:
+            row = conn.execute(
+                queries.get("get_job_by_idempotency"),
+                {"scope_key": scope_key, "idempotency_key": idempotency_key},
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("job idempotency conflict did not resolve to a job")
+        job = Job.from_row(row)
+        if created:
+            self._append_event(conn, job.job_id, "queued", {"status": "queued"}, now)
+        return job
 
     def get(self, job_id: UUID) -> Job:
         with self._transaction() as conn:

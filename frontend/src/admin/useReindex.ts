@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
-import { getClient } from '../../api/client';
-import type { SourceDoc } from '../../api/types';
-import { errorMessage } from '../../lib/errors';
-import { useMountedRef } from '../../lib/useMountedRef';
+import { getClient } from '../api/client';
+import type { SourceDoc } from '../api/types';
+import { errorMessage } from '../lib/errors';
+import { useMountedRef } from '../lib/useMountedRef';
 import { statusLabel } from './statusLabel';
 
 /** Per-source reindex state: which are running, and the last note or error for each. */

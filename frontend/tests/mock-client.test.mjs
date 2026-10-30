@@ -15,6 +15,15 @@ test('mock refuses explicit empty source scope without building a context', asyn
   assert.deepEqual(result.trace?.contextBlock, []);
 });
 
+test('mock make-a-plan answer starts an artifact run', async () => {
+  const result = await new mock.MockClient().query({ query: 'make a plan for next semester' });
+  assert.equal(result.type, 'answer');
+  if (result.type === 'answer') {
+    assert.equal(result.artifactRun?.runId, 'demo-run-1');
+    assert.equal(result.artifactRun?.kind, 'document');
+  }
+});
+
 test('mock scoped answer never includes passages from deselected sources', async () => {
   const client = new mock.MockClient();
   const selected = await client.query({ query: 'What is a vector basis?', sourceIds: ['src-linalg'] });

@@ -451,6 +451,7 @@ def build_worker_handlers(settings) -> WorkerHandlers:
     """The job worker's handlers; providers stay behind their factories."""
     from app.conversations.worker import ConversationTurnExecutor
     from app.db.connection import connector
+    from app.jobs.store import JobStore
     from app.runtime import build_runtime
 
     if not settings.database_url:
@@ -470,5 +471,6 @@ def build_worker_handlers(settings) -> WorkerHandlers:
         provider=runtime.provider, connection_profiles=runtime.connection_profiles,
         connection_runtime=runtime.connection_runtime,
         connect=connector(settings, pool_name="conversation_execution"),
+        job_store=JobStore(connector(settings)),
     )
     return WorkerHandlers(artifacts=artifacts, conversation=conversation)

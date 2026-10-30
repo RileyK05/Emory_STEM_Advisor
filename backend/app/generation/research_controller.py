@@ -47,6 +47,7 @@ ROLE AND CONTRACT
 - Finish only by calling advisor_finish as the sole tool call. Free text is not an answer. Use structured arguments, not JSON in prose.
 - Separate facts, candidate judgments, student-reported assumptions, limits, and questions.
 - If incomplete, finish partial and state the gap.
+- Set finish.decision.artifact only when asked to keep/export something or revise the attached artifact; the answer still says it is being made.
 
 EVIDENCE
 - Every fact must occur in its cited chunks. Use evidence_ids, never raw citation markers.

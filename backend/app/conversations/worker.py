@@ -38,6 +38,8 @@ class ConversationTurnResult:
     collection_id: UUID
     operation_id: UUID | None
     profile_selections: tuple[tuple[UUID, int], ...]
+    job_store: Any = None
+    settings: Any = None
 
 
 def _request_ids(job: Job) -> tuple[UUID, UUID]:
@@ -145,7 +147,7 @@ class ConversationTurnExecutor:
     """Execute one leased conversation request and publish only after validation."""
 
     def __init__(self, *, settings, config, embedder, provider, connection_profiles,
-                 connection_runtime, connect):
+                 connection_runtime, connect, job_store=None):
         self.settings = settings
         self.config = config
         self.embedder = embedder
@@ -153,6 +155,7 @@ class ConversationTurnExecutor:
         self.connection_profiles = connection_profiles
         self.connection_runtime = connection_runtime
         self.connect = connect
+        self.job_store = job_store
 
     def __call__(self, job: Job, context: JobContext) -> ConversationTurnResult:
         if job.kind != "conversation.turn":
@@ -220,6 +223,7 @@ class ConversationTurnExecutor:
             return ConversationTurnResult(
                 response.model_dump(mode="json"), source_snapshot, collection_id,
                 operation_ids[-1] if operation_ids else None, tuple(selected_profiles),
+                job_store=self.job_store, settings=self.settings,
             )
         finally:
             conn.close()
@@ -259,6 +263,65 @@ class ConversationTurnExecutor:
             pass
         except Exception:
             logger.exception("conversation cleanup did not settle %s", request_id)
+
+    @classmethod
+    def _queue_turn_artifact(cls, conn, job: Job, value: ConversationTurnResult,
+                             artifact: dict[str, Any], conversation_id: UUID,
+                             request_id: UUID, sequence: int) -> None:
+        if value.job_store is None or value.settings is None:
+            raise RuntimeError("artifact admission is unavailable")
+        purpose = artifact.get("purpose") or "create"
+        title = str(artifact.get("title") or "Advising artifact")
+        if purpose == "summary":
+            from app.flags.service import FeatureFlagService
+
+            try:
+                FeatureFlagService.require_enabled(
+                    conn, "advising_summary_export", workspace_key=job.scope_key,
+                    settings=value.settings,
+                )
+            except HTTPException:
+                return  # A disabled summary export is an intentional no-op, not a failure.
+            kind = "document"
+            inputs: dict[str, Any] = {
+                "prompt": title,
+                "conversationId": str(conversation_id),
+                "throughSequence": sequence,
+            }
+        else:
+            kind = artifact.get("kind")
+            if kind not in {"document", "workbook", "html"}:
+                raise ValueError("artifact kind is invalid")
+            answer = str(value.response.get("answer") or value.response.get("reason") or "")
+            brief = str(artifact.get("brief") or "").strip()
+            if not brief:
+                raise ValueError("artifact brief is empty")
+            inputs = {
+                "prompt": brief + "\n\nPublished answer:\n" + answer,
+                "mode": "grounded",
+                "sourceIds": sorted(value.source_snapshot),
+                "collectionId": str(value.collection_id),
+            }
+            if purpose == "revise":
+                revises = artifact.get("revises")
+                if not isinstance(revises, dict):
+                    raise ValueError("artifact revision is missing")
+                inputs["artifactId"] = revises["artifactId"]
+                inputs["expectedRevisionId"] = revises["revisionId"]
+        from app.generation.artifacts import ArtifactGenerationInput
+        from app.jobs.artifact_runs import admit_artifact_run
+
+        validated = ArtifactGenerationInput.model_validate(inputs).model_dump(
+            mode="json", exclude_none=True)
+        run = admit_artifact_run(
+            value.job_store, conn=conn, kind=kind, inputs=validated,
+            scope_key=job.scope_key,
+            idempotency_key=f"turn-artifact:{conversation_id}:{request_id}",
+            settings=value.settings,
+        )
+        value.response["artifactRun"] = {
+            "runId": str(run.job_id), "kind": kind, "title": title, "purpose": purpose,
+        }
 
     @classmethod
     def publish_success(cls, conn, job: Job, value: ConversationTurnResult) -> dict[str, Any]:
@@ -309,7 +372,22 @@ class ConversationTurnExecutor:
         check_profiles()
         if value.operation_id is not None:
             cls._assert_operation_publishable(conn, value.operation_id, job.scope_key)
-        result = ConversationStore(conn, job.scope_key).finish_uncommitted(
+        store = ConversationStore(conn, job.scope_key)
+        artifact = (value.response.get("research") or {}).get("artifact")
+        if artifact:
+            # The answer is published as the conversation's next turn.
+            sequence = store.get(conversation_id, lock=True)["last_sequence"] + 1
+            try:
+                with conn.transaction():
+                    cls._queue_turn_artifact(
+                        conn, job, value, artifact, conversation_id, request_id, sequence)
+            except Exception:  # noqa: BLE001 - artifact admission is best-effort
+                # The answer is still the primary result. A failed artifact
+                # admission must not undo a validated turn.
+                value.response["artifactNotice"] = (
+                    "The answer is saved, but the artifact could not be started."
+                )
+        result = store.finish_uncommitted(
             conversation_id, request_id, value.response)
         # Recheck after the conversation write while all source, profile, and
         # operation rows remain locked in the job publication transaction.

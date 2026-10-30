@@ -8,7 +8,12 @@ from fastapi import HTTPException
 
 from app.advising.research_repository import ScopeChanged, build_scope, verify_manifest
 from app.advising.research_store import ResearchStore, RunClosed
-from app.api.schemas import ClaimReviewUnit, ResearchDecisionInfo
+from app.api.schemas import (
+    ArtifactRequestInfo,
+    ArtifactRevisesInfo,
+    ClaimReviewUnit,
+    ResearchDecisionInfo,
+)
 from app.api.serialize import answer_response, provider_failure_detail
 from app.connections.models import required_data_scopes
 from app.connections.selection import StaleProfileSelection
@@ -85,7 +90,10 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
         request_id=conversation_request_id)
     if not created:
         raise HTTPException(409, "This conversation request already owns a research run; reconnect to it.")
-    session = ResearchSession(conn, scope, store, run, settings=settings, config=config, embedder=embedder)
+    session = ResearchSession(
+        conn, scope, store, run, settings=settings, config=config, embedder=embedder,
+        artifact_references=getattr(body, "artifactReferences", ()),
+    )
     outcome = Retrieved([], RetrievalTrace(trace_id, collection_id, body.query,
                         normalize_query(body.query), config.version, settings.embedding_model_id,
                         False, ()))
@@ -133,8 +141,19 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
                                    latency_ms=int((time.perf_counter() - started) * 1000))
         response.claims = [ClaimReviewUnit(text=c["text"], citationChunkIds=[
             str(rendered.chunks[n - 1].chunk_id) for n in c["citation_numbers"]]) for c in claims]
+        artifact = None
+        if decision.artifact is not None:
+            request = decision.artifact
+            artifact = ArtifactRequestInfo(
+                kind=request.kind, title=request.title, brief=request.brief,
+                purpose=request.purpose,
+                revises=ArtifactRevisesInfo(
+                    artifactId=str(request.revises.artifact_id),
+                    revisionId=str(request.revises.revision_id),
+                ) if request.revises else None,
+            )
         response.research = ResearchDecisionInfo(runId=str(run.run_id), outcome=decision.outcome,
-            completeness=decision.completeness, blocks=rendered.blocks,
+            completeness=decision.completeness, blocks=rendered.blocks, artifact=artifact,
             unresolvedQuestions=list(decision.unresolved_questions))
         cited_source_ids = sorted({
             UUID(str(item.source_id)) for item in rendered.answer.citations if item.source_id

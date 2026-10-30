@@ -1,31 +1,18 @@
 import { useEffect, useRef } from 'react';
-import type { NativeArtifactKind } from '../../api/types';
-import { CloseIcon, FolderIcon } from '../icons';
+import { CloseIcon } from '../icons';
 import { Composer } from './Composer';
 import { MessageView, PendingAnswer } from './MessageView';
 import { Welcome } from './Welcome';
-import type { AssistantEntry, Attachment, ChatController } from './model';
+import type { Attachment, ChatController } from './model';
 
 interface Props {
   chat: ChatController;
   attachments: Attachment[];
   onRemoveAttachment: (attachment: Attachment) => void;
-  /** Saved mode: artifacts can be made from answers and from the composer. */
-  onMake?: (kind: NativeArtifactKind, entry: AssistantEntry) => void;
-  onCreate?: (kind: NativeArtifactKind) => void;
-  onImport?: () => void;
-  artifactCount: number;
-  artifactsOpen: boolean;
-  onToggleArtifacts?: () => void;
-  onManageSources: () => void;
-  onExplore: () => void;
-  onExportSummary?: () => void;
-  exportingSummary?: boolean;
-  onOpenMemory?: () => void;
+  showDetails?: boolean;
 }
 
-export function ChatView(props: Props) {
-  const { chat } = props;
+export function ChatView({ chat, attachments, onRemoveAttachment, showDetails = false }: Props) {
   const bottom = useRef<HTMLDivElement>(null);
   const textLength = chat.pending?.preview?.text.length ?? 0;
 
@@ -43,42 +30,6 @@ export function ChatView(props: Props) {
     <main className="chat" aria-label="Chat">
       <header className="chat-header">
         <h2 className="chat-title">{chat.title ?? 'New chat'}</h2>
-        <div className="chat-header-actions">
-          {props.onExportSummary &&
-            chat.saved &&
-            chat.activeId &&
-            chat.entries.some((e) => e.role === 'assistant' && e.kind === 'answer') && (
-              <button
-                type="button"
-                className="ghost-button"
-                onClick={props.onExportSummary}
-                disabled={props.exportingSummary}
-                aria-label="Export advising summary document"
-              >
-                {props.exportingSummary ? 'Creating summary...' : 'Export Summary'}
-              </button>
-            )}
-          {props.onOpenMemory && chat.saved && chat.activeId && (
-            <button
-              type="button"
-              className="ghost-button"
-              onClick={props.onOpenMemory}
-              aria-label="Inspect conversation memory and context"
-            >
-              Memory
-            </button>
-          )}
-          {props.onToggleArtifacts && (props.artifactCount > 0 || props.artifactsOpen) && (
-            <button
-              type="button"
-              className="ghost-button"
-              aria-pressed={props.artifactsOpen}
-              onClick={props.onToggleArtifacts}
-            >
-              <FolderIcon size={16} /> Artifacts{props.artifactCount ? ` (${props.artifactCount})` : ''}
-            </button>
-          )}
-        </div>
       </header>
       <div className="chat-scroll">
         <div className="chat-column" aria-busy={chat.loadingConversation}>
@@ -93,14 +44,9 @@ export function ChatView(props: Props) {
             </p>
           )}
           {empty ? (
-            <Welcome
-              demo={!chat.saved}
-              onSuggest={suggest}
-              onExplore={props.onExplore}
-              onCreate={props.onCreate && (() => props.onCreate?.('document'))}
-            />
+            <Welcome demo={!chat.saved} onSuggest={suggest} />
           ) : (
-            chat.entries.map((entry) => <MessageView key={entry.key} entry={entry} onMake={props.onMake} />)
+            chat.entries.map((entry) => <MessageView key={entry.key} entry={entry} showDetails={showDetails} />)
           )}
           {chat.pending && (
             <PendingAnswer preview={chat.pending.preview} abandoning={chat.pending.abandoning} onStop={chat.abandon} />
@@ -121,16 +67,9 @@ export function ChatView(props: Props) {
               </button>
             </div>
           )}
-          <Composer
-            chat={chat}
-            attachments={props.attachments}
-            onRemoveAttachment={props.onRemoveAttachment}
-            onCreate={props.onCreate}
-            onImport={props.onImport}
-            onManageSources={props.onManageSources}
-          />
+          <Composer chat={chat} attachments={attachments} onRemoveAttachment={onRemoveAttachment} />
           <p className="composer-hint">
-            Answers use only your sources and can be incomplete. Confirm important decisions with your advisor.
+            Answers use only Emory sources and can be incomplete. Confirm important decisions with your advisor.
           </p>
         </div>
       </div>

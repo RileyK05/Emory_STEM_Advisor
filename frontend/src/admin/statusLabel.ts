@@ -1,4 +1,4 @@
-import type { SourceDoc } from '../../api/types';
+import type { SourceDoc } from '../api/types';
 
 const STATUS_LABELS: Record<SourceDoc['status'], string> = {
   uploaded: 'Processing',

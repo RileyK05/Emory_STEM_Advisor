@@ -1539,7 +1539,12 @@ Out-of-scope and unknown identifiers both raise `NotInScope`.
   eight concise notes (`hypothesis|user_report|evidence_summary`). Evidence
   summaries require issued evidence; note/task IDs are unique within each list.
   These are model work products, never source facts or prerequisite graph data.
-- **Decisions.** `research_decisions` stores structurally valid decisions
+- **Decisions.** A finish may include one optional `artifact` request
+  (`document|workbook|html`) with a title, brief, purpose, and, for a revision,
+  the exact `{artifactId, revisionId}` the turn referenced. Create forbids a
+  revision, revise requires one, and summary requires a document with no
+  revision; an unreferenced revision rejects the finish as `rejected_finish`.
+  `research_decisions` stores structurally valid decisions
   (limits, issued evidence only, every fact cited) with their digest. A fact
   block that asserts program inclusion must name only course codes present in
   its cited evidence or in cited program requirement text; an absent code is
@@ -2348,7 +2353,11 @@ optional `archivedAt`, `createdAt`, and `updatedAt`. The 500-conversation cap
 counts active conversations only. Archive refuses a pending turn or pending
 summary and never destroys turns; restore rechecks capacity atomically. Turns carry `sequence`,
 `requestId`, `role` (`user|assistant`), `text`, `status`
-(`input|answer|refusal|history|failed|abandoned`), `evidence`, and `createdAt`.
+(`input|answer|refusal|history|failed|abandoned`), `evidence`, optional
+`artifactRun` (`{runId, kind, title, purpose}` when the answer started one),
+optional `artifactNotice` when admission failed, and `createdAt`. Publication
+admits that dependent run in the same transaction as the turn; a summary run is
+ignored when `advising_summary_export` is off.
 User evidence preserves requested inputs and effective collection/source scope,
 retrieval query, and full exact artifact revision specs. Assistant evidence
 preserves exact cited context, actual citations, trace identity, and any saved-turn

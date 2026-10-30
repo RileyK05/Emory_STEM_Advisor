@@ -59,8 +59,11 @@ export function useDemoChat(): ChatController {
             text: res.answer,
             citations: res.citations,
             context: res.trace.contextBlock,
+            responseId: res.trace.traceId,
             research: res.research,
             applicability: res.applicability,
+            artifactRun: res.artifactRun,
+            artifactNotice: res.artifactNotice,
             trace: res.trace,
           });
       })

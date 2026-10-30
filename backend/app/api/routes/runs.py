@@ -213,21 +213,12 @@ def create_run(body: CreateRunRequest, request: Request, workspace: WorkspaceDep
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         inputs_payload = inputs.model_dump(mode="json", by_alias=True, exclude_none=True)
-    from app.api.admission import AdmissionLimits
+    from app.jobs.artifact_runs import admit_artifact_run
 
-    scope_key = workspace
-    settings = getattr(request.app.state, "settings", None)
-    admission = AdmissionLimits(
-        getattr(settings, "admission_max_pending_workspace", 0),
-        getattr(settings, "admission_max_pending_global", 0),
-    )
-    options = {"admission": admission} if admission.enabled else {}
-    job = _store(request).create(
-        kind="artifact.run",
-        scope_key=scope_key,
-        idempotency_key=body.idempotencyKey,
-        payload={"kind": body.kind, "inputs": inputs_payload},
-        **options,
+    job = admit_artifact_run(
+        _store(request), kind=body.kind, inputs=inputs_payload,
+        scope_key=workspace, idempotency_key=body.idempotencyKey,
+        settings=getattr(request.app.state, "settings", None),
     )
     return _public_run(job)
 

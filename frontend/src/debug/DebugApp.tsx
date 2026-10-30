@@ -182,6 +182,7 @@ function bootDebug(): Promise<DebugBoot> {
 
 function DebugSurface({ session, onLogout }: { session: AuthSession; onLogout?: () => void }) {
   const [tab, setTab] = useState<'settings' | 'chat'>('settings');
+  const [showDetails, setShowDetails] = useState(false);
   const [registry, setRegistry] = useState<DebugSettingsResponse | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [info, setInfo] = useState<DebugSession | null>(null);
@@ -283,10 +284,14 @@ function DebugSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
           <button type="button" className="secondary-button" onClick={() => setTab('settings')}>
             Back to overrides
           </button>
+          <label className="debug-bool">
+            <input type="checkbox" checked={showDetails} onChange={(event) => setShowDetails(event.target.checked)} />
+            <span>Show retrieval details</span>
+          </label>
           <a href="/">Main</a>
         </div>
         <AppProvider key={`${session.mode}:${session.workspaceKey ?? 'development'}:debug`} session={session}>
-          <Shell onLogout={onLogout} />
+          <Shell onLogout={onLogout} showDetails={showDetails} />
         </AppProvider>
       </div>
     );

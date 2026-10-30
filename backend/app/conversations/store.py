@@ -391,6 +391,8 @@ class ConversationStore:
                 "turnReferences": result.get("turnReferences", []),
                 **({"research": result["research"]} if result.get("research") else {}),
                 **({"applicability": result["applicability"]} if result.get("applicability") else {}),
+                **({"artifactRun": result["artifactRun"]} if result.get("artifactRun") else {}),
+                **({"artifactNotice": result["artifactNotice"]} if result.get("artifactNotice") else {}),
             })})
         if research or result["type"] in {"failed", "abandoned"}:
             status = ("cancelled" if result["type"] == "abandoned" else
@@ -743,9 +745,13 @@ def warm_citations(rows, *, allowed_source_ids: set[str] | None = None) -> list[
 
 
 def public_turn(row):
+    evidence = row["evidence"] or {}
     return {"sequence": row["sequence"], "requestId": str(row["request_id"]),
             "role": row["role"], "text": row["text"], "status": row["status"],
-            "evidence": row["evidence"], "createdAt": row["created_at"].isoformat()}
+            "evidence": evidence,
+            **({"artifactRun": evidence["artifactRun"]} if evidence.get("artifactRun") else {}),
+            **({"artifactNotice": evidence["artifactNotice"]} if evidence.get("artifactNotice") else {}),
+            "createdAt": row["created_at"].isoformat()}
 
 
 def public_summary(row):
