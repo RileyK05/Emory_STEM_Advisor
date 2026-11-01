@@ -9,8 +9,6 @@ function shouldTrack(entry, historySequence) {
 }
 
 test('missing sequence is treated as history when historyThrough is at least -1 after load', () => {
-  // After opening an existing chat, historyThrough.sequence is max(sequences).
-  // An entry without sequence must not reopen the panel.
   assert.equal(shouldTrack({ role: 'assistant', artifactRun: { runId: 'r1' } }, 2), false);
 });
 
@@ -23,4 +21,16 @@ test('savedScope-style guard tolerates missing evidence', () => {
   assert.equal(Boolean(evidence && 'effective' in evidence), false);
   const ok = { effective: { sourceIds: null } };
   assert.equal(Boolean(ok && 'effective' in ok), true);
+});
+
+test('referenced flatMap treats missing attachments as empty', () => {
+  const entries = [
+    { role: 'user', text: 'hi' },
+    { role: 'user', text: 'with', attachments: [{ artifactId: 'a' }] },
+    { role: 'assistant', text: 'ok' },
+  ];
+  const referenced = entries.flatMap((entry) =>
+    entry.role === 'user' ? (entry.attachments ?? []) : [],
+  );
+  assert.deepEqual(referenced, [{ artifactId: 'a' }]);
 });

@@ -18,7 +18,7 @@ export function Shell({ onLogout, showDetails = false }: { onLogout?: () => void
   const { session } = useApp();
   const chat = useChat();
   const referenced = useMemo(
-    () => chat.entries.flatMap((entry) => (entry.role === 'user' ? entry.attachments : [])),
+    () => chat.entries.flatMap((entry) => (entry.role === 'user' ? (entry.attachments ?? []) : [])),
     [chat.entries],
   );
   const workspace = useArtifactWorkspace(session.workspaceKey ?? 'development', chat.activeId, referenced);
