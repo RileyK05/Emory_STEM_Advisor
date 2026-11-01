@@ -127,6 +127,7 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.scrape_catalog --offline   # rebuild JSONL from raw cache
 ../.venv/Scripts/python -m scripts.scrape_programs       # majors/minors -> data/programs/{catalog,departments}/, programs.jsonl
 ../.venv/Scripts/python -m scripts.ingest --collection NAME --origin-manifest ../data/programs/ingest-manifest.json ../data/programs/catalog/* ../data/programs/departments/*
+../.venv/Scripts/python -m scripts.bootstrap_programs --collection NAME  # ingest all program sources + bind
 ../.venv/Scripts/python -m scripts.import_programs --collection NAME   # after ingest: parsed requirements -> DB, bound to exact sources
 ../.venv/Scripts/python -m scripts.import_atlas --collection NAME FILE
 ../.venv/Scripts/python -m scripts.reconcile_atlas               # prepare Atlas-primary JSONL from verified saved captures
