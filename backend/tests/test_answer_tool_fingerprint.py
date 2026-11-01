@@ -24,10 +24,10 @@ def test_answer_tool_fingerprint_includes_campus_equivalents():
     }]
     ctx = {"courses": courses, "topic_groups": []}
     settings = load_settings()
-    common = dict(
-        query="q", chunks=chunks, workspace_key="w", settings=settings,
-        advising_context=ctx,
-    )
+    common = {
+        "query": "q", "chunks": chunks, "workspace_key": "w", "settings": settings,
+        "advising_context": ctx,
+    }
     without = answer_tool_context(**common, campus_equivalents=None)[2]
     with_eq = answer_tool_context(
         **common, campus_equivalents={"MATH 111": frozenset({"MATH_OX 111"})},

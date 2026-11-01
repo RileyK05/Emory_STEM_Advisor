@@ -253,8 +253,8 @@ def extract(raw: bytes, content_type: str, *, lines_per_locator: int = 40) -> Ex
                 equiv_map[item.oxford_code].append(item.atlanta_code)
             if item.oxford_code not in equiv_map[item.atlanta_code]:
                 equiv_map[item.atlanta_code].append(item.oxford_code)
-        for code in equiv_map:
-            equiv_map[code] = sorted(equiv_map[code])
+        for code, peers in equiv_map.items():
+            equiv_map[code] = sorted(peers)
         text, spans = render_courses(normalized, campus_equivalents=equiv_map)
         result = Extracted(
             text=text,
