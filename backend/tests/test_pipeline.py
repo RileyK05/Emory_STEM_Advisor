@@ -88,6 +88,68 @@ def test_raw_upload_goes_to_data_dir(db, collection, tmp_path):
     assert load_settings().data_dir.resolve() in Path(raw_path).resolve().parents
 
 
+def test_a_reindex_that_would_move_a_chunk_is_refused(db, collection, tmp_path):
+    """A chunk's id addresses it by index, so its text may not move under it.
+
+    The chunking rules are part of what the id means. If the measure changes
+    without the chunker version changing, a re-index would put the same id on
+    different text, and every saved citation into that source would silently
+    point somewhere else. The stored chunk records the count the chunker
+    measured, so the change is detectable, and the re-index is refused before
+    anything is written.
+    """
+    path = tmp_path / "doc.md"
+    path.write_text("# Title\n\none two three four five\n", encoding="utf-8")
+    _ingest(db, collection, path, "text/markdown")
+    db.commit()
+    before = db.execute(
+        "SELECT c.chunk_id, c.text FROM chunks c JOIN sources s "
+        "ON s.source_id = c.source_id WHERE s.collection_id = %(c)s "
+        "ORDER BY c.chunk_index",
+        {"c": collection},
+    ).fetchall()
+
+    def other_measure(text: str) -> int:
+        return len(text.split()) + 2
+
+    with pytest.raises(ValueError, match="chunking measure"):
+        _ingest(db, collection, path, "text/markdown",
+                count_tokens=other_measure, force=True)
+    db.rollback()
+
+    after = db.execute(
+        "SELECT c.chunk_id, c.text FROM chunks c JOIN sources s "
+        "ON s.source_id = c.source_id WHERE s.collection_id = %(c)s "
+        "ORDER BY c.chunk_index",
+        {"c": collection},
+    ).fetchall()
+    assert [(r["chunk_id"], r["text"]) for r in after] == \
+        [(r["chunk_id"], r["text"]) for r in before]
+
+
+def test_a_deliberate_reindex_may_move_a_chunk(db, collection, tmp_path):
+    """The guard has a way through, for an operator who knows the rule changed."""
+    path = tmp_path / "doc.md"
+    path.write_text("# Title\n\none two three four five\n", encoding="utf-8")
+    _ingest(db, collection, path, "text/markdown")
+    db.commit()
+
+    def other_measure(text: str) -> int:
+        return len(text.split()) + 2
+
+    source_id = _ingest(db, collection, path, "text/markdown",
+                        count_tokens=other_measure, force=True,
+                        allow_chunking_change=True)
+    db.commit()
+    chunks = db.execute(
+        "SELECT text, token_count FROM chunks WHERE source_id = %(s)s ORDER BY chunk_index",
+        {"s": source_id},
+    ).fetchall()
+    assert chunks
+    for row in chunks:
+        assert row["token_count"] == other_measure(row["text"])
+
+
 def test_verified_provenance_publishes_with_the_indexed_version(db, collection, tmp_path):
     from app.ingest.provenance import provenance_from_manifest
 

@@ -158,6 +158,14 @@ transaction must survive.
   `locator_id = uuid5(source_id, "loc:{ordinal}")`,
   `chunk_id = uuid5(source_id, "{chunker_version}:{chunk_index}")`,
   `course_id = uuid5(collection_id, "course:{code}")`.
+  A `chunk_id` names a chunk by its index, so the chunking rules are part of
+  what it means: one chunking measure is used on every ingest path, so the
+  same bytes chunk the same way whichever path indexed them, and a re-index
+  that would move a chunk's text under an unchanged id is refused unless the
+  chunker version changed with it. The chunking measure counts the tokens a
+  text occupies; the embedding measure counts the tokens the model sees,
+  special tokens included, because that is what the model's ceiling applies
+  to. The two are deliberately different.
 - **D4 One locator per chunk:** a source's locators are disjoint, ordered, and
   cover all its text; a chunk never crosses a locator boundary, so
   `chunks.locator_id` is exact.
@@ -701,12 +709,54 @@ cannot displace a distinct course. A cited cross-listed course is labelled by al
 of its official codes (`"AAS 325 / REL 325"`). Courses without an explicit
 relation keep their own code as the anchor.
 
+**Campus equivalence (migration 079):** an Oxford course is the other campus's
+offering of a course. `MATH 112` is "Calculus II" in Atlanta and `MATH_OX 112`
+is "Calculus II" at Oxford: a student who took one has taken the other, and a
+requirement that names either accepts either.
+
+`course_campus_equivalents` states the relation, one row per pair, with the
+basis on which it was established. Both bases are the Atlas's own statements,
+never an inference:
+
+- `catalog_requirement` — a requirement offers an Atlanta course and an Oxford
+  course with the same course number in one alternative list. This is how
+  Emory states it: `"BIOL 142 or BIOL_OX 142 or BIOL_OX 142Q or BIOL 240"`.
+  A code whose number carries a topic suffix the Atlanta course does not
+  carry is that course's variant, so `BIOL_OX 142Q` is BIOL 142. A code whose
+  own number is an Atlanta course's number exactly is that course: `MATH_OX
+  112Z` is MATH 112Z, not a variant of MATH 112.
+- `course_record` — two records with the same course number and compatible
+  titles are the same course at the two campuses. The title is required,
+  because the number alone proves nothing: `PE_OX 101` is "Weight
+  Training/Conditioning" and `PE 101` is "Personal Health". The campuses
+  abbreviate each other's titles (`Concepts And Methods in Biol Anth` and
+  `Concepts & Methods in Biological Anthropology`), so one title's content
+  words must be contained in the other's, and the titles must open with the
+  same word.
+
+The relation is deliberately not `courses.canonical_code`. That column is the
+retrieval deduplication key, and an Atlanta/Oxford pair sharing it would
+delete one campus's passage from the candidate set, relabel the survivor, blind
+the answer's course-identity check to the difference between the campuses, and
+leave the research search unable to open the Oxford record at all. Here the
+Oxford code may name a course the master has no row for, which is the point:
+the catalog names it and the master does not carry it. `prereq_mentions` and
+`program_course_mentions` resolve such a mention to the Atlanta course it
+stands for, keeping their own text code, and the prerequisite graph traverses
+either campus's code to the same course.
+
+The traversal expands the edge's codes before the join, with a lateral that
+yields the edge's own code and its counterpart. A correlated subquery in the
+join condition is correct but blocks the index on `courses.code` and made the
+prerequisite seam eighty times slower; the lateral keeps the index and costs
+about half a millisecond per course.
+
 **Campus, schools, topics and lab pairings (migration 078):**
 
 - `courses.campus` (`atlanta` | `oxford`) is generated from the `_OX` subject
-  suffix. No Atlanta/Oxford equivalence is stored: the two are not one-to-one
-  (`BIOL_OX 142` stands for `BIOL 142` plus `BIOL 142L`), and Emory states
-  equivalence in requisite text where it applies.
+  suffix. The equivalence between the campuses is stored separately, in
+  migration 079, because it is a statement about satisfying a requirement
+  and not about a course's identity.
 - `course_schools` holds the Atlas career a course is offered under, verbatim
   (`source = atlas_offering`, with its term), or `Emory College` for a reconciled
   catalog fallback (`source = college_catalog`). Legacy unlabelled catalog
@@ -1402,6 +1452,20 @@ recognized course code in a factual paragraph must occur with the same subject
 and number, including any suffix, in the cited passage or its locator. Recognition
 uses the collection's course/program subject registry and deterministic subject
 aliases and number lists, so prose such as "across 15" is not a course code.
+Both sides of that comparison are read by one shared reader,
+`canonical_codes_in` (`atlas/requisites.py`), so a code the answer names
+canonically always matches the same code a passage spells unusually. The reader
+resolves identities with the requirement parser's subject resolution but reads
+prose, not a requirement: it applies no labels, exclusions or trees, and it
+never asserts that a course is required. It therefore reads the corpus's
+`Math_OX 112`, `Psyc_ox 110`, `Phys_OX 151`, `Econ_OX 101`, `BIOL 151or`,
+`Math 112_OX` and `BIOl 142L` spellings, and carries a subject across a
+listing separator (`CHEM 202Z + 202ZL`, `MATH 411-412`). Two rules differ from
+the requirement parser because the question differs: a passage listing codes
+carries the subject across its separator, and a number printed in a level
+phrase (`GER 300 level courses`) still names that course. The reader must
+never find fewer codes than the requirement parser or the previous gate reader
+found: a code it misses makes a correct answer look unsupported.
 The comparison tolerates source line wrapping and explicitly printed digits
 split by PDF spacing, without changing saved bytes or graph facts. A narrowly
 attributed student-report clause may name courses actually reported in the
@@ -1426,8 +1490,14 @@ retrieval and the answering prompt, while the saved user message remains exact.
 Explicit topic switches take precedence over pronoun-based continuation.
 
 Empty, refused, filtered, truncated, and unexecuted-tool output is also withheld.
-Usage is recorded before rejecting output. There is no all-context citation
-fallback. `PROMPT_VERSION` identifies the prompt in the evidence chain. The
+Usage is recorded before rejecting output. A reply that ran out of output
+allowance is asked again before it is withheld: the requested allowance doubles
+per cut-off reply, up to `ANSWER_TRUNCATION_MAX_OUTPUT_TOKENS`, the retry is told
+its previous reply was cut off, and the per-call output cap admits the larger
+allowance. A cut-off draft is still withheld once the retries are spent, and a
+retry the operation budget cannot afford stops the retry rather than the answer.
+The query operation holds one call beyond `OPERATION_MAX_CALLS` for that retry.
+There is no all-context citation fallback. `PROMPT_VERSION` identifies the prompt in the evidence chain. The
 prompt fences conversation history with historical-citation rules; requires
 cited bullets; distinguishes topical course-fit inferences from verified career
 outcomes; and omits unspecified special-topics offerings from recommendations.
@@ -1619,7 +1689,14 @@ Policy discovery includes policy text in institutional catalogs and department
 publications. Document search handles open their highest-ranked matching
 section; a read returns `beginning_handle` for the document start only after the
 matching section has been opened. Reads expose their starting chunk and
-explicitly identify any preceding unread material.
+explicitly identify any preceding unread material. When a policy search must
+be read before the next search, the controller offers the read tool with every
+section the search matched, not only the one the keyword seam ranked first:
+a rule often sits in a different section of the same document from the one the
+ranking favours, and pinning the read to a single section makes that rule
+unreachable. A section handle points at that section's first chunk, and a read
+returns one page from there, so a rule further into a long section is reached
+with the returned cursor.
 Program searches also return bounded `requirement_documents` from verified
 requirements/checklist provenance, so a missing parsed program projection does
 not hide an available captured checklist. Discovery metadata never authorizes
@@ -1672,7 +1749,21 @@ executed results. It rejects empty finals and raw model-authored citation
 markers. Course-specific suggestions use `FinalDecision.recommended_course_codes`;
 course-only candidate paths also require actual course evidence. Course codes
 within a program candidate remain research hypotheses, so listing a program's
-requirements does not demand descriptions of every required course. The server
+requirements does not demand descriptions of every required course. The
+course-identity check has two halves, because it answers two questions.
+*Identity* is a question about the course and the run: a course the answer
+names must be one that exists. The course master is the authority on
+existence and the run's evidence is the authority on what the run established,
+so a course Emory offers may be named even if the run never read it — an
+answer may say so — while a course that is in no master and in no passage is
+not a course at all. *Claim support* is a question about the passage a block
+cites: a fact block that asserts a course is required, listed or part of a
+program must be backed by that passage. Both sides of both comparisons are
+read with the shared `canonical_codes_in` reader, and the locator label is
+part of a cited passage, as in the legacy path. A clause that reports the
+evidence does not establish the claim may name the absent code; a positive
+clause may not. `judgment` and `question` blocks are exempt: neither
+asserts an institutional fact about a course. The server
 renders numbers in first-use order, with `trace.contextBlock` and citations in
 exactly that order. JSON/citation acceptance is structural validation. Typed
 factual blocks become entailment-review units; subjective suitability judgments
@@ -2190,6 +2281,12 @@ The output always says `scope=prerequisite_order_only` and
 `enrollment_eligibility_verified=false`. Degree rules, credit loads, offerings,
 transfer/grade verification, and semester scheduling are not evaluated here.
 
+A completed course satisfies a requirement for its campus equivalent: a
+student who took `MATH_OX 111` at Oxford has taken what a `MATH 111`
+requirement asks for. The equivalence changes only what is satisfied, never
+what is planned; the student's own plan still reports the student's own
+courses. Without the equivalence the planner behaves exactly as before.
+
 The immutable request snapshot, including Boolean tree types and graph IDs,
 participates in the durable tool fingerprint. Changed requirements or group
 membership cannot replay a prior tool result under a matching identity. These
@@ -2200,6 +2297,23 @@ topics -> requirements -> sequence -> answer conversation needs
 `OPERATION_MAX_CALLS` of at least 4; the default 2-call operation budget stops
 its third provider attempt. A sequence request can call the planner directly
 without a preceding requirement read.
+
+The tools path spends provider calls on tool turns, so it needs more of them
+than a plain answer does: the tools, then the answer, then a retry when a reply
+runs out of output allowance. One operation call is reserved for that retry,
+so `OPERATION_MAX_CALLS` of five leaves the tools two turns and the answer
+two. With two calls the tools must all be requested in one turn and a cut-off
+answer cannot be retried.
+
+The tool-call budget is a fence, not a failure. When the model asks for more
+tool calls than the operation allows, none of them run: the call is answered
+with a refusal that says the budget is spent, and the model is asked to answer
+from the numbered context and the tool results it already has. The same holds
+when the durable ledger reports the budget spent, which an earlier provider
+attempt on the same request may have done: the fence holds and the operation
+still answers. A required deterministic tool that did not run is still
+required, so an operation that needed one fails rather than publishing an
+answer without it.
 
 ### Runs and dependent artifacts
 

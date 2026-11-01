@@ -69,6 +69,24 @@ WHERE p.program_id = m.program_id
   AND c.code = m.target_code
   AND m.target_course_id IS DISTINCT FROM c.course_id;
 
+-- name: resolve_program_mentions_by_campus_equivalence
+-- A program slot that names an Oxford course the master has no row for still
+-- identifies a course: the catalog pairs it with the Atlanta course it is the
+-- other campus's offering of.
+UPDATE program_course_mentions m
+SET target_course_id = c.course_id
+FROM programs p, courses c
+WHERE p.program_id = m.program_id
+  AND p.collection_id = %(collection_id)s
+  AND c.collection_id = p.collection_id
+  AND p.is_active
+  AND m.target_course_id IS NULL
+  AND c.code = (
+      SELECT min(e.atlanta_code)
+        FROM course_campus_equivalents e
+       WHERE e.collection_id = %(collection_id)s
+         AND e.oxford_code = m.target_code);
+
 -- name: program_mention_counts
 SELECT count(*) AS mentions, count(m.target_course_id) AS resolved
 FROM program_course_mentions m

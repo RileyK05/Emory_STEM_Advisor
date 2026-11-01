@@ -12,6 +12,7 @@ from psycopg import Connection
 
 from app.admin.course_changes import record_baseline_conflict
 from app.atlas.course_writer import course_uuid, replace_course_requisites
+from app.atlas.equivalence import derive_campus_equivalents
 from app.atlas.records import AtlasCourse, canonical_code_map, load_atlas_lines
 from app.atlas.requisites import (
     PARSER_VERSION,
@@ -130,6 +131,39 @@ def _replace_course_schools_and_topics(conn, course_id: UUID, course: AtlasCours
         })
 
 
+def write_campus_equivalents(
+    conn: Connection, collection_id: UUID, courses: list[AtlasCourse]
+) -> int:
+    """Record the campus equivalences the Atlas states, and re-link mentions.
+
+    An Oxford course is the other campus's offering of an Atlanta course. The
+    relation is derived from the Atlas itself - the catalog's alternative
+    lists and the course records - and is not a parser fact, so it is written
+    without advancing the parser revision.
+
+    A mention that names an Oxford course the master has no row for still
+    identifies a course, so the mentions are re-linked to the Atlanta course
+    it stands for. The mention keeps its own text code.
+    """
+    pairs = derive_campus_equivalents(
+        [(course.code, course.title) for course in courses],
+        [requisite_text(course.requisites, course.description) for course in courses],
+    )
+    conn.execute(queries.get("delete_campus_equivalents"), {"collection_id": collection_id})
+    for pair in pairs:
+        conn.execute(queries.get("insert_campus_equivalent"), {
+            "collection_id": collection_id,
+            "oxford_code": pair.oxford_code,
+            "atlanta_code": pair.atlanta_code,
+            "basis": pair.basis,
+        })
+    conn.execute(queries.get("resolve_mentions_by_campus_equivalence"),
+                 {"collection_id": collection_id})
+    conn.execute(queries.get("resolve_program_mentions_by_campus_equivalence"),
+                 {"collection_id": collection_id})
+    return len(pairs)
+
+
 def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Path) -> int:
     """Reparse an already indexed, byte-identical atlas without re-embedding.
 
@@ -198,6 +232,9 @@ def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Pat
             conn.execute(queries.get("resolve_mention_targets"), {
                 "course_id": course_uuid(collection_id, code), "collection_id": collection_id,
             })
+        # The campus equivalences are not a parser fact either, so they are
+        # refreshed on every reparse of the indexed atlas.
+        write_campus_equivalents(conn, collection_id, courses)
         if changed:
             # Durable jobs must not reuse a snapshot of the old requisite facts.
             conn.execute(queries.get("advance_atlas_parser_revision"), {
@@ -319,6 +356,9 @@ def import_atlas(
                     "collection_id": collection_id,
                 },
             )
+        # The campus equivalences the Atlas states, so a mention that names an
+        # Oxford course the master has no row for still identifies a course.
+        write_campus_equivalents(tx_conn, collection_id, courses)
         # Program requirement mentions lost their course links when the old
         # atlas source cascaded away; re-link them to the new course rows.
         tx_conn.execute(queries.get("resolve_program_mentions"),

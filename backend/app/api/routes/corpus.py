@@ -155,7 +155,7 @@ def upload_source(
     content_type = _content_type(filename)
     if raw.startswith(b"%PDF-") and content_type != "application/pdf":
         raise HTTPException(status_code=415, detail="PDF bytes require a .pdf filename")
-    count_tokens = getattr(embedder, "count_tokens", None)
+    count_tokens = getattr(embedder, "chunk_tokens", None)
     if count_tokens is None:
         raise HTTPException(status_code=503, detail="embedding tokenizer is unavailable")
     conn.commit()
@@ -217,7 +217,7 @@ def reindex_source(
         raise HTTPException(status_code=409, detail="stored source failed integrity validation")
     if hashlib.sha256(io_path(raw_path).read_bytes()).hexdigest() != row["file_hash"]:
         raise HTTPException(status_code=409, detail="stored source failed integrity validation")
-    count_tokens = getattr(embedder, "count_tokens", None)
+    count_tokens = getattr(embedder, "chunk_tokens", None)
     if count_tokens is None:
         raise HTTPException(status_code=503, detail="embedding tokenizer is unavailable")
     conn.commit()

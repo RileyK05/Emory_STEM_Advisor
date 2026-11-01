@@ -178,7 +178,11 @@ def advising_identity(context: dict | None) -> dict | None:
     }
 
 
-def advising_specs(context: dict | None, chunks: list[CitedChunk]) -> tuple[ToolSpec, ...]:
+def advising_specs(
+    context: dict | None,
+    chunks: list[CitedChunk],
+    campus_equivalents: dict[str, frozenset[str]] | None = None,
+) -> tuple[ToolSpec, ...]:
     if not context or not context["courses"]:
         return ()
     citation_resources = {number: str(chunk.chunk_id)
@@ -226,7 +230,8 @@ def advising_specs(context: dict | None, chunks: list[CitedChunk]) -> tuple[Tool
                 lifecycle=course.get("lifecycle", "current"),
             ) for code, course in courses.items()
         }
-        plan = plan_sequence(records, value.selected_codes, value.completed_codes)
+        plan = plan_sequence(records, value.selected_codes, value.completed_codes,
+                             campus_equivalents)
         blockers = []
         for item in plan.blockers:
             reason = item.reason

@@ -21,6 +21,10 @@ class ToolLedgerError(RuntimeError):
     """Base class for safe ledger failures."""
 
 
+class ToolCallLimitReached(ToolLedgerError):
+    """The operation's durable tool budget is spent."""
+
+
 class ToolCallChanged(ToolLedgerError):
     pass
 
@@ -93,7 +97,7 @@ class ToolExecutionLedger:
             if inserted:
                 claimed = conn.execute(queries.get("increment_tool_execution_claims"), params).fetchone()
                 if claimed is None:
-                    raise ToolLedgerError("tool call limit has been reached")
+                    raise ToolCallLimitReached("tool call limit has been reached")
                 return ClaimResult(ToolClaim(operation_id, workspace_key, call_id, tool_id, digest,
                                              scope_fingerprint))
             row = conn.execute(queries.get("get_tool_execution"), params).fetchone()

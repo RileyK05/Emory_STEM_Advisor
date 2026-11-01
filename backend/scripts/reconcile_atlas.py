@@ -138,7 +138,7 @@ def main() -> None:
         source_id = import_authoritative_atlas(
             conn, collection_id=collection_id, path=args.output, snapshots=snapshots,
             catalog=catalog, embedder=embedder, embed_model=settings.embedding_model_id,
-            count_tokens=embedder.count_tokens, config=config,
+            count_tokens=embedder.chunk_tokens, config=config,
         )
     print(f"published {args.output}: source {source_id}")
 

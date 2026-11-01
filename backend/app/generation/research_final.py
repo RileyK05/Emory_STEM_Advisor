@@ -14,14 +14,17 @@ from app.advising.research_types import (
     validate_fact_support,
 )
 from app.atlas.records import normalize_code
-from app.generation.answer import Citation, GeneratedAnswer
+from app.atlas.requisites import canonical_codes_in
+from app.generation.answer import _NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
-from app.programs.requirements import course_mentions
 from app.retrieval.types import CitedChunk
 
 RESEARCH_PROMPT_VERSION = "research-17"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
+# A fact block that asserts a course is required, listed or part of a program
+# must be backed by the passage it cites. A block that only describes a course
+# makes no such assertion.
 _INCLUSION = re.compile(
     r"\b(?:required|requirement|elective|counts?|sits? within|list(?:ed)?|"
     r"program|major|minor|degree)\b", re.IGNORECASE)
@@ -47,7 +50,7 @@ def _program_requirement_mentions(records, cited: set[str]) -> set[str]:
         record = records.get(evidence_id)
         if record is None or not any(ref.startswith("h_") for ref in record.entity_refs):
             continue
-        mentioned.update(course_mentions(record.exact_text))
+        mentioned.update(canonical_codes_in(record.exact_text))
     return mentioned
 
 
@@ -58,7 +61,8 @@ class DecisionRejected(ValueError):
 def validate_final(decision: FinalDecision, state: ResearchState | None,
                    evidence: list[EvidenceRecord], supplied: set[str],
                    checks: dict[str, dict], entity_evidence: dict[str, set[str]] | None = None,
-                   artifact_references: set[tuple[str, str]] | None = None) -> None:
+                   artifact_references: set[tuple[str, str]] | None = None,
+                   known_course_codes: frozenset[str] | None = None) -> None:
     candidates = {c.id: c for c in state.candidates} if state else {}
     records = {e.evidence_id: e for e in evidence}
     problems = (validate_decision_limits(decision) + validate_fact_support(decision)
@@ -77,13 +81,61 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
     refs = {ref for e in cited if e in records for ref in records[e].entity_refs}
     if entity_evidence is not None:
         refs = {entity for entity, ids in entity_evidence.items() if ids & cited}
+    # Two different questions, checked at two different levels.
+    #
+    # Identity: a course the answer names must be a course that exists. The
+    # course master is the authority on existence, and the run's evidence is
+    # the authority on what the run established: a course the run never read
+    # is still a course, and an answer may say so, while a course that is in
+    # no master and in no passage is not a course at all. That is a question
+    # about the run and the collection, not about one block's citations: a
+    # block may cite a narrow passage while naming a course the run read
+    # elsewhere.
+    #
+    # Claim support: a passage must establish what a block asserts about a
+    # course. That is a question about the passage the block cites.
+    established: set[str] = set()
+    for record in records.values():
+        established |= set(canonical_codes_in(
+            f"{record.locator_label}\n{record.exact_text}"))
+    established |= _program_requirement_mentions(records, set(records))
+    if known_course_codes:
+        established |= set(known_course_codes)
+    for block in decision.blocks:
+        if block.kind not in {"fact", "limitation"}:
+            # A judgment compares candidates the run already read; a question
+            # asks the student something. Neither asserts an institutional
+            # fact about a course, so neither is an identity claim.
+            continue
+        missing = set()
+        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
+            named = set(canonical_codes_in(clause)) - established
+            if not named or _NONSUPPORT_RE.search(clause):
+                # A clause that says the evidence does not support the claim
+                # may name the absent code; that is the point of the clause.
+                continue
+            missing.update(named)
+        if missing:
+            problems.append(
+                f"{block.kind} block names course code(s) absent from the evidence "
+                "this run acquired: " + ", ".join(sorted(missing)))
     for block in decision.blocks:
         if block.kind != "fact" or not _INCLUSION.search(block.text):
             continue
-        support = "\n".join(records[e].exact_text for e in block.evidence_ids if e in records)
-        named = set(course_mentions(block.text))
-        missing = named - set(course_mentions(support)) - _program_requirement_mentions(
+        # The locator is part of the cited passage: a course record's locator
+        # names the course the passage is about, exactly as the legacy path's
+        # cited chunks do.
+        support = "\n".join(
+            f"{records[e].locator_label}\n{records[e].exact_text}"
+            for e in block.evidence_ids if e in records)
+        present = set(canonical_codes_in(support)) | _program_requirement_mentions(
             records, set(block.evidence_ids))
+        missing = set()
+        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
+            named = set(canonical_codes_in(clause)) - present
+            if not named or _NONSUPPORT_RE.search(clause):
+                continue
+            missing.update(named)
         if missing:
             problems.append(
                 "fact block names course code(s) absent from its cited evidence: "
@@ -92,7 +144,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
         if (block.kind not in {"fact", "judgment"} or not _ENTRY.search(block.text)
                 or _ENTRY_NEGATED.search(block.text)):
             continue
-        mentions = course_mentions(block.text)
+        mentions = canonical_codes_in(block.text)
         if not mentions:
             continue
         course = mentions[0]
@@ -103,7 +155,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
                 f"entry/starting-point claim names {course} without citing its course record")
         elif any(_PREREQUISITE.search(record.exact_text) for record in support):
             prerequisite_codes = {
-                code for record in support for code in course_mentions(record.exact_text)
+                code for record in support for code in canonical_codes_in(record.exact_text)
             } - {course}
             if not prerequisite_codes & set(mentions):
                 problems.append(

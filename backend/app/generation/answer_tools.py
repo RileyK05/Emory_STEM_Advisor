@@ -16,6 +16,7 @@ from app.util.digest import json_digest
 def answer_tool_context(*, query: str, chunks: list[CitedChunk], workspace_key: str,
                         settings, selection=None,
                         advising_context: dict | None = None,
+                        campus_equivalents: dict[str, frozenset[str]] | None = None,
                         history_context: str | None = None,
                         check_cancelled: Callable[[], None] | None = None):
     """Build read-only tools scoped to the exact chunks cited by this query."""
@@ -38,7 +39,7 @@ def answer_tool_context(*, query: str, chunks: list[CitedChunk], workspace_key: 
 
     registry = build_default_registry(
         {"advisor_read_source": read} if chunks else {},
-        extra_specs=advising_specs(advising_context, chunks),
+        extra_specs=advising_specs(advising_context, chunks, campus_equivalents),
     )
     scope = ToolScope(
         principal_id=workspace_key,

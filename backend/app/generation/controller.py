@@ -27,6 +27,7 @@ from app.llm.base import (
 )
 from app.tools.executions import (
     ToolCallChanged,
+    ToolCallLimitReached,
     ToolClaim,
     ToolExecutionIndeterminate,
     ToolExecutionInProgress,
@@ -45,6 +46,9 @@ MAX_TOOL_RESULT_BYTES = 64_000
 MAX_TOOL_ARGUMENT_BYTES = 64_000
 _FINAL_CALL_NOTE = ("The tool budget for this answer is used. Answer now from the numbered "
                     "context and the tool results above; do not request more tools.")
+_TOOL_BUDGET_REFUSAL = json.dumps({
+    "error": "The tool budget for this operation is spent. Answer now from the numbered "
+             "context and the tool results above; do not request more tools."})
 
 
 class ToolConversationError(RuntimeError):
@@ -147,7 +151,20 @@ class ToolConversationController:
                     continue
                 return replace(result, usage=_aggregate_usage(usages))
             if tool_count + len(result.tool_calls) > self.max_tool_calls:
-                raise ToolCallLimitExceeded("the model requested more tools than this operation allows")
+                # The operation's tool budget is spent. The fence holds: none of
+                # these calls run. The model is told so and asked to answer from
+                # the context and the tool results it already has, the same way
+                # the last allowed provider call is handled. A required
+                # deterministic tool that did not run is still required: the
+                # answer cannot be published without it.
+                if pending:
+                    raise ToolCallLimitExceeded(
+                        "the model requested more tools than this operation allows")
+                messages.append(AssistantToolMessage(result.tool_calls, result.text))
+                for call in result.tool_calls:
+                    _validate_call(call)
+                    messages.append(ToolResultMessage(call.id, call.name, _TOOL_BUDGET_REFUSAL))
+                continue
             terminal_calls = [call for call in result.tool_calls if call.name in terminal_tool_names]
             if terminal_calls and (len(result.tool_calls) != 1 or len(terminal_calls) != 1):
                 raise ToolConversationError("terminal artifact tool must be the only requested tool")
@@ -164,10 +181,20 @@ class ToolConversationController:
                         raise ToolCallChanged("a repeated tool call ID changed its request")
                     _progress(on_progress, "tool_reused", call)
                 else:
-                    output, ran = self._invoke(
-                        call, registry=registry, scope=scope, ledger=ledger,
-                        operation_id=operation_id, workspace_key=workspace_key,
-                        scope_fingerprint=scope_fingerprint, on_progress=on_progress)
+                    try:
+                        output, ran = self._invoke(
+                            call, registry=registry, scope=scope, ledger=ledger,
+                            operation_id=operation_id, workspace_key=workspace_key,
+                            scope_fingerprint=scope_fingerprint, on_progress=on_progress)
+                    except ToolCallLimitReached:
+                        # The operation's durable tool budget is spent, which
+                        # an earlier provider attempt on the same request may
+                        # have spent. The fence holds: the call does not run.
+                        # The model is told and asked to answer from what it
+                        # already has.
+                        messages.append(ToolResultMessage(call.id, call.name,
+                                                         _TOOL_BUDGET_REFUSAL))
+                        continue
                     executed[call.id] = (call.name, encoded_args, output)
                     tool_count += ran
                 if call.name in terminal_tool_names:

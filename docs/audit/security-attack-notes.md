@@ -4,6 +4,12 @@ Scope: authenticated student surfaces, unauthenticated API boundary, LLM
 context, upload/import paths, and export formats. This is a focused attack pass,
 not a formal penetration test or a claim that the system is unhackable.
 
+> **Restored 2026-10-30.** This document was deleted from the repository by
+> accident in commit `9a64af3` while `docs/audit/README.md` still pointed at
+> it; it is restored unchanged. The findings below are the 2026-10-23 pass and
+> are kept as the record of that pass, not as a current audit. The round-4
+> attack work is in [REPORT-round4.md](REPORT-round4.md) §9.
+
 ## Fixed in this pass
 
 1. **Unbounded request strings.** `QueryRequest.studentCohort` and

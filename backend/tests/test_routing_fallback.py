@@ -123,7 +123,6 @@ def test_explicit_course_lookup_patterns_route_simple_and_leave_uncertainty_comp
     ("MATH 111 requires MATH 100 [99].", "stop"),
     ("MATH 111 requires MATH 100 [1.", "stop"),
     ("MATH 111 requires MATH 100.", "stop"),
-    ("MATH 111 requires MATH 100 [1].", "length"),
 ])
 def test_standard_integrity_rejection_escalates_once_under_same_operation(
         db, collection, migrated_dsn, tmp_path, first_text, finish):
@@ -155,6 +154,28 @@ def test_standard_integrity_rejection_escalates_once_under_same_operation(
     assert operation["accounted_tokens"] == 60 and operation["reserved_tokens"] == 0
 
 
+def test_a_truncated_reply_is_asked_again_before_the_escalation(
+        db, collection, migrated_dsn, tmp_path):
+    """A reply that ran out of room is retried, not escalated.
+
+    More room is the cheaper fix: the same connection answers again with a
+    larger allowance, so the fallback profile is never called.
+    """
+    app, runtime, _profiles, standard, complex_provider = _setup(
+        db, collection, migrated_dsn, tmp_path)
+    standard.responses = [
+        _result("MATH 111 requires MATH 100 [1].", standard.model, finish="length"),
+        _result("MATH 111 requires MATH 100 [1].", standard.model),
+    ]
+    complex_provider.responses = [_result("MATH 111 requires MATH 100 [1].", complex_provider.model)]
+    response = _post_query(TestClient(app), collection, db)
+    assert response.status_code == 200, response.text
+    assert response.json()["type"] == "answer"
+    assert standard.calls == 2, "the cut-off reply was not asked again"
+    assert complex_provider.calls == 0, "the fallback profile was called for a cut-off reply"
+    assert runtime.selected_roles == ["standard"]
+
+
 @pytest.mark.parametrize("limit_kind", ["calls", "tokens", "deadline"])
 def test_operation_limits_withhold_escalation_and_keep_first_usage(
         db, collection, migrated_dsn, tmp_path, limit_kind):
@@ -173,13 +194,18 @@ def test_operation_limits_withhold_escalation_and_keep_first_usage(
                 conn.commit()
 
     usage_prompt = 5_001 if limit_kind == "tokens" else 20
-    standard.responses = [_result("MATH 111 requires MATH 100 [99].", standard.model,
-                                  prompt=usage_prompt)]
+    # The call limit is exercised by a reply that spends two calls of the
+    # operation: the answer and the citation repair it asks for.
+    first = ("MATH 111 requires BIOL 200 [1]." if limit_kind == "calls"
+             else "MATH 111 requires MATH 100 [99].")
+    standard.responses = [_result(first, standard.model, prompt=usage_prompt),
+                          _result(first, standard.model, prompt=usage_prompt)]
     standard.on_call = expire_operation
     complex_provider.responses = [_result("MATH 111 requires MATH 100 [1].", complex_provider.model)]
     response = _post_query(TestClient(app), collection, db)
     assert response.status_code == 422, response.text
-    assert standard.calls == 1 and complex_provider.calls == 0
+    assert complex_provider.calls == 0
+    assert standard.calls == (2 if limit_kind == "calls" else 1)
     with connect(migrated_dsn) as conn:
         call = conn.execute(
             "SELECT status,measured_prompt_tokens,measured_completion_tokens "

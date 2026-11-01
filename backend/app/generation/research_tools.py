@@ -9,7 +9,7 @@ from uuid import uuid5
 
 from pydantic import Field, ValidationError, field_validator
 
-from app.advising.catalog import load_advising_context
+from app.advising.catalog import load_advising_context, load_campus_equivalents
 from app.advising.comparison import compare_mentions
 from app.advising.research_repository import (
     NotInScope,
@@ -28,6 +28,7 @@ from app.advising.research_store import (
 from app.advising.research_types import FinalDecision, ResearchState
 from app.advising.research_workspace import ConversationWorkspace
 from app.advising.sequence import CourseRequirement, plan_sequence
+from app.atlas.equivalence import is_oxford
 from app.atlas.requisites import AllOf, AnyOf, CourseRef
 from app.db import queries
 from app.generation.advising_tools import CourseCode
@@ -280,7 +281,8 @@ class ResearchSession:
         self.program_positions = {}
         self.program_sizes = {}
         self.program_cursors = {}
-        self.pending_policy_read: str | None = None
+        self.pending_policy_reads: tuple[str, ...] = ()
+        self._course_codes: frozenset[str] | None = None
         self.actions = []
         self.checks: dict[str, dict] = {}
         self.unavailable_preparation_check_ids: set[str] = set()
@@ -547,7 +549,7 @@ class ResearchSession:
             leads = [lead for row in zip_longest(*groups) for lead in row if lead is not None]
         self.conn.commit()
         page, cursor = self.page(leads, value, 12, "search")
-        self.pending_policy_read = None
+        self.pending_policy_reads = ()
         for lead in page:
             identity = lead.pop("_identity")
             lead["handle"] = self.handle(lead["kind"], identity)
@@ -557,8 +559,15 @@ class ResearchSession:
                 # seen what the section contains.
                 lead["handle"] = lead["matching_sections"][0]["handle"]
                 lead["read_scope"] = "matching_section"
-                if value.kind == "policy" and self.pending_policy_read is None:
-                    self.pending_policy_read = lead["handle"]
+                if value.kind == "policy" and not self.pending_policy_reads:
+                    # The model must read the policy before searching again, but
+                    # it must be able to reach every section the search
+                    # matched. Pinning it to the first matched section - which
+                    # the keyword seam ranks, not the retrieval score - makes
+                    # the rule unreachable when a different section of the same
+                    # document holds it.
+                    self.pending_policy_reads = tuple(
+                        section["handle"] for section in lead["matching_sections"])
         requirement_documents = []
         if value.kind == "program":
             # A verified checklist need not have a parsed program projection.
@@ -668,8 +677,8 @@ class ResearchSession:
         offset = self.offset(value.cursor, key) if value.cursor else start
         page = read_document(self.conn, self.scope, source, from_chunk=offset)
         self.conn.commit()
-        if value.handle == self.pending_policy_read:
-            self.pending_policy_read = None
+        if value.handle in self.pending_policy_reads:
+            self.pending_policy_reads = ()
         ids = self.acquire(page.chunks, complete=not page.incomplete, action="read_document",
                            progress_key=("read_document", value.handle, value.cursor, offset))
         cursor = None
@@ -758,7 +767,9 @@ class ResearchSession:
         # Discovery follows all prerequisite references so the answer can cite
         # their alternatives. Discovery does not mean the student selected each
         # alternative; only their explicit selections belong in the plan.
-        plan = plan_sequence(courses, value.selected_codes, value.completed_codes)
+        plan = plan_sequence(courses, value.selected_codes, value.completed_codes,
+                             load_campus_equivalents(self.conn,
+                                                     collection_id=self.scope.collection_id))
         requirement_blockers = {
             course["code"]: course["blocker_reason"] for course in context["courses"]
         }
@@ -817,9 +828,34 @@ class ResearchSession:
                              if check_id not in self.unavailable_preparation_check_ids}
         validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
                        self.supplied, finishable_checks, self.entity_evidence,
-                       self.artifact_references)
+                       self.artifact_references, self._known_course_codes())
         self.decision = value.decision
         return ResearchResult(data={"accepted": True})
+
+    def _known_course_codes(self) -> frozenset[str]:
+        """The collection's course identities, for the identity check.
+
+        A course the answer names must exist. The master is the authority on
+        that; the run's evidence says what the run established. A course that
+        exists but was not read may still be named, in a clause that says so.
+
+        The catalog names Oxford courses the master carries no row for - a
+        requirement that reads "BIOL 142 or BIOL_OX 142" publishes both. The
+        campus equivalence states which ones are real, so an answer that names
+        one is not naming a course that does not exist.
+        """
+        if self._course_codes is None:
+            rows = self.conn.execute(
+                queries.get("list_collection_course_codes"),
+                {"collection_id": self.scope.collection_id}).fetchall()
+            known = {row["code"] for row in rows}
+            known.update(
+                code for code in load_campus_equivalents(
+                    self.conn, collection_id=self.scope.collection_id)
+                if is_oxford(code)
+            )
+            self._course_codes = frozenset(known)
+        return self._course_codes
 
     def registry(self):
         def safe(handler):

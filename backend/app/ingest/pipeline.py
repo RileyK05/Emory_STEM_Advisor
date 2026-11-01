@@ -100,6 +100,31 @@ def _chunk_id(source_id: UUID, chunker_version: str, chunk_index: int) -> UUID:
     return uuid5(source_id, f"{chunker_version}:{chunk_index}")
 
 
+def _guard_chunking_change(conn: Connection, source_id: UUID, version: str,
+                           count_tokens: Callable[[str], int]) -> None:
+    """Refuse a re-index that would move a chunk's text under an unchanged id.
+
+    A chunk's id addresses it by index within its source, so the chunking
+    rules are part of that id's meaning. If the rules change without the
+    chunker version changing, a re-index puts the same id on different text
+    and every saved citation into that source silently points somewhere else.
+
+    The stored chunk records the count the chunker measured, so the change is
+    detectable: the current counter no longer reproduces it. A version change
+    is the deliberate way to change the rules - it changes the ids with the
+    text - so it is not a change to guard against.
+    """
+    row = conn.execute(queries.get("get_source_chunk_measure"),
+                        {"source_id": source_id}).fetchone()
+    if row is None or row["chunker_version"] != version:
+        return
+    if count_tokens(row["text"]) != row["token_count"]:
+        raise ValueError(
+            "the chunking measure no longer matches this source's stored chunks; "
+            "re-indexing would move the text behind unchanged chunk ids. Bump "
+            "chunker_version, or re-index the source deliberately.")
+
+
 def _store_raw(collection_id: UUID, file_hash: str, raw: bytes,
                workspace_key: str | None = None) -> Path:
     """Store content-addressed bytes; private uploads get a per-workspace directory."""
@@ -224,6 +249,7 @@ def ingest_file(
     on_chunk_transaction: OnChunkTransaction | None = None,
     force: bool = False,
     expected_index_revision: int | None = None,
+    allow_chunking_change: bool = False,
     provenance=None,
 ) -> UUID:
     """Index one file. `provenance` (`app.ingest.provenance.SourceProvenance`) is a
@@ -253,6 +279,10 @@ def ingest_file(
                              provenance.row(existing["source_id"], file_hash))
             conn.commit()
         return existing["source_id"]
+
+    if not allow_chunking_change:
+        _guard_chunking_change(conn, source_id, config.chunking.chunker_version,
+                               count_tokens)
 
     raw_path = _store_raw(collection_id, file_hash, raw, workspace_key)
     conn.execute(

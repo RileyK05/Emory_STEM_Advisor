@@ -92,7 +92,7 @@ def main() -> None:
                     collection_id=coll_id,
                     path=source,
                     content_type="text/markdown",
-                    count_tokens=embedder.count_tokens,
+                    count_tokens=embedder.chunk_tokens,
                     embedder=embedder,
                     embed_model=settings.embedding_model_id,
                     config=config,

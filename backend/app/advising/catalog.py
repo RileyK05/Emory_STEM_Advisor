@@ -199,6 +199,23 @@ def _requirements_are_cited(raw: str | None, chunks: list[CitedChunk]) -> bool:
     return bool(run) and _contains_phrase(_merge_overlapping_texts(run), target)
 
 
+def load_campus_equivalents(conn, *, collection_id: UUID) -> dict[str, frozenset[str]]:
+    """The collection's campus equivalences, in both directions.
+
+    An Oxford course and the Atlanta course it is the other campus's offering
+    of satisfy one another, so a student who took one has taken the other. The
+    relation is recorded by the Atlas import; this reads it.
+    """
+    rows = conn.execute(
+        queries.get("list_campus_equivalents"), {"collection_id": collection_id}
+    ).fetchall()
+    mapping: dict[str, set[str]] = defaultdict(set)
+    for row in rows:
+        mapping[row["oxford_code"]].add(row["atlanta_code"])
+        mapping[row["atlanta_code"]].add(row["oxford_code"])
+    return {code: frozenset(others) for code, others in mapping.items()}
+
+
 def load_advising_context(
     conn,
     *,

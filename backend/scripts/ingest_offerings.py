@@ -95,7 +95,6 @@ def main() -> None:
     if snapshot.eligible_count == 0:
         parser.error("all result rows are held; no ordinary advising source will be published")
 
-    from transformers import AutoTokenizer
 
     from app.config import load_settings
     from app.embeddings import get_embedder
@@ -109,10 +108,9 @@ def main() -> None:
     settings = load_settings()
     config = load_retrieval_config(settings=settings)
     embedder = get_embedder(settings)
-    tokenizer = AutoTokenizer.from_pretrained(settings.embedding_model_id)
-
-    def count_tokens(text: str) -> int:
-        return len(tokenizer.encode(text, add_special_tokens=False))
+    # The chunking measure comes from the embedder, so every ingest path cuts
+    # the same bytes the same way.
+    count_tokens = embedder.chunk_tokens
 
     with open_connection(settings, args.database_url) as conn:
         collection_id = _collection_id(conn, args.collection)

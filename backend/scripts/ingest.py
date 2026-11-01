@@ -11,8 +11,6 @@ import mimetypes
 from pathlib import Path
 from uuid import uuid4
 
-from transformers import AutoTokenizer
-
 from app.config import load_settings
 from app.db import queries
 from app.embeddings import get_embedder
@@ -58,6 +56,12 @@ def main() -> None:
     parser.add_argument("--collection", required=True)
     parser.add_argument("--database-url", default=None)
     parser.add_argument("--origin-manifest", type=Path)
+    parser.add_argument(
+        "--allow-chunking-change", action="store_true",
+        help="re-index even when the chunking measure no longer matches the "
+             "stored chunks. A chunk's id addresses it by index, so this moves "
+             "the text behind that id; use it only when the rule change is "
+             "intended.")
     parser.add_argument("files", nargs="+", type=Path)
     args = parser.parse_args()
     origin_by_path = {}
@@ -92,10 +96,10 @@ def main() -> None:
     settings = load_settings()
     config = load_retrieval_config(settings=settings)
     embedder = get_embedder(settings)
-    tokenizer = AutoTokenizer.from_pretrained(settings.embedding_model_id)
-
-    def count_tokens(text: str) -> int:
-        return len(tokenizer.encode(text, add_special_tokens=False))
+    # The chunking measure comes from the embedder, so every ingest path cuts
+    # the same bytes the same way. A chunk id addresses a chunk by index: two
+    # counters would put the same index on different text.
+    count_tokens = embedder.chunk_tokens
 
     with open_connection(settings, args.database_url) as conn:
         collection_id = _collection_id(conn, args.collection)
@@ -112,6 +116,8 @@ def main() -> None:
                 config=config,
                 origin_key=origin_key,
                 provenance=provenance,
+                force=args.allow_chunking_change,
+                allow_chunking_change=args.allow_chunking_change,
             )
             print(f"{path.name}: {source_id}")
 

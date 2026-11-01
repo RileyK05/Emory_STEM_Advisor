@@ -16,7 +16,7 @@ from app.programs.requirements import (
     _is_level_descriptor,
 )
 
-PARSER_VERSION = "19"
+PARSER_VERSION = "20"
 
 # A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
 # uppercase, so ordinary words and "111or" are not read as codes. Spelled-out
@@ -73,6 +73,10 @@ _AND_OR = re.compile(r"(and|or)\b", re.IGNORECASE)
 # subject to carry forward: whitespace, commas, slashes, and/or. So
 # "MATH 111, 112, or 115" carries MATH across ", " and ", or ".
 _CARRY_SEP = re.compile(r"\s*(?:(?:,|/|and|or)\s*)*", re.IGNORECASE)
+# A passage that lists codes carries the subject further than a requirement
+# does: "CHEM 202Z + 202ZL; MATH 411-412" names both labs and both courses.
+# The identity reader asks which codes a passage names, not what it requires.
+_IDENTITY_CARRY_SEP = re.compile(r"\s*(?:(?:,|/|&|\+|-|–|and|or|plus)\s*)*", re.IGNORECASE)
 _INLINE_LABEL_RE = re.compile(
     r"\s+as\s+(?:an?\s+)?"
     r"(recommended\s+preparation|recommended|prerequisite\s+or\s+co[ -]?requisite|"
@@ -91,13 +95,21 @@ _EXCLUSION_RE = re.compile(
 # "HPMMPH or HPMMPHOL students only.", "This section is reserved for students in
 # the Executive MBA program.", "MB program students". A sentence with a digit
 # may name a course and is never removed by this.
+#
+# The distinctive wording is matched wherever it stands, because the catalog
+# runs two enrollment statements together without punctuation ("BBA or
+# SPECSTUBUS students This section is reserved for students in the BBA
+# program."). The general wording ("students only") is matched only at a
+# sentence boundary, so a course code in the same sentence keeps it.
 _PROGRAM_ONLY_RE = re.compile(
-    r"(?:^|(?<=[.!?;])\s*)(?:"
-    r"[^.!?;\d]*\bstudents\s+only"
-    r"|This\s+section\s+is\s+reserved\s+for\s+students\s+in\s+the\s+[^.!?;\d]*\bprograms?"
+    r"(?:"
+    r"This\s+section\s+is\s+reserved\s+for\s+[^.!?;\d]*\bprograms?"
+    r"|Program\s+restrictions\s+apply\b[^.!?;\d]*"
     r"|Only\s+[^.!?;\d]*\bhave\s+permission\s+to\s+enroll\b[^.!?;\d]*"
-    r"|[^.!?;\d]*\bprogram\s+students"
-    r"|Program\s+restrictions\s+apply"
+    r"|(?:^\s*|(?<=[.!?;])\s*)[^.!?;\d]*\bstudents\s+only"
+    r"|(?:^\s*|(?<=[.!?;])\s*)[^.!?;\d]*\bprogram\s+students"
+    r"|(?:^\s*|(?<=[.!?;])\s*)(?-i:[A-Z][A-Z&]{2,})"
+    r"(?:\s+or\s+(?-i:[A-Z][A-Z&]{2,}))*\s+students\b[^.!?;\d]*"
     r")\s*(?:[.!?]|$)",
     re.IGNORECASE,
 )
@@ -342,7 +354,7 @@ def _requisite_parts(text: str, course_code: str | None) -> tuple[tuple[str, str
     # The same requirement stated twice (a label and an enrollment sentence) is one.
     parts: dict[tuple[str, str], str] = {}
     for kind, content, joiner in segments:
-        if content:
+        if content.strip():
             parts.setdefault((kind, content), joiner)
     return tuple((kind, content, joiner) for (kind, content), joiner in parts.items())
 
@@ -514,6 +526,60 @@ def _scan(segment: str) -> list[tuple[str, str]]:
         tokens.append(("leftover", char))
         i += 1
     return tokens
+
+
+def canonical_codes_in(text: str) -> tuple[str, ...]:
+    """Every course identity a passage names, in canonical form.
+
+    The identity gate compares the code an answer names against the codes the
+    cited passage contains. Both sides must be read the same way, or a correct
+    answer looks unsupported: a passage spells subjects in ways a plain
+    subject-word reader cannot resolve ("Math_OX 112", "Psyc_ox 110",
+    "Phys_OX 151", "Econ_OX 101"), runs a code into the conjunction
+    ("BIOL 151or"), puts Oxford's suffix after the number ("Math 112_OX"), and
+    mixes case inside a subject ("BIOl 142L").
+
+    This resolves identities with the requirement parser's own subject
+    resolution, but reads prose rather than a requirement: no labels, no
+    exclusions, no trees. It never states that a course is required.
+
+    Two rules differ from the requirement parser, both because the question
+    differs. A passage that lists codes carries the subject across the
+    separator ("CHEM 202Z + 202ZL", "MATH 411-412"), and a number the
+    passage prints as part of a level phrase still names that course
+    ("GER 300 level courses" names GER 300). The requirement parser treats
+    both as structure, because there it must decide what is required.
+    """
+    prepared = _OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", text)
+    prepared = _SHARED_NUMBER_RE.sub(r"\1 \3/\2 \3", prepared)
+    prepared = _RUN_TOGETHER_RE.sub(r"\1 \2 ", prepared)
+    codes: list[str] = []
+    last_subject: str | None = None
+    previous_end = 0
+    for match in _CODE_RE.finditer(prepared):
+        subject_part, digits = match.group(1), match.group(2)
+        if subject_part is None:
+            # A bare number continues the previous subject when the passage
+            # separated them only by a list separator.
+            digits = match.group(3)
+            if last_subject is None:
+                continue
+            between = prepared[previous_end:match.start()]
+            if _IDENTITY_CARRY_SEP.fullmatch(between) is None:
+                continue
+            subject = last_subject
+        else:
+            subject = _resolve_subject(subject_part)
+            if subject is None:
+                continue
+        code = normalize_code(f"{subject} {digits}")
+        if code is None:
+            continue
+        if code not in codes:
+            codes.append(code)
+        last_subject = subject.upper()
+        previous_end = match.end()
+    return tuple(codes)
 
 
 class _Parser:
@@ -783,6 +849,11 @@ def parse_requisites(
         status = "unparsed"
     elif ambiguous:
         status = "ambiguous"
+    elif not trees:
+        # The text stated no requirement at all: only enrollment restrictions,
+        # or nothing the requirement scanner can read. That is not a parsed
+        # requirement; it is no requirement.
+        status = "none"
     else:
         status = "parsed"
     return ParsedRequisites(status, tuple(mentions), trees, tuple(leftover))

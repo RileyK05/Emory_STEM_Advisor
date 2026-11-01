@@ -59,7 +59,7 @@ def main():
                 f"Catalog term: {data['term']}\nSource: {row['url']}\n", encoding="utf-8")
             ingest_file(
                 conn, collection_id=collection_id, path=path, content_type="text/markdown",
-                count_tokens=embedder.count_tokens, embedder=embedder,
+                count_tokens=embedder.chunk_tokens, embedder=embedder,
                 embed_model=settings.embedding_model_id, config=config,
             )
             cases.append(EvalCase(id=row["code"], collection=collection,

@@ -12,8 +12,26 @@ WHERE co.collection_id = %(collection_id)s
 ORDER BY c.chunk_index;
 
 -- name: prereq_upstream
+-- An edge names the course it requires. When it names an Oxford course, the
+-- edge reaches that course and the Atlanta course it is the other campus's
+-- offering of. The codes are expanded before the join so the index on
+-- courses.code is still used; a correlated subquery in the join condition
+-- made this seam eighty times slower.
+WITH edge_targets AS (
+    SELECT edge.course_id, edge.kind, edge.node_type, target.code AS target_code
+    FROM prereq_nodes edge
+    JOIN courses requiring ON requiring.course_id = edge.course_id
+    CROSS JOIN LATERAL (
+        SELECT edge.target_code AS code
+        UNION ALL
+        SELECT e.atlanta_code
+        FROM course_campus_equivalents e
+        WHERE e.collection_id = requiring.collection_id
+          AND e.oxford_code = edge.target_code
+    ) target
+)
 SELECT DISTINCT c.chunk_id, c.source_id, c.chunk_index
-FROM prereq_nodes edge
+FROM edge_targets edge
 JOIN courses requiring ON requiring.course_id = edge.course_id
                        AND requiring.parse_status = 'parsed'
                        AND requiring.lifecycle = 'current'
@@ -57,8 +75,25 @@ WHERE edge.course_id = %(course_id)s
 ORDER BY c.chunk_index;
 
 -- name: prereq_downstream
+-- The mirror: a course's Oxford counterpart is the same course, so an edge
+-- naming either is an edge naming the course the student asked about. The
+-- codes are expanded before the join so the index on courses.code is used.
+WITH target_codes AS (
+    SELECT codes.code
+    FROM courses target
+    CROSS JOIN LATERAL (
+        SELECT target.code AS code
+        UNION ALL
+        SELECT e.oxford_code
+        FROM course_campus_equivalents e
+        WHERE e.collection_id = target.collection_id
+          AND e.atlanta_code = target.code
+    ) codes
+    WHERE target.course_id = %(course_id)s
+)
 SELECT DISTINCT c.chunk_id, c.source_id, c.chunk_index
-FROM prereq_nodes edge
+FROM target_codes
+JOIN prereq_nodes edge ON edge.target_code = target_codes.code
 JOIN courses requiring ON requiring.course_id = edge.course_id
                        AND requiring.parse_status = 'parsed'
                        AND requiring.lifecycle = 'current'
@@ -72,7 +107,7 @@ JOIN courses requiring ON requiring.course_id = edge.course_id
                              AND hold.status = 'active'
                        )
 JOIN courses target ON target.collection_id = requiring.collection_id
-                   AND target.code = edge.target_code
+                   AND target.course_id = %(course_id)s
                    AND target.lifecycle = 'current'
 JOIN chunks c ON c.locator_id = requiring.locator_id
 JOIN sources s ON s.source_id = c.source_id

@@ -27,6 +27,9 @@ class FakeEmbedder:
     def count_tokens(self, text: str) -> int:
         return whitespace_tokens(text)
 
+    def chunk_tokens(self, text: str) -> int:
+        return whitespace_tokens(text)
+
     def embed_documents(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.empty((0, self.dim), dtype=np.float32)
@@ -73,6 +76,9 @@ class ScriptedProvider:
     exercise finish reasons, provider refusals, tool calls, and usage accounting
     without redefining a provider in each file. Requests are recorded for
     inspection.
+
+    Pass ``results`` to script a sequence: each call takes the next result, and
+    the last one repeats once the sequence is exhausted.
     """
 
     def __init__(
@@ -84,6 +90,7 @@ class ScriptedProvider:
         tool_calls=(),
         usage: Usage | None = None,
         model: str | None = None,
+        results: list[GenerationResult] | None = None,
     ) -> None:
         if usage is None:
             usage = Usage(prompt_tokens=8, completion_tokens=8, source="provider")
@@ -95,10 +102,14 @@ class ScriptedProvider:
             refusal=refusal,
             model=model,
         )
+        self.results = list(results) if results else None
         self.requests: list = []
 
     def generate(self, request):
         self.requests.append(request)
+        if self.results:
+            index = min(len(self.requests) - 1, len(self.results) - 1)
+            return self.results[index]
         return self.result
 
 

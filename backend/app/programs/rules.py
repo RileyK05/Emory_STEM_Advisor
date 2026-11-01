@@ -208,7 +208,16 @@ def validate_rules_tree(
 
 
 def generate_default_rules_tree(program: dict[str, Any], raw_items: list[dict[str, Any]]) -> dict:
-    """Prepare a review draft, retaining mentions without guessing clause semantics."""
+    """Prepare a review draft, retaining mentions without guessing clause semantics.
+
+    The root's `coverage_disposition` marks the container, not a clause: it
+    says the requirement list is fully accounted for, because every supplied
+    item becomes a child. Whether each clause's semantics are established is
+    the children's own disposition, and every child here is `unresolved`
+    because nothing has been reviewed yet. Making the root `unresolved` would
+    be more literal but would collapse the audit report from one row per
+    clause to a single row, losing the detail a reviewer needs.
+    """
     children = tuple(RuleNode(
         node_id=f"pos-{item['position']}", node_type=RuleNodeType.UNRESOLVED,
         title=item.get("text", "").strip() or "Unreviewed requirement",

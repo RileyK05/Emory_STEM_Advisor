@@ -64,7 +64,12 @@ def test_research_preparation_serializes_bounded_grouped_alternatives(monkeypatc
                      "corequisites": None, "requisites_raw": "test", "blocker_reason": None}],
     })
     session = ResearchSession.__new__(ResearchSession)
-    session.conn = SimpleNamespace(commit=lambda: None)
+    # The preparation check reads the collection's campus equivalences; this
+    # collection has none.
+    session.conn = SimpleNamespace(
+        commit=lambda: None,
+        execute=lambda *_args, **_kwargs: SimpleNamespace(fetchall=list),
+    )
     session.scope = SimpleNamespace(collection_id="collection", sources={})
     session.acquire = lambda *_args, **_kwargs: []
     session.checks = {}
@@ -517,7 +522,7 @@ def test_document_snippet_shows_the_query_dense_part_of_a_long_passage():
     assert snippet.index("20 credit hours") < 400
 
 
-def test_policy_search_read_round_is_narrowed_to_the_matching_section():
+def test_policy_search_read_round_is_narrowed_to_the_matching_sections():
     from types import SimpleNamespace
     from uuid import uuid4
 
@@ -532,7 +537,7 @@ def test_policy_search_read_round_is_narrowed_to_the_matching_section():
         scope=SimpleNamespace(sources={"source-1": SimpleNamespace(source_kind="institutional_policy")},
                               programs={}), handles={}, checks={}, actions=[],
         program_reads={}, program_positions={}, program_sizes={}, program_cursors={},
-        supplied=set(), remaining_limits={}, pending_policy_read="h_policy",
+        supplied=set(), remaining_limits={}, pending_policy_reads=("h_policy", "h_policy_2"),
     )
     definitions = (
         ToolDefinition("advisor_read_document", "Read.", {"type": "object",
@@ -544,7 +549,10 @@ def test_policy_search_read_round_is_narrowed_to_the_matching_section():
         session, SimpleNamespace(definitions=definitions), "What is the policy?", None,
         [], "", False, read_required=True, policy_required=True)
     assert [tool.name for tool in request.tools] == ["advisor_read_document", "advisor_finish"]
-    assert request.tools[0].input_schema["properties"]["handle"]["enum"] == ["h_policy"]
+    # Every section the search matched stays reachable: the rule may sit in a
+    # section the keyword seam did not rank first.
+    assert request.tools[0].input_schema["properties"]["handle"]["enum"] == [
+        "h_policy", "h_policy_2"]
 
 
 @pytest.mark.parametrize("payload", [

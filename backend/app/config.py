@@ -110,6 +110,10 @@ class Settings:
     profile_encryption_key: str | None = field(default=None, repr=False)
     llm_timeout_seconds: float = 60.0
     llm_max_output_tokens: int = 1024
+    # A reply cut off at the output limit is retried with a doubled allowance up
+    # to this ceiling: a reasoning model can spend its whole allowance before it
+    # writes anything, and a cut-off draft is withheld rather than published.
+    answer_truncation_max_output_tokens: int = 16_384
     routing_enabled: bool = False
     routing_eval_suite_hash: str | None = None
     admin_api_enabled: bool = False
@@ -355,6 +359,9 @@ class Settings:
         if (not math.isfinite(self.llm_timeout_seconds)
                 or self.llm_timeout_seconds <= 0 or self.llm_max_output_tokens <= 0):
             raise ValueError("generation limits must be positive")
+        if self.answer_truncation_max_output_tokens < self.llm_max_output_tokens:
+            raise ValueError(
+                "ANSWER_TRUNCATION_MAX_OUTPUT_TOKENS must be at least LLM_MAX_OUTPUT_TOKENS")
         if (not math.isfinite(self.operation_timeout_seconds)
                 or self.operation_timeout_seconds <= 0
                 or not 1 <= self.operation_max_calls <= 100
@@ -442,6 +449,7 @@ def load_settings() -> Settings:
         profile_encryption_key=_optional("PROFILE_ENCRYPTION_KEY"),
         llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 60),
         llm_max_output_tokens=_int("LLM_MAX_OUTPUT_TOKENS", 1024),
+        answer_truncation_max_output_tokens=_int("ANSWER_TRUNCATION_MAX_OUTPUT_TOKENS", 16_384),
         routing_enabled=_bool("ROUTING_ENABLED", False),
         routing_eval_suite_hash=_optional("ROUTING_EVAL_SUITE_HASH"),
         admin_api_enabled=_bool("ADMIN_API_ENABLED", False),

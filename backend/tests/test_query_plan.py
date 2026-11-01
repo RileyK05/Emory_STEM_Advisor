@@ -193,4 +193,6 @@ def test_planned_course_reaches_the_answer_and_planning_shares_the_operation(
     assert {str(c["trace_id"]) for c in calls} == {body["trace"]["traceId"]}
     operation = db.execute("SELECT call_count, max_calls FROM operations").fetchone()
     assert operation["call_count"] == 2
-    assert operation["max_calls"] == settings.operation_max_calls + 1
+    # The planning call, the answer and the citation repair share one operation,
+    # and one more call is held back for a reply that ran out of room.
+    assert operation["max_calls"] == settings.operation_max_calls + 2

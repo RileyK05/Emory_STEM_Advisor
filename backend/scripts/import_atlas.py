@@ -8,8 +8,6 @@ import argparse
 from pathlib import Path
 from uuid import uuid4
 
-from transformers import AutoTokenizer
-
 from app.atlas.importer import import_atlas, refresh_atlas_requisites, unresolved_courses
 from app.atlas.records import load_atlas
 from app.config import load_settings
@@ -58,10 +56,9 @@ def main() -> None:
         return
     config = load_retrieval_config(settings=settings)
     embedder = get_embedder(settings)
-    tokenizer = AutoTokenizer.from_pretrained(settings.embedding_model_id)
-
-    def count_tokens(text: str) -> int:
-        return len(tokenizer.encode(text, add_special_tokens=False))
+    # The chunking measure comes from the embedder, so every ingest path cuts
+    # the same bytes the same way.
+    count_tokens = embedder.chunk_tokens
 
     with open_connection(settings, args.database_url) as conn:
         collection_id = _collection_id(conn, args.collection)

@@ -47,6 +47,40 @@ Two consequences worth stating plainly:
 | `kind` values present in the graph | `prerequisite` only (of 3 supported) |
 | `parse_status = 'none'` (nothing parsed) | 2,525 (75.5%) |
 
+### Status, re-measured 2026-10-30
+
+This document was deleted from the repository by accident in commit `9a64af3`
+while `docs/architecture.md` still pointed at it; it is restored here. The
+figures above are the 2026-10-20 snapshot and are kept as the "before" column
+of the acceptance sweep at the bottom of this document. Re-running that sweep
+against the same collection today gives:
+
+| Probe | 2026-10-20 (before) | 2026-10-30 (now) | Target | Met |
+|---|---|---|---|---|
+| A. mentions that resolve to nothing | 905 | 716 | < 300 | no |
+| B. self-loops | 10 | 0 | 0 | **yes** |
+| C. impossible subject codes | 24 over 5 codes | 0 | 0 | **yes** |
+| D. `kind` coverage | `prerequisite` only | `prerequisite` 2821, `corequisite` 88 | more than one kind | **yes** |
+| E. mention/code mismatch | 0 | 0 | 0 (keep) | **yes** |
+| F. level inversions | 53 edges | 54 edges | a drop | no — see below |
+
+Two of the remaining probes moved for reasons worth recording:
+
+- **F grew by one, not because a real inversion appeared.** Three of the 54
+  edges point at `DATASCI 999XFR` / `QTM 999XFR`, Emory's placeholder for a
+  course still to be determined. That is a placeholder, not a 900-level
+  graduate course, so those edges are artifacts of the same kind as §1.1. The
+  real inversions are 51, down from 53. Every dependent course (`BUS_OX 350`,
+  `ISOM 454`, `ISOM 455`) already parses as `unparsed`, so no tree is built
+  from these edges.
+- **A is down by 189 but still far from its target**, and the remainder is
+  dominated by the Oxford coverage gap of §2.1 rather than by parse errors:
+  an `_OX` course with no College master row is a coverage gap, not a bad
+  parse.
+
+The remaining worklist is unchanged: probe A and probe F still need the
+human reading this document asks for.
+
 ---
 
 # PART 1 — Confirmed errors. These are bugs, not judgement calls.

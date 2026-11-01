@@ -3,7 +3,9 @@
 # Read by `python -m scripts.manual.data_audit`. `text` is the requirement text
 # stored for the course (Atlas registration restrictions, or a labeled
 # catalog fallback); the audit flags an entry when that text changes. The
-# expected trees are a reading of `text`, never the parser's output.
+# audit also compares `text` with the Atlas capture itself, so this file and
+# the database cannot drift together unnoticed. The expected trees are a
+# reading of `text`, never the parser's output.
 #
 # Notation: all(...), any(...), a course code, or cond:TEXT. `status` is the
 # expected parse status; only `parsed` entries carry trees. An entry counts as

@@ -1361,8 +1361,20 @@ def test_research_answers_progressively_and_persists_its_decision(
             assert {"stages", "blockers", "complete", "unexplored_codes"} <= set(check)
             observed["context_preparation_check"] = check
         ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+        # The block must name the courses its cited evidence names: the identity
+        # gate rejects a block that names a course the evidence does not
+        # contain, and the evidence differs per scenario (ECON 201 for the
+        # economics scenarios, the BIOL alternatives for the others).
+        check = context["executed_preparation_checks"][0] if scenario in preparation_scenarios else None
+        if check is not None and check["completed_codes"]:
+            block_text = (f"{check['selected_codes'][0]} lists "
+                          f"{check['completed_codes'][0]} as preparation.")
+        elif check is not None:
+            block_text = f"{check['selected_codes'][0]} is an unmet preparation requirement."
+        else:
+            block_text = "ECON 201 lists ECON 101 as preparation."
         decision = {"outcome": "information", "completeness": "complete",
-                    "blocks": [{"kind": "fact", "text": "ECON 201 lists ECON 101 as preparation.", "evidence_ids": ids}]}
+                    "blocks": [{"kind": "fact", "text": block_text, "evidence_ids": ids}]}
         if scenario in preparation_scenarios:
             check = context["executed_preparation_checks"][0]
             decision.update(preparation_check_ids=[check["check_id"]], preparation_claims=[{

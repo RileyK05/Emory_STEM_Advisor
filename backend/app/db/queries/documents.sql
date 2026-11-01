@@ -170,6 +170,13 @@ FROM chunks
 WHERE source_id = %(source_id)s
 ORDER BY chunk_index;
 
+-- name: get_source_chunk_measure
+SELECT c.text, c.token_count, s.chunker_version
+FROM chunks c JOIN sources s ON s.source_id = c.source_id
+WHERE c.source_id = %(source_id)s
+ORDER BY c.chunk_index
+LIMIT 1;
+
 -- name: cited_chunk_details
 SELECT c.chunk_id,
        c.source_id,

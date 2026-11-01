@@ -8,7 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from uuid import UUID
 
-from app.atlas.records import course_codes_in
+from app.atlas.requisites import canonical_codes_in
 from app.generation.citations import (
     InvalidCitation,
     citation_numbers_visible,
@@ -23,8 +23,8 @@ from app.llm.base import (
     Provider,
     consume_stream,
 )
+from app.operations.budget import BudgetExceeded
 from app.programs.requirements import SUBJECT_ALIASES
-from app.retrieval.seams.prereq import course_codes_in_query
 from app.retrieval.types import CitedChunk
 
 PROMPT_VERSION = "10"
@@ -150,25 +150,35 @@ def _context_block(chunks: list[CitedChunk], *, include_resource_ids: bool = Fal
 
 
 # A paragraph may name a course while saying the passage does not establish it.
+# Every branch here is a statement that a course is absent from a source or a
+# requirement list. A clause that denies presence may name the absent course;
+# a clause that asserts a requirement may not. "does not require" is
+# deliberately absent: it is a claim about a requirement, not about presence.
 _NONSUPPORT_RE = re.compile(
     r"\b(?:does not support|do not support|not support|no evidence|"
     r"not in the|cannot determine|not established|not found|"
-    r"does not (?:show|state|describe|list|include|contain|cover|mention|name)|"
-    r"do not (?:show|state|describe|list|include|contain|cover|mention|name)|"
+    r"does not (?:show|state|describe|list|include|contain|cover|mention|name|"
+    r"appear|occur)|"
+    r"do not (?:show|state|describe|list|include|contain|cover|mention|name|"
+    r"appear|occur)|"
     r"cannot (?:confirm|verify)|contains no|names no|"
     r"no supplied (?:passage|source)(?:\s+or\s+[a-z][a-z ]{0,60})?\s+"
     r"(?:establishes|names|contains|lists)|"
     r"does not (?:establish|substitute|verify|confirm|validate)|"
     r"cannot (?:establish|substitute|verify|confirm|validate)|"
     r"no basis|gives no basis|neither (?:course )?code (?:appears|is named)|"
-    r"not (?:listed|included|contained|named)|unresolved here|"
-    r"no course (?:numbered|named|coded|listed)|there (?:is|are) no)\b",
+    r"not (?:listed|included|contained|named|part of|among)|unresolved here|"
+    r"no course (?:numbered|named|coded|listed)|there (?:is|are) no|"
+    r"(?:is|are) (?:absent|missing)|"
+    r"(?:was|were)\s+not\s+(?:captured|retained|available|consulted)\b|"
+    r"no\b[^.]{0,80}\b(?:was|were)\s+(?:read|captured|consulted|found)\b|"
+    r"neither\b[^.]{0,120}\b(?:appears?|occurs?)\b)\b",
     re.IGNORECASE,
 )
 
 
 def _course_codes(text: str, subjects: set[str]) -> set[str]:
-    return {code for code in course_codes_in_query(text) if code.split()[0] in subjects}
+    return {code for code in canonical_codes_in(text) if code.split()[0] in subjects}
 
 
 # Reviewed identity-only aliases. Emory renamed the QTM subject to DATASCI and
@@ -303,7 +313,7 @@ def citation_repair_hint(result: GenerationResult, chunks: list[CitedChunk], *,
         return CITATION_REPAIR_PROMPT
     subjects = set(course_subjects or ()) | set(SUBJECT_ALIASES.values())
     subjects.update(code.split()[0] for chunk in chunks
-                    for code in course_codes_in(f"{chunk.locator_label}\n{chunk.text}"))
+                    for code in canonical_codes_in(f"{chunk.locator_label}\n{chunk.text}"))
     reported = _reported_codes(query, history_context, subjects)
     visible = citation_visible_text(result.text)
     violations = []
@@ -353,6 +363,46 @@ def _call_provider(provider, request: GenerationRequest, on_provisional_text) ->
     return provider.generate(request)
 
 
+# A reply that ran out of output allowance is not a malformed answer: a
+# reasoning model can spend its whole allowance before it writes anything, and
+# the draft it produces is empty. Such a reply is asked again with the
+# allowance doubled, the way the research path retries a cut-off round.
+TRUNCATED_FINISH_REASONS = frozenset({"length", "max_tokens", "incomplete"})
+TRUNCATION_RETRIES = 2
+TRUNCATED_RETRY_NOTE = ("Your previous reply used its whole output allowance without "
+                         "writing an answer. Answer now: be brief and direct.")
+
+
+def _with_truncation_note(request: GenerationRequest) -> GenerationRequest:
+    """Tell the model its previous reply was cut off, so it answers directly.
+
+    More room alone does not help a model that deliberated until the limit;
+    asking it to answer briefly is what makes the second attempt succeed.
+    """
+    messages = list(request.messages)
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if isinstance(message, dict) and message.get("role") == "user":
+            messages[index] = {**message,
+                               "content": f"{message.get('content', '')}\n\n{TRUNCATED_RETRY_NOTE}"}
+            break
+    return replace(request, messages=tuple(messages))
+
+
+def _with_retry_allowance(request: GenerationRequest, base_output_tokens: int | None,
+                          truncations: int, ceiling: int | None) -> GenerationRequest:
+    """Double the requested output allowance per truncated attempt, up to a ceiling.
+
+    The larger allowance stays for the rest of the call: a model that needed it
+    once is likely to need it again.
+    """
+    if not truncations or base_output_tokens is None:
+        return request
+    allowance = base_output_tokens * 2 ** truncations
+    return replace(request, max_output_tokens=(allowance if ceiling is None
+                                              else min(ceiling, allowance)))
+
+
 def answer_from_context(
     chunks: list[CitedChunk],
     query: str,
@@ -374,6 +424,8 @@ def answer_from_context(
     system_prompt: str | None = None,
     prompt_version: str = PROMPT_VERSION,
     course_subjects: set[str] | None = None,
+    truncation_retries: int = TRUNCATION_RETRIES,
+    truncation_ceiling: int | None = None,
 ) -> GeneratedAnswer:
     if sampling_policy not in {"greedy", "model_default"}:
         raise ValueError("unsupported sampling policy")
@@ -384,22 +436,60 @@ def answer_from_context(
         {"role": "system", "content": prompt},
         {"role": "user", "content": user_prompt},
     ]
-    request = GenerationRequest(messages, max_output_tokens=max_new_tokens,
-                                timeout_seconds=timeout_seconds,
-                                temperature=0 if sampling_policy == "greedy" else None,
-                                reasoning_effort=reasoning_effort)
-    if prepare_request is not None:
-        request = prepare_request(request)  # Reservation must commit before provider I/O.
-    if before_provider_call is not None:
-        before_provider_call()  # Release durable resources reserved for this call.
-    try:
-        result = _call_provider(provider, request, on_provisional_text)
-    except Exception as exc:
+    base_request = GenerationRequest(messages, max_output_tokens=max_new_tokens,
+                                     timeout_seconds=timeout_seconds,
+                                     temperature=0 if sampling_policy == "greedy" else None,
+                                     reasoning_effort=reasoning_effort)
+    ceiling = truncation_ceiling
+    truncations = 0
+
+    def _call(prepared: GenerationRequest) -> GenerationResult:
+        if before_provider_call is not None:
+            before_provider_call()  # Release durable resources reserved for this call.
+        try:
+            result = _call_provider(provider, prepared, on_provisional_text)
+        except Exception as exc:
+            if on_attempt:
+                on_attempt(None, exc)
+            raise
         if on_attempt:
-            on_attempt(None, exc)
-        raise
-    if on_attempt:
-        on_attempt(result, None)  # Account before rejection/repair/return.
+            on_attempt(result, None)  # Account before rejection/repair/return.
+        return result
+
+    def _generate(request_to_send: GenerationRequest) -> tuple[GenerationRequest, GenerationResult]:
+        """Call the provider; a reply cut off at the limit is asked again with more room.
+
+        A retry the operation budget cannot afford stops the retry, and the
+        cut-off draft is withheld exactly as it was before.
+        """
+        nonlocal truncations
+        prepared = request_to_send
+        result: GenerationResult | None = None
+        while True:
+            attempt = _with_retry_allowance(request_to_send, max_new_tokens, truncations,
+                                             ceiling)
+            if truncations:
+                attempt = _with_truncation_note(attempt)
+            try:
+                prepared = (prepare_request(attempt) if prepare_request is not None
+                            else attempt)  # Reservation must commit before provider I/O.
+                result = _call(prepared)
+            except BudgetExceeded:
+                if truncations == 0:
+                    raise  # The first call is not a retry; the budget answer stands.
+                break  # A retry the operation cannot afford: withhold the draft.
+            if (result.finish_reason or "") not in TRUNCATED_FINISH_REASONS:
+                break
+            if truncations >= truncation_retries:
+                break
+            truncations += 1
+            if on_provisional_reset is not None:
+                on_provisional_reset()  # A cut-off draft must not reach the student.
+        if result is None:
+            raise RuntimeError("the provider call produced no result")
+        return prepared, result
+
+    request, result = _generate(base_request)
     repair_hint = citation_repair_hint(
         result, chunks, query=query, history_context=history_context,
         course_subjects=course_subjects, identity_only=repair_identity_only,
@@ -412,19 +502,7 @@ def answer_from_context(
             {"role": "assistant", "content": result.text},
             {"role": "user", "content": repair_hint},
         ]
-        request = replace(request, messages=messages)
-        if prepare_request is not None:
-            request = prepare_request(request)
-        if before_provider_call is not None:
-            before_provider_call()
-        try:
-            result = _call_provider(provider, request, on_provisional_text)
-        except Exception as exc:
-            if on_attempt:
-                on_attempt(None, exc)
-            raise
-        if on_attempt:
-            on_attempt(result, None)
+        request, result = _generate(replace(request, messages=messages))
         # Ledger callbacks see individual calls; public generation totals include both.
         from app.generation.controller import _aggregate_usage
 
@@ -452,7 +530,7 @@ def answer_from_context(
     subjects = set(course_subjects or ()) | set(SUBJECT_ALIASES.values())
     if course_subjects is None:
         subjects.update(code.split()[0] for chunk in chunks
-                        for code in course_codes_in(f"{chunk.locator_label}\n{chunk.text}"))
+                        for code in canonical_codes_in(f"{chunk.locator_label}\n{chunk.text}"))
     reported = _reported_codes(query, history_context, subjects)
     for start, end, paragraph in answer_paragraph_spans(text):
         numbers = citation_numbers_visible(visible[start:end], len(chunks))
@@ -495,6 +573,11 @@ def _shingles(words: list[str], size: int) -> set[tuple[str, ...]]:
     return {tuple(words[index:index + size]) for index in range(len(words) - size + 1)}
 
 
+# How many eight-word stretches an answer has to reproduce from the system
+# prompt before it is an echo rather than a quotation.
+_MIN_ECHO_SHINGLES = 8
+
+
 def _overlaps_prompt(text: str, prompt: str) -> bool:
     """Detect a substantial instruction echo after common trivial obfuscations.
 
@@ -502,28 +585,30 @@ def _overlaps_prompt(text: str, prompt: str) -> bool:
     word shingles, so citation insertions, punctuation, underscore joins and
     Unicode forms do not hide an echo.  A bounded base64 decode catches the
     reported encoded-prompt case.
+
+    The measure is how much of the prompt the answer reproduces verbatim.  A
+    careful answer often quotes one of the advisor's own caveats, and that is
+    not a leak; an answer that reproduces a stretch of the instructions is.
+    A count, not a share, keeps a short quotation from looking like an echo
+    and a long echo from looking like a quotation.
     """
     words = _content_words(text)
     prompt_words = _content_words(prompt)
     if len(prompt_words) < 8:
         return False
-    prompt_shingles = _shingles(prompt_words, 5)
-    if len(words) >= 8:
-        if _shingles(words, 8) & _shingles(prompt_words, 8):
-            return True
-        answer_shingles = _shingles(words, 5)
-        if len(answer_shingles) >= 8 and (
-                len(answer_shingles & prompt_shingles) / len(answer_shingles) >= 0.5):
-            return True
+    if len(words) >= 8 and (
+            len(_shingles(words, 8) & _shingles(prompt_words, 8)) >= _MIN_ECHO_SHINGLES):
+        return True
     # A base64 block is only a candidate when it decodes to prompt text.
     for token in re.findall(r"[A-Za-z0-9+/]{40,}={0,2}", text):
         try:
             decoded = base64.b64decode(token, validate=True).decode("utf-8")
         except (ValueError, UnicodeDecodeError):
             continue
-        decoded_shingles = _shingles(_content_words(decoded), 5)
-        if len(decoded_shingles) >= 8 and (
-                len(decoded_shingles & prompt_shingles) / len(decoded_shingles) >= 0.5):
+        decoded_words = _content_words(decoded)
+        if len(decoded_words) >= 8 and (
+                len(_shingles(decoded_words, 8) & _shingles(prompt_words, 8))
+                >= _MIN_ECHO_SHINGLES):
             return True
     return False
 

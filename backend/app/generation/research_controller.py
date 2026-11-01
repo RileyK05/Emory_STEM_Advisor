@@ -340,7 +340,7 @@ class ResearchController:
                 session.state.candidates if session.state else ())
                 for handle in candidate.program_handles
                 if not session.entity_evidence.get(handle)})
-            pending_policy = getattr(session, "pending_policy_read", None)
+            pending_policy = getattr(session, "pending_policy_reads", ())
             read_due = (discovery_rounds >= 2 or bool(pending_policy)) and any(
                 kind in {"document", "section", "program", "course", "memory"}
                 for kind, _identity in session.handles.values())
@@ -369,7 +369,7 @@ class ResearchController:
                               "more searches are deferred until a read. h_ handles and snippets are not evidence. "
                               "If the leads cannot answer, finish with the specific evidence gap.")
             if policy_required:
-                round_hint = ("A policy search found a matching section. Read that exact section now with "
+                round_hint = ("A policy search found matching sections. Read one of them now with "
                               "advisor_read_document before another search. The discovery snippet is not "
                               "evidence; repeated synonym searches do not establish the rule.")
             if program_required:
@@ -623,7 +623,7 @@ class ResearchController:
             tools = tuple(t for t in tools if t.name in {
                 "advisor_read_program", "advisor_read_document", "advisor_read_courses", "advisor_recall", "advisor_read_conversation", "advisor_finish"})
         if policy_required:
-            pending = getattr(session, "pending_policy_read", None)
+            pending = getattr(session, "pending_policy_reads", ())
             tools = tuple(t for t in tools if t.name in {"advisor_read_document", "advisor_finish"})
             narrowed = []
             for tool in tools:
@@ -631,7 +631,7 @@ class ResearchController:
                     narrowed.append(tool)
                     continue
                 schema = deepcopy(tool.input_schema)
-                schema["properties"]["handle"] = {"type": "string", "enum": [pending]}
+                schema["properties"]["handle"] = {"type": "string", "enum": list(pending)}
                 schema["required"] = list(dict.fromkeys([*schema.get("required", []), "handle"]))
                 narrowed.append(replace(tool, input_schema=schema))
             tools = tuple(narrowed)

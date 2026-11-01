@@ -26,7 +26,8 @@ plans and `docs/audit/` the review status.
     TypeScript interfaces and `tests/test_contract_drift.py` fails when their
     field sets diverge.
   - Deterministic data: `atlas/` (course records, the requisites parser,
-    importer, `course_writer.course_uuid`), `programs/` (catalog PDF split, page
+    importer, `course_writer.course_uuid`, the Atlanta/Oxford campus
+    equivalence), `programs/` (catalog PDF split, page
     conversion, requirement parser, exact-source binding, reviewed rule
     releases), `advising/` (citation-scoped snapshots, the sequence planner,
     program audit engine, comparisons, research advisor data layer),
@@ -94,7 +95,7 @@ prerequisite the parser can't handle is a parser fix or a manual fix, never a
 model call. `tests/test_no_llm_in_prereq.py` fails if `app/atlas/` or the
 prerequisite seam imports a model or provider.
 
-Course requirement authority: the public Course Atlas (`atlas.emory.edu`) takes precedence over the catalog when they disagree (user decision, 2026-10-21). Use exact captured Atlas registration restrictions, not model intuition, to update the graph. Oxford is a separate campus listed in the same Atlas; import its displayed course identities alongside Atlanta records and preserve campus/suffix codes. An absent College master row is a coverage gap, not evidence that an Oxford course is invalid. `scripts.reconcile_atlas` prepares and explicitly publishes an Atlas-primary master from verified saved offering snapshots, with clearly labeled catalog fallbacks only where Atlas evidence is absent. Never run a plain catalog import over an Atlas-primary master.
+Course requirement authority: the public Course Atlas (`atlas.emory.edu`) takes precedence over the catalog when they disagree (user decision, 2026-10-21). Use exact captured Atlas registration restrictions, not model intuition, to update the graph. Oxford is a separate campus listed in the same Atlas; import its displayed course identities alongside Atlanta records and preserve campus/suffix codes. An absent College master row is a coverage gap, not evidence that an Oxford course is invalid. `app/atlas/equivalence.py` derives the Atlanta/Oxford equivalence from the Atlas itself (the catalog's alternative lists and the course records) and the Atlas import writes it to `course_campus_equivalents`; the mention, program-slot and prerequisite-graph lookups honour it, and the sequence planner treats a campus's course as the same course. The relation is not `courses.canonical_code`, which is the retrieval deduplication key. `scripts.reconcile_atlas` prepares and explicitly publishes an Atlas-primary master from verified saved offering snapshots, with clearly labeled catalog fallbacks only where Atlas evidence is absent. Never run a plain catalog import over an Atlas-primary master.
 
 The similarity graph's nudges file is also hand-written data. Don't generate
 it with a model.

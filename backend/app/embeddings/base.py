@@ -15,6 +15,16 @@ class Embedder(Protocol):
         """Count actual embedding tokens, including special tokens, without truncation."""
         ...
 
+    def chunk_tokens(self, text: str) -> int:
+        """Count the tokens a chunk's text occupies, without special tokens.
+
+        This is the chunking measure, and it must be the same on every ingest
+        path: a source's chunk boundaries have to be a function of its bytes
+        alone. A ``chunk_id`` addresses a chunk by index, so a path that counts
+        differently would put the same index on different text.
+        """
+        ...
+
     def embed_documents(self, texts: list[str]) -> np.ndarray:
         """Embed corpus texts. Returns (n, dim) float32, L2-normalized."""
         ...

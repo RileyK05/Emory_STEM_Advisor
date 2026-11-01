@@ -162,6 +162,19 @@ def _load(settings: Settings) -> SentenceTransformer:
 def _token_count(model: SentenceTransformer, text: str) -> int:
     return len(model.tokenizer.encode(text, add_special_tokens=True, truncation=False))
 
+
+def _chunk_token_count(model: SentenceTransformer, text: str) -> int:
+    """The chunking measure: the tokens the text occupies, without the
+    model's special tokens.
+
+    The chunker asks how long a piece of text is so it can cut the source
+    into pieces of a target size. That is a property of the text, not of the
+    embedding, and every ingest path must measure it the same way: a chunk's
+    id addresses it by index, so two counters would put the same index on
+    different text.
+    """
+    return len(model.tokenizer.encode(text, add_special_tokens=False, truncation=False))
+
 def _validate_length(settings: Settings, model: SentenceTransformer, text: str) -> None:
     count = _token_count(model, text)
     key = (settings.embedding_model_id, settings.embedding_device,
@@ -188,6 +201,9 @@ class GraniteEmbedder:
 
     def count_tokens(self, text: str) -> int:
         return _token_count(_load(self._settings), text)
+
+    def chunk_tokens(self, text: str) -> int:
+        return _chunk_token_count(_load(self._settings), text)
 
     def embed_documents(self, texts: list[str]) -> np.ndarray:
         model = _load(self._settings)

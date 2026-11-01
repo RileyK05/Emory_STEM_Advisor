@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from psycopg import Error as DatabaseError
 
 from app.admin.prompt_registry import PromptRegistry
-from app.advising.catalog import load_advising_context
+from app.advising.catalog import load_advising_context, load_campus_equivalents
 from app.api import deps
 from app.api.schemas import AnswerResponse, QueryRequest, RefusalResponse
 from app.api.serialize import answer_response, provider_failure_detail, refusal_response
@@ -31,6 +31,7 @@ from app.gaps.store import GapError, GapStore
 from app.generation.answer import (
     ANSWER_PROMPT_NAME,
     PROMPT_VERSION,
+    TRUNCATION_RETRIES,
     GenerationRejected,
     answer_from_context,
     citation_repair_hint,
@@ -45,7 +46,7 @@ from app.generation.evidence import persist_response, record_attempt
 from app.generation.operation import GenerationOperation
 from app.generation.query_plan import PlanRejected, parse_plan, planning_request
 from app.llm.base import Provider, ProviderError
-from app.operations.budget import OperationBudgetError
+from app.operations.budget import OperationBudgetError, OperationLimits
 from app.retrieval.config import RetrievalConfig
 from app.retrieval.directory import load_directory
 from app.retrieval.retrieve import retrieve
@@ -58,6 +59,25 @@ def _noop(*args):
 
 
 logger = logging.getLogger(__name__)
+
+
+def _answer_operation_limits(settings: Settings) -> OperationLimits:
+    """Limits for one query's operation.
+
+    The per-call output cap admits the larger allowance a reply that ran out of
+    room is retried with (generation.answer), the way the research path's cap
+    admits the research allowance. One call beyond the configured maximum is
+    reserved for that retry: the answer, the citation repair and the
+    truncated-reply retry are three legitimate uses of one operation.
+    """
+    return OperationLimits(
+        active_budget_seconds=settings.operation_timeout_seconds,
+        max_calls=settings.operation_max_calls + 1,
+        total_token_budget=settings.operation_token_budget,
+        per_call_output_cap=max(settings.llm_max_output_tokens,
+                                settings.answer_truncation_max_output_tokens),
+        per_call_timeout_seconds=settings.llm_timeout_seconds,
+    )
 
 
 def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) -> None:
@@ -250,18 +270,27 @@ def _tool_answer_provider(conn, body, outcome, operation, settings, provider, se
     advising_context = load_advising_context(
         conn, collection_id=outcome.trace.collection_id, chunks=outcome.chunks,
     )
+    campus_equivalents = load_campus_equivalents(
+        conn, collection_id=outcome.trace.collection_id,
+    )
     conn.commit()  # Snapshot is read-only; release the transaction before model I/O.
     registry, scope, fingerprint = answer_tool_context(
         query=body.query, chunks=outcome.chunks, workspace_key=workspace_key,
         settings=settings, selection=selection, check_cancelled=check_cancelled,
         history_context=history_context,
         advising_context=advising_context,
+        campus_equivalents=campus_equivalents,
     )
     return ToolAnswerProvider(
         provider,
         controller=ToolConversationController(
             max_tool_calls=settings.tool_max_calls,
-            max_provider_calls=settings.operation_max_calls,
+            # The tool turns and the answer share the operation's calls, and one
+            # call is reserved for the answer's own retry: a reply that ran out
+            # of output allowance is asked again with a larger allowance, and
+            # that retry needs a call to make. Two calls are the floor the
+            # tools path needs - the tools in one turn, then the answer.
+            max_provider_calls=max(2, settings.operation_max_calls - 1),
         ),
         registry=registry, scope=scope, operation=operation,
         # The ledger's short transitions use a dedicated pool role, never the
@@ -412,11 +441,13 @@ def query_response(
                                             if selection is not None else (settings, provider))
             if plan_provider is not None:
                 on_progress({"stage": "planning"})
-                operation = GenerationOperation(conn, replace(
+                plan_settings = replace(
                     plan_settings, operation_max_calls=plan_settings.operation_max_calls + 1,
                     operation_token_budget=(plan_settings.operation_token_budget
                                             + plan_settings.query_planning_token_budget),
-                ), uuid4(), workspace_key)
+                )
+                operation = GenerationOperation(conn, plan_settings, uuid4(), workspace_key,
+                                                limits=_answer_operation_limits(plan_settings))
                 if on_operation_created is not None:
                     on_operation_created(operation.operation_id)
                 plan, plan_warning = _plan_query(
@@ -477,7 +508,8 @@ def query_response(
 
     on_progress({"stage": "generating"})
     if operation is None:
-        operation = GenerationOperation(conn, settings, outcome.trace.trace_id, workspace_key)
+        operation = GenerationOperation(conn, settings, outcome.trace.trace_id, workspace_key,
+                                        limits=_answer_operation_limits(settings))
         if on_operation_created is not None:
             on_operation_created(operation.operation_id)
 
@@ -509,6 +541,15 @@ def query_response(
     ).fetchall()}
     conn.commit()
 
+    operation_status = operation.controller.get(operation.conn, operation.operation_id)
+    # A reply that ran out of output allowance is asked again with a larger
+    # allowance. One call is left for the citation repair or the escalation
+    # that follows, so the retry only gets what is left over.
+    reserved = 1 if (settings.answer_citation_repair_enabled
+                     and not settings.tools_enabled) else 0
+    truncation_retries = max(0, min(TRUNCATION_RETRIES,
+                                    operation_status.remaining_calls - 1 - reserved))
+
     def generate_answer():
         return answer_from_context(
             outcome.chunks, retrieval_query or body.query, provider=answer_provider,
@@ -529,10 +570,11 @@ def query_response(
             system_prompt=system_prompt,
             prompt_version=prompt_version,
             course_subjects=course_subjects,
+            truncation_retries=truncation_retries,
+            truncation_ceiling=settings.answer_truncation_max_output_tokens,
         )
 
     try:
-        operation_status = operation.controller.get(operation.conn, operation.operation_id)
         try:
             answer = retry_transient(
                 generate_answer,

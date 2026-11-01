@@ -141,6 +141,42 @@ WHERE m.course_id = %(course_id)s
   AND c.collection_id = %(collection_id)s
   AND c.code = m.target_code;
 
+-- name: resolve_mentions_by_campus_equivalence
+-- A mention that names an Oxford course the master has no row for still
+-- identifies a course: the catalog's alternative list pairs it with the
+-- Atlanta course it is the other campus's offering of. The mention keeps its
+-- own text code; only the resolved target moves.
+UPDATE prereq_mentions m
+SET target_course_id = c.course_id
+FROM courses c
+WHERE m.target_course_id IS NULL
+  AND c.collection_id = %(collection_id)s
+  AND m.course_id IN (
+      SELECT owner.course_id FROM courses owner
+       WHERE owner.collection_id = %(collection_id)s)
+  AND c.code = (
+      SELECT min(e.atlanta_code)
+        FROM course_campus_equivalents e
+       WHERE e.collection_id = %(collection_id)s
+         AND e.oxford_code = m.target_code);
+
+-- name: list_campus_equivalents
+SELECT oxford_code, atlanta_code, basis
+FROM course_campus_equivalents
+WHERE collection_id = %(collection_id)s
+ORDER BY oxford_code, atlanta_code;
+
+-- name: delete_campus_equivalents
+DELETE FROM course_campus_equivalents WHERE collection_id = %(collection_id)s;
+
+-- name: insert_campus_equivalent
+INSERT INTO course_campus_equivalents (
+    collection_id, oxford_code, atlanta_code, basis
+)
+VALUES (
+    %(collection_id)s, %(oxford_code)s, %(atlanta_code)s, %(basis)s
+);
+
 -- name: list_courses_for_source
 SELECT course_id, code, subject, title, requisites_raw, parse_status,
        locator_id, parser_version, canonical_code, lifecycle, authority,

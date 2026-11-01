@@ -1,3 +1,5 @@
+from uuid import uuid4
+
 import pytest
 
 from app.generation.controller import (
@@ -16,6 +18,7 @@ from app.llm.base import (
     Usage,
 )
 from app.tools.builtins import CalculatorOutput, build_default_registry
+from app.tools.executions import ToolCallLimitReached
 from app.tools.registry import (
     ToolCapability,
     ToolInputModel,
@@ -280,15 +283,93 @@ def test_tool_limits_and_cancellation_stop_execution():
         side_effects.append(1) or CalculatorOutput(result="ok"))
     two = GenerationResult(tool_calls=(ToolCall("1", "test_once", {}),
                                        ToolCall("2", "test_once", {})))
+    # The fence holds: a model may not run more tools than the operation
+    # allows. It is told the budget is spent and answers from what it has, so
+    # the request does not die with the answer it already earned.
+    provider = Provider([two, GenerationResult("Answered [1].", finish_reason="stop")])
+    result = ToolConversationController(max_tool_calls=1).run(provider,
+        GenerationRequest((TextMessage("user", "x"),)), registry=registry,
+        scope=_scope(ToolCapability.CALCULATE), operation=Operation([]))
+    assert result.text == "Answered [1]."
+    assert side_effects == []
+    cancelled = lambda: True
+    with pytest.raises(GenerationCancelled):
+        ToolConversationController().run(Provider([]),
+            GenerationRequest((TextMessage("user", "x"),)), registry=registry,
+            scope=_scope(ToolCapability.CALCULATE), operation=Operation([]),
+            cancellation=cancelled)
+    assert side_effects == []
+
+
+def test_a_model_that_asks_for_more_tools_than_the_budget_is_told_and_can_answer():
+    """The refused call is answered with a refusal, not with silence.
+
+    The provider protocol needs a result for every tool call, so the model is
+    told the budget is spent and asked to answer from the context and the
+    tool results it already has.
+    """
+    side_effects = []
+    registry = _custom_registry(lambda _value, _scope:
+        side_effects.append(1) or CalculatorOutput(result="ok"))
+    two = GenerationResult(tool_calls=(ToolCall("1", "test_once", {}),
+                                       ToolCall("2", "test_once", {})))
+    provider = Provider([two, GenerationResult("Answered [1].", finish_reason="stop")])
+    ToolConversationController(max_tool_calls=1).run(provider,
+        GenerationRequest((TextMessage("user", "x"),)), registry=registry,
+        scope=_scope(ToolCapability.CALCULATE), operation=Operation([]))
+    refusals = [message for message in provider.requests[1].messages
+                if getattr(message, "tool_call_id", None) == "1"]
+    assert refusals and "budget" in refusals[0].content
+
+
+def test_a_spent_durable_tool_budget_is_refused_and_the_model_can_answer():
+    """An earlier provider attempt may have spent the operation's tool budget.
+
+    The ledger fences the budget durably, so the second attempt on the same
+    request finds it spent. That is a fence holding, not a failure: the call
+    does not run, the model is told, and it answers from what it has.
+    """
+    executions = []
+
+    class SpentLedger:
+        def claim_or_replay(self, **_kwargs):
+            raise ToolCallLimitReached("tool call limit has been reached")
+
+    registry = _custom_registry(lambda _value, _scope:
+        executions.append("run") or CalculatorOutput(result="ok"))
+    provider = Provider([
+        GenerationResult(tool_calls=(ToolCall("1", "test_once", {}),)),
+        GenerationResult("Answered [1].", finish_reason="stop"),
+    ])
+    result = ToolConversationController().run(provider,
+        GenerationRequest((TextMessage("user", "do"),)), registry=registry,
+        scope=_scope(ToolCapability.CALCULATE), operation=Operation([]),
+        ledger=SpentLedger(), operation_id=uuid4(), workspace_key="test",
+        scope_fingerprint="a" * 64)
+    assert result.text == "Answered [1]."
+    assert executions == []
+    refusals = [message for message in provider.requests[1].messages
+                if getattr(message, "tool_call_id", None) == "1"]
+    assert refusals and "budget" in refusals[0].content
+
+
+def test_a_required_tool_that_did_not_run_still_fails_the_operation():
+    """The model may not publish a plan whose deterministic tool never ran.
+
+    The budget is a fence, and a required tool the operation could not afford
+    leaves the operation without the fact it needed. The answer cannot be
+    published without it, so the operation fails rather than answering.
+    """
+    side_effects = []
+    registry = _custom_registry(lambda _value, _scope:
+        side_effects.append(1) or CalculatorOutput(result="ok"))
+    two = GenerationResult(tool_calls=(ToolCall("1", "test_once", {}),
+                                       ToolCall("2", "test_once", {})))
     with pytest.raises(ToolCallLimitExceeded):
         ToolConversationController(max_tool_calls=1).run(Provider([two]),
             GenerationRequest((TextMessage("user", "x"),)), registry=registry,
-            scope=_scope(ToolCapability.CALCULATE), operation=Operation([]))
-    cancelled = lambda: True
-    with pytest.raises(GenerationCancelled):
-        ToolConversationController().run(Provider([]), GenerationRequest((TextMessage("user", "x"),)),
-            registry=registry, scope=_scope(ToolCapability.CALCULATE),
-            operation=Operation([]), cancellation=cancelled)
+            scope=_scope(ToolCapability.CALCULATE), operation=Operation([]),
+            required_tool_names=frozenset({"test_once"}))
     assert side_effects == []
 
 

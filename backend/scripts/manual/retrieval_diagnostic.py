@@ -314,7 +314,7 @@ def run() -> dict:
             for source in sources:
                 source_id = ingest_file(
                     conn, collection_id=collection_id, path=source,
-                    content_type="text/markdown", count_tokens=embedder.count_tokens,
+                    content_type="text/markdown", count_tokens=embedder.chunk_tokens,
                     embedder=embedder, embed_model=settings.embedding_model_id, config=config,
                 )
                 conn.commit()

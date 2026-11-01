@@ -155,6 +155,45 @@ def _choice_groups(req: Req) -> tuple[tuple[tuple[str, ...], ...], bool]:
     return expand(req)
 
 
+def _distinct_courses(
+    results: list[_Evaluation],
+    campus_equivalents: Mapping[str, frozenset[str]] | None,
+) -> list[list[_Evaluation]]:
+    """Group evaluated alternatives by the course they name.
+
+    An alternative that resolved to one course is that course. Two
+    alternatives that resolved to campus equivalents of one another name the
+    same course at two campuses, so they belong to one group. A compound
+    alternative names several courses and is never collapsed into another.
+    """
+    groups: list[list[_Evaluation]] = []
+    for result in results:
+        for group in groups:
+            if _same_course(group[0], result, campus_equivalents):
+                group.append(result)
+                break
+        else:
+            groups.append([result])
+    return groups
+
+
+def _same_course(
+    left: _Evaluation,
+    right: _Evaluation,
+    campus_equivalents: Mapping[str, frozenset[str]] | None,
+) -> bool:
+    """Whether two alternatives resolved to the same course."""
+    if len(left.dependencies) != 1 or len(right.dependencies) != 1:
+        return False
+    left_code = next(iter(left.dependencies))
+    right_code = next(iter(right.dependencies))
+    if left_code == right_code:
+        return True
+    if not campus_equivalents:
+        return False
+    return right_code in campus_equivalents.get(left_code, ())
+
+
 def _evaluate(
     req: Req | None,
     owner: str,
@@ -162,25 +201,39 @@ def _evaluate(
     selected: set[str],
     completed: set[str],
     courses: Mapping[str, CourseRequirement],
+    completed_aliases: frozenset[str] = frozenset(),
+    selected_aliases: Mapping[str, str] | None = None,
+    campus_equivalents: Mapping[str, frozenset[str]] | None = None,
 ) -> _Evaluation:
     if req is None:
         return _Evaluation(True)
     if isinstance(req, CourseRef):
-        if req.code in completed:
+        if req.code in completed or req.code in completed_aliases:
             return _Evaluation(True)
-        if req.code not in selected:
+        # A requirement may name the other campus's offering of the course the
+        # student selected. The student's own course is the one that satisfies
+        # it, and it is the one the plan reports.
+        matched = req.code if req.code in selected else (
+            (selected_aliases or {}).get(req.code))
+        if matched is None:
             return _Evaluation(False, blockers=(SequenceBlocker(owner, "missing_prerequisite", (req.code,)),))
-        target = courses.get(req.code)
+        target = courses.get(matched)
+        if target is None and matched != req.code:
+            # The student's course is the other campus's offering of the one
+            # the requirement names: the same course, one record.
+            target = courses.get(req.code)
         if target is None:
             return _Evaluation(False, blockers=(SequenceBlocker(req.code, "unknown_course"),))
         if target.lifecycle != "current":
             return _Evaluation(False, blockers=(SequenceBlocker(req.code, "retired_prerequisite"),))
-        return _Evaluation(True, frozenset((req.code,)))
+        return _Evaluation(True, frozenset((matched,)))
     if isinstance(req, Condition):
         return _Evaluation(False, blockers=(SequenceBlocker(owner, "unresolved_condition", (req.text,)),))
     if isinstance(req, AllOf):
         results = [
-            _evaluate(item, owner, selected=selected, completed=completed, courses=courses)
+            _evaluate(item, owner, selected=selected, completed=completed, courses=courses,
+                      completed_aliases=completed_aliases, selected_aliases=selected_aliases,
+                      campus_equivalents=campus_equivalents)
             for item in req.items
         ]
         blockers = tuple(blocker for result in results for blocker in result.blockers)
@@ -204,16 +257,29 @@ def _evaluate(
             blockers,
         )
     if isinstance(req, AnyOf):
-        if any(_satisfied_by_completed(item, completed) for item in req.items):
+        if any(_satisfied_by_completed(item, completed, completed_aliases) for item in req.items):
             return _Evaluation(True)
         results = [
-            _evaluate(item, owner, selected=selected, completed=completed, courses=courses)
+            _evaluate(item, owner, selected=selected, completed=completed, courses=courses,
+                      completed_aliases=completed_aliases, selected_aliases=selected_aliases,
+                      campus_equivalents=campus_equivalents)
             for item in req.items
         ]
         viable = [result for result in results if result.ready]
         if len(viable) == 1:
             return viable[0]
         if len(viable) > 1:
+            # Two alternatives that are the same course at two campuses are one
+            # choice, not a conflict: "MATH 111 or MATH_OX 111" is one course,
+            # and taking it at either campus is taking it.
+            distinct = _distinct_courses(viable, campus_equivalents)
+            if len(distinct) == 1:
+                merged = distinct[0]
+                return _Evaluation(
+                    True,
+                    frozenset(code for result in merged for code in result.dependencies),
+                    tuple(blocker for result in merged for blocker in result.blockers),
+                )
             groups, truncated = _choice_groups(req)
             flat = tuple(sorted({choice for group in groups for choice in group})) \
                 if not truncated and all(len(group) == 1 for group in groups) else ()
@@ -234,15 +300,19 @@ def _evaluate(
     raise TypeError(f"unsupported requisite node: {type(req).__name__}")
 
 
-def _satisfied_by_completed(req: Req, completed: set[str]) -> bool:
+def _satisfied_by_completed(
+    req: Req, completed: set[str], completed_aliases: frozenset[str] = frozenset()
+) -> bool:
     if isinstance(req, CourseRef):
-        return req.code in completed
+        return req.code in completed or req.code in completed_aliases
     if isinstance(req, Condition):
         return False
     if isinstance(req, AllOf):
-        return all(_satisfied_by_completed(item, completed) for item in req.items)
+        return all(_satisfied_by_completed(item, completed, completed_aliases)
+                   for item in req.items)
     if isinstance(req, AnyOf):
-        return any(_satisfied_by_completed(item, completed) for item in req.items)
+        return any(_satisfied_by_completed(item, completed, completed_aliases)
+                   for item in req.items)
     raise TypeError(f"unsupported requisite node: {type(req).__name__}")
 
 
@@ -250,11 +320,18 @@ def plan_sequence(
     courses: Mapping[str, CourseRequirement],
     selected_codes: Sequence[str],
     completed_codes: Sequence[str] = (),
+    campus_equivalents: Mapping[str, frozenset[str]] | None = None,
 ) -> SequencePlan:
     """Plan safe stages; unresolved facts block affected courses and dependents.
 
     Course references are exact atlas codes. Only selected, known courses can
     enter stages. Recommendations are intentionally absent from the input tree.
+
+    ``campus_equivalents`` maps a course code to the codes of the same course
+    at the other campus. A student who took `MATH_OX 111` at Oxford has taken
+    what a `MATH 111` requirement asks for, so the requirement is satisfied.
+    The student's own plan is untouched: only the satisfaction test knows
+    about the equivalence.
     """
     if len(courses) > _MAX_COURSES or len(selected_codes) > _MAX_SELECTED or len(completed_codes) > _MAX_COMPLETED:
         raise ValueError("sequence input exceeds the supported size")
@@ -265,6 +342,19 @@ def plan_sequence(
         selected_codes = tuple(sorted(selected))
     selected = set(selected_codes) - completed
     referenced_selected = selected
+    completed_aliases: frozenset[str] = frozenset()
+    selected_aliases: dict[str, str] = {}
+    if campus_equivalents:
+        completed_aliases = frozenset(
+            alias for code in completed
+            for alias in campus_equivalents.get(code, ())
+            if alias not in completed
+        )
+        # A requirement may name the other campus's offering of a course the
+        # student selected; the student's own course satisfies it.
+        for code in selected:
+            for alias in campus_equivalents.get(code, ()):
+                selected_aliases.setdefault(alias, code)
 
     blockers: set[SequenceBlocker] = set()
     known_selected = selected.intersection(courses)
@@ -326,6 +416,9 @@ def plan_sequence(
                 selected=referenced_selected,
                 completed=completed,
                 courses=courses,
+                completed_aliases=completed_aliases,
+                selected_aliases=selected_aliases,
+                campus_equivalents=campus_equivalents,
             )
             coreq = _evaluate(
                 course.corequisites,
@@ -333,6 +426,9 @@ def plan_sequence(
                 selected=referenced_selected,
                 completed=completed,
                 courses=courses,
+                completed_aliases=completed_aliases,
+                selected_aliases=selected_aliases,
+                campus_equivalents=campus_equivalents,
             )
             prereq_dependencies[code].update(prereq.dependencies)
             coreq_dependencies[code].update(coreq.dependencies)

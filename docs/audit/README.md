@@ -7,6 +7,52 @@ git history. [db-data-review.md](db-data-review.md) is the live data review and
 stays until its R1–R11 acceptance pass is re-run.
 [security-attack-notes.md](security-attack-notes.md) records the adversarial
 input pass and its open denial-of-service limits.
+[REPORT-llm-error-suite.md](REPORT-llm-error-suite.md) records the 58-probe
+live LLM error suite and Course Atlas concordance across all STEM majors,
+minors, divisions, electives, and policies (2026-10-28).
+[TEST-SUITE-SPECIFICATION.md](TEST-SUITE-SPECIFICATION.md) defines the full 65-probe
+test suite specification, exact query prompts, Course Atlas invariants, and pass/fail criteria.
+[REPORT-round5.md](REPORT-round5.md) records the fifth round: one shared
+course-identity reader for both answering paths, the research path's identity
+check split into identity and claim support, the policy read widened to every
+matched section, the gold set cross-checked against the Atlas capture, and one
+chunking measure on every ingest path.
+[REPORT-round6.md](REPORT-round6.md) records the sixth round: the Atlanta/Oxford
+campus equivalence, stated by the database and derived from the Atlas itself.
+
+## Round 6 (2026-10-31)
+
+| Finding | Disposition |
+| --- | --- |
+| The database stated no Atlanta/Oxford equivalence | Fixed. Migration 079 adds `course_campus_equivalents`: one row per pair, with the basis on which the pair was established. `catalog_requirement` (101 pairs) reads the requirement texts, where Emory states the relation itself ("BIOL 142 or BIOL_OX 142"). `course_record` (48 pairs) reads the course records: same course number, compatible titles. The number alone proves nothing — `PE_OX 101` is "Weight Training/Conditioning" and `PE 101` is "Personal Health" — so the title has to agree. |
+| The equivalence is not the retrieval deduplication key | Deliberate. `courses.canonical_code` deduplicates passages; an Atlanta/Oxford pair sharing it would delete one campus's passage, relabel the survivor, blind the answer's identity check to the campuses, and leave the research search unable to open the Oxford record. A test asserts the two keep their own anchor. |
+| 406 unresolved prerequisite mentions and 21 program slots named an `_OX` code | Fixed for 355 mentions and 8 slots. A mention that names an Oxford course the master has no row for resolves to the Atlanta course it stands for, keeping its own text code, and the graph traverses either campus's code to the same course. The 51 mentions that remain name an Oxford course whose Atlanta counterpart is not a current course (`MATH_OX 117`, `FREN_OX 310`, `PE_OX 102`–`160`): a stale requirement, visibly so. |
+| The planner treated a campus's course as a different course | Fixed. A completed campus equivalent satisfies the requirement: a student who took `MATH_OX 111` at Oxford has taken what a `MATH 111` requirement asks for. A selected campus equivalent satisfies a requirement that names the other campus's course, and the plan reports the student's own course. The equivalence changes what is satisfied, never what is planned. |
+| The research identity check rejected a course the catalog publishes | Fixed. The collection's known courses now include the Oxford codes the catalog names, so an answer may name `BIOL_OX 142`. A course nothing publishes is still rejected. |
+| The planner read two campus codes of one course as two alternatives | Fixed. "MATH 111 or MATH_OX 111" is one course at two campuses, so a student who selected either one was not blocked with `multiple_alternatives_selected`. The alternatives that name one course are collapsed. |
+| The tools path was never measured | Measured. The clarity probe measured the legacy path with the tools off, which is not the development configuration. With the tools on, three probes ended in an HTTP 422 and the path scored 116/122 against the no-tools baseline's 126/126. The probe now has a `--tools` mode. |
+| A spent tool budget killed the request | Fixed. The fence holds — none of the calls run — but the model is told the budget is spent and answers from the context and the tool results it already has, instead of the request dying with a 422. |
+| A routing fallback found the durable tool budget spent | Fixed. The ledger reports that case as its own error and the controller answers it the same way: the fence holds and the operation still answers. |
+| The tools path had no room for the answer's own retry | Fixed and documented. One operation call is reserved for the retry, and `OPERATION_MAX_CALLS` of five is what the tools path needs. The tools path went from 116/122 to 134/135. |
+| The prompt-leak guard withheld correct answers | Fixed. It fired on a single shared eight-word stretch, and a careful answer often quotes the advisor's own caveat. It now counts eight shared stretches, so a quotation is not an echo and a wholesale reproduction still is; all four round-4 leak cases still fail. |
+| The probe read the corpus with a different reader than the product | Fixed. A passage that writes "171Z" after "CS 171" names CS 171Z; the probe compared the text literally and flagged the answer as naming a course that exists nowhere, including in the passage that named it. Both sides now use the shared reader. |
+
+## Round 5 (2026-10-30)
+
+| Finding | Disposition |
+| --- | --- |
+| The identity gate withheld correct answers | Fixed. The gate compared the answer's canonical code against the passage's codes read by a weaker reader, so the corpus's own spellings (`Math_OX 112`, `Psyc_ox 110`, `BIOL 151or`) made correct answers look unsupported. One shared reader, `canonical_codes_in`, now reads both sides; it finds every code the requirement parser finds (1,257/1,257) and every code the previous reader found (0 misses, 16 gains). Live: 3 refusals and 3 malformed codes became 6/6 answers with the canonical code. A/B over 172 recorded answers: the previous reader rejects 9, the new one 7, and every changed verdict moves toward accepting. |
+| The probe's `states-the-fact` check missed an honest answer | Instrument fixed. The check looked for "not" within three words of "listed/required/named/part of"; "do not establish it as a required core course" needs four. The window is four words and the "does not" list now includes "establish" and "identify". An answer that asserts the course is still refused. Round-4 and round-5 numbers for that probe are not strictly comparable. |
+| The research path's identity check skipped limitation blocks and fact blocks without inclusion wording | Fixed. The check now covers every fact and limitation block, clause by clause. The two former xfails are real tests, plus a test that an honest "the evidence does not name CS 325" limitation is allowed. |
+| The research check compared a block against only its own citations | Fixed. Split into identity (a course the answer names must be one that exists: the course master is the authority on existence, the run's evidence on what the run established) and claim support (a fact asserting a course is required must be backed by the passage it cites). The first measurement rejected three legitimate answers with a 422. |
+| The escape hatch did not cover the absence phrasings models produce | Fixed and bounded. "neither X nor Y appears", "not part of", "no … was read" now escape; "were not read" deliberately does not, so an answer may not name courses the run never heard of. `phantom-cs495` went from 5/7 to 6/6. |
+| The research policy read was pinned to one section | Fixed. `pending_policy_read` became `pending_policy_reads`; the read tool's handle enum lists every section the search matched. The 4+1 rule (chunk 19) and the 43rd-class-day rule (chunk 48) are in different sections. |
+| The research path's remaining failures are not identity failures | Measured. After the fixes, `phantom-cs495` passes 6/6 and `phantom-math231` 13/13 (it was a 422). The three that still fail do so on the model's own malformed output — a raw citation marker in a block, an unread recommended course, a malformed `decision.artifact` — and on the operation budget, not on the identity check. The path stays off by default for that reason. |
+| The gold set could drift with the database unnoticed | Fixed. The audit now also compares each entry's text with the Atlas capture, the primary source. All 51 entries match exactly. The human sign-off is still outstanding for all 51. |
+| Two audit documents were deleted while their references remained | Fixed. `db-data-review.md` and `security-attack-notes.md` were removed by commit `9a64af3`; `architecture.md` and this README still pointed at them. Both restored, and the acceptance sweep re-measured. |
+| Two ingest paths counted tokens differently | Fixed. One chunking measure on every path (`Embedder.chunk_tokens`), separate from the embedding measure. 42 of 235 current sources chunked differently under the old pair. A re-index that would move a chunk's text under an unchanged id is now refused. The one current source cut the other way was re-indexed; its cited chunks' text did not change. |
+| The rule draft's root claims `supported` while every child is `unresolved` | Measured, not a defect. The disposition marks the container; the children carry the clause status and the audit engine reports one row per clause. Making the root `unresolved` collapses three rows into one. The reading is now written down in the code. |
+| 375 program clauses name a choice without an executable count | Measured, left alone. 140 state a minimum and must never become an exact choice; 69 are cleanly recoverable. No rule release exists, so nothing reaches a student yet. |
 
 ## Round 4 remediation (2026-10-25)
 
@@ -332,6 +378,16 @@ Partial fixes and remaining work:
   and the R1–R11 pass in [db-data-review.md](db-data-review.md) is re-run, its
   counts and anomalies stand. Never hand-edit `prereq_nodes` or `prereq_mentions`:
   fix the parser, re-import, re-run the sweep.
+- **The research advising path stays off by default** until its live score is at
+  least as good as the legacy path's.
+- **A section handle points at a section's first chunk**, so a rule several
+  chunks into a long section needs a second page. The read reports its cursor,
+  so the rule is reachable, but one page may not hold it.
+- **The gold set's 51 entries are all unreviewed.** The mechanical cross-check
+  against the Atlas capture is automated; the comparison with Emory's own page
+  is a person's reading.
+- **48 retrieval eval cases are `pending_human_review`.** The runner is a manual
+  script and is deliberately out of the test suite.
 
 ## Preserve while refining
 

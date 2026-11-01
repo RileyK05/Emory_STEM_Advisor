@@ -40,7 +40,21 @@ from app.db import queries
 from scripts._db import open_connection
 
 GOLD = Path(__file__).resolve().parents[2] / "configs" / "requirement_gold.toml"
+ATLAS = Path(__file__).resolve().parents[3] / "data" / "atlas" / "atlas-primary-spring-2027.jsonl"
 KINDS = ("prerequisite", "corequisite", "recommended")
+
+
+def _atlas_capture() -> dict[str, str] | None:
+    """The Atlas capture's own requirement text, keyed by course code.
+
+    The capture is the primary source. The gold file is compared with it so
+    the gold file and the database cannot drift together unnoticed.
+    """
+    if not ATLAS.exists():
+        return None
+    from app.atlas.records import load_atlas
+
+    return {course.code: (course.requisites or "") for course in load_atlas(ATLAS)}
 
 
 def parse_expression(text: str) -> Req:
@@ -130,6 +144,7 @@ def main() -> None:
         nodes = conn.execute(queries.get("diagnostic_audit_prereq_nodes"), scope).fetchall()
         mentions = conn.execute(queries.get("diagnostic_audit_prereq_mentions"), scope).fetchall()
         slots = conn.execute(queries.get("diagnostic_audit_program_slots"), scope).fetchall()
+        equivalents = conn.execute(queries.get("list_campus_equivalents"), scope).fetchall()
 
     by_code = {row["code"]: row for row in courses}
     nodes_by = defaultdict(lambda: defaultdict(list))
@@ -142,6 +157,11 @@ def main() -> None:
     # 1. Integrity
     stored: dict[str, dict[str, Req]] = {}
     problems: list[str] = []
+    for pair in equivalents:
+        if pair["atlanta_code"] not in by_code:
+            problems.append(f"campus equivalence {pair['oxford_code']} -> "
+                            f"{pair['atlanta_code']} names an Atlanta course the "
+                            "master does not carry")
     for course in courses:
         code, status = course["code"], course["parse_status"]
         kinds = nodes_by.get(course["course_id"], {})
@@ -209,11 +229,22 @@ def main() -> None:
          [f"{code:14} x{count:<4} {reason(code):40} e.g. {example[code][:40]}"
           for code, count in open_slots.most_common()], args.limit)
 
+    # 3b. Campus equivalence
+    by_basis = Counter(row["basis"] for row in equivalents)
+    oxford = {row["oxford_code"] for row in equivalents}
+    print(f"\nCampus equivalence: {len(equivalents)} pairs over {len(oxford)} "
+          f"Oxford courses, by basis {dict(by_basis)}")
+    oxford_unresolved = {code: count for code, count in unresolved.items()
+                         if code in oxford}
+    print(f"  unresolved links still naming an equivalent Oxford course: "
+          f"{sum(oxford_unresolved.values())} to {len(oxford_unresolved)} codes")
+
     # 4. Gold set
     failures = 0
     if args.gold.exists():
         entries = tomllib.loads(args.gold.read_text(encoding="utf-8")).get("course", [])
         results: dict[bool, list[str]] = {True: [], False: []}
+        capture = _atlas_capture()
         for entry in entries:
             code, reviewed = entry["code"], bool(entry.get("reviewed"))
             course = by_code.get(code)
@@ -223,6 +254,15 @@ def main() -> None:
             issues = []
             if (course["requisites_raw"] or "").strip() != entry.get("text", "").strip():
                 issues.append("source text changed since the entry was checked")
+            # The gold text is checked against the Atlas capture, the primary
+            # source, so the gold file and the database cannot drift together
+            # and pass unnoticed.
+            if capture is not None:
+                source = capture.get(code)
+                if source is None:
+                    issues.append("the course is not in the Atlas capture")
+                elif (source or "").strip() != entry.get("text", "").strip():
+                    issues.append("the gold text differs from the Atlas capture")
             if course["parse_status"] != entry["status"]:
                 issues.append(f"status {course['parse_status']}, expected {entry['status']}")
             expected = {kind: parse_expression(entry[kind]) for kind in KINDS if kind in entry}
@@ -236,6 +276,9 @@ def main() -> None:
                 results[reviewed].append(f"{code}: {'; '.join(issues)}")
         reviewed_count = sum(1 for entry in entries if entry.get("reviewed"))
         print(f"\nGold set: {len(entries)} entries, {reviewed_count} reviewed by a person")
+        if capture is None:
+            print(f"  (no Atlas capture found at {ATLAS}; the gold text was not "
+                  "checked against the primary source)")
         show("Reviewed gold mismatches", results[True], args.limit)
         show("Unreviewed gold mismatches", results[False], args.limit)
         failures = len(results[True])

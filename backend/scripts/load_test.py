@@ -193,7 +193,7 @@ def _seed(dsn: str, name: str, *, documents: int, chunks_per_document: int,
             path.write_text(body, encoding="utf-8")
             ingest_file(
                 conn, collection_id=collection_id, path=path, content_type="text/plain",
-                count_tokens=embedder.count_tokens, embedder=embedder,
+                count_tokens=embedder.chunk_tokens, embedder=embedder,
                 embed_model=model, config=config,
             )
         conn.commit()

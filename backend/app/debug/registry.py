@@ -84,6 +84,8 @@ SETTINGS_FIELDS = (
            "Model calls per answer operation.", minimum=1, maximum=100),
     _field("operation_token_budget", "Operation token budget", "Operations", "int",
            "Accounting ceiling per answer operation.", minimum=1, maximum=20000000),
+    _field("answer_truncation_max_output_tokens", "Truncation retry cap", "Operations", "int",
+           "Largest output allowance a cut-off reply is retried with.", minimum=16, maximum=65536),
     _field("admission_max_pending_workspace", "Pending per workspace", "Admission", "int",
            "Outstanding turn cap per workspace; 0 disables.", minimum=0, maximum=100000),
     _field("admission_max_pending_global", "Pending global", "Admission", "int",
