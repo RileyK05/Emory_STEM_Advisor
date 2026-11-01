@@ -277,3 +277,33 @@ def test_student_trace_hides_non_cited_chunk_and_source_ids():
         "chunkId": "", "sourceId": "", "sourceName": "", "locatorLabel": "", "text": "",
     }
     assert public["trace"]["timings"] == {}
+
+
+def test_saved_turn_evidence_hides_uncited_passages_from_students():
+    """Saved turns store context under evidence, not a live-answer trace."""
+    from types import SimpleNamespace
+
+    from app.api.serialize import public_payload
+
+    value = {
+        "turns": [{
+            "evidence": {
+                "citations": [{"chunkId": "cited"}],
+                "contextBlock": [
+                    {"chunkId": "cited", "sourceId": "source-a", "sourceName": "a",
+                     "locatorLabel": "page 1", "text": "cited text"},
+                    {"chunkId": "uncited", "sourceId": "source-b", "sourceName": "secret",
+                     "locatorLabel": "page 2", "text": "UNCITED"},
+                ],
+            },
+        }],
+    }
+    public = public_payload(value, SimpleNamespace(mode="oidc", role="student"))
+    block = public["turns"][0]["evidence"]["contextBlock"]
+    assert block[0]["text"] == "cited text"
+    assert block[1] == {
+        "chunkId": "", "sourceId": "", "sourceName": "", "locatorLabel": "", "text": "",
+    }
+    # Admins still see the full evidence.
+    admin = public_payload(value, SimpleNamespace(mode="oidc", role="admin"))
+    assert admin["turns"][0]["evidence"]["contextBlock"][1]["text"] == "UNCITED"
