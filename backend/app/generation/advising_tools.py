@@ -215,7 +215,8 @@ def advising_specs(
                 "collection's Atlas-derived equivalence table. Pass course_codes named in the "
                 "question. known=false means this collection has no stored campus pair for that "
                 "code (do not invent one). Equivalence is identity across campuses, not transfer "
-                "credit evaluation."
+                "credit evaluation: either campus code satisfies a program requirement slot or "
+                "prerequisite that lists the other."
             ),
             input_model=CampusEquivalentsInput,
             output_model=CampusEquivalentsOutput,

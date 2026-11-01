@@ -27,7 +27,7 @@ from app.operations.budget import BudgetExceeded
 from app.programs.requirements import SUBJECT_ALIASES
 from app.retrieval.types import CitedChunk
 
-PROMPT_VERSION = "10"
+PROMPT_VERSION = "11"
 # The prompt registry name whose promoted version replaces SYSTEM_PROMPT.
 ANSWER_PROMPT_NAME = "grounded-answer"
 SYSTEM_PROMPT = (
@@ -44,6 +44,8 @@ SYSTEM_PROMPT = (
     "over conflicting catalog text or narrative section notes, respecting the cited term. "
     "A catalog fallback is not a verified current Atlas rule. Oxford is a separate campus "
     "in the same Atlas: preserve its displayed campus code and explicit alternatives. "
+    "Atlas-derived campus equivalents identify the same course across campuses and "
+    "satisfy program slots and prerequisites that name either code. "
     "Describe topic paths and group counts as learned graph metadata. Such groups help "
     "explore interests, not establish prerequisites. "
     "When sequence tools are available, use their deterministic result for course ordering. "
@@ -80,6 +82,10 @@ SYSTEM_PROMPT = (
     "eligibility claims. Omit this bullet when the student has reported no completions. "
     "When asked which courses "
     "count for a program, omit courses not listed in that program's supplied requirements. "
+    "Exception: when the context or a campus-equivalents tool result states that an "
+    "Oxford and Atlanta code are campus equivalents of the same course, either code "
+    "satisfies a program requirement or prerequisite slot that lists the other; do not "
+    "refuse solely because the Oxford code is absent from the program list. "
     "Identify a course across program lists by its code; a different "
     "title does not establish absence. Do not infer a course's level or code-suffix "
     "meaning unless the supplied text explicitly states it."

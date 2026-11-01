@@ -29,3 +29,20 @@ def test_campus_equivalents_tool_returns_known_pairs_without_course_context():
 def test_campus_equivalents_tool_absent_when_mapping_empty():
     assert advising_specs(None, [], campus_equivalents=None) == ()
     assert advising_specs(None, [], campus_equivalents={}) == ()
+
+
+def test_system_prompt_treats_campus_equivalents_as_program_slots():
+    from app.generation.answer import SYSTEM_PROMPT, PROMPT_VERSION
+    assert PROMPT_VERSION == "11"
+    assert "campus equivalents identify the same course across campuses" in SYSTEM_PROMPT
+    assert "refuse solely because the Oxford code is absent" in SYSTEM_PROMPT
+
+
+def test_campus_equivalents_tool_description_mentions_program_slots():
+    specs = advising_specs(
+        None,
+        [],
+        campus_equivalents={"CS 171": frozenset({"CS_OX 171"})},
+    )
+    assert len(specs) == 1
+    assert "program requirement slot" in specs[0].description
