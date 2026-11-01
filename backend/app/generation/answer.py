@@ -214,7 +214,7 @@ _REPORT_RE = re.compile(
     r"|done\s*:\s*)([^.!?;\n]+)", re.IGNORECASE)
 # "I have CS 170" is a report only when a code follows immediately.
 _REPORT_HAVE_RE = re.compile(
-    r"\b(?:i|we)\s+have\s+(?=(?:[A-Z]{2,7}|[A-Z][a-z]{1,10})\s+\d)([^.!?;\n]+)",
+    r"\b(?:i|we)\s+have\s+(?=(?:[A-Z]{2,7}(?:_OX)?|[A-Z][a-z]{1,10})\s+\d)([^.!?;\n]+)",
     re.IGNORECASE)
 _ATTRIBUTION_RE = re.compile(
     r"\b(?:you (?:report|reported|completed|took|have(?:\s+(?:taken|completed|done))?|'ve taken)|"
@@ -441,7 +441,6 @@ def answer_from_context(
                                      temperature=0 if sampling_policy == "greedy" else None,
                                      reasoning_effort=reasoning_effort)
     ceiling = truncation_ceiling
-    truncations = 0
 
     def _call(prepared: GenerationRequest) -> GenerationResult:
         if before_provider_call is not None:
@@ -460,9 +459,10 @@ def answer_from_context(
         """Call the provider; a reply cut off at the limit is asked again with more room.
 
         A retry the operation budget cannot afford stops the retry, and the
-        cut-off draft is withheld exactly as it was before.
+        cut-off draft is withheld exactly as it was before. Truncation state is
+        local to each call so citation repair starts with a fresh allowance.
         """
-        nonlocal truncations
+        truncations = 0
         prepared = request_to_send
         result: GenerationResult | None = None
         while True:
@@ -527,10 +527,11 @@ def answer_from_context(
     visible = citation_visible_text(text)
     # The collection registry supplies subjects absent from the retrieved pages.
     # Standalone callers without a registry use the supplied context subjects.
+    # Collection registry subjects fill gaps; cited passages always contribute
+    # too, so a registry that omits a department cannot hide a hallucinated code.
     subjects = set(course_subjects or ()) | set(SUBJECT_ALIASES.values())
-    if course_subjects is None:
-        subjects.update(code.split()[0] for chunk in chunks
-                        for code in canonical_codes_in(f"{chunk.locator_label}\n{chunk.text}"))
+    subjects.update(code.split()[0] for chunk in chunks
+                    for code in canonical_codes_in(f"{chunk.locator_label}\n{chunk.text}"))
     reported = _reported_codes(query, history_context, subjects)
     for start, end, paragraph in answer_paragraph_spans(text):
         numbers = citation_numbers_visible(visible[start:end], len(chunks))

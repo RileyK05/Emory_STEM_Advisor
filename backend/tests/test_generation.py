@@ -469,3 +469,85 @@ def test_an_answer_that_quotes_an_instruction_is_not_an_echo():
     with pytest.raises(GenerationRejected, match="echoed"):
         answer_from_context(chunks(1), "question", provider=FakeProvider(
             " ".join(SYSTEM_PROMPT.split()) + " [1]."))
+
+
+def test_cited_passage_subjects_are_checked_even_with_a_registry():
+    """A course_subjects registry that omits a department cannot hide a hallucinated code."""
+    from uuid import uuid4
+
+    chunk = CitedChunk(
+        uuid4(), uuid4(), 0, "arch.md", "ARCH 101",
+        "ARCH 101 description.", ("keyword",), 1.0, 1, 1,
+    )
+    with pytest.raises(GenerationRejected, match="ARCH 999"):
+        answer_from_context(
+            [chunk], "question",
+            provider=FakeProvider("ARCH 999 is required [1]."),
+            course_subjects={"CS"},
+        )
+    accepted = answer_from_context(
+        [chunk], "question",
+        provider=FakeProvider("ARCH 101 is described in the passage [1]."),
+        course_subjects={"CS"},
+    )
+    assert accepted.citations
+
+
+def test_citation_repair_does_not_inherit_truncation_state():
+    """A truncated first draft must not force the truncation note onto citation repair."""
+    from uuid import uuid4
+
+    from app.llm.base import GenerationResult, Usage
+
+    chunk = CitedChunk(
+        uuid4(), uuid4(), 0, "cs.md", "CS 101",
+        "CS 101 is intro.", ("keyword",), 1.0, 1, 1,
+    )
+    calls: list = []
+
+    class TruncateThenRepairProvider:
+        def generate(self, request):
+            calls.append(request)
+            if len(calls) == 1:
+                return GenerationResult(
+                    text="", finish_reason="length",
+                    usage=Usage(10, 10, source="provider"),
+                )
+            if len(calls) == 2:
+                return GenerationResult(
+                    text="Uncited intro.\n\nCS 101 is intro [1].",
+                    finish_reason="stop",
+                    usage=Usage(10, 10, source="provider"),
+                )
+            return GenerationResult(
+                text="CS 101 is intro [1].", finish_reason="stop",
+                usage=Usage(10, 10, source="provider"),
+            )
+
+    answer = answer_from_context(
+        [chunk], "question", provider=TruncateThenRepairProvider(),
+        repair_citations=True, course_subjects={"CS"}, truncation_retries=1,
+    )
+    assert answer.text.startswith("CS 101")
+    assert len(calls) == 3
+    repair_user = calls[2].messages[-1]["content"]
+    assert "whole output allowance" not in repair_user
+
+
+def test_student_report_recognises_oxford_have_phrasing():
+    """'I have CS_OX 170' is a student report, same as 'I have CS 170'."""
+    from uuid import uuid4
+
+    chunk = CitedChunk(
+        uuid4(), uuid4(), 0, "cs.md", "CS 253",
+        "CS 253 requires CS 171.", ("keyword",), 1.0, 1, 1,
+    )
+    query = "I have CS_OX 170. What does CS 253 require?"
+    answer = answer_from_context(
+        [chunk], query,
+        provider=FakeProvider(
+            "Unverified student report: you have CS_OX 170 [1]."
+        ),
+        course_subjects={"CS", "CS_OX"},
+    )
+    assert answer.citations
