@@ -470,3 +470,26 @@ def test_reverse_prereq_intent_is_recognized(query):
 def test_forward_prereq_questions_are_not_reverse(query):
     from app.retrieval.seams.prereq import is_reverse_query
     assert not is_reverse_query(query)
+
+
+def test_ambiguous_or_unparsed_status_never_keeps_a_partial_tree():
+    """A non-parsed status must not publish whichever clauses succeeded first."""
+    for text in (
+        "Prerequisite: CS 170. Prerequisite: MATH 111.",
+        "ECON 101 as prerequisite and ECON 102 or ECON 103 as prerequisite or ECON 104.",
+        "QTM100 equivalent transfer credit as a prerequisite",
+    ):
+        result = parse_requisites(text)
+        assert result.status in {"ambiguous", "unparsed"}
+        assert result.trees == {}
+        assert result.mentions  # mentions still recorded
+
+
+def test_title_case_oxford_subjects_keep_oxford_spelling():
+    """Anth_ox stays ANTH_OX; alias expansion must not rewrite it to ANT_OX."""
+    from app.atlas.requisites import _resolve_subject, canonical_codes_in
+
+    assert _resolve_subject("Anth_ox") == "ANTH_OX"
+    assert _resolve_subject("ANTH_OX") == "ANTH_OX"
+    assert canonical_codes_in("Anth_ox 202") == ("ANTH_OX 202",)
+    assert canonical_codes_in("Psyc_ox 110") == ("PSYC_OX 110",)
