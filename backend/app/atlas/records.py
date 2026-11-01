@@ -173,6 +173,10 @@ def render_courses(courses: list[AtlasCourse]) -> tuple[str, list[tuple[str, str
             block += ("\n\nCatalog fallback: current Course Atlas requirements have not "
                       "been verified for this record.")
         block += f"\n\n{course.description}"
+        if course.credits:
+            block += f"\n\nCredits: {course.credits}"
+        if course.crosslisted:
+            block += "\n\nCross-listed as: " + "; ".join(course.crosslisted)
         if course.requisites:
             block += f"\n\nRequisites: {course.requisites}"
         if course.topics:
