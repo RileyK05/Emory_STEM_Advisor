@@ -10,6 +10,13 @@ SELECT code FROM courses
 WHERE collection_id = %(collection_id)s AND lifecycle = 'current'
 ORDER BY code;
 
+-- name: list_collection_course_requisite_texts
+SELECT requisites_raw FROM courses
+WHERE collection_id = %(collection_id)s
+  AND lifecycle = 'current'
+  AND requisites_raw IS NOT NULL
+  AND requisites_raw <> '';
+
 -- name: lock_atlas_source_for_reparse
 SELECT source_id
 FROM sources

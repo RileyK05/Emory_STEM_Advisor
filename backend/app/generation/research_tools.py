@@ -29,7 +29,7 @@ from app.advising.research_types import FinalDecision, ResearchState
 from app.advising.research_workspace import ConversationWorkspace
 from app.advising.sequence import CourseRequirement, plan_sequence
 from app.atlas.equivalence import is_oxford
-from app.atlas.requisites import AllOf, AnyOf, CourseRef
+from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
 from app.generation.advising_tools import CourseCode
 from app.generation.research_final import DecisionRejected, validate_final
@@ -339,7 +339,22 @@ class ResearchSession:
                     [chunk for _source, chunk in identities],
                 )
             self.conn.commit()
-            ids = self.acquire(list(chunks.values()), action="recall_evidence")
+            # Reopening memory must restore entity refs so recommendations /
+            # identity checks still see the course or program that was read.
+            prior_refs = {
+                e.chunk_id: e.entity_refs
+                for e in self.store.evidence(self.run.run_id) if e.entity_refs
+            }
+            refs = {}
+            for chunk in chunks.values():
+                key = str(chunk.chunk_id)
+                if key in prior_refs:
+                    refs[chunk.chunk_id] = prior_refs[key]
+                    continue
+                codes = tuple(canonical_codes_in(chunk.locator_label or ""))
+                if codes:
+                    refs[chunk.chunk_id] = codes
+            ids = self.acquire(list(chunks.values()), refs=refs, action="recall_evidence")
             missing = [h for h, (_s, chunk) in zip(value.handles, identities, strict=True)
                        if chunk not in chunks]
             return ResearchResult(status="incomplete" if missing else "ok", data={
@@ -698,17 +713,29 @@ class ResearchSession:
             next_cursor=cursor, limitations=limits)
 
     def compare(self, value, _scope):
-        if any(h not in self.program_reads for h in value.handles):
+        handles = list(dict.fromkeys(value.handles))
+        if len(handles) != len(value.handles) or not 2 <= len(handles) <= 4:
+            return ResearchResult(
+                status="conflict",
+                limitations=["Compare two to four distinct programs."],
+            )
+        if any(h not in self.program_reads for h in handles):
             return ResearchResult(status="conflict", limitations=["Read each program first."])
-        result = compare_mentions([self.program_reads[h] for h in value.handles])
+        result = compare_mentions([self.program_reads[h] for h in handles])
         data = asdict(result)
-        data["shared"] = {code: refs[:4] for code, refs in list(data["shared"].items())[:12]}
-        data["unique"] = {str(pid): {code: refs[:2] for code, refs in list(codes.items())[:12]}
-                          for pid, codes in data["unique"].items()}
+        # Bound by dropping whole codes, never by shortening a code's refs into
+        # a stronger claim than the omitted lines supported.
+        data["shared"] = {
+            code: list(refs) for code, refs in list(data["shared"].items())[:12]
+        }
+        data["unique"] = {
+            str(pid): {code: list(refs) for code, refs in list(codes.items())[:12]}
+            for pid, codes in data["unique"].items()
+        }
         data["unresolved_positions"] = {str(pid): positions for pid, positions
                                         in data["unresolved_positions"].items()}
         incomplete = any(len(self.program_positions[h]) < len(read_program(
-            self.conn, self.scope, self.resolve(h, "program")).items) for h in value.handles)
+            self.conn, self.scope, self.resolve(h, "program")).items) for h in handles)
         self.conn.commit()
         incomplete = incomplete or len(result.shared) > 12 or any(
             len(codes) > 12 for codes in result.unique.values())
@@ -854,6 +881,15 @@ class ResearchSession:
                     self.conn, collection_id=self.scope.collection_id)
                 if is_oxford(code)
             )
+            # Catalog-named Oxford codes in current requisite text are real
+            # identities even when no master row or equivalence exists yet.
+            for row in self.conn.execute(
+                queries.get("list_collection_course_requisite_texts"),
+                {"collection_id": self.scope.collection_id},
+            ).fetchall():
+                for code in canonical_codes_in(row["requisites_raw"] or ""):
+                    if is_oxford(code):
+                        known.add(code)
             self._course_codes = frozenset(known)
         return self._course_codes
 

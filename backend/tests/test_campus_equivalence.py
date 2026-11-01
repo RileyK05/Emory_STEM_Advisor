@@ -366,6 +366,35 @@ def test_the_research_path_knows_a_course_the_catalog_publishes(
     assert "MATH 999" not in known
 
 
+def test_unpaired_oxford_code_in_requisites_is_known(db, collection, tmp_path):
+    """Catalog-named Oxford codes remain known even without an equivalence row."""
+    import json
+    from types import SimpleNamespace
+
+    from app.generation.research_tools import ResearchSession
+    from tests.test_atlas_import import _import
+
+    lines = [
+        json.dumps({"code": "MATH 112", "title": "Calculus II",
+                    "requisites": "MATH 112 or MATH_OX 117 or equivalent transfer credit."}),
+    ]
+    _import(db, collection, tmp_path, "\n".join(lines) + "\n")
+    rows = db.execute(
+        "SELECT oxford_code, atlanta_code FROM course_campus_equivalents "
+        "WHERE collection_id = %(c)s",
+        {"c": collection},
+    ).fetchall()
+    assert ("MATH_OX 117", "MATH 112") not in {
+        (r["oxford_code"], r["atlanta_code"]) for r in rows
+    }
+    session = ResearchSession.__new__(ResearchSession)
+    session.conn = db
+    session.scope = SimpleNamespace(collection_id=collection)
+    session._course_codes = None
+    known = session._known_course_codes()
+    assert "MATH_OX 117" in known
+
+
 def test_the_equivalence_is_not_the_retrieval_deduplication_key(
         db, collection, tmp_path):
     """The two campuses share a course, not a passage.
