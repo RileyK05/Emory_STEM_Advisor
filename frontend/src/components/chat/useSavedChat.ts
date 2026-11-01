@@ -15,7 +15,7 @@ const CONVERSATION_PAGE_SIZE = 200;
 function savedScope(record: ConversationRecord): SourceScope | undefined {
   for (let index = record.turns.length - 1; index >= 0; index -= 1) {
     const evidence = record.turns[index].evidence;
-    if ('effective' in evidence) return evidence.effective.sourceIds;
+    if (evidence && 'effective' in evidence) return evidence.effective.sourceIds;
   }
   return record.lastSequence === 0 ? null : undefined;
 }
