@@ -62,6 +62,12 @@ def answer_tool_context(*, query: str, chunks: list[CitedChunk], workspace_key: 
             for chunk in chunks
         ],
         "advising": advising_identity(advising_context),
+        # Equivalence changes plan_sequence output; omit it and a ledger can
+        # replay a stale sequence under a newer campus map.
+        "campus_equivalents": {
+            code: sorted(aliases)
+            for code, aliases in sorted((campus_equivalents or {}).items())
+        },
         "workspace": workspace_key,
         "provider": settings.llm_provider,
         "model": settings.llm_model_id or settings.hf_model_id,
