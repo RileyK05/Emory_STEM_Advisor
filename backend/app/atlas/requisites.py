@@ -138,15 +138,17 @@ def _resolve_subject(word: str) -> str | None:
         return None
     if oxford and re.fullmatch(r"[A-Z][A-Z0-9]{0,5}[A-Z]", base):
         # Oxford keeps its own subjects (ANTH_OX, not the Atlanta ANT).
-        return word
+        return base + oxford
+    if oxford and re.fullmatch(r"[A-Z][a-z]{2,6}", base):
+        # Title-case Oxford subjects ("Anth_ox", "Psyc_ox") keep Oxford's
+        # spelling too; alias expansion would rewrite ANTH to Atlanta's ANT.
+        return base.upper() + oxford
     if base in SUBJECT_ALIASES:
         return SUBJECT_ALIASES[base] + oxford
     alias = _ALIAS_LOWER.get(base.lower())
     if alias is not None:
         return alias + oxford
     if re.fullmatch(r"[A-Z][A-Z0-9]{0,5}[A-Z]", base) or re.fullmatch(r"[A-Z]{3,6}[a-z]", base):
-        return base.upper() + oxford
-    if oxford and re.fullmatch(r"[A-Z][a-z]{2,6}", base):
         return base.upper() + oxford
     return None
 
@@ -856,4 +858,8 @@ def parse_requisites(
         status = "none"
     else:
         status = "parsed"
-    return ParsedRequisites(status, tuple(mentions), trees, tuple(leftover))
+    # Mentions stay for every status; the boolean tree is emitted only when the
+    # parse is unambiguous. A partial tree would silently drop later clauses.
+    return ParsedRequisites(
+        status, tuple(mentions), trees if status == "parsed" else {}, tuple(leftover),
+    )

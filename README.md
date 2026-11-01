@@ -138,7 +138,9 @@ the following rebuilds the same corpus a teammate can verify against:
 ```powershell
 python -m scripts.migrate                                   # applies every pending migration
 python -m scripts.scrape_programs --skip-departments       # catalog PDF -> data/programs/catalog/
-python -m scripts.ingest --collection NAME --origin-manifest ../data/programs/ingest-manifest.json ../data/programs/catalog/*
+python -m scripts.bootstrap_programs --collection NAME   # ingest catalog+departments, then bind programs.jsonl
+# Or the two-step form:
+python -m scripts.ingest --collection NAME --origin-manifest ../data/programs/ingest-manifest.json ../data/programs/catalog/* ../data/programs/departments/*
 python -m scripts.import_programs --collection NAME        # after ingest: binds programs to their sources
 python -m scripts.reconcile_source_origins --collection NAME --manifest <verified-legacy-groups.json>
 ```

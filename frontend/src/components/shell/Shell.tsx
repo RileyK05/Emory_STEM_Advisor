@@ -18,7 +18,7 @@ export function Shell({ onLogout, showDetails = false }: { onLogout?: () => void
   const { session } = useApp();
   const chat = useChat();
   const referenced = useMemo(
-    () => chat.entries.flatMap((entry) => (entry.role === 'user' ? entry.attachments : [])),
+    () => chat.entries.flatMap((entry) => (entry.role === 'user' ? (entry.attachments ?? []) : [])),
     [chat.entries],
   );
   const workspace = useArtifactWorkspace(session.workspaceKey ?? 'development', chat.activeId, referenced);
@@ -61,12 +61,18 @@ export function Shell({ onLogout, showDetails = false }: { onLogout?: () => void
     if (chat.loadingConversation) return;
     if (historyThrough.current.chat !== chat.activeId) {
       const sequences = chat.entries.map((entry) => entry.sequence ?? -1);
-      historyThrough.current = { chat: chat.activeId, sequence: Math.max(-1, ...sequences) };
-      return;
+      const firstOpen = historyThrough.current.chat === null && historyThrough.current.sequence === -1;
+      historyThrough.current = {
+        chat: chat.activeId,
+        // A brand-new chat's first answer must still be trackable; do not mark
+        // its entries as history on the initial id assignment.
+        sequence: firstOpen ? -1 : Math.max(-1, ...sequences),
+      };
+      if (!firstOpen) return;
     }
     for (const entry of chat.entries) {
       if (entry.role !== 'assistant' || !entry.artifactRun) continue;
-      if (entry.sequence !== undefined && entry.sequence <= historyThrough.current.sequence) continue;
+      if ((entry.sequence ?? -1) <= historyThrough.current.sequence) continue;
       const { runId } = entry.artifactRun;
       if (trackedRuns.current.has(runId)) continue;
       trackedRuns.current.add(runId);

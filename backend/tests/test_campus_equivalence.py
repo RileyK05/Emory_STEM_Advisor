@@ -366,6 +366,35 @@ def test_the_research_path_knows_a_course_the_catalog_publishes(
     assert "MATH 999" not in known
 
 
+def test_unpaired_oxford_code_in_requisites_is_known(db, collection, tmp_path):
+    """Catalog-named Oxford codes remain known even without an equivalence row."""
+    import json
+    from types import SimpleNamespace
+
+    from app.generation.research_tools import ResearchSession
+    from tests.test_atlas_import import _import
+
+    lines = [
+        json.dumps({"code": "MATH 112", "title": "Calculus II",
+                    "requisites": "MATH 112 or MATH_OX 117 or equivalent transfer credit."}),
+    ]
+    _import(db, collection, tmp_path, "\n".join(lines) + "\n")
+    rows = db.execute(
+        "SELECT oxford_code, atlanta_code FROM course_campus_equivalents "
+        "WHERE collection_id = %(c)s",
+        {"c": collection},
+    ).fetchall()
+    assert ("MATH_OX 117", "MATH 112") not in {
+        (r["oxford_code"], r["atlanta_code"]) for r in rows
+    }
+    session = ResearchSession.__new__(ResearchSession)
+    session.conn = db
+    session.scope = SimpleNamespace(collection_id=collection)
+    session._course_codes = None
+    known = session._known_course_codes()
+    assert "MATH_OX 117" in known
+
+
 def test_the_equivalence_is_not_the_retrieval_deduplication_key(
         db, collection, tmp_path):
     """The two campuses share a course, not a passage.
@@ -534,3 +563,34 @@ def test_taking_the_course_at_either_campus_is_one_choice():
     }
     plan = plan_sequence(courses, ["CS 170", "MATH 111", "MATH_OX 111"], [], equivalents)
     assert [b.reason for b in plan.blockers] == []
+
+
+def test_generic_titles_do_not_pair_across_departments() -> None:
+    """Honors Research / Freshman Seminar numbers are shared; subjects are not.
+
+    CHEM_OX 495A is CHEM 495A, never CS 495A or MATH 495A, even when the
+    titles are identical.
+    """
+    courses = [
+        ("CHEM_OX 495A", "Honors Research"),
+        ("CHEM 495A", "Honors Research"),
+        ("CS 495A", "Honors Research"),
+        ("MATH 495A", "Honors Research"),
+    ]
+    derived = {(p.oxford_code, p.atlanta_code) for p in _derive(courses, [])}
+    assert ("CHEM_OX 495A", "CHEM 495A") in derived
+    assert ("CHEM_OX 495A", "CS 495A") not in derived
+    assert ("CHEM_OX 495A", "MATH 495A") not in derived
+
+
+def test_a_foreign_department_number_does_not_block_a_topic_variant() -> None:
+    """ART 142Q existing in Atlanta must not stop BIOL_OX 142Q → BIOL 142."""
+    courses = [
+        ("BIOL 142", "Foundations of Modern Biology II"),
+        ("ART 142Q", "Art Topics"),
+    ]
+    texts = [
+        "BIOL 142 or BIOL_OX 142Q or equivalent transfer credit as prerequisite.",
+    ]
+    derived = {(p.oxford_code, p.atlanta_code) for p in _derive(courses, texts)}
+    assert ("BIOL_OX 142Q", "BIOL 142") in derived

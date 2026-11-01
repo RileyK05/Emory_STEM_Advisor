@@ -222,6 +222,7 @@ def _extract_pdf(raw: bytes) -> Extracted:
 
 def extract(raw: bytes, content_type: str, *, lines_per_locator: int = 40) -> Extracted:
     if content_type == "application/x-course-atlas+jsonl":
+        from app.atlas.equivalence import derive_campus_equivalents
         from app.atlas.records import load_atlas_lines, render_courses
 
         courses = load_atlas_lines(decode_text(raw).splitlines())
@@ -240,7 +241,21 @@ def extract(raw: bytes, content_type: str, *, lines_per_locator: int = 40) -> Ex
             })
             for course in courses
         ]
-        text, spans = render_courses(normalized)
+        derived = derive_campus_equivalents(
+            [(course.code, course.title) for course in normalized],
+            [course.requisites or "" for course in normalized],
+        )
+        equiv_map: dict[str, list[str]] = {}
+        for item in derived:
+            equiv_map.setdefault(item.oxford_code, [])
+            equiv_map.setdefault(item.atlanta_code, [])
+            if item.atlanta_code not in equiv_map[item.oxford_code]:
+                equiv_map[item.oxford_code].append(item.atlanta_code)
+            if item.oxford_code not in equiv_map[item.atlanta_code]:
+                equiv_map[item.atlanta_code].append(item.oxford_code)
+        for code, peers in equiv_map.items():
+            equiv_map[code] = sorted(peers)
+        text, spans = render_courses(normalized, campus_equivalents=equiv_map)
         result = Extracted(
             text=text,
             locators=[

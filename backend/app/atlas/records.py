@@ -151,28 +151,41 @@ def load_atlas(path: Path) -> list[AtlasCourse]:
     return load_atlas_lines(path.read_text(encoding="utf-8").splitlines())
 
 
-def render_courses(courses: list[AtlasCourse]) -> tuple[str, list[tuple[str, str, int, int]]]:
+def render_courses(
+    courses: list[AtlasCourse],
+    campus_equivalents: dict[str, list[str]] | None = None,
+) -> tuple[str, list[tuple[str, str, int, int]]]:
     """Render courses in code order with one locator per course.
 
     Returns (text, locators) where each locator is
     (locator_type, label, start_char, end_char).
+    ``campus_equivalents`` maps a course code to sorted peer campus codes.
     """
     ordered = sorted(courses, key=lambda c: c.code)
+    equiv = campus_equivalents or {}
     parts: list[str] = []
     locators: list[tuple[str, str, int, int]] = []
     offset = 0
     for course in ordered:
         block = f"{course.code}: {course.title}"
         if course.authority == "atlas":
-            scope = "; ".join(filter(None, [course.term, ", ".join(course.careers)]))
+            scope = "; ".join(filter(None, [course.term, ", ".join(course.careers or [])]))
             block += f"\n\nRequirement authority: Emory Course Atlas ({scope})."
             block += "\nSource: https://atlas.emory.edu/"
-            if course.code.split(" ", 1)[0].endswith("_OX"):
-                block += "\nCampus: Oxford. The exact campus course code is retained."
         elif course.authority == "catalog":
             block += ("\n\nCatalog fallback: current Course Atlas requirements have not "
                       "been verified for this record.")
-        block += f"\n\n{course.description}"
+        if course.code.split(" ", 1)[0].endswith("_OX"):
+            block += "\nCampus: Oxford. The exact campus course code is retained."
+        if course.description:
+            block += f"\n\n{course.description}"
+        if course.credits is not None and course.credits != "":
+            block += f"\n\nCredits: {course.credits}"
+        if course.crosslisted:
+            block += "\n\nCross-listed as: " + "; ".join(course.crosslisted)
+        peers = equiv.get(course.code) or []
+        if peers:
+            block += "\n\nCampus equivalents: " + "; ".join(sorted(peers))
         if course.requisites:
             block += f"\n\nRequisites: {course.requisites}"
         if course.topics:

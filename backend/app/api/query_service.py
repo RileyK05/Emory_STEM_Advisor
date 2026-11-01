@@ -70,9 +70,10 @@ def _answer_operation_limits(settings: Settings) -> OperationLimits:
     reserved for that retry: the answer, the citation repair and the
     truncated-reply retry are three legitimate uses of one operation.
     """
+    # Config admits 100; the +1 retry reservation must still fit the ledger.
     return OperationLimits(
         active_budget_seconds=settings.operation_timeout_seconds,
-        max_calls=settings.operation_max_calls + 1,
+        max_calls=min(100, settings.operation_max_calls + 1),
         total_token_budget=settings.operation_token_budget,
         per_call_output_cap=max(settings.llm_max_output_tokens,
                                 settings.answer_truncation_max_output_tokens),
@@ -223,7 +224,8 @@ def _plan_query(conn, settings, provider, selection, operation, config, question
 
     The planning call is reserved and accounted in the query's operation like any
     other call, including when it fails. A plan that cannot be used falls back to
-    the scoped unplanned retrieval; budget exhaustion after the call propagates.
+    the scoped unplanned retrieval, including when accounting the call exhausts
+    the operation budget.
     """
     if settings.llm_provider == "hf-local":
         return None, "local model context is too small for the catalog directory"
@@ -256,7 +258,11 @@ def _plan_query(conn, settings, provider, selection, operation, config, question
     record_attempt(conn, None, settings, result, None, int((time.perf_counter() - started) * 1000),
                    operation_id=operation.operation_id, request=request, selection=selection)
     conn.commit()
-    operation.account(result, None)
+    try:
+        operation.account(result, None)
+    except OperationBudgetError as exc:
+        # Same as prepare: fall back to unplanned retrieval instead of a 500.
+        return None, f"planning call exceeds the operation budget ({exc.code})"
     try:
         plan = parse_plan(result.text, directory, config.planning)
     except PlanRejected as exc:
@@ -307,7 +313,8 @@ def _tool_answer_provider(conn, body, outcome, operation, settings, provider, se
         on_provisional_reset=on_provisional_reset,
         final_repair=(lambda result: citation_repair_hint(
             result, outcome.chunks, query=body.query,
-            history_context=history_context, identity_only=True))
+            history_context=history_context, identity_only=True,
+            campus_equivalents=campus_equivalents))
         if settings.answer_citation_repair_enabled else None,
         required_tool_names=frozenset({"advisor_plan_course_sequence"})
         if _requests_course_sequence(body.query) else frozenset(),
@@ -539,6 +546,7 @@ def query_response(
     course_subjects = {row["subject"] for row in conn.execute(
         queries.get("list_advising_course_subjects"), {"collection_id": collection_id},
     ).fetchall()}
+    campus_equivalents = load_campus_equivalents(conn, collection_id=collection_id)
     conn.commit()
 
     operation_status = operation.controller.get(operation.conn, operation.operation_id)
@@ -570,6 +578,7 @@ def query_response(
             system_prompt=system_prompt,
             prompt_version=prompt_version,
             course_subjects=course_subjects,
+            campus_equivalents=campus_equivalents,
             truncation_retries=truncation_retries,
             truncation_ceiling=settings.answer_truncation_max_output_tokens,
         )

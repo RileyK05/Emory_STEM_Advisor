@@ -112,8 +112,13 @@ def _run_seams(conn, collection_id, query, embed_model, config, source_ids, work
 
 
 def _cite(conn, fused: list[FusedChunk], collection_id, source_ids, workspace_key,
-          dedupe: bool, details=None) -> tuple[list[CitedChunk], list[FusedChunk]]:
-    """Attach each fused chunk's text and locator, checking the contract and dropping duplicates."""
+          dedupe: bool, details=None
+          ) -> tuple[list[CitedChunk], list[FusedChunk], dict]:
+    """Attach each fused chunk's text and locator, checking the contract and dropping duplicates.
+
+    Returns the details map used so callers can still apply cross-list labels when
+    fusion skipped the early details fetch (``dedupe`` off).
+    """
     if details is None:
         details = {
             row["chunk_id"]: row
@@ -162,7 +167,7 @@ def _cite(conn, fused: list[FusedChunk], collection_id, source_ids, workspace_ke
                 rank=rank,
             )
         )
-    return cited, contributions
+    return cited, contributions, details
 
 
 def _alias_labels(conn, collection_id, cited: list[CitedChunk],
@@ -419,8 +424,10 @@ def _finish(conn, collection_id, query, embed_model, config, source_ids, workspa
         _add_timing(timings, "held_ms", held_started)
 
     cite_started = time.perf_counter()
-    cited, contributions = _cite(conn, fused, collection_id, source_ids, workspace_key,
-                                 config.fusion.dedupe, details)
+    cited, contributions, details = _cite(
+        conn, fused, collection_id, source_ids, workspace_key,
+        config.fusion.dedupe, details,
+    )
     if details:
         cited = _alias_labels(conn, collection_id, cited, details)
     _add_timing(timings, "cite_ms", cite_started)

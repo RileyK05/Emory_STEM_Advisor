@@ -440,6 +440,13 @@ def test_a_course_is_never_its_own_prerequisite():
     ("Biology 141", ["BIOL 141"]),
     ("Physics 152 prerequisite", ["PHYS 152"]),
     ("what do I need for econ301?", ["ECON 301"]),
+    ("what do i need before taking cs 253?", ["CS 253"]),
+    ("can i take cs171", ["CS 171"]),
+    ("prereqs for cs_ox 170", ["CS_OX 170"]),
+    ("CS 170 and 171 after repeating CS 170", ["CS 170", "CS 171"]),
+    ("Prereqs for CS 170? Is CS 170 and 171 required?", ["CS 170", "CS 171"]),
+    ("do mth 111 and cs 170 count?", ["MATH 111", "CS 170"]),
+    ("wat r prereqs 4 cmpsc 326???", ["CS 326"]),
     ("section 111 applies", []),  # a bare number is ignored
     ("MATH 111 and MATH 111 or ECON 101", ["MATH 111", "ECON 101"]),  # deduped, in order
     ("Can I take DATASCI 355 before AAS 490RW?", ["DATASCI 355", "AAS 490RW"]),
@@ -470,3 +477,26 @@ def test_reverse_prereq_intent_is_recognized(query):
 def test_forward_prereq_questions_are_not_reverse(query):
     from app.retrieval.seams.prereq import is_reverse_query
     assert not is_reverse_query(query)
+
+
+def test_ambiguous_or_unparsed_status_never_keeps_a_partial_tree():
+    """A non-parsed status must not publish whichever clauses succeeded first."""
+    for text in (
+        "Prerequisite: CS 170. Prerequisite: MATH 111.",
+        "ECON 101 as prerequisite and ECON 102 or ECON 103 as prerequisite or ECON 104.",
+        "QTM100 equivalent transfer credit as a prerequisite",
+    ):
+        result = parse_requisites(text)
+        assert result.status in {"ambiguous", "unparsed"}
+        assert result.trees == {}
+        assert result.mentions  # mentions still recorded
+
+
+def test_title_case_oxford_subjects_keep_oxford_spelling():
+    """Anth_ox stays ANTH_OX; alias expansion must not rewrite it to ANT_OX."""
+    from app.atlas.requisites import _resolve_subject, canonical_codes_in
+
+    assert _resolve_subject("Anth_ox") == "ANTH_OX"
+    assert _resolve_subject("ANTH_OX") == "ANTH_OX"
+    assert canonical_codes_in("Anth_ox 202") == ("ANTH_OX 202",)
+    assert canonical_codes_in("Psyc_ox 110") == ("PSYC_OX 110",)

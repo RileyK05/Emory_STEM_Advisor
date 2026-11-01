@@ -1063,3 +1063,29 @@ def test_cross_listed_aliases_count_once_with_a_combined_label(db, collection, t
     love = [chunk for chunk in outcome.chunks if "Black Love" in chunk.text]
     assert len(love) == 1
     assert love[0].locator_label == "AAS 325 / REL 325"
+
+
+def test_cross_listed_alias_label_survives_when_fusion_dedupe_is_off(
+        db, collection, tmp_path):
+    """``_cite`` must hand details back so ``_alias_labels`` still runs.
+
+    When fusion.dedupe is False the unplanned path skips the early details
+    fetch and used to leave ``details is None`` in ``_finish``, so cross-listed
+    citations kept a single code even though ``_cite`` had loaded the rows.
+    """
+    text = "\n".join(json.dumps(record) for record in [
+        {"code": "AAS 325", "title": "Black Love", "description": "Religion and race.",
+         "crosslisted": ["REL 325"]},
+        {"code": "REL 325", "title": "Black Love", "description": "Religion and race.",
+         "crosslisted": ["AAS 325"]},
+    ])
+    _import(db, collection, tmp_path, text)
+    config = replace(_embed_off(), fusion=replace(_embed_off().fusion, dedupe=False))
+    outcome = retrieve(
+        db, collection_id=collection, query="religion race",
+        embedder=FakeEmbedder(dim=8), embed_model=_MODEL, config=config,
+    )
+    assert isinstance(outcome, Retrieved)
+    love = [chunk for chunk in outcome.chunks if "Black Love" in chunk.text]
+    assert love, "expected the cross-listed course among citations"
+    assert all(chunk.locator_label == "AAS 325 / REL 325" for chunk in love)

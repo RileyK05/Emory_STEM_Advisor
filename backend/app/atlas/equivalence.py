@@ -186,30 +186,49 @@ def derive_campus_equivalents(
     # The subject renames the records establish: Oxford writes ANTH where
     # Atlanta writes ANT, and so on. A rename is learned only where the two
     # campuses' records agree on the course, so it cannot be a coincidence.
+    atlanta_subjects = {code.partition(" ")[0] for code in atlanta_codes}
     renames: dict[str, str] = {}
     record_pairs: dict[str, set[str]] = defaultdict(set)
     for code in sorted(oxford_codes):
         if code not in titles:
             continue  # No record, so no title to compare.
-        for candidate in atlanta_by_number.get(course_number(code), ()):
-            if titles_compatible(titles[code], titles[candidate]) is not True:
-                continue
-            record_pairs[code].add(candidate)
-            oxford_subject = base_subject(code)
-            atlanta_subject = candidate.partition(" ")[0]
-            if oxford_subject != atlanta_subject and (
-                    renames.setdefault(oxford_subject, atlanta_subject) != atlanta_subject):
-                # The campuses' subjects disagree in more than one way;
-                # no rename can be trusted for this subject.
-                renames[oxford_subject] = ""
+        oxford_subject = base_subject(code)
+        candidates = [
+            candidate for candidate in atlanta_by_number.get(course_number(code), ())
+            if titles_compatible(titles[code], titles[candidate]) is True
+        ]
+        same_subject = [
+            candidate for candidate in candidates
+            if candidate.partition(" ")[0] == oxford_subject
+        ]
+        if same_subject:
+            # CHEM_OX pairs with CHEM, never with another department that
+            # happens to share a number and a generic title ("Honors Research").
+            record_pairs[code].update(same_subject)
+            continue
+        if oxford_subject in atlanta_subjects:
+            continue  # Same-subject Atlanta row exists but titles disagreed.
+        # Cross-subject rename (ANTH_OX → ANT): only when every title match
+        # points at one Atlanta subject.
+        other_subjects = {candidate.partition(" ")[0] for candidate in candidates}
+        if len(other_subjects) != 1:
+            continue
+        atlanta_subject = next(iter(other_subjects))
+        if renames.setdefault(oxford_subject, atlanta_subject) != atlanta_subject:
+            # The campuses' subjects disagree in more than one way;
+            # no rename can be trusted for this subject.
+            renames[oxford_subject] = ""
+            continue
+        record_pairs[code].update(candidates)
 
     def atlanta_subject_of(code: str) -> str:
-        subject = code.partition(" ")[0]
-        return renames.get(subject, subject)
+        # Atlanta subjects are already Atlanta; renames map Oxford → Atlanta.
+        return code.partition(" ")[0]
 
     def oxford_subject_of(code: str) -> str:
         subject = base_subject(code)
-        return renames.get(subject, subject)
+        mapped = renames.get(subject)
+        return mapped if mapped else subject
 
     def variant_counterpart(code: str, atlanta_here: list[str]) -> str | None:
         """The Atlanta course an Oxford topic variant stands for.
@@ -224,7 +243,10 @@ def derive_campus_equivalents(
         never applies to it.
         """
         number = course_number(code)
-        if number in atlanta_by_number:
+        # Another department's course with the same number (ART 142Q vs
+        # BIOL_OX 142Q) must not block a topic-variant match in this clause.
+        if any(atlanta_subject_of(candidate) == oxford_subject_of(code)
+               for candidate in atlanta_by_number.get(number, ())):
             return None
         stripped = number.rstrip(_SUFFIX_LETTERS)
         if stripped == number:

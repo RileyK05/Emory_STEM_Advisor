@@ -32,11 +32,31 @@ def provider_failure_detail(exc: ProviderError, subject: str) -> str:
     return f"{subject} connection failed; check provider settings."
 
 
+def _redact_context(context_block, cited: set[str]) -> list:
+    """Blank uncited passages in place so citation numbers stay stable."""
+    return [
+        item if isinstance(item, dict) and item.get("chunkId") in cited else {
+            **(item if isinstance(item, dict) else {}),
+            "chunkId": "", "sourceId": "",
+            "sourceName": "", "locatorLabel": "", "text": "",
+        }
+        for item in context_block
+    ]
+
+
+def _cited_chunk_ids(citations) -> set[str]:
+    return {
+        item["chunkId"] for item in (citations or [])
+        if isinstance(item, dict) and item.get("chunkId")
+    }
+
+
 def public_payload(value, principal):
     """Redact diagnostics at the HTTP boundary, keeping numbered cited excerpts.
 
     Saved evidence retains the complete trace for authorized review and replay.
-    Empty context slots keep the original citation numbers stable.
+    Empty context slots keep the original citation numbers stable. Live answers
+    nest passages under ``trace``; saved turns store them under ``evidence``.
     """
     if principal.mode == "development" or principal.role == "admin":
         return value
@@ -47,18 +67,22 @@ def public_payload(value, principal):
     result = {key: public_payload(item, principal) for key, item in value.items()}
     trace = result.get("trace")
     if isinstance(trace, dict) and "traceId" in trace:
-        cited = {item["chunkId"] for item in (result.get("citations") or [])}
+        cited = _cited_chunk_ids(result.get("citations"))
         result["trace"] = {
             "traceId": trace["traceId"], "query": "", "normalizedQuery": "",
             "seams": [], "contributions": [],
-            "contextBlock": [item if item.get("chunkId") in cited else {
-                **item, "chunkId": "", "sourceId": "",
-                "sourceName": "", "locatorLabel": "", "text": "",
-            } for item in (trace.get("contextBlock") or [])],
+            "contextBlock": _redact_context(trace.get("contextBlock") or [], cited),
             "prompt": {"system": "", "user": ""},
             "modelCall": {"provider": "", "modelId": "", "promptTokens": None,
                           "completionTokens": None, "usageSource": "unknown", "latencyMs": 0},
             "warnings": [], "errors": [], "timings": {},
+        }
+    evidence = result.get("evidence")
+    if isinstance(evidence, dict) and "contextBlock" in evidence:
+        cited = _cited_chunk_ids(evidence.get("citations"))
+        result["evidence"] = {
+            **evidence,
+            "contextBlock": _redact_context(evidence.get("contextBlock") or [], cited),
         }
     return result
 

@@ -55,6 +55,27 @@ def reconcile_pending_requests(
             },
         ).fetchall()
         for row in rows:
+            job_status = row["job_status"]
+            if row["job_id"] is not None:
+                # Lock the job row now. FOR UPDATE cannot target the nullable
+                # side of the LEFT JOIN above, so the request lock alone is not
+                # enough to stop reclaim_expired / completion from racing us.
+                job = conn.execute(
+                    "SELECT status, lease_expires_at FROM jobs WHERE job_id = %s "
+                    "FOR UPDATE",
+                    (row["job_id"],),
+                ).fetchone()
+                if job is None:
+                    job_status = None
+                else:
+                    job_status = job["status"]
+                    if job_status == "running" and (
+                            job["lease_expires_at"] is None
+                            or job["lease_expires_at"] > current):
+                        # Lease was renewed or the job is live again; skip.
+                        continue
+                    if job_status not in {"succeeded", "failed", "cancelled", "running"}:
+                        continue
             store = ConversationStore(conn, row["workspace_key"])
             try:
                 store.finish_uncommitted(
@@ -75,6 +96,6 @@ def reconcile_pending_requests(
                 "conversationId": str(row["conversation_id"]),
                 "requestId": str(row["request_id"]),
                 "jobId": str(row["job_id"]) if row["job_id"] is not None else None,
-                "jobStatus": row["job_status"],
+                "jobStatus": job_status,
             })
     return settled

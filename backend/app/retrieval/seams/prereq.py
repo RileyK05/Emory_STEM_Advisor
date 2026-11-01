@@ -24,10 +24,21 @@ from app.retrieval.types import Candidate, SeamResult
 # SUBJECT_ALIASES so the seam does not go dormant on a spelled-out subject
 # (EMO-015).
 _TAIL = r"\d{2,4}(?:[A-Z][A-Z0-9]{0,7}|[a-z][A-Z]?)?"
-_SUBJECT_RE = re.compile(rf"\b([A-Za-z][A-Za-z0-9]{{0,10}}[A-Za-z](?:_OX)?)\s*({_TAIL})\b")
+# Accept cs_ox / CS_OX campus markers; subjects are resolved case-insensitively.
+_SUBJECT_RE = re.compile(
+    rf"\b([A-Za-z][A-Za-z0-9]{{0,10}}[A-Za-z](?:_[Oo][Xx])?)\s*({_TAIL})\b"
+)
 _NUMBER_RE = re.compile(rf"\b({_TAIL})\b")
 _CARRY_SEP = re.compile(r"\s*(?:(?:,|/|\+|&|-|–|and|or|plus)\s*)*", re.IGNORECASE)
 _CONJUNCTIONS = frozenset({"and", "or"})
+# Uppercasing student text can mint fake subjects ("section 111"). Reject prose.
+_PROSE_SUBJECTS = frozenset({
+    "ALL", "AND", "ANY", "OR", "THE", "NOT", "ONLY", "OF", "ONE", "TWO", "SOME",
+    "EACH", "IN", "AT", "ON", "FOR", "IS", "SPRING", "SUMMER", "FALL", "AUTUMN",
+    "WINTER", "YEAR", "AY", "TERM", "SECTION", "CLASS", "PAGE", "CHAPTER", "TABLE",
+    "FIGURE", "CREDIT", "CREDITS", "LEVEL", "COURSE", "COURSES", "BEFORE", "AFTER",
+    "TAKING", "NEED", "NEEDS", "TAKE", "TOOK",
+})
 # Reverse-intent questions ask what a completed course opens, not what it needs.
 # Keep downstream graph hits out of ordinary forward prerequisite questions.
 REVERSE_CITED_SET_SIZE = 12
@@ -51,8 +62,12 @@ def _resolve_subject(word: str) -> str | None:
     alias = _SUBJECT_ALIASES.get(word.lower())
     if alias is not None:
         return alias
-    if re.fullmatch(r"[A-Z][A-Z0-9]{0,5}[A-Z](?:_OX)?", word):
-        return word
+    # Student queries are often lowercase ("cs 253", "math111"); canonicalize.
+    upper = word.upper()
+    if upper in _PROSE_SUBJECTS:
+        return None
+    if re.fullmatch(r"[A-Z][A-Z0-9]{0,5}[A-Z](?:_OX)?", upper):
+        return upper
     return None
 
 
@@ -87,8 +102,11 @@ def course_codes_in_query(query: str) -> list[str]:
                 continue
             subject = last_subject
         code = normalize_code(f"{subject} {tail}")
-        if code is not None and code not in codes:
-            codes.append(code)
+        if code is not None:
+            # Always advance the subject cursor, even on duplicates, so a later
+            # bare number ("CS 170 and 171") still carries the subject.
+            if code not in codes:
+                codes.append(code)
             last_subject = subject
             previous_end = end
     return codes
