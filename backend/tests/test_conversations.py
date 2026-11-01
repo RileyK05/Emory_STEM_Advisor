@@ -816,3 +816,61 @@ def test_conversation_archive_and_restore_http_routes(db, collection):
     restored = client.post(path + "/restore")
     assert restored.status_code == 200, restored.text
     assert restored.json()["archivedAt"] is None
+
+
+def test_reconcile_skips_a_running_job_whose_lease_was_renewed(db):
+    """An expired-looking row must not be failed after its lease is renewed."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.conversations.recovery import reconcile_pending_requests
+
+    store = ConversationStore(db, "development")
+    conversation_id = UUID(store.create("Live lease")["conversationId"])
+    request_id = uuid4()
+    accepted = store.begin_stream(
+        conversation_id, request_id, 0,
+        {"request": {"query": "live"}, "query": "live", "effective": {}},
+    )
+    token = uuid4()
+    db.execute(
+        "UPDATE jobs SET status='running', lease_owner='worker-a', "
+        "lease_token=%s, lease_expires_at=%s WHERE job_id=%s",
+        (token, datetime.now(UTC) - timedelta(seconds=30), accepted["job_id"]),
+    )
+    db.commit()
+    # Renew the lease before reconciliation settles (simulates a heartbeat).
+    db.execute(
+        "UPDATE jobs SET lease_expires_at=%s WHERE job_id=%s",
+        (datetime.now(UTC) + timedelta(minutes=2), accepted["job_id"]),
+    )
+    db.commit()
+    assert reconcile_pending_requests(db) == []
+    assert store.get(conversation_id)["pending_request_id"] == request_id
+    assert db.execute(
+        "SELECT state FROM conversation_requests WHERE request_id=%s",
+        (request_id,),
+    ).fetchone()["state"] == "pending"
+
+
+def test_reconcile_settles_an_expired_running_lease(db):
+    """A running job whose lease is gone is terminal for recovery purposes."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.conversations.recovery import reconcile_pending_requests
+
+    store = ConversationStore(db, "development")
+    conversation_id = UUID(store.create("Expired lease")["conversationId"])
+    request_id = uuid4()
+    accepted = store.begin_stream(
+        conversation_id, request_id, 0,
+        {"request": {"query": "stale"}, "query": "stale", "effective": {}},
+    )
+    db.execute(
+        "UPDATE jobs SET status='running', lease_owner='dead-worker', "
+        "lease_token=%s, lease_expires_at=%s WHERE job_id=%s",
+        (uuid4(), datetime.now(UTC) - timedelta(minutes=5), accepted["job_id"]),
+    )
+    db.commit()
+    settled = reconcile_pending_requests(db)
+    assert [item["requestId"] for item in settled] == [str(request_id)]
+    assert store.get(conversation_id)["pending_request_id"] is None
