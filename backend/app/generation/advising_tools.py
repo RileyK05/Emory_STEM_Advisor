@@ -17,7 +17,7 @@ from app.tools.registry import (
     ToolSpec,
 )
 
-ADVISING_TOOLS_VERSION = "3"
+ADVISING_TOOLS_VERSION = "4"
 
 
 def _course_code(value: str) -> str:
@@ -41,6 +41,20 @@ class RequirementsInput(EvidenceInput):
 class SequenceInput(EvidenceInput):
     selected_codes: list[CourseCode] = Field(min_length=1, max_length=50)
     completed_codes: list[CourseCode] = Field(default_factory=list, max_length=100)
+
+
+class CampusEquivalentsInput(ToolInputModel):
+    course_codes: list[CourseCode] = Field(min_length=1, max_length=50)
+
+
+class CampusEquivalentRow(ToolOutputModel):
+    code: str
+    equivalents: list[str] = Field(default_factory=list)
+    known: bool
+
+
+class CampusEquivalentsOutput(ToolOutputModel):
+    courses: list[CampusEquivalentRow]
 
 
 class RequirementNode(ToolOutputModel):
@@ -183,8 +197,34 @@ def advising_specs(
     chunks: list[CitedChunk],
     campus_equivalents: dict[str, frozenset[str]] | None = None,
 ) -> tuple[ToolSpec, ...]:
+    equiv_map = campus_equivalents or {}
+
+    def campus_lookup(value, _scope):
+        rows = []
+        for code in sorted(set(value.course_codes)):
+            aliases = sorted(equiv_map.get(code, ()))
+            rows.append(CampusEquivalentRow(code=code, equivalents=aliases, known=bool(aliases)))
+        return CampusEquivalentsOutput(courses=rows)
+
+    campus_tool = ()
+    if equiv_map:
+        campus_tool = (ToolSpec(
+            tool_id="advisor_lookup_campus_equivalents",
+            description=(
+                "Look up deterministic Oxford↔Atlanta campus course equivalents from the "
+                "collection's Atlas-derived equivalence table. Pass course_codes named in the "
+                "question. known=false means this collection has no stored campus pair for that "
+                "code (do not invent one). Equivalence is identity across campuses, not transfer "
+                "credit evaluation."
+            ),
+            input_model=CampusEquivalentsInput,
+            output_model=CampusEquivalentsOutput,
+            capability=ToolCapability.SOURCE_READ,
+            handler=campus_lookup,
+        ),)
+
     if not context or not context["courses"]:
-        return ()
+        return campus_tool
     citation_resources = {number: str(chunk.chunk_id)
                           for number, chunk in enumerate(chunks, 1)}
 
@@ -267,7 +307,8 @@ def advising_specs(
          "assumptions. Explain every blocker. Stages are dependency order, not semesters, degree "
          "approval, availability, credit-load advice, or verified enrollment eligibility.")),
     )
-    return tuple(ToolSpec(
+    course_tools = tuple(ToolSpec(
         tool_id=name, description=description, input_model=input_model, output_model=output_model,
         capability=ToolCapability.SOURCE_READ, handler=handler, resource_fields=("resource_ids",),
     ) for name, input_model, output_model, handler, description in definitions)
+    return course_tools + campus_tool

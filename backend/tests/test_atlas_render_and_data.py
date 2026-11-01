@@ -42,3 +42,11 @@ def test_cs_171_requisites_are_cs_170_not_mus_221():
     raw = courses["CS 171"].requisites or ""
     assert "MUS 221" not in raw
     assert "CS 170" in raw
+
+
+def test_render_courses_includes_campus_equivalents():
+    text, _ = render_courses(
+        [AtlasCourse(code="MATH_OX 111", title="Calculus I", description="Calc.")],
+        campus_equivalents={"MATH_OX 111": ["MATH 111"]},
+    )
+    assert "Campus equivalents: MATH 111" in text
