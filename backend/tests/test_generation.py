@@ -458,16 +458,23 @@ def test_an_answer_that_quotes_an_instruction_is_not_an_echo():
     instruction, but an answer that says it is answering the question, not
     leaking the prompt. Withholding it takes away a correct answer.
     """
+    # Passage must name the same course codes the answer cites: SUBJECT_ALIASES
+    # values (including CS via CMPSC→CS) participate in identity checks.
+    passage = [
+        CitedChunk(uuid4(), uuid4(), 0, "cs.pdf", "CS 253",
+                   "CS 253 requires CS 171 or CS_OX 171 or equivalent transfer credit.",
+                   ("keyword",), 1.0, 1, 1),
+    ]
     quoted = (
         "A fact absent from the supplied passages is unknown here, so the "
         "supplied context does not establish that requirement. CS 253 requires "
         "CS 171 or CS_OX 171 or equivalent transfer credit [1].")
-    answer = answer_from_context(chunks(1), "What does CS 253 require?",
+    answer = answer_from_context(passage, "What does CS 253 require?",
                                  provider=FakeProvider(quoted))
     assert answer.text.startswith("A fact absent")
     # A wholesale reproduction of the instructions is still an echo.
     with pytest.raises(GenerationRejected, match="echoed"):
-        answer_from_context(chunks(1), "question", provider=FakeProvider(
+        answer_from_context(passage, "question", provider=FakeProvider(
             " ".join(SYSTEM_PROMPT.split()) + " [1]."))
 
 
