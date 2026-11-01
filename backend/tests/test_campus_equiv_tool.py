@@ -31,11 +31,19 @@ def test_campus_equivalents_tool_absent_when_mapping_empty():
     assert advising_specs(None, [], campus_equivalents={}) == ()
 
 
-def test_system_prompt_treats_campus_equivalents_as_program_slots():
-    from app.generation.answer import SYSTEM_PROMPT, PROMPT_VERSION
-    assert PROMPT_VERSION == "11"
-    assert "campus equivalents identify the same course across campuses" in SYSTEM_PROMPT
-    assert "refuse solely because the Oxford code is absent" in SYSTEM_PROMPT
+def test_unsupported_course_codes_accepts_atlas_campus_equivalents():
+    """Program list citing CS 171 may support an answer that names CS_OX 171."""
+    from app.generation.answer import unsupported_course_codes
+    subjects = {"CS", "CS_OX"}
+    paragraph = (
+        "CS_OX 171 can satisfy the CS BS requirement slot that lists CS 171 [1]."
+    )
+    support = "Computer Science (BS) requires CS 170, CS 171, CS 224."
+    assert unsupported_course_codes(paragraph, support, subjects=subjects) == ("CS_OX 171",)
+    equiv = {"CS 171": frozenset({"CS_OX 171"}), "CS_OX 171": frozenset({"CS 171"})}
+    assert unsupported_course_codes(
+        paragraph, support, subjects=subjects, campus_equivalents=equiv,
+    ) == ()
 
 
 def test_campus_equivalents_tool_description_mentions_program_slots():

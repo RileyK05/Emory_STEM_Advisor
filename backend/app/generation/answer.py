@@ -27,7 +27,7 @@ from app.operations.budget import BudgetExceeded
 from app.programs.requirements import SUBJECT_ALIASES
 from app.retrieval.types import CitedChunk
 
-PROMPT_VERSION = "11"
+PROMPT_VERSION = "12"
 # The prompt registry name whose promoted version replaces SYSTEM_PROMPT.
 ANSWER_PROMPT_NAME = "grounded-answer"
 SYSTEM_PROMPT = (
@@ -82,10 +82,11 @@ SYSTEM_PROMPT = (
     "eligibility claims. Omit this bullet when the student has reported no completions. "
     "When asked which courses "
     "count for a program, omit courses not listed in that program's supplied requirements. "
-    "Exception: when the context or a campus-equivalents tool result states that an "
-    "Oxford and Atlanta code are campus equivalents of the same course, either code "
-    "satisfies a program requirement or prerequisite slot that lists the other; do not "
-    "refuse solely because the Oxford code is absent from the program list. "
+    "Exception: when an Atlas-derived campus-equivalents tool result (not untrusted "
+    "catalog prose alone) states that an Oxford and Atlanta code are campus equivalents "
+    "of the same course, either code satisfies a program requirement or prerequisite "
+    "slot that lists the other, unless the cited program text excludes that campus; do "
+    "not refuse solely because the Oxford code is absent from the program list. "
     "Identify a course across program lists by its code; a different "
     "title does not establish absence. Do not infer a course's level or code-suffix "
     "meaning unless the supplied text explicitly states it."
@@ -250,16 +251,24 @@ def _reported_codes(query: str, history: str | None, subjects: set[str]) -> set[
 
 
 def unsupported_course_codes(paragraph: str, support_text: str, *,
-                             subjects: set[str], reported_codes: set[str] | None = None
+                             subjects: set[str], reported_codes: set[str] | None = None,
+                             campus_equivalents: dict[str, frozenset[str]] | None = None,
                              ) -> tuple[str, ...]:
     """Course codes a factual paragraph names that the cited passage does not.
 
     Exact subject and number, including a suffix, must occur in the cited
-    locator or text. A paragraph that says the context does not support the
-    claim may name an absent code. This is identity, not entailment: surrounding
-    prose is not judged by a model.
+    locator or text. Atlas-derived campus equivalents of a cited code also count
+    as present, so an Oxford code may rest on an Atlanta-coded program line (and
+    the reverse). A paragraph that says the context does not support the claim
+    may name an absent code. This is identity, not entailment: surrounding prose
+    is not judged by a model.
     """
     present = _source_course_codes(support_text, subjects)
+    if campus_equivalents:
+        expanded = set(present)
+        for code in present:
+            expanded.update(campus_equivalents.get(code, ()))
+        present = expanded
     missing = set()
     for clause in re.split(r"[;\n]|(?<=[.!?])\s+", paragraph):
         codes = _course_codes(clause, subjects) - present
@@ -292,7 +301,9 @@ def _cited_chunks(answer: str, chunks: list[CitedChunk]) -> tuple[Citation, ...]
 def citation_repair_hint(result: GenerationResult, chunks: list[CitedChunk], *,
                          query: str = "", history_context: str | None = None,
                          course_subjects: set[str] | None = None,
-                         identity_only: bool = False) -> str | None:
+                         identity_only: bool = False,
+                         campus_equivalents: dict[str, frozenset[str]] | None = None,
+                         ) -> str | None:
     """Only completed, non-refusal text is eligible for one structural rewrite.
 
     ``identity_only`` is the production default: repair a course identity that is
@@ -326,7 +337,9 @@ def citation_repair_hint(result: GenerationResult, chunks: list[CitedChunk], *,
     for ordinal, (start, end, paragraph) in enumerate(answer_paragraph_spans(result.text), 1):
         numbers = citation_numbers_visible(visible[start:end], len(chunks))
         support = "\n".join(f"{chunks[n - 1].locator_label}\n{chunks[n - 1].text}" for n in numbers)
-        missing = unsupported_course_codes(paragraph, support, subjects=subjects, reported_codes=reported)
+        missing = unsupported_course_codes(
+            paragraph, support, subjects=subjects, reported_codes=reported,
+            campus_equivalents=campus_equivalents)
         if missing:
             violations.append({"bullet": ordinal, "unsupported_codes": missing,
                 "passages_naming_each_code": {code: [i for i, chunk in enumerate(chunks, 1)
@@ -430,6 +443,7 @@ def answer_from_context(
     system_prompt: str | None = None,
     prompt_version: str = PROMPT_VERSION,
     course_subjects: set[str] | None = None,
+    campus_equivalents: dict[str, frozenset[str]] | None = None,
     truncation_retries: int = TRUNCATION_RETRIES,
     truncation_ceiling: int | None = None,
 ) -> GeneratedAnswer:
@@ -545,8 +559,9 @@ def answer_from_context(
             f"{chunks[number - 1].locator_label}\n{chunks[number - 1].text}"
             for number in numbers
         )
-        missing = unsupported_course_codes(paragraph, support, subjects=subjects,
-                                           reported_codes=reported)
+        missing = unsupported_course_codes(
+            paragraph, support, subjects=subjects, reported_codes=reported,
+            campus_equivalents=campus_equivalents)
         if missing:
             raise GenerationRejected(
                 "cited passage does not contain course code " + ", ".join(missing),

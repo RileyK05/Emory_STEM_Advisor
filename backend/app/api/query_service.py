@@ -313,7 +313,8 @@ def _tool_answer_provider(conn, body, outcome, operation, settings, provider, se
         on_provisional_reset=on_provisional_reset,
         final_repair=(lambda result: citation_repair_hint(
             result, outcome.chunks, query=body.query,
-            history_context=history_context, identity_only=True))
+            history_context=history_context, identity_only=True,
+            campus_equivalents=campus_equivalents))
         if settings.answer_citation_repair_enabled else None,
         required_tool_names=frozenset({"advisor_plan_course_sequence"})
         if _requests_course_sequence(body.query) else frozenset(),
@@ -545,6 +546,7 @@ def query_response(
     course_subjects = {row["subject"] for row in conn.execute(
         queries.get("list_advising_course_subjects"), {"collection_id": collection_id},
     ).fetchall()}
+    campus_equivalents = load_campus_equivalents(conn, collection_id=collection_id)
     conn.commit()
 
     operation_status = operation.controller.get(operation.conn, operation.operation_id)
@@ -576,6 +578,7 @@ def query_response(
             system_prompt=system_prompt,
             prompt_version=prompt_version,
             course_subjects=course_subjects,
+            campus_equivalents=campus_equivalents,
             truncation_retries=truncation_retries,
             truncation_ceiling=settings.answer_truncation_max_output_tokens,
         )
