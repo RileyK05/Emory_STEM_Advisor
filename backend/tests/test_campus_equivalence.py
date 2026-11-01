@@ -534,3 +534,34 @@ def test_taking_the_course_at_either_campus_is_one_choice():
     }
     plan = plan_sequence(courses, ["CS 170", "MATH 111", "MATH_OX 111"], [], equivalents)
     assert [b.reason for b in plan.blockers] == []
+
+
+def test_generic_titles_do_not_pair_across_departments() -> None:
+    """Honors Research / Freshman Seminar numbers are shared; subjects are not.
+
+    CHEM_OX 495A is CHEM 495A, never CS 495A or MATH 495A, even when the
+    titles are identical.
+    """
+    courses = [
+        ("CHEM_OX 495A", "Honors Research"),
+        ("CHEM 495A", "Honors Research"),
+        ("CS 495A", "Honors Research"),
+        ("MATH 495A", "Honors Research"),
+    ]
+    derived = {(p.oxford_code, p.atlanta_code) for p in _derive(courses, [])}
+    assert ("CHEM_OX 495A", "CHEM 495A") in derived
+    assert ("CHEM_OX 495A", "CS 495A") not in derived
+    assert ("CHEM_OX 495A", "MATH 495A") not in derived
+
+
+def test_a_foreign_department_number_does_not_block_a_topic_variant() -> None:
+    """ART 142Q existing in Atlanta must not stop BIOL_OX 142Q → BIOL 142."""
+    courses = [
+        ("BIOL 142", "Foundations of Modern Biology II"),
+        ("ART 142Q", "Art Topics"),
+    ]
+    texts = [
+        "BIOL 142 or BIOL_OX 142Q or equivalent transfer credit as prerequisite.",
+    ]
+    derived = {(p.oxford_code, p.atlanta_code) for p in _derive(courses, texts)}
+    assert ("BIOL_OX 142Q", "BIOL 142") in derived
