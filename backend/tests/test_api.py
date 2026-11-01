@@ -307,3 +307,14 @@ def test_saved_turn_evidence_hides_uncited_passages_from_students():
     # Admins still see the full evidence.
     admin = public_payload(value, SimpleNamespace(mode="oidc", role="admin"))
     assert admin["turns"][0]["evidence"]["contextBlock"][1]["text"] == "UNCITED"
+
+def test_answer_operation_limits_fit_inside_the_ledger_ceiling():
+    """OPERATION_MAX_CALLS=100 must not crash when a retry call is reserved."""
+    from dataclasses import replace
+
+    from app.api.query_service import _answer_operation_limits
+    from app.config import load_settings
+
+    settings = replace(load_settings(), operation_max_calls=100)
+    limits = _answer_operation_limits(settings)
+    assert limits.max_calls == 100
