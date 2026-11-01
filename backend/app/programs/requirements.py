@@ -23,7 +23,7 @@ PARSER_VERSION = "2"
 # Words the catalog uses in place of subject codes. Only exact (case-sensitive)
 # forms listed here are read as subjects when not written in capitals.
 SUBJECT_ALIASES = {
-    "Math": "MATH", "Mathematics": "MATH", "MTH": "MATH", "Mth": "MATH", "Physics": "PHYS", "Phys": "PHYS",
+    "Math": "MATH", "Mathematics": "MATH", "MTH": "MATH", "Mth": "MATH", "CMPSC": "CS", "Cmpsc": "CS", "Physics": "PHYS", "Phys": "PHYS",
     "Biology": "BIOL", "Biol": "BIOL", "Chemistry": "CHEM", "Chem": "CHEM",
     "Econ": "ECON", "Economics": "ECON", "Psych": "PSYC", "Psychology": "PSYC",
     "Arabic": "ARAB", "Chinese": "CHN", "Japanese": "JPN", "Korean": "KRN",

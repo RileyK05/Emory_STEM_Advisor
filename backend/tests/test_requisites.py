@@ -446,6 +446,7 @@ def test_a_course_is_never_its_own_prerequisite():
     ("CS 170 and 171 after repeating CS 170", ["CS 170", "CS 171"]),
     ("Prereqs for CS 170? Is CS 170 and 171 required?", ["CS 170", "CS 171"]),
     ("do mth 111 and cs 170 count?", ["MATH 111", "CS 170"]),
+    ("wat r prereqs 4 cmpsc 326???", ["CS 326"]),
     ("section 111 applies", []),  # a bare number is ignored
     ("MATH 111 and MATH 111 or ECON 101", ["MATH 111", "ECON 101"]),  # deduped, in order
     ("Can I take DATASCI 355 before AAS 490RW?", ["DATASCI 355", "AAS 490RW"]),
