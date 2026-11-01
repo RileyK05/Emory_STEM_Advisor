@@ -169,22 +169,23 @@ def render_courses(
     for course in ordered:
         block = f"{course.code}: {course.title}"
         if course.authority == "atlas":
-            scope = "; ".join(filter(None, [course.term, ", ".join(course.careers)]))
+            scope = "; ".join(filter(None, [course.term, ", ".join(course.careers or [])]))
             block += f"\n\nRequirement authority: Emory Course Atlas ({scope})."
             block += "\nSource: https://atlas.emory.edu/"
-            if course.code.split(" ", 1)[0].endswith("_OX"):
-                block += "\nCampus: Oxford. The exact campus course code is retained."
         elif course.authority == "catalog":
             block += ("\n\nCatalog fallback: current Course Atlas requirements have not "
                       "been verified for this record.")
-        block += f"\n\n{course.description}"
-        if course.credits:
+        if course.code.split(" ", 1)[0].endswith("_OX"):
+            block += "\nCampus: Oxford. The exact campus course code is retained."
+        if course.description:
+            block += f"\n\n{course.description}"
+        if course.credits is not None and course.credits != "":
             block += f"\n\nCredits: {course.credits}"
         if course.crosslisted:
             block += "\n\nCross-listed as: " + "; ".join(course.crosslisted)
         peers = equiv.get(course.code) or []
         if peers:
-            block += "\n\nCampus equivalents: " + "; ".join(peers)
+            block += "\n\nCampus equivalents: " + "; ".join(sorted(peers))
         if course.requisites:
             block += f"\n\nRequisites: {course.requisites}"
         if course.topics:

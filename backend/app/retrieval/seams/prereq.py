@@ -102,8 +102,11 @@ def course_codes_in_query(query: str) -> list[str]:
                 continue
             subject = last_subject
         code = normalize_code(f"{subject} {tail}")
-        if code is not None and code not in codes:
-            codes.append(code)
+        if code is not None:
+            # Always advance the subject cursor, even on duplicates, so a later
+            # bare number ("CS 170 and 171") still carries the subject.
+            if code not in codes:
+                codes.append(code)
             last_subject = subject
             previous_end = end
     return codes
