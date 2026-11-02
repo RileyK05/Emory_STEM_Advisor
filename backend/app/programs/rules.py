@@ -210,13 +210,10 @@ def validate_rules_tree(
 def generate_default_rules_tree(program: dict[str, Any], raw_items: list[dict[str, Any]]) -> dict:
     """Prepare a review draft, retaining mentions without guessing clause semantics.
 
-    The root's `coverage_disposition` marks the container, not a clause: it
-    says the requirement list is fully accounted for, because every supplied
-    item becomes a child. Whether each clause's semantics are established is
-    the children's own disposition, and every child here is `unresolved`
-    because nothing has been reviewed yet. Making the root `unresolved` would
-    be more literal but would collapse the audit report from one row per
-    clause to a single row, losing the detail a reviewer needs.
+    Every supplied item becomes a child, so the draft keeps one row per clause
+    for the reviewer. Nothing in the draft is executable: each child is
+    `unresolved`, and so is the root. A root marked `supported` would tell a
+    reader who looks only at it that the program's requirements are settled.
     """
     children = tuple(RuleNode(
         node_id=f"pos-{item['position']}", node_type=RuleNodeType.UNRESOLVED,
@@ -230,7 +227,10 @@ def generate_default_rules_tree(program: dict[str, Any], raw_items: list[dict[st
     root = RuleNode(
         node_id="root", node_type=RuleNodeType.ALL_OF if children else RuleNodeType.UNRESOLVED,
         title=f"{program.get('title', 'Program')} Requirements", children=children,
-        unresolved_reason=None if children else "No requirement clauses were supplied.",
-        coverage_disposition=CoverageDisposition.SUPPORTED if children else CoverageDisposition.UNRESOLVED,
+        unresolved_reason=(
+            "No requirement clause has reviewed semantics yet." if children
+            else "No requirement clauses were supplied."
+        ),
+        coverage_disposition=CoverageDisposition.UNRESOLVED,
     )
     return root.to_dict()

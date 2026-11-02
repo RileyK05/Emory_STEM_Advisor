@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from app.atlas.records import normalize_code
 
-PARSER_VERSION = "2"
+PARSER_VERSION = "3"
 
 # Words the catalog uses in place of subject codes. Only exact (case-sensitive)
 # forms listed here are read as subjects when not written in capitals.
@@ -66,6 +66,15 @@ _CHOOSE_RES = (
     re.compile(rf"\b(?:select|choose)\s+{_COUNT}\b"
                rf"(?!\s+(?:courses?\s+)?from\s+each\b)", re.IGNORECASE),
     re.compile(rf"\b{_COUNT}\s+courses?\s+(?:chosen\s+)?from\b(?!\s+each\b)",
+               re.IGNORECASE),
+    # A clause that opens with the count and ends in the noun it counts:
+    # "Three additional 300-level CS courses", "3 Advanced QTM (300-level or
+    # above) electives", "Four (4) courses at the 300 level or above". Anchored
+    # at the start so a number inside the clause cannot become the count, and
+    # "one course from each …" is a per-area rule, not a count.
+    re.compile(rf"^\W*(?:at\s+least\s+)?{_COUNT}\b(?:\s*\(\d+\))?"
+               rf"(?:\s+[\w()\-]+){{0,6}}?\s+(?:courses?|electives?|classes?)\b"
+               rf"(?!\s+(?:chosen\s+)?from\s+each\b)",
                re.IGNORECASE),
 )
 # A section heading such as "Mathematics (3 courses required, 11 CU)".

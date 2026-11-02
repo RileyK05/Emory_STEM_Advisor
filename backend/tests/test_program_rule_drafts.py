@@ -78,12 +78,6 @@ def test_a_counted_clause_keeps_its_count():
     assert tree["children"][0]["count"] == 1
 
 
-@pytest.mark.xfail(
-    reason="the root reports a supported all_of even when every clause below it is "
-           "unresolved, so a reader who looks only at the root would take the "
-           "program's requirements for a settled all-of set",
-    strict=False,
-)
 def test_a_draft_whose_clauses_are_all_unresolved_does_not_claim_to_be_supported():
     tree = _tree([
         _item(0, "CS BS Requirements", "Math 111", ["MATH 111"]),
@@ -93,12 +87,6 @@ def test_a_draft_whose_clauses_are_all_unresolved_does_not_claim_to_be_supported
     assert tree["unresolvedReason"]
 
 
-@pytest.mark.xfail(
-    reason="choose_count only recognises 'select N' and 'one/two ... chosen from'; "
-           "the catalog's own 'Three ... courses' and '3 ... electives' wording is "
-           "not read, so the count is lost on most clauses",
-    strict=False,
-)
 @pytest.mark.parametrize(("text", "expected"), [
     ("Three additional 300-level CS courses", 3),
     ("Three 400-level CS courses", 3),
