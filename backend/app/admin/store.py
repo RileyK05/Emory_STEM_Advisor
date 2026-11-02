@@ -7,7 +7,6 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
 from app.auth.models import Principal
@@ -405,105 +404,6 @@ class AdminStore:
         }).fetchall()
         self.conn.commit()
         return [dict(row) for row in rows]
-
-    def artifacts(self, *, limit: int = 100, offset: int = 0) -> list[dict]:
-        if offset < 0:
-            raise HTTPException(422, "offset must be non-negative")
-        rows = self.conn.execute(queries.get("admin_list_artifacts"), {
-            "limit": _limit(limit, maximum=500), "offset": offset,
-        }).fetchall()
-        self.conn.commit()
-        return [dict(row) for row in rows]
-
-    def collections(self, *, limit: int = 100, offset: int = 0) -> list[dict]:
-        if offset < 0:
-            raise HTTPException(422, "offset must be non-negative")
-        rows = self.conn.execute(queries.get("admin_list_collections"), {
-            "limit": _limit(limit, maximum=500), "offset": offset,
-        }).fetchall()
-        self.conn.commit()
-        return [dict(row) for row in rows]
-
-    @staticmethod
-    def _collection_name(value: str) -> str:
-        name = value.strip()
-        if not 1 <= len(name) <= 200:
-            raise HTTPException(422, "collection name must be between 1 and 200 characters")
-        return name
-
-    def create_collection(self, name: str) -> dict:
-        name = self._collection_name(name)
-        collection_id = uuid4()
-        try:
-            with self.conn.transaction():
-                row = self.conn.execute(queries.get("admin_create_collection"), {
-                    "collection_id": collection_id, "name": name,
-                }).fetchone()
-                self.record_audit("collection.created", "collection", str(collection_id),
-                                  {"name": name})
-        except UniqueViolation:
-            raise HTTPException(409, "a collection with that name already exists") from None
-        return {**dict(row), "source_count": 0}
-
-    def rename_collection(self, collection_id: UUID, name: str,
-                          *, protected_name: str | None = None) -> dict:
-        name = self._collection_name(name)
-        current = self.conn.execute(queries.get("admin_get_collection"), {
-            "collection_id": collection_id,
-        }).fetchone()
-        if current is None:
-            self.conn.commit()
-            raise HTTPException(404, "collection not found")
-        if protected_name and current["name"] == protected_name:
-            self.conn.commit()
-            raise HTTPException(409, "the default collection cannot be renamed")
-        try:
-            with self.conn.transaction():
-                row = self.conn.execute(queries.get("admin_rename_collection"), {
-                    "collection_id": collection_id, "name": name,
-                }).fetchone()
-                if row is None:
-                    raise HTTPException(404, "collection not found")
-                self.record_audit("collection.renamed", "collection", str(collection_id),
-                                  {"name": name})
-        except UniqueViolation:
-            raise HTTPException(409, "a collection with that name already exists") from None
-        count = self.conn.execute(queries.get("admin_collection_source_count"), {
-            "collection_id": collection_id,
-        }).fetchone()["sources"]
-        self.conn.commit()
-        return {**dict(row), "source_count": count}
-
-    def delete_collection(self, collection_id: UUID,
-                          *, protected_name: str | None = None) -> None:
-        current = self.conn.execute(queries.get("admin_get_collection"), {
-            "collection_id": collection_id,
-        }).fetchone()
-        if current is None:
-            self.conn.commit()
-            raise HTTPException(404, "collection not found")
-        if protected_name and current["name"] == protected_name:
-            self.conn.commit()
-            raise HTTPException(409, "the default collection cannot be deleted")
-        with self.conn.transaction():
-            sources = self.conn.execute(queries.get("admin_collection_source_count"), {
-                "collection_id": collection_id,
-            }).fetchone()["sources"]
-            plans = self.conn.execute(queries.get("admin_collection_plan_count"), {
-                "collection_id": collection_id,
-            }).fetchone()["plans"]
-            if sources or plans:
-                raise HTTPException(
-                    409,
-                    "collection is not empty; move or remove its sources and artifact runs first",
-                )
-            row = self.conn.execute(queries.get("admin_delete_collection"), {
-                "collection_id": collection_id,
-            }).fetchone()
-            if row is None:
-                raise HTTPException(404, "collection not found")
-            self.record_audit("collection.deleted", "collection", str(collection_id), {})
-        self.conn.commit()
 
     def create_grant(
         self,

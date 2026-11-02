@@ -12,10 +12,7 @@ from app.admin.source_review import SourceReviewService
 from app.admin.store import AdminStore
 from app.api import deps
 from app.api.schemas import (
-    AdminArtifact,
     AdminAuditEntry,
-    AdminCollection,
-    AdminCollectionWrite,
     AdminConversation,
     AdminCourse,
     AdminCourseChange,
@@ -312,54 +309,6 @@ def sources(conn: Conn, principal: Admin, workspace: str = "",
                responses={204: {"description": "Conversation transcript and turn jobs deleted."}})
 def delete_conversation(conversation_id: UUID, conn: Conn, principal: Admin):
     AdminStore(conn, principal).delete_conversation(conversation_id)
-    return Response(status_code=204)
-
-
-@router.get("/artifacts", response_model=list[AdminArtifact])
-def artifacts(conn: Conn, principal: Admin, limit: int = Query(100, ge=1, le=500),
-              offset: int = 0):
-    rows = AdminStore(conn, principal).artifacts(limit=limit, offset=offset)
-    return [AdminArtifact(
-        artifactId=row["artifact_id"], workspaceKey=row["workspace_key"],
-        kind=row["kind"], headRevisionId=row["head_revision_id"],
-        originalFilename=row["original_filename"], revisionCount=row["revision_count"],
-        createdAt=iso(row["created_at"]),
-    ) for row in rows]
-
-
-def _collection(row) -> AdminCollection:
-    return AdminCollection(
-        collectionId=row["collection_id"], name=row["name"],
-        sourceCount=row["source_count"], createdAt=iso(row["created_at"]),
-    )
-
-
-@router.get("/collections", response_model=list[AdminCollection])
-def collections(conn: Conn, principal: Admin, limit: int = Query(100, ge=1, le=500),
-                offset: int = 0):
-    rows = AdminStore(conn, principal).collections(limit=limit, offset=offset)
-    return [_collection(row) for row in rows]
-
-
-@router.post("/collections", response_model=AdminCollection, status_code=201)
-def create_collection(body: AdminCollectionWrite, conn: Conn, principal: Admin):
-    _operation(principal, "collections.manage")
-    return _collection(AdminStore(conn, principal).create_collection(body.name))
-
-
-@router.patch("/collections/{collection_id}", response_model=AdminCollection)
-def rename_collection(collection_id: UUID, body: AdminCollectionWrite,
-                      request: Request, conn: Conn, principal: Admin):
-    return _collection(AdminStore(conn, principal).rename_collection(
-        collection_id, body.name,
-        protected_name=request.app.state.settings.default_collection))
-
-
-@router.delete("/collections/{collection_id}", status_code=204, response_class=Response,
-               responses={204: {"description": "Empty collection deleted."}})
-def delete_collection(collection_id: UUID, request: Request, conn: Conn, principal: Admin):
-    AdminStore(conn, principal).delete_collection(
-        collection_id, protected_name=request.app.state.settings.default_collection)
     return Response(status_code=204)
 
 

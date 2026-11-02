@@ -350,33 +350,6 @@ def test_admin_cancels_a_queued_job(db, collection):
     assert any(item["action"] == "job.cancel" for item in client.get("/api/admin/audit").json())
 
 
-def test_admin_collection_crud(db, collection):
-    client = api_client(db, collection)
-    created = client.post("/api/admin/collections", json={"name": "advisor-test-collection"})
-    assert created.status_code == 201, created.text
-    collection_id = created.json()["collectionId"]
-    assert created.json()["sourceCount"] == 0
-
-    renamed = client.patch(f"/api/admin/collections/{collection_id}",
-                           json={"name": "advisor-test-renamed"})
-    assert renamed.status_code == 200, renamed.text
-    assert renamed.json()["name"] == "advisor-test-renamed"
-
-    deleted = client.delete(f"/api/admin/collections/{collection_id}")
-    assert deleted.status_code == 204, deleted.text
-    assert collection_id not in [item["collectionId"] for item in
-                                 client.get("/api/admin/collections").json()]
-    default_name = client.app.state.settings.default_collection
-    default = next((item for item in client.get("/api/admin/collections").json()
-                    if item["name"] == default_name), None)
-    if default is None:
-        created_default = client.post("/api/admin/collections", json={"name": default_name})
-        assert created_default.status_code == 201, created_default.text
-        default = created_default.json()
-    assert client.delete(f"/api/admin/collections/{default['collectionId']}").status_code == 409
-    assert client.get("/api/admin/artifacts").status_code == 200
-
-
 def test_admin_audit_filtering_and_keyset_cursor_pagination(db, collection):
     client = api_client(db, collection)
     actor_id = _app_user(db, email="admin1@emory.edu", role="admin")

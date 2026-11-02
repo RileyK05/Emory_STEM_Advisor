@@ -2164,9 +2164,8 @@ does not send the header.
 | POST | `/api/admin/users/{id}/revoke-sessions` | Admin-only session revocation with audit |
 | GET/DELETE | `/api/admin/conversations`, `.../{id}/transcript`, `.../{id}/transcript/download` | Metadata list; audited transcript read/download; audited conversation delete |
 | GET/POST | `/api/admin/jobs`, `/api/admin/jobs/{id}/cancel` | Admin-only job inspection and audited cancellation |
-| GET | `/api/admin/sources`, `/api/admin/artifacts`, `/api/admin/audit`, `/api/admin/audit/export` | Authorized operational inspection; audit reads allow auditor |
+| GET | `/api/admin/sources`, `/api/admin/audit` | Authorized operational inspection; audit reads allow auditor |
 | GET/POST | `/api/admin/telemetry/usage`, `/api/admin/pricing/schedules` | Authorized read-only usage, cost, cache, and price views; schedule mutation is admin-only |
-| GET/POST/PATCH/DELETE | `/api/admin/collections`, `/api/admin/collections/{id}` | Empty-collection CRUD with audit |
 | GET/POST/PUT/DELETE | `/api/admin/connections`, `.../{profile_id}`, `.../{profile_id}/secret`, `.../{profile_id}/diagnose` | Encrypted connection profiles: masked list, create/update, secret replace/remove, diagnostics |
 | GET | `/api/debug/settings` | Admin-only allowlisted registry and defaults |
 | POST/GET/PATCH/DELETE | `/api/debug/sessions`, `/api/debug/session` | Admin-only scoped override session (bearer token) |

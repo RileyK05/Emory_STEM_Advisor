@@ -777,27 +777,6 @@ class AdminUserSession(_WireModel):
     revokedAt: str | None = None
 
 
-class AdminArtifact(_WireModel):
-    artifactId: UUID
-    workspaceKey: str
-    kind: str
-    headRevisionId: UUID
-    originalFilename: str | None = None
-    revisionCount: int
-    createdAt: str
-
-
-class AdminCollection(_WireModel):
-    collectionId: UUID
-    name: str
-    sourceCount: int
-    createdAt: str
-
-
-class AdminCollectionWrite(BaseModel):
-    name: str = Field(min_length=1, max_length=200)
-
-
 class TelemetryUsageSummary(_WireModel):
     costCurrency: str | None = None
     costCurrencies: list[str] = Field(default_factory=list)
