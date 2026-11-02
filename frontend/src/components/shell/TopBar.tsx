@@ -10,9 +10,12 @@ interface Props {
   session?: AuthSession;
   onLogout?: () => void;
   onMenu?: () => void;
+  /** Admins only: whether the answer Details view is shown. */
+  details?: boolean;
+  onToggleDetails?: () => void;
 }
 
-export function TopBar({ session, onLogout, onMenu }: Props) {
+export function TopBar({ session, onLogout, onMenu, details = false, onToggleDetails }: Props) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -117,9 +120,16 @@ export function TopBar({ session, onLogout, onMenu }: Props) {
                   </div>
                 )}
                 {session?.role === 'admin' && (
-                  <a className="account-link" href="/admin.html" role="menuitem">
-                    Admin
-                  </a>
+                  <>
+                    {onToggleDetails && (
+                      <button type="button" role="menuitemcheckbox" aria-checked={details} onClick={onToggleDetails}>
+                        Answer details
+                      </button>
+                    )}
+                    <a className="account-link" href="/admin.html" role="menuitem">
+                      Admin
+                    </a>
+                  </>
                 )}
                 {onLogout && (
                   <button type="button" role="menuitem" onClick={onLogout}>

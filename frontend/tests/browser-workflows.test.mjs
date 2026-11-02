@@ -2099,16 +2099,6 @@ async function setupPage({
     } catch {
       throw new Error(`Admin page did not render expected state. Body: ${await page.locator('body').innerText()}`);
     }
-  } else if (entry === '/debug.html' || entry === '/debug') {
-    try {
-      if (currentSession?.role === 'admin') {
-        await page.getByRole('button', { name: 'Save overrides' }).waitFor({ timeout: 5000 });
-      } else {
-        await page.getByRole('heading', { name: 'Administrator access required' }).waitFor({ timeout: 5000 });
-      }
-    } catch {
-      throw new Error(`Debug page did not render expected state. Body: ${await page.locator('body').innerText()}`);
-    }
   }
   return {
     context,
@@ -2664,27 +2654,38 @@ test('a protected API 401 clears the active workspace and returns to sign in', a
   }
 });
 
-test('non-admin student is rejected from admin and debug surfaces with clear role notice', async () => {
+test('non-admin student is rejected from the admin surface with a clear role notice', async () => {
   const studentSession = { mode: 'development', authenticated: true, role: 'student', workspaceKey: 'student-ws' };
   const adminPage = await setupPage({ entry: '/admin.html', initialSession: studentSession });
   try {
     await adminPage.page.getByRole('heading', { name: 'Administrator access required' }).waitFor();
     assert.match(await adminPage.page.locator('.gate-card p').innerText(), /cannot manage institutional users/);
+    assert.equal(await adminPage.page.locator('a.primary-button').getAttribute('href'), '/');
   } finally {
     await adminPage.context.close();
   }
 
-  const debugPage = await setupPage({ entry: '/debug.html', initialSession: studentSession });
+  // A student's account menu has no answer Details toggle.
+  const { context, page } = await setupPage({ entry: '/', initialSession: studentSession });
   try {
-    await debugPage.page.getByRole('heading', { name: 'Administrator access required' }).waitFor();
-    assert.match(
-      await debugPage.page.locator('.gate-card p').innerText(),
-      /Debug overrides are scoped to institutional administrators/,
-    );
-    const returnLink = debugPage.page.locator('a.primary-button');
-    assert.equal(await returnLink.getAttribute('href'), '/');
+    await page.locator('.account-trigger').click();
+    assert.equal(await page.getByRole('menuitemcheckbox', { name: 'Answer details' }).count(), 0);
   } finally {
-    await debugPage.context.close();
+    await context.close();
+  }
+
+  // An admin sees the Details toggle in the student app's account menu and it flips.
+  const admin = await setupPage({ entry: '/', initialSession: adminSession });
+  try {
+    await admin.page.locator('.account-trigger').click();
+    const details = admin.page.getByRole('menuitemcheckbox', { name: 'Answer details' });
+    await details.waitFor();
+    assert.equal(await details.getAttribute('aria-checked'), 'false');
+    await details.click();
+    assert.equal(await details.getAttribute('aria-checked'), 'true');
+    await admin.page.keyboard.press('Escape');
+  } finally {
+    await admin.context.close();
   }
 });
 
@@ -2782,62 +2783,6 @@ test('admin creates and deletes an empty collection', async () => {
       adminCollectionsList.some((c) => c.name === 'Math Lab 2026'),
       false,
     );
-  } finally {
-    await context.close();
-  }
-});
-
-test('debug session recovers from expired token and saves prompt overrides', async () => {
-  const adminSession = { mode: 'development', authenticated: true, role: 'admin', workspaceKey: 'admin-ws' };
-  const { context, page, capturedDebugPatches } = await setupPage({
-    entry: '/debug.html',
-    initialSession: adminSession,
-    sessionStorageEntries: { 'advisor-debug-session': 'expired-token' },
-  });
-  try {
-    await page.getByRole('button', { name: 'Save overrides' }).waitFor();
-    const promptInput = page.locator('.debug-prompt');
-    await promptInput.waitFor();
-
-    await promptInput.fill('Override STEM advising prompt for testing.');
-    await page.getByRole('button', { name: 'Save overrides' }).click();
-
-    assert.equal(capturedDebugPatches.length, 1);
-    assert.equal(capturedDebugPatches[0].systemPrompt, 'Override STEM advising prompt for testing.');
-  } finally {
-    await context.close();
-  }
-});
-
-test('debug credentials and override headers never reach the main advisor bundle', async () => {
-  const adminSession = { mode: 'development', authenticated: true, role: 'admin', workspaceKey: 'admin-ws' };
-  const debugPage = await setupPage({
-    entry: '/debug.html',
-    initialSession: adminSession,
-  });
-  try {
-    await debugPage.page.getByRole('button', { name: 'Save overrides' }).waitFor();
-  } finally {
-    await debugPage.context.close();
-  }
-
-  const { context, page, capturedApiRequests } = await setupPage({
-    entry: '/',
-    initialSession: adminSession,
-  });
-  try {
-    await page.getByRole('heading', { name: 'Emory STEM Advisor' }).waitFor();
-    await send(page, 'What is linear algebra?');
-    await page.getByText('A basis spans the vector space.').waitFor();
-
-    assert.equal(capturedApiRequests.length > 0, true);
-    for (const req of capturedApiRequests) {
-      assert.equal(
-        req.headers['x-debug-session'],
-        undefined,
-        `Header X-Debug-Session leaked in ${req.method} ${req.path}`,
-      );
-    }
   } finally {
     await context.close();
   }

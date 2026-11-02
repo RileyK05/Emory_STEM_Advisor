@@ -23,7 +23,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
 | P1.1 | todo | | |
-| P1.2 | todo | | |
+| P1.2 | done | P1.2 | Deleted `frontend/src/debug/` and the `debug` Vite entry; the build now emits only `main` and `admin` chunks. The Details view is a "Answer details" toggle in the student app's account menu, shown to admins only (Shell owns the state, TopBar renders it). Removed the admin "Debug" link. The two debug-bundle browser tests are replaced by one test: a student's menu has no toggle, an admin's flips it. Saved answers carry no retrieval trace (`entriesFromTurns` sets no `trace`; only the legacy query response did), so the panel is empty for saved chats — recorded under candidates. Gate: 39 browser tests pass, typecheck and format:check green; backend tree unchanged since the R10 gate. |
 | P1.3 | todo | | |
 | P1.4 | todo | | |
 | P1.5 | todo | | |

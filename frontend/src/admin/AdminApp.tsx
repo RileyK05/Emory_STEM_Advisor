@@ -164,7 +164,6 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
       <div className="surface-nav">
         <strong>Institutional Admin</strong>
         <a href="/">Main</a>
-        {isAdmin && <a href="/debug.html">Debug</a>}
       </div>
       <main className="admin-main">
         <div className="admin-tabs" role="tablist" ref={setToolbar}>

@@ -14,9 +14,11 @@ import { TopBar } from './TopBar';
 // The API mode is fixed for the page's lifetime, so this is the same hook on every render.
 const useChat: () => ChatController = isDemoMode() ? useDemoChat : useSavedChat;
 
-export function Shell({ onLogout, showDetails = false }: { onLogout?: () => void; showDetails?: boolean }) {
+export function Shell({ onLogout }: { onLogout?: () => void }) {
   const { session } = useApp();
   const chat = useChat();
+  // Admins can show an answer's retrieval details from the account menu.
+  const [showDetails, setShowDetails] = useState(false);
   const referenced = useMemo(
     () => chat.entries.flatMap((entry) => (entry.role === 'user' ? (entry.attachments ?? []) : [])),
     [chat.entries],
@@ -130,7 +132,13 @@ export function Shell({ onLogout, showDetails = false }: { onLogout?: () => void
 
   return (
     <div className={'shell' + (showPanel ? ' with-panel' : '') + (showPanel && workspace.record ? ' with-canvas' : '')}>
-      <TopBar session={session} onLogout={onLogout} onMenu={() => setDrawerOpen(true)} />
+      <TopBar
+        session={session}
+        onLogout={onLogout}
+        onMenu={() => setDrawerOpen(true)}
+        details={showDetails}
+        onToggleDetails={session.role === 'admin' ? () => setShowDetails((value) => !value) : undefined}
+      />
       <div className="shell-body">
         <Sidebar
           chat={chatForView}
