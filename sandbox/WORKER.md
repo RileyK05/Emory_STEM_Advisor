@@ -5,7 +5,7 @@ This service belongs on a separate, disposable Linux host with Docker and gVisor
 Prepare the host and daemon before starting Compose:
 
 1. Install Docker Engine and gVisor `runsc`, register the runtime as `runsc`, and verify `docker info --format '{{json .Runtimes}}'` lists it.
-2. Build the execution images from the repository root: `docker build -f sandbox/Dockerfile.python -t emory-sandbox-python:3.12-v1 .`, `docker build -f sandbox/Dockerfile.javascript -t emory-sandbox-javascript:22-v1 .`, `docker build -f sandbox/Dockerfile.office -t emory-sandbox-office:7.4.7-v1 .`, and, when HTML visual review is enabled, `docker build -f sandbox/Dockerfile.browser -t emory-sandbox-browser:1.50.0-v1 .`. The Office and browser images pin their upstream package/browser versions; record and review the resulting image IDs when updating them.
+2. Build the execution images from the repository root: `docker build -f sandbox/Dockerfile.office -t emory-sandbox-office:7.4.7-v1 .`, and, when HTML visual review is enabled, `docker build -f sandbox/Dockerfile.browser -t emory-sandbox-browser:1.50.0-v1 .`. The Office and browser images pin their upstream package/browser versions; record and review the resulting image IDs when updating them.
 3. Create the daemon-visible bind mount directory and allow the API UID to write: `sudo install -d -o 10001 -g 10001 /var/lib/emory-sandbox/jobs`. The same absolute host path is mounted into the worker container and then into execution containers.
 4. Set `DOCKER_GID` to the numeric group ID owning `/var/run/docker.sock`, set `SANDBOX_WORKER_BEARER_TOKEN` to a random 32+ character secret shared with the application, then build and start using `docker compose -f sandbox/compose.worker.yaml up -d --build`.
 5. Put an organization-managed HTTPS reverse proxy in front of `127.0.0.1:8080`. Restrict ingress to the application service, require TLS, and configure the client with that HTTPS origin and the shared token. Do not expose the worker on a public interface.
@@ -22,7 +22,7 @@ resolved immutable image ID. `SANDBOX_SEPARATE_HOST_ATTESTED=true` is an
 operator handoff attestation only. Verify the host separation, real `runsc`
 runtime, output limits, cancellation, cleanup, formula caches, representative
 DOCX/XLSX renders, and visual layout on the actual dedicated host before
-enabling Office or code execution in production. Mocked runtime tests are not
-live isolation proof.
+enabling Office conversion or visual review in production. Mocked runtime tests
+are not live isolation proof.
 
-The deployment is portable scaffolding, not proof of runtime isolation. Validate the host's gVisor runtime, filesystem behavior, limits, cancellation and cleanup before enabling code-execution tools in production.
+The deployment is portable scaffolding, not proof of runtime isolation. Validate the host's gVisor runtime, filesystem behavior, limits, cancellation and cleanup before enabling Office conversion or visual review in production.

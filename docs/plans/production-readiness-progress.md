@@ -33,7 +33,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | P1.9 | todo | | |
 | P1.10 | todo | | |
 | P1.11 | todo | | |
-| P1.12 | todo | | |
+| P1.12 | done | P1.12 | Deleted the `/v1/execute` endpoint, `ExecuteBody`/`InputFile`, `_decode_inputs`/`_program_response`, and the program-execution `run`/`_payload`/`_parse_result` from `sandbox/remote.py`; the worker health now reports the Office image and, when configured, the browser image. `DockerCliRuntime.probe` reads only Office (+browser) image IDs; `host_app` no longer reads the removed image env vars. Deleted `sandbox/Dockerfile.python`, `sandbox/Dockerfile.javascript`, their lines in `WORKER.md` and `compose.worker.yaml`, and `docs/architecture.md`'s code-execution claims. Program-execution tests removed; the shared runtime/transport tests stay. |
 | P1.13 | todo | | |
 | P1.14 | todo | | |
 | P1.15 | todo | | |
@@ -144,3 +144,9 @@ plan entry; each candidate below is left in place.
    it then.
 3. **`api/backoffice.ts` debug helpers and `api/http.ts`'s `setDebugSessionToken`**
    have no caller after P1.2. They are removed with the backend in P1.9.
+4. **`SandboxConfig.python_image` / `javascript_image`** keep their defaults and
+   validation after P1.12 but nothing consumes them (the program images are
+   gone). Removing them is not on the cut list.
+5. **`SandboxRunner.run(SandboxRequest)`** in `sandbox/runner.py` has no app
+   caller after P1.12: Office and screenshots use `SandboxRunner` only as the
+   bounded output collector. `test_sandbox.py` still exercises the method.

@@ -2896,7 +2896,7 @@ layers. Where code does not yet meet one, the requirement still applies.
 - The application owns the sequence: authorized inputs, retrieval, routing,
   generation/tool execution, validation, then persistence. Typed tools expose
   source inspection, retrieval, deterministic calculations, document/workbook
-  operations, rendering, and approved code execution. Models receive scoped
+  operations, and rendering. Models receive scoped
   resource IDs, not arbitrary host paths or credentials.
 - Conversations, responses, claims/citations, immutable artifact revisions,
   files, runs/jobs, model calls, and tool executions persist through
@@ -2941,11 +2941,12 @@ layers. Where code does not yet meet one, the requirement still applies.
   revision. Repairs retain already valid units. Exports include applicable source
   legends, correct MIME type/extension, and a visible browser download outcome.
   Import containers/XML and output files have bounded sizes and decoded content.
-- Code runs in disposable Linux containers with fixed dependencies, bounded
-  CPU/memory/runtime/output, approved input/output files, and no network,
-  secrets, database access, privileged execution, or Docker socket. Production
-  uses a separate sandbox host with gVisor isolation and refuses code execution
-  when that isolation is unavailable. Network tooling is deferred.
+- Office conversion and HTML screenshots run in disposable Linux containers
+  with fixed dependencies, bounded CPU/memory/runtime/output, approved
+  input/output files, and no network, secrets, database access, privileged
+  execution, or Docker socket. Production uses a separate sandbox host with
+  gVisor isolation and refuses those jobs when that isolation is unavailable.
+  Network tooling is deferred.
 - Interactive (script-enabled) HTML stays disabled until a separately verified
   containment boundary passes browser tests; CSP alone is not evidence of
   network or navigation containment.

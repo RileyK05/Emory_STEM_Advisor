@@ -1,8 +1,4 @@
-import base64
-import hashlib
 import json
-import threading
-from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -13,11 +9,7 @@ from app.sandbox import (
     IsolationUnavailable,
     RemoteSandboxClient,
     RemoteSandboxConfig,
-    SandboxCancelled,
     SandboxConfig,
-    SandboxInputFile,
-    SandboxRequest,
-    SandboxResult,
     create_worker_app,
 )
 
@@ -40,16 +32,9 @@ class FakeOfficeRunner:
         return "sha256:" + "c" * 64
 
 
-class FakeRunner:
-    def __init__(self):
-        self.called = None
-
-    def probe_production(self):
-        return {"python": "sha256:" + "a" * 64, "javascript": "sha256:" + "b" * 64, "office": "sha256:" + "c" * 64}
-
-    def run(self, request, *, cancel_event=None):
-        self.called = (request, cancel_event)
-        return SandboxResult(request.language, 0, "ok", "", (), 0.01)
+class FakeScreenshotRunner:
+    def probe_browser(self):
+        return "sha256:" + "d" * 64
 
 
 def test_production_worker_requires_local_daemon_and_gvisor(tmp_path):
@@ -60,94 +45,34 @@ def test_production_worker_requires_local_daemon_and_gvisor(tmp_path):
         {"separate_sandbox_host": False},
     ):
         with pytest.raises(IsolationUnavailable):
-            create_worker_app(prod_config(tmp_path, **opts), TOKEN, FakeRunner())
-    app = create_worker_app(prod_config(tmp_path), TOKEN, FakeRunner(), FakeOfficeRunner())
+            create_worker_app(
+                prod_config(tmp_path, **opts), TOKEN, office_runner=FakeOfficeRunner()
+            )
+    app = create_worker_app(prod_config(tmp_path), TOKEN, office_runner=FakeOfficeRunner())
     health = TestClient(app)
     assert health.get("/v1/health").status_code == 401
-    assert (
-        health.get("/v1/health", headers={"Authorization": "Bearer " + TOKEN}).json()["runtime"]
-        == "runsc"
+    body = health.get("/v1/health", headers={"Authorization": "Bearer " + TOKEN}).json()
+    assert body["runtime"] == "runsc"
+    # Program execution is gone: the worker reports the images it still runs.
+    assert set(body["image_ids"]) == {prod_config(tmp_path).office_image}
+
+
+def test_health_lists_the_office_and_browser_images_when_configured(tmp_path):
+    browser = "emory-sandbox-browser:1.50.0-v1"
+    config = prod_config(tmp_path, browser_image=browser)
+    app = create_worker_app(
+        config,
+        TOKEN,
+        office_runner=FakeOfficeRunner(),
+        screenshot_runner=FakeScreenshotRunner(),
     )
-
-
-def test_worker_auth_scoped_bytes_hash_limits_and_rejects_paths(tmp_path):
-    runner = FakeRunner()
-    app = create_worker_app(prod_config(tmp_path), TOKEN, runner)
-    client = TestClient(app)
-    raw = b"course data"
-    body = {
-        "request_id": "req_1",
-        "language": "python",
-        "source": "print(1)",
-        "inputs": [
-            {
-                "resource_id": "doc:1",
-                "filename": "notes.txt",
-                "content_base64": base64.b64encode(raw).decode(),
-                "sha256": hashlib.sha256(raw).hexdigest(),
-            }
-        ],
+    body = TestClient(app).get(
+        "/v1/health", headers={"Authorization": "Bearer " + TOKEN}
+    ).json()
+    assert body["image_ids"] == {
+        config.office_image: "sha256:" + "c" * 64,
+        browser: "sha256:" + "d" * 64,
     }
-    assert client.post("/v1/execute", json=body).status_code == 401
-    headers = {"Authorization": "Bearer " + TOKEN}
-    assert (
-        client.post(
-            "/v1/execute",
-            json={**body, "inputs": [{**body["inputs"][0], "filename": "../secret"}]},
-            headers=headers,
-        ).status_code
-        == 422
-    )
-    assert (
-        client.post(
-            "/v1/execute",
-            json={**body, "inputs": [{**body["inputs"][0], "sha256": "0" * 64}]},
-            headers=headers,
-        ).status_code
-        == 422
-    )
-    response = client.post("/v1/execute", json=body, headers=headers)
-    assert response.status_code == 200 and response.json()["stdout"] == "ok"
-    request, _event = runner.called
-    assert request.inputs[0].content == raw and request.inputs[0].filename == "notes.txt"
-    assert not hasattr(request, "host_path")
-
-
-def test_pre_cancelled_request_is_never_executed(tmp_path):
-    runner = FakeRunner()
-    client = TestClient(create_worker_app(prod_config(tmp_path), TOKEN, runner))
-    headers = {"Authorization": "Bearer " + TOKEN}
-    assert client.delete("/v1/jobs/cancel-first", headers=headers).json() == {"cancelled": True}
-    response = client.post(
-        "/v1/execute",
-        json={"request_id": "cancel-first", "language": "python", "source": "pass"},
-        headers=headers,
-    )
-    assert response.status_code == 409
-    assert runner.called is None
-
-
-def test_worker_cancel_sets_runner_event(tmp_path):
-    class BlockingRunner(FakeRunner):
-        def __init__(self):
-            super().__init__()
-            self.started = threading.Event()
-
-        def run(self, request, *, cancel_event=None):
-            self.started.set()
-            assert cancel_event.wait(3)
-            raise SandboxCancelled("cancelled")
-
-    runner = BlockingRunner()
-    client = TestClient(create_worker_app(prod_config(tmp_path), TOKEN, runner))
-    headers = {"Authorization": "Bearer " + TOKEN}
-    body = {"request_id": "cancel-me", "language": "python", "source": "pass"}
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        pending = executor.submit(client.post, "/v1/execute", json=body, headers=headers)
-        assert runner.started.wait(2)
-        response = client.delete("/v1/jobs/cancel-me", headers=headers)
-        assert response.json() == {"cancelled": True}
-        assert pending.result(timeout=3).status_code == 409
 
 
 class Response:
@@ -179,44 +104,6 @@ class Opener:
         return Response(self.responses.pop(0))
 
 
-def test_remote_client_sends_only_bounded_bytes_and_opaque_ids():
-    payload = b"output"
-    response = json.dumps(
-        {
-            "language": "python",
-            "exit_code": 0,
-            "stdout": "ok",
-            "stderr": "",
-            "runtime_seconds": 0.1,
-            "files": [
-                {
-                    "path": "out.txt",
-                    "content_base64": base64.b64encode(payload).decode(),
-                    "sha256": hashlib.sha256(payload).hexdigest(),
-                }
-            ],
-        }
-    ).encode()
-    health = b'{"status":"ready","runtime":"runsc","separate_host_attested":true,"image_ids":{"python":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","javascript":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}'
-    opener = Opener([health, response])
-    client = RemoteSandboxClient(
-        RemoteSandboxConfig("https://sandbox.example", "x" * 40), opener=opener
-    )
-    result = client.run(
-        SandboxRequest("python", "print(1)", (SandboxInputFile("doc:1", "in.txt", b"data"),), 3),
-        request_id="opaque_01",
-    )
-    assert result.files[0].content == payload
-    assert len(opener.requests) == 2
-    assert opener.requests[0].full_url.endswith("/v1/health")
-    req = opener.request
-    assert req.full_url == "https://sandbox.example/v1/execute"
-    assert req.get_header("Authorization") == "Bearer " + "x" * 40
-    sent = json.loads(req.data)
-    assert sent["inputs"][0]["content_base64"] == base64.b64encode(b"data").decode()
-    assert "path" not in sent["inputs"][0] and "host_path" not in sent
-
-
 @pytest.mark.parametrize(
     "url",
     [
@@ -236,35 +123,10 @@ def test_remote_client_refuses_oversized_response():
         opener=Opener(b"x" * 1025),
     )
     with pytest.raises(IsolationUnavailable):
-        client._request("POST", "/v1/execute", "id", b"{}", 2)
+        client._request("POST", "/v1/office/execute", "id", b"{}", 2)
 
 
-def test_remote_client_rejects_worker_path_traversal_and_bad_checksum():
-    file_data = b"secret"
-    invalid = {
-        "language": "python",
-        "exit_code": 0,
-        "stdout": "",
-        "stderr": "",
-        "runtime_seconds": 0.1,
-        "files": [
-            {
-                "path": "../secret",
-                "content_base64": base64.b64encode(file_data).decode(),
-                "sha256": hashlib.sha256(file_data).hexdigest(),
-            }
-        ],
-    }
-    health = b'{"status":"ready","runtime":"runsc","separate_host_attested":true,"image_ids":{"python":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","javascript":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}'
-    client = RemoteSandboxClient(
-        RemoteSandboxConfig("https://sandbox.example", "x" * 40),
-        opener=Opener([health, json.dumps(invalid).encode()]),
-    )
-    with pytest.raises(IsolationUnavailable):
-        client.run(SandboxRequest("python", "pass"), request_id="path")
-
-
-def test_docker_probe_requires_registered_runsc_and_resolves_both_images(tmp_path, monkeypatch):
+def test_docker_probe_requires_registered_runsc_and_resolves_image_ids(tmp_path, monkeypatch):
     calls = []
     image_id = "sha256:" + "c" * 64
 
@@ -280,7 +142,7 @@ def test_docker_probe_requires_registered_runsc_and_resolves_both_images(tmp_pat
     runtime = DockerCliRuntime()
     config = prod_config(tmp_path)
     resolved = runtime.probe(config)
-    assert set(resolved) == {config.python_image, config.javascript_image, config.office_image}
+    assert set(resolved) == {config.office_image}
     assert set(resolved.values()) == {image_id}
     assert all(
         call[1:3] == ["info", "--format"] or call[1:3] == ["image", "inspect"] for call in calls

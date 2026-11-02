@@ -161,7 +161,7 @@ def test_office_readiness_fails_when_image_probe_is_missing(tmp_path):
             raise IsolationUnavailable("missing Office image")
     app = create_worker_app(
         config(tmp_path, production=True, runtime="runsc", separate_sandbox_host=True),
-        TOKEN, GenericRunner(), MissingOffice(),
+        TOKEN, office_runner=MissingOffice(),
     )
     response = TestClient(app).get(
         "/v1/health", headers={"Authorization":"Bearer "+TOKEN}
@@ -182,7 +182,7 @@ def test_worker_cancel_kills_active_office_request(tmp_path):
     office = BlockingOffice()
     app = create_worker_app(
         config(tmp_path, production=True, runtime="runsc", separate_sandbox_host=True),
-        TOKEN, GenericRunner(), office,
+        TOKEN, office_runner=office,
     )
     client = TestClient(app)
     raw = zip_bytes()
@@ -270,7 +270,7 @@ def test_worker_office_endpoint_auth_checksum_and_cancel(tmp_path):
                                    hashlib.sha256(output).hexdigest(), 0.01)
     raw = zip_bytes()
     app = create_worker_app(config(tmp_path, production=True, runtime="runsc", separate_sandbox_host=True),
-                            TOKEN, GenericRunner(), FakeOffice())
+                            TOKEN, office_runner=FakeOffice())
     client = TestClient(app)
     body = {"request_id":"office-1", "operation":"render_docx_pdf",
             "input_base64":base64.b64encode(raw).decode(), "input_sha256":hashlib.sha256(raw).hexdigest()}

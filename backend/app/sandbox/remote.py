@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import re
 import threading
@@ -13,13 +10,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
-from app.sandbox.types import (
-    IsolationUnavailable,
-    SandboxCancelled,
-    SandboxOutputFile,
-    SandboxRequest,
-    SandboxResult,
-)
+from app.sandbox.types import IsolationUnavailable, SandboxCancelled
 
 _IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
@@ -111,83 +102,6 @@ class RemoteSandboxClient:
                 "Sandbox worker does not report required production isolation."
             )
 
-    def run(
-        self,
-        request: SandboxRequest,
-        *,
-        request_id: str,
-        cancel_event: threading.Event | None = None,
-    ) -> SandboxResult:
-        if (
-            not request_id
-            or len(request_id) > 128
-            or any(
-                c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
-                for c in request_id
-            )
-        ):
-            raise ValueError("request ID must be an opaque safe identifier")
-        self._raise_if_cancelled(cancel_event)
-        self._verify_worker()
-        self._raise_if_cancelled(cancel_event)
-        payload = self._payload(request, request_id)
-        raw = self._execute(request_id, payload, cancel_event)
-        self._raise_if_cancelled(cancel_event)
-        return self._parse_result(raw, request)
-
-    @staticmethod
-    def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
-        if cancel_event is not None and cancel_event.is_set():
-            raise SandboxCancelled("Sandbox execution was cancelled.")
-
-    def _payload(self, request: SandboxRequest, request_id: str) -> bytes:
-        inputs = []
-        total = len(request.source.encode("utf-8"))
-        seen = set()
-        for f in request.inputs:
-            if (
-                not f.resource_id
-                or len(f.resource_id) > 128
-                or not f.filename
-                or f.filename in {".", ".."}
-                or any(c in f.filename for c in "/\\:")
-                or f.filename in seen
-            ):
-                raise ValueError("invalid scoped sandbox input")
-            seen.add(f.filename)
-            total += len(f.content)
-            if total > self.config.max_input_bytes:
-                raise ValueError("remote sandbox input exceeds configured limit")
-            inputs.append(
-                {
-                    "resource_id": f.resource_id,
-                    "filename": f.filename,
-                    "content_base64": base64.b64encode(f.content).decode("ascii"),
-                    "sha256": hashlib.sha256(f.content).hexdigest(),
-                }
-            )
-        timeout = request.timeout_seconds or self.config.max_timeout_seconds
-        if not 1 <= timeout <= self.config.max_timeout_seconds:
-            raise ValueError("remote sandbox timeout exceeds configured limit")
-        payload = json.dumps(
-            {
-                "request_id": request_id,
-                "language": request.language,
-                "source": request.source,
-                "timeout_seconds": timeout,
-                "inputs": inputs,
-            },
-            separators=(",", ":"),
-        ).encode()
-        if len(payload) > self.config.max_request_bytes:
-            raise ValueError("remote sandbox request exceeds transport limit")
-        return payload
-
-    def _execute(self, request_id: str, payload: bytes, cancel_event: threading.Event | None) -> bytes:
-        return self.post_cancellable("/v1/execute", request_id, payload,
-                                     timeout=self.config.request_timeout_seconds,
-                                     cancel_event=cancel_event)
-
     def post_cancellable(self, path: str, request_id: str, payload: bytes, *, timeout: float,
                          cancel_event: threading.Event | None,
                          cancelled: str = "Sandbox execution was cancelled.") -> bytes:
@@ -219,55 +133,6 @@ class RemoteSandboxClient:
         if cancel_event is not None and cancel_event.is_set():
             raise SandboxCancelled(cancelled)
         return raw
-
-    def _parse_result(self, raw: bytes, request: SandboxRequest) -> SandboxResult:
-        try:
-            obj = json.loads(raw)
-            if (
-                not isinstance(obj["files"], list)
-                or len(obj["files"]) > self.config.max_output_files
-            ):
-                raise ValueError
-            files = tuple(
-                SandboxOutputFile(f["path"], base64.b64decode(f["content_base64"], validate=True))
-                for f in obj["files"]
-            )
-            for file, item in zip(files, obj["files"], strict=True):
-                path = file.path
-                if (
-                    not isinstance(path, str)
-                    or not path
-                    or path.startswith(("/", "\\"))
-                    or "\\" in path
-                    or ":" in path
-                    or len(path) > 1024
-                    or len(path.split("/")) > 8
-                    or any(part in {"", ".", ".."} for part in path.split("/"))
-                ):
-                    raise ValueError
-                if not hmac.compare_digest(
-                    hashlib.sha256(file.content).hexdigest(), item["sha256"]
-                ):
-                    raise ValueError
-            result = SandboxResult(
-                obj["language"],
-                int(obj["exit_code"]),
-                obj["stdout"],
-                obj["stderr"],
-                files,
-                float(obj["runtime_seconds"]),
-            )
-        except Exception as exc:
-            raise IsolationUnavailable("Sandbox worker returned an invalid response.") from exc
-        if (
-            result.language != request.language
-            or len(result.stdout.encode())
-            + len(result.stderr.encode())
-            + sum(len(f.content) for f in files)
-            > self.config.max_output_bytes
-        ):
-            raise IsolationUnavailable("Sandbox worker response exceeded configured limits.")
-        return result
 
     def cancel(self, request_id: str) -> None:
         self._request("DELETE", "/v1/jobs/" + request_id, request_id, b"", 5)
