@@ -48,6 +48,10 @@ Electives (select 2 courses required, 6 CU)
     ("Math 211, 250, and Classics 350", ["MATH 211", "MATH 250"]),
     ("Two QTM 100-level courses", []),
     ("MATH 200-300 level", []),
+    # Student spellings answer a question (retrieval/seams/prereq.py) but are
+    # not catalog subjects: the parser of record reads the literal subject and
+    # never remaps them to MATH or CS.
+    ("MTH 111 and CMPSC 170", ["MTH 111", "CMPSC 170"]),
 ])
 def test_course_mentions(text, codes):
     assert list(course_mentions(text)) == codes

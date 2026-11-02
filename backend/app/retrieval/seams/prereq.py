@@ -55,7 +55,14 @@ _REVERSE_RE = re.compile(
     r"after\s+(?:I\s+)?(?:complet|finish|tak)(?:e|ed|es|ing)|downstream|reverse\s+prereq)\b",
     re.IGNORECASE,
 )
-_SUBJECT_ALIASES = {word.lower(): code for word, code in SUBJECT_ALIASES.items()}
+# Student spellings ("MTH 111", "CMPSC 170") answer a question; they are not
+# catalog words, so they resolve here only and never in SUBJECT_ALIASES, which
+# drives the program and requisite parsers of record.
+_QUERY_SUBJECT_SPELLINGS = {"mth": "MATH", "cmpsc": "CS"}
+_SUBJECT_ALIASES = {
+    **_QUERY_SUBJECT_SPELLINGS,
+    **{word.lower(): code for word, code in SUBJECT_ALIASES.items()},
+}
 
 
 def _resolve_subject(word: str) -> str | None:
