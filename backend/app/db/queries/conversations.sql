@@ -167,7 +167,9 @@ RETURNING *;
 
 -- A pending request is reconcilable when its job is terminal, its job row is
 -- missing, or it never had a job and has outlived the synchronous deadline.
--- A live queued/running lease is deliberately not selected.
+-- A live queued/running lease is deliberately not selected. Rows are read
+-- without a lock: recovery claims each one by locking its job and then its
+-- conversation, the order success publication uses.
 -- name: reconcile_pending_conversation_requests
 SELECT r.conversation_id, r.request_id, r.job_id, c.workspace_key,
        j.status AS job_status
@@ -183,5 +185,4 @@ WHERE r.state = 'pending'
       OR (j.status = 'running' AND j.lease_expires_at <= %(now)s)
   )
 ORDER BY r.created_at, r.request_id
-FOR UPDATE OF r SKIP LOCKED
 LIMIT %(limit)s;

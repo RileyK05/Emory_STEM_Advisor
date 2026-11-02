@@ -46,6 +46,10 @@ def reconcile_pending_requests(
     conn.commit()
     settled: list[dict[str, Any]] = []
     with conn.transaction():
+        # Candidates are read without a row lock. Each is claimed below by
+        # locking the job and then the conversation, which is the order success
+        # publication uses, so recovery cannot deadlock with it. A candidate
+        # another path settled in between fails the conversation check.
         rows = conn.execute(
             queries.get("reconcile_pending_conversation_requests"),
             {
@@ -57,13 +61,11 @@ def reconcile_pending_requests(
         for row in rows:
             job_status = row["job_status"]
             if row["job_id"] is not None:
-                # Lock the job row now. FOR UPDATE cannot target the nullable
-                # side of the LEFT JOIN above, so the request lock alone is not
-                # enough to stop reclaim_expired / completion from racing us.
+                # Lock the job row first. FOR UPDATE cannot target the nullable
+                # side of the LEFT JOIN above.
                 job = conn.execute(
-                    "SELECT status, lease_expires_at FROM jobs WHERE job_id = %s "
-                    "FOR UPDATE",
-                    (row["job_id"],),
+                    queries.get("lock_job_for_recovery"),
+                    {"job_id": row["job_id"]},
                 ).fetchone()
                 if job is None:
                     job_status = None
@@ -76,6 +78,16 @@ def reconcile_pending_requests(
                         continue
                     if job_status not in {"succeeded", "failed", "cancelled", "running"}:
                         continue
+            conversation = conn.execute(
+                queries.get("lock_conversation"),
+                {
+                    "conversation_id": row["conversation_id"],
+                    "workspace_key": row["workspace_key"],
+                },
+            ).fetchone()
+            if conversation is None or conversation["pending_request_id"] != row["request_id"]:
+                # Another path settled this request or started a newer turn.
+                continue
             store = ConversationStore(conn, row["workspace_key"])
             try:
                 store.finish_uncommitted(

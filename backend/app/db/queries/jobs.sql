@@ -423,6 +423,12 @@ LIMIT %(limit)s;
 SELECT status, cancel_requested, lease_token, lease_expires_at
 FROM jobs WHERE job_id = %(job_id)s;
 
+-- name: lock_job_for_recovery
+SELECT status, lease_expires_at
+FROM jobs
+WHERE job_id = %(job_id)s
+FOR UPDATE;
+
 -- name: lock_job_for_success_publish
 SELECT status, cancel_requested, lease_token, lease_expires_at
 FROM jobs

@@ -757,6 +757,28 @@ def test_reconcile_settles_terminal_or_stale_pending_requests_but_not_live_work(
     ]
     assert store.get(conversation_id)["pending_request_id"] is None
 
+    # A candidate whose conversation has moved on to a newer turn is skipped:
+    # the scan and the settle are not one atomic step, so a newer admission can
+    # win in between and recovery must not fail that turn.
+    raced_request = uuid4()
+    raced = store.begin_stream(
+        conversation_id, raced_request, store.get(conversation_id)["last_sequence"],
+        {"request": {"query": "raced"}, "query": "raced", "effective": {}},
+    )
+    db.execute(
+        "UPDATE jobs SET status='failed', lease_owner=NULL, lease_token=NULL, "
+        "lease_expires_at=NULL, finished_at=now() WHERE job_id=%s",
+        (raced["job_id"],),
+    )
+    newer_request = uuid4()
+    db.execute(
+        "UPDATE conversations SET pending_request_id=%s WHERE conversation_id=%s",
+        (newer_request, conversation_id),
+    )
+    db.commit()
+    assert reconcile_pending_requests(db) == []
+    assert store.get(conversation_id)["pending_request_id"] == newer_request
+
 
 def test_archive_and_restore_free_active_capacity_without_deleting_history(db):
     store = ConversationStore(db, "development", max_conversations=1)
