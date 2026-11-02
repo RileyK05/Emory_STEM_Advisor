@@ -2695,29 +2695,6 @@ test('non-admin student is rejected from the admin surface with a clear role not
   } finally {
     await adminPage.context.close();
   }
-
-  // A student's account menu has no answer Details toggle.
-  const { context, page } = await setupPage({ entry: '/', initialSession: studentSession });
-  try {
-    await page.locator('.account-trigger').click();
-    assert.equal(await page.getByRole('menuitemcheckbox', { name: 'Answer details' }).count(), 0);
-  } finally {
-    await context.close();
-  }
-
-  // An admin sees the Details toggle in the student app's account menu and it flips.
-  const admin = await setupPage({ entry: '/', initialSession: adminSession });
-  try {
-    await admin.page.locator('.account-trigger').click();
-    const details = admin.page.getByRole('menuitemcheckbox', { name: 'Answer details' });
-    await details.waitFor();
-    assert.equal(await details.getAttribute('aria-checked'), 'false');
-    await details.click();
-    assert.equal(await details.getAttribute('aria-checked'), 'true');
-    await admin.page.keyboard.press('Escape');
-  } finally {
-    await admin.context.close();
-  }
 });
 
 test('admin reads overview, lists and updates users, and verifies audit trail', async () => {

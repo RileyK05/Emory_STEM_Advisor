@@ -23,7 +23,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
 | P1.1 | done | P1.1 | `AdminApp` now has exactly 7 tabs: Overview (with Jobs), Users (with the read-only audit log, no export), Sources, Courses & programs (course maintenance + a new `ProgramRulesPanel`), Student questions (feedback triage + unanswered questions), Usage & cost, Model connections. Deleted `ChatsPanel`, `ArtifactsPanel`, `CollectionsPanel`, `FeatureFlagsPanel`, `GrantsPanel`, `CatalogRefreshPanel`, `ExperimentPanel`, `PromptPromotionPanel` and `AUDITOR_TABS`; the program half of `SourceReviewPanel` moved to `ProgramRulesPanel` (source picker → its bound programs → inspection/releases). Admin browser tests: 5 ported to the new tabs (overview+Jobs with Cancel, Users+audit without export, sources, courses & programs, telemetry label), 7 deleted with their panels. Added `npm run check:callers` (`scripts/check-client-callers.mjs`, TypeScript-AST based): it finds 66 methods with no caller, which P1.3 removes. Gate: 32 browser tests pass, typecheck and format:check green. |
-| P1.2 | done | P1.2 | Deleted `frontend/src/debug/` and the `debug` Vite entry; the build now emits only `main` and `admin` chunks. The Details view is a "Answer details" toggle in the student app's account menu, shown to admins only (Shell owns the state, TopBar renders it). Removed the admin "Debug" link. The two debug-bundle browser tests are replaced by one test: a student's menu has no toggle, an admin's flips it. Saved answers carry no retrieval trace (`entriesFromTurns` sets no `trace`; only the legacy query response did), so the panel is empty for saved chats — recorded under candidates. Gate: 39 browser tests pass, typecheck and format:check green; backend tree unchanged since the R10 gate. |
+| P1.2 | done | P1.2 | Deleted `frontend/src/debug/` and the `debug` Vite entry; the build emits only `main` and `admin`. Per the user's decision the admin Details toggle and `DebugPanel` are cut entirely (no saved answer carries the retrieval trace they need): `showDetails` is gone from Shell, TopBar, ChatView and MessageView. Removed the admin Debug link. The two debug-bundle browser tests are gone. Gate: 32 browser tests pass, typecheck, format:check and check:callers green; backend tree unchanged since the R10 follow-up gate. |
 | P1.3 | done | P1.3 | Removed the 29 caller-less `AdvisorClient` methods and the 37 `backoffice.ts` functions whose panels P1.1/P1.2 deleted (grants, admin chats, artifacts, collections, flags, catalog refresh, debug, experiments, prompts, audit export) from `types.ts`, `http.ts`, `mock.ts` and `backoffice.ts`, with the now-unused type imports. `npm run check:callers` is green: 39 `AdvisorClient` methods and 33 backoffice helpers, every one referenced outside an import. Unit tests that only exercised removed methods went; three were rewritten to keep their live half (privacy export token, FastAPI detail, original download + run events). Gate: 32 browser tests and 19 unit tests pass, typecheck, format:check and check:callers green. |
 | P1.4 | todo | | |
 | P1.5 | done | P1.5 | Removed the admin `/artifacts` read and the `/collections` GET/POST/PATCH/DELETE routes, `AdminStore.artifacts/collections/create_collection/rename_collection/delete_collection`, their eight named queries in `db/queries/admin.sql`, the `AdminArtifact`/`AdminCollection`/`AdminCollectionWrite` schemas, and `test_admin_collection_crud`. The gap queue reads sources through `listSources`, so no collection read was needed. `docs/architecture.md` no longer lists the routes. Gate: `test_admin_debug`, `test_api`, `test_contract_drift`, `test_openapi_complete` pass (57 tests); ruff clean. |
@@ -133,21 +133,14 @@ above.
 Code that looks dead but is not on a cut list. Nothing is deleted without a
 plan entry; each candidate below is left in place.
 
-1. **The answer Details view has no trace for saved chats.** `entriesFromTurns`
-   does not map a `trace`, and `ConversationAssistantTurnEvidence` carries only
-   citations, contextBlock and traceId. Only the legacy `/api/query` response
-   and the demo chat ever supplied a `RetrievalTrace`, so after P1.2 the toggle
-   is present for admins but renders nothing on a saved answer. Giving it data
-   needs a per-turn trace (a stored trace or a route), which no plan item lists.
-2. **`frontend/tests/browser-workflows.test.mjs` still carries the debug-session
+1. **`frontend/tests/browser-workflows.test.mjs` still carries the debug-session
    fixture** (`/api/debug/...` handlers, `debugSessionExpired`,
    `capturedDebugPatches`). P1.9 removes the debug backend; the fixture goes with
    it then.
-3. **`api/backoffice.ts` debug helpers and `api/http.ts`'s `setDebugSessionToken`**
+2. **`api/backoffice.ts` debug helpers and `api/http.ts`'s `setDebugSessionToken`**
    have no caller after P1.2. They are removed with the backend in P1.9.
-4. **`SandboxConfig.python_image` / `javascript_image`** keep their defaults and
-   validation after P1.12 but nothing consumes them (the program images are
-   gone). Removing them is not on the cut list.
-5. **`SandboxRunner.run(SandboxRequest)`** in `sandbox/runner.py` has no app
-   caller after P1.12: Office and screenshots use `SandboxRunner` only as the
-   bounded output collector. `test_sandbox.py` still exercises the method.
+3. **`SandboxConfig.python_image` / `javascript_image`** keep their defaults and
+   validation after P1.12 but nothing consumes them. The user approved deleting
+   them in P1.12's follow-up.
+4. **`SandboxRunner.run(SandboxRequest)`** in `sandbox/runner.py` has no app
+   caller after P1.12. The user approved deleting it in P1.12's follow-up.

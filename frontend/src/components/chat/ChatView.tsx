@@ -9,10 +9,9 @@ interface Props {
   chat: ChatController;
   attachments: Attachment[];
   onRemoveAttachment: (attachment: Attachment) => void;
-  showDetails?: boolean;
 }
 
-export function ChatView({ chat, attachments, onRemoveAttachment, showDetails = false }: Props) {
+export function ChatView({ chat, attachments, onRemoveAttachment }: Props) {
   const bottom = useRef<HTMLDivElement>(null);
   const textLength = chat.pending?.preview?.text.length ?? 0;
 
@@ -46,7 +45,7 @@ export function ChatView({ chat, attachments, onRemoveAttachment, showDetails = 
           {empty ? (
             <Welcome demo={!chat.saved} onSuggest={suggest} />
           ) : (
-            chat.entries.map((entry) => <MessageView key={entry.key} entry={entry} showDetails={showDetails} />)
+            chat.entries.map((entry) => <MessageView key={entry.key} entry={entry} />)
           )}
           {chat.pending && (
             <PendingAnswer preview={chat.pending.preview} abandoning={chat.pending.abandoning} onStop={chat.abandon} />

@@ -3,7 +3,6 @@ import { getClient } from '../../api/client';
 import { CheckIcon, CopyIcon, KindIcon, StopIcon, ThumbDownIcon, ThumbUpIcon } from '../icons';
 import { AnswerText } from './AnswerText';
 import { ApplicabilityBanner } from './ApplicabilityBanner';
-import { DebugPanel } from './DebugPanel';
 import { SourceList } from './SourceList';
 import { streamStageLabel } from './model';
 import type { AssistantEntry, ChatEntry, StreamPreview } from './model';
@@ -89,10 +88,9 @@ function VoteButtons({ entry }: { entry: AssistantEntry }) {
 
 interface AssistantProps {
   entry: AssistantEntry;
-  showDetails?: boolean;
 }
 
-function AssistantMessage({ entry, showDetails = false }: AssistantProps) {
+function AssistantMessage({ entry }: AssistantProps) {
   const [openPassage, setOpenPassage] = useState<number | null>(null);
 
   if (entry.kind === 'thinking')
@@ -152,18 +150,11 @@ function AssistantMessage({ entry, showDetails = false }: AssistantProps) {
           </div>
         </>
       )}
-      {showDetails && entry.trace && <DebugPanel trace={entry.trace} />}
     </div>
   );
 }
 
-export const MessageView = memo(function MessageView({
-  entry,
-  showDetails,
-}: {
-  entry: ChatEntry;
-  showDetails?: boolean;
-}) {
+export const MessageView = memo(function MessageView({ entry }: { entry: ChatEntry }) {
   if (entry.role === 'user')
     return (
       <div className="message message-user">
@@ -180,7 +171,7 @@ export const MessageView = memo(function MessageView({
         )}
       </div>
     );
-  return <AssistantMessage entry={entry} showDetails={showDetails} />;
+  return <AssistantMessage entry={entry} />;
 });
 
 /** The answer to a saved question that is still being written: unverified text, and a way to stop it. */
