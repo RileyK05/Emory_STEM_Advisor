@@ -5,20 +5,10 @@ import type {
   QueryResponse,
   SourceDoc,
   CollectionDoc,
-  Recommendation,
-  RetiredCourse,
   ArtifactPreview,
-  ArtifactRevisionRequest,
   NativeArtifactRecord,
-  NativeArtifactSpec,
-  ExportSummaryRequest,
   ArtifactRun,
   ArtifactRunEvent,
-  ArtifactRunRequest,
-  ArtifactRunLimits,
-  ArtifactBatchRequest,
-  ArtifactBatchRecord,
-  ArtifactBatchSummary,
   ArtifactRevisionSummary,
   ConnectionDiagnostic,
   ConnectionProfile,
@@ -32,27 +22,9 @@ import type {
   ConversationStreamStartResponse,
   ConversationStreamEventsResponse,
   ConversationTerminalResponse,
-  ConversationMemoryInspection,
-  ConversationResetResponse,
   GapListResponse,
   ResolveGapRequest,
   RetrievalGap,
-  AcademicRecordAttemptItem,
-  AcademicRecordAttemptUpsertRequest,
-  AcademicRecordDetailResponse,
-  AcademicRecordImportBatchResponse,
-  AcademicRecordImportCommitRequest,
-  AcademicRecordImportCommitResponse,
-  AcademicRecordImportPreviewRequest,
-  AcademicRecordImportUpdateRequest,
-  AcademicRecordRevisionResponse,
-  AuditableProgramItem,
-  DegreeAuditDetailResponse,
-  DegreeAuditRecordItem,
-  DegreeAuditRunRequest,
-  ProgramComparisonCreateRequest,
-  ProgramComparisonResponse,
-  ProgramComparisonSummary,
   PrivacyDeletionRequest,
   PrivacyDeletionResponse,
   PrivacyExportDownloadResponse,
@@ -187,16 +159,6 @@ export class HttpClient implements AdvisorClient {
     });
   }
 
-  async recommendations(query: string): Promise<Recommendation[]> {
-    const params = new URLSearchParams({ query });
-    return request<Recommendation[]>(`/api/recommendations?${params.toString()}`);
-  }
-
-  async retiredCourses(query: string): Promise<RetiredCourse[]> {
-    const params = new URLSearchParams({ query });
-    return request<RetiredCourse[]>(`/api/retired-courses?${params.toString()}`);
-  }
-
   async listConversations(archived = false, limit?: number, offset?: number): Promise<ConversationSummary[]> {
     const params = new URLSearchParams();
     if (archived) params.set('archived', 'true');
@@ -256,23 +218,6 @@ export class HttpClient implements AdvisorClient {
     );
   }
 
-  async inspectConversationMemory(id: string): Promise<ConversationMemoryInspection> {
-    return request<ConversationMemoryInspection>(`/api/conversations/${encodeURIComponent(id)}/memory`);
-  }
-
-  async resetConversationMemory(id: string): Promise<ConversationResetResponse> {
-    return request<ConversationResetResponse>(`/api/conversations/${encodeURIComponent(id)}/memory/reset`, {
-      method: 'POST',
-    });
-  }
-
-  async exportSummary(id: string, body?: ExportSummaryRequest): Promise<NativeArtifactRecord> {
-    return request<NativeArtifactRecord>(`/api/conversations/${encodeURIComponent(id)}/export-summary`, {
-      method: 'POST',
-      body: JSON.stringify(body ?? {}),
-    });
-  }
-
   async listGaps(collectionId?: string): Promise<GapListResponse> {
     const query = collectionId ? `?${new URLSearchParams({ collectionId })}` : '';
     return request<GapListResponse>(`/api/gaps${query}`);
@@ -309,19 +254,6 @@ export class HttpClient implements AdvisorClient {
     return (await response.json()) as SourceDoc;
   }
 
-  async createArtifact(spec: NativeArtifactSpec): Promise<NativeArtifactRecord> {
-    return request<NativeArtifactRecord>('/api/artifacts', {
-      method: 'POST',
-      body: JSON.stringify({ kind: spec.kind, spec }),
-    });
-  }
-
-  async importArtifact(file: File): Promise<NativeArtifactRecord> {
-    const form = new FormData();
-    form.append('file', file);
-    return request<NativeArtifactRecord>('/api/artifacts/import', { method: 'POST', body: form });
-  }
-
   async getArtifact(id: string, revisionId?: string): Promise<NativeArtifactRecord> {
     const query = revisionId ? `?revisionId=${encodeURIComponent(revisionId)}` : '';
     return request<NativeArtifactRecord>(`/api/artifacts/${encodeURIComponent(id)}${query}`);
@@ -329,13 +261,6 @@ export class HttpClient implements AdvisorClient {
 
   async listArtifactRevisions(id: string): Promise<ArtifactRevisionSummary[]> {
     return request<ArtifactRevisionSummary[]>(`/api/artifacts/${encodeURIComponent(id)}/revisions`);
-  }
-
-  async saveArtifactRevision(id: string, body: ArtifactRevisionRequest): Promise<NativeArtifactRecord> {
-    return request<NativeArtifactRecord>(`/api/artifacts/${encodeURIComponent(id)}/revisions`, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
   }
 
   async previewArtifact(id: string, revisionId?: string): Promise<ArtifactPreview> {
@@ -369,14 +294,6 @@ export class HttpClient implements AdvisorClient {
     return { blob: await response.blob(), filename: encoded ? decodeURIComponent(encoded) : (quoted ?? fallbackName) };
   }
 
-  async createArtifactRun(body: ArtifactRunRequest): Promise<ArtifactRun> {
-    return request<ArtifactRun>('/api/runs', { method: 'POST', body: JSON.stringify(body) });
-  }
-
-  async getArtifactRunLimits(): Promise<ArtifactRunLimits> {
-    return request<ArtifactRunLimits>('/api/runs/limits');
-  }
-
   async getArtifactRun(id: string): Promise<ArtifactRun> {
     return request<ArtifactRun>(`/api/runs/${encodeURIComponent(id)}`);
   }
@@ -388,26 +305,6 @@ export class HttpClient implements AdvisorClient {
 
   async cancelArtifactRun(id: string): Promise<ArtifactRun> {
     return request<ArtifactRun>(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
-  }
-
-  async listArtifactBatches(): Promise<ArtifactBatchSummary[]> {
-    return request<ArtifactBatchSummary[]>('/api/artifact-batches');
-  }
-
-  async createArtifactBatch(body: ArtifactBatchRequest): Promise<ArtifactBatchRecord> {
-    return request<ArtifactBatchRecord>('/api/artifact-batches', { method: 'POST', body: JSON.stringify(body) });
-  }
-
-  async getArtifactBatch(id: string): Promise<ArtifactBatchRecord> {
-    return request<ArtifactBatchRecord>(`/api/artifact-batches/${encodeURIComponent(id)}`);
-  }
-
-  async pollArtifactBatch(id: string): Promise<ArtifactBatchRecord> {
-    return request<ArtifactBatchRecord>(`/api/artifact-batches/${encodeURIComponent(id)}/poll`, { method: 'POST' });
-  }
-
-  async cancelArtifactBatch(id: string): Promise<ArtifactBatchRecord> {
-    return request<ArtifactBatchRecord>(`/api/artifact-batches/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   }
 
   async listConnectionProfiles(): Promise<ConnectionProfile[]> {
@@ -466,80 +363,11 @@ export class HttpClient implements AdvisorClient {
   async listArtifacts(): Promise<NativeArtifactSummary[]> {
     return request<NativeArtifactSummary[]>('/api/artifacts');
   }
-  async getAcademicRecord(): Promise<AcademicRecordDetailResponse> {
-    return request<AcademicRecordDetailResponse>('/api/academic-record');
-  }
-  async upsertAcademicAttempt(body: AcademicRecordAttemptUpsertRequest): Promise<AcademicRecordAttemptItem> {
-    return request<AcademicRecordAttemptItem>('/api/academic-record/attempts', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
-  async previewAcademicImport(body: AcademicRecordImportPreviewRequest): Promise<AcademicRecordImportBatchResponse> {
-    return request<AcademicRecordImportBatchResponse>('/api/academic-record/imports/preview', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
-  async updateAcademicImport(
-    batchId: string,
-    body: AcademicRecordImportUpdateRequest,
-  ): Promise<AcademicRecordImportBatchResponse> {
-    return request<AcademicRecordImportBatchResponse>(
-      `/api/academic-record/imports/${encodeURIComponent(batchId)}/rows`,
-      {
-        method: 'POST',
-        body: JSON.stringify(body),
-      },
-    );
-  }
-  async commitAcademicImport(
-    batchId: string,
-    body: AcademicRecordImportCommitRequest,
-  ): Promise<AcademicRecordImportCommitResponse> {
-    return request<AcademicRecordImportCommitResponse>(
-      `/api/academic-record/imports/${encodeURIComponent(batchId)}/commit`,
-      { method: 'POST', body: JSON.stringify(body) },
-    );
-  }
-  async getAcademicRecordRevision(revision: number): Promise<AcademicRecordRevisionResponse> {
-    return request<AcademicRecordRevisionResponse>(`/api/academic-record/revisions/${revision}`);
-  }
-  async listAuditablePrograms(): Promise<AuditableProgramItem[]> {
-    return request<AuditableProgramItem[]>('/api/audits/programs');
-  }
-  async listProgramAudits(): Promise<DegreeAuditRecordItem[]> {
-    return request<DegreeAuditRecordItem[]>('/api/audits');
-  }
-  async runProgramAudit(body: DegreeAuditRunRequest): Promise<DegreeAuditDetailResponse> {
-    return request<DegreeAuditDetailResponse>('/api/audits/run', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
-  async getProgramAudit(auditId: string): Promise<DegreeAuditDetailResponse> {
-    return request<DegreeAuditDetailResponse>(`/api/audits/${encodeURIComponent(auditId)}`);
-  }
-  async exportProgramAudit(auditId: string): Promise<DegreeAuditDetailResponse> {
-    return request<DegreeAuditDetailResponse>(`/api/audits/${encodeURIComponent(auditId)}/export`);
-  }
-  async listProgramComparisons(): Promise<ProgramComparisonSummary[]> {
-    return request<ProgramComparisonSummary[]>('/api/comparisons');
-  }
-  async createProgramComparison(body: ProgramComparisonCreateRequest): Promise<ProgramComparisonResponse> {
-    return request<ProgramComparisonResponse>('/api/comparisons', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-  }
   async submitResponseFeedback(body: ResponseFeedbackRequest): Promise<ResponseFeedbackResponse> {
     return request<ResponseFeedbackResponse>('/api/feedback', {
       method: 'POST',
       body: JSON.stringify(body),
     });
-  }
-  async listPrivacyExports(): Promise<PrivacyExportResponse[]> {
-    return request<PrivacyExportResponse[]>('/api/privacy/exports');
   }
   async createPrivacyExport(): Promise<PrivacyExportResponse> {
     return request<PrivacyExportResponse>('/api/privacy/exports', { method: 'POST' });

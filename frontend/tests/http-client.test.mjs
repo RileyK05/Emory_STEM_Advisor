@@ -53,59 +53,30 @@ test('upload sends multipart data without overriding its boundary', async () => 
   });
 });
 
-test('caller headers merge with the debug session, and FormData keeps the browser boundary', async () => {
+test('a privacy export download carries its own token beside the session cookie', async () => {
   const sent = [];
   const handler = async (_input, init) => {
     sent.push(new Headers(init.headers));
     return Response.json({});
   };
   await withStubbedFetch(handler, async () => {
-    setDebugSessionToken('debug-1');
-    try {
-      await new HttpClient().downloadPrivacyExport('export-1', 'once-token');
-      await new HttpClient().importArtifact(new File(['x'], 'notes.docx'));
-    } finally {
-      setDebugSessionToken(null);
-    }
+    await new HttpClient().downloadPrivacyExport('export-1', 'once-token');
   });
   assert.equal(sent[0].get('X-Export-Token'), 'once-token');
-  assert.equal(sent[0].get('X-Debug-Session'), 'debug-1');
   assert.equal(sent[0].get('Content-Type'), 'application/json');
-  assert.equal(sent[1].get('X-Debug-Session'), 'debug-1');
-  assert.equal(sent[1].get('Content-Type'), null);
 });
 
-test('recommendations encode the topic and API failures expose FastAPI detail', async () => {
-  let url;
-  const handler = async (input) => {
-    url = String(input);
-    return Response.json([]);
-  };
-  await withStubbedFetch(handler, async () => {
-    assert.deepEqual(await new HttpClient().recommendations('linear algebra & calculus'), []);
-    assert.equal(url, '/api/recommendations?query=linear+algebra+%26+calculus');
-    globalThis.fetch = async () =>
+test('API failures expose FastAPI detail', async () => {
+  await withStubbedFetch(
+    async () =>
       new Response(JSON.stringify({ detail: 'collection not found' }), {
         status: 404,
         headers: { 'content-type': 'application/json' },
-      });
-    await assert.rejects(() => new HttpClient().listSources(), /collection not found/);
-  });
-});
-
-test('retired courses use their own separated lookup', async () => {
-  let url;
-  const handler = async (input) => {
-    url = String(input);
-    return Response.json([
-      { courseId: 'math-199', code: 'MATH 199', title: 'Retired Topics', lifecycle: 'retired' },
-    ]);
-  };
-  await withStubbedFetch(handler, async () => {
-    const rows = await new HttpClient().retiredCourses('math 199');
-    assert.equal(url, '/api/retired-courses?query=math+199');
-    assert.deepEqual(rows.map((row) => [row.code, row.lifecycle]), [['MATH 199', 'retired']]);
-  });
+      }),
+    async () => {
+      await assert.rejects(() => new HttpClient().listSources(), /collection not found/);
+    },
+  );
 });
 
 test('a proxy 5xx with the backend stopped reports the unreachable message', async () => {
@@ -119,32 +90,6 @@ test('an application 5xx with a body keeps the backend detail', async () => {
   const handler = async () => Response.json({ detail: 'boom' }, { status: 500 });
   await withStubbedFetch(handler, async () => {
     await assert.rejects(() => new HttpClient().getSession(), /boom/);
-  });
-});
-
-test('artifact feature errors surface the unsupported feature list', async () => {
-  const handler = async () =>
-    new Response(
-      JSON.stringify({
-        detail: 'This file uses features that cannot be preserved safely',
-        code: 'unsupported_feature',
-        features: ['hyperlinks', 'drawing objects'],
-      }),
-      { status: 422, headers: { 'content-type': 'application/json' } },
-    );
-  await withStubbedFetch(handler, async () => {
-    const file = new File(['x'], 'bad.docx', {
-      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    });
-    await assert.rejects(
-      () => new HttpClient().importArtifact(file),
-      (error) => {
-        assert.ok(error instanceof ApiError);
-        assert.deepEqual(error.features, ['hyperlinks', 'drawing objects']);
-        assert.match(error.message, /Unsupported: hyperlinks, drawing objects\./);
-        return true;
-      },
-    );
   });
 });
 
@@ -325,7 +270,7 @@ test('source listings can be pinned to the exact collection displayed in gap rev
   });
 });
 
-test('native artifact revisions use compare-and-swap and original files remain separately downloadable', async () => {
+test('artifact originals stay separately downloadable and run events read through the run route', async () => {
   const calls = [];
   const handler = async (input, init) => {
     calls.push({ url: String(input), init });
@@ -334,153 +279,16 @@ test('native artifact revisions use compare-and-swap and original files remain s
         headers: { 'Content-Disposition': 'attachment; filename="source.docx"' },
       });
     if (String(input).includes('/events?')) return Response.json([]);
-    return Response.json({
-      artifactId: 'a1',
-      revisionId: 'r2',
-      parentRevisionId: 'r1',
-      kind: 'document',
-      title: 'T',
-      spec: { kind: 'document', title: 'T', blocks: [] },
-    });
+    return Response.json({});
   };
   await withStubbedFetch(handler, async () => {
     const client = new HttpClient();
-    await client.saveArtifactRevision('a1', {
-      expectedParentRevisionId: 'r1',
-      draftId: 'draft-1',
-      spec: { kind: 'document', title: 'T', blocks: [] },
-    });
     await client.listArtifactRunEvents('job/1');
     const original = await client.downloadOriginalArtifact('a1');
-    assert.equal(calls[0].url, '/api/artifacts/a1/revisions');
-    assert.deepEqual(JSON.parse(calls[0].init.body), {
-      expectedParentRevisionId: 'r1',
-      draftId: 'draft-1',
-      spec: { kind: 'document', title: 'T', blocks: [] },
-    });
-    assert.equal(calls[1].url, '/api/runs/job%2F1/events?afterEventId=0');
-    assert.equal(calls[2].url, '/api/artifacts/a1/original');
+    assert.equal(calls[0].url, '/api/runs/job%2F1/events?afterEventId=0');
+    assert.equal(calls[1].url, '/api/artifacts/a1/original');
     assert.equal(original.filename, 'source.docx');
     assert.equal(await original.blob.text(), 'original bytes');
-  });
-});
-
-test('dependent run requests preserve strict plan fields and use explicit read-only operation limits', async () => {
-  const calls = [];
-  const handler = async (input, init = {}) => {
-    calls.push({ path: String(input), method: init.method ?? 'GET', body: init.body });
-    return Response.json(
-      calls.at(-1).path === '/api/runs/limits'
-        ? { maxCalls: 4, totalTokenBudget: 6000, perCallOutputCap: 2048 }
-        : { runId: 'run-planned', state: 'queued' },
-    );
-  };
-  await withStubbedFetch(handler, async () => {
-    const client = new HttpClient();
-    assert.deepEqual(await client.getArtifactRunLimits(), {
-      maxCalls: 4,
-      totalTokenBudget: 6000,
-      perCallOutputCap: 2048,
-    });
-    const request = {
-      kind: 'document',
-      idempotencyKey: 'request-1',
-      inputs: {
-        prompt: 'write',
-        sourceIds: ['source-1'],
-        mode: 'grounded',
-        artifactId: 'artifact-1',
-        expectedRevisionId: 'revision-4',
-        outputPlan: {
-          kind: 'document',
-          title: 'Plan',
-          sections: [
-            {
-              key: 'intro',
-              title: 'Introduction',
-              target_words: 300,
-              min_words: 250,
-              max_words: 350,
-              target_blocks: 2,
-              min_blocks: 1,
-              max_blocks: 3,
-            },
-          ],
-          max_total_blocks: 4,
-          max_output_tokens_per_unit: 1000,
-          max_repairs_per_unit: 1,
-          max_checkpoint_bytes: 4096,
-        },
-      },
-    };
-    await client.createArtifactRun(request);
-    assert.deepEqual(
-      calls.map(({ path, method }) => [path, method]),
-      [
-        ['/api/runs/limits', 'GET'],
-        ['/api/runs', 'POST'],
-      ],
-    );
-    assert.deepEqual(JSON.parse(calls[1].body), request);
-  });
-});
-
-test('native artifact batches use stable typed submission and explicit read, poll, and cancel routes', async () => {
-  const calls = [];
-  const handler = async (input, init) => {
-    calls.push({ url: String(input), init });
-    if (String(input) === '/api/artifact-batches')
-      return Response.json([
-        {
-          batchId: 'batch-1',
-          state: 'in_progress',
-          itemCount: 1,
-          totalCount: 1,
-          completedCount: 0,
-          failedCount: 0,
-          cancelRequested: false,
-        },
-      ]);
-    return Response.json({
-      batchId: 'batch-1',
-      state: 'in_progress',
-      itemCount: 1,
-      totalCount: 1,
-      completedCount: 0,
-      failedCount: 0,
-      cancelRequested: false,
-      items: [],
-    });
-  };
-  await withStubbedFetch(handler, async () => {
-    const client = new HttpClient();
-    const request = {
-      batchId: 'batch-1',
-      kind: 'document',
-      items: [{ itemId: 'item-1', inputs: { prompt: 'Draft a guide', sourceIds: [], mode: 'authoring' } }],
-    };
-    await client.createArtifactBatch(request);
-    await client.listArtifactBatches();
-    await client.getArtifactBatch('batch-1');
-    await client.pollArtifactBatch('batch-1');
-    await client.cancelArtifactBatch('batch-1');
-    assert.deepEqual(
-      calls.map((call) => call.url),
-      [
-        '/api/artifact-batches',
-        '/api/artifact-batches',
-        '/api/artifact-batches/batch-1',
-        '/api/artifact-batches/batch-1/poll',
-        '/api/artifact-batches/batch-1/cancel',
-      ],
-    );
-    assert.deepEqual(JSON.parse(calls[0].init.body), request);
-    assert.equal(calls[1].init.method, undefined, 'list is a read-only GET');
-    assert.equal(calls[1].init.body, undefined);
-    assert.equal(calls[2].init.method, undefined, 'detail is a read-only GET');
-    assert.equal(calls[2].init.body, undefined);
-    assert.equal(calls[3].init.method, 'POST');
-    assert.equal(calls[4].init.method, 'POST');
   });
 });
 

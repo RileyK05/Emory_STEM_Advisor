@@ -9,8 +9,6 @@ import type {
   RetrievalTrace,
   SeamStatus,
   SourceDoc,
-  Recommendation,
-  RetiredCourse,
   AuthSession,
   ArtifactPreview,
   ArtifactRevisionSummary,
@@ -240,14 +238,6 @@ export class MockClient implements AdvisorClient {
     return response;
   }
 
-  async recommendations(_query: string): Promise<Recommendation[]> {
-    return [];
-  }
-
-  async retiredCourses(_query: string): Promise<RetiredCourse[]> {
-    return [];
-  }
-
   async listSources(): Promise<SourceDoc[]> {
     return MOCK_SOURCES;
   }
@@ -301,12 +291,6 @@ export class MockClient implements AdvisorClient {
   listGaps = unavailable(GAPS);
   resolveGap = unavailable(GAPS);
 
-  async createArtifact(): Promise<NativeArtifactRecord> {
-    throw new Error(ARTIFACTS);
-  }
-  async importArtifact(): Promise<NativeArtifactRecord> {
-    throw new Error(ARTIFACTS);
-  }
   async getArtifact(): Promise<NativeArtifactRecord> {
     return DEMO_ARTIFACT;
   }
@@ -320,9 +304,6 @@ export class MockClient implements AdvisorClient {
       },
     ];
   }
-  async saveArtifactRevision(): Promise<NativeArtifactRecord> {
-    throw new Error(ARTIFACTS);
-  }
   async previewArtifact(): Promise<ArtifactPreview> {
     return {
       kind: 'document',
@@ -335,12 +316,6 @@ export class MockClient implements AdvisorClient {
   }
   async downloadOriginalArtifact(): Promise<{ blob: Blob; filename: string }> {
     throw new Error(ARTIFACTS);
-  }
-  async createArtifactRun(): Promise<ArtifactRun> {
-    return DEMO_RUN;
-  }
-  async getArtifactRunLimits() {
-    return { maxCalls: 8, totalTokenBudget: 10_000, perCallOutputCap: 2_000 };
   }
   async getArtifactRun(): Promise<ArtifactRun> {
     return DEMO_RUN;

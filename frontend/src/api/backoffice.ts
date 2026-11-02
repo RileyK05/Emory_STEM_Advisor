@@ -1,21 +1,13 @@
-import { API_BASE_URL, request as apiRequest, requestWithHeaders } from './http';
+import { request as apiRequest, requestWithHeaders } from './http';
 import type {
-  AdminArtifact,
   AdminAuditEntry,
   AdminCollection,
-  AdminConversation,
   AdminJob,
   AdminOverview,
   AdminSource,
-  AdminTranscript,
   AdminUser,
   AdminUserSession,
   AdminUserUpdate,
-  ResourceGrant,
-  SupportGrantRequest,
-  SupportGrantRequestCreate,
-  SupportGrantRequestDecision,
-  SupportGrantRequestUpdate,
   SourceReviewDetailResponse,
   SourceReviewProposal,
   SourceReviewProposalCreate,
@@ -24,34 +16,13 @@ import type {
   SourceRevisionEvidenceResponse,
   ProgramInspectionResponse,
   ProgramRuleReleaseDetail,
-  DebugSession,
-  DebugSessionCreated,
-  DebugSettingsResponse,
   ModelPriceSchedule,
   TelemetryUsageResponse,
-  FeatureFlagSummary,
-  FeatureFlagOverride,
-  FeatureFlagOverrideRequest,
-  FeatureFlagKillSwitchRequest,
-  CohortSummary,
-  CohortMember,
-  CatalogRefreshBatchResponse,
-  CatalogRefreshStartRequest,
-  CatalogRefreshStatusResponse,
-  CohortAssignmentResponse,
   FeedbackTriageListItem,
   FeedbackTriageRequest,
   FeedbackTriageResponse,
   EvalCandidatePromotionRequest,
   EvalCandidatePromotionResponse,
-  DebugExperimentCreateRequest,
-  DebugExperimentResponse,
-  PromptVersionCreateRequest,
-  PromptVersionResponse,
-  PromptFixtureCreateRequest,
-  PromptFixtureResponse,
-  PromptPromotionRequest,
-  PromptPromotionResponse,
   AdminCourseChange,
   AdminCourseChangeCreate,
   AdminCourseConflict,
@@ -130,94 +101,6 @@ export async function listAdminAudit(
     entries: Array.isArray(data) ? data : [],
     nextCursor: headers.get('X-Next-Cursor'),
   };
-}
-
-export function exportAdminAuditUrl(
-  params: {
-    format?: 'csv' | 'json';
-    action?: string;
-    targetType?: string;
-    targetId?: string;
-    actor?: string;
-    since?: string;
-    until?: string;
-    limit?: number;
-  } = {},
-): string {
-  const search = new URLSearchParams();
-  search.set('format', params.format ?? 'csv');
-  if (params.action) search.set('action', params.action);
-  if (params.targetType) search.set('target_type', params.targetType);
-  if (params.targetId) search.set('target_id', params.targetId);
-  if (params.actor) search.set('actor', params.actor);
-  if (params.since) search.set('since', params.since);
-  if (params.until) search.set('until', params.until);
-  if (params.limit) search.set('limit', String(params.limit));
-  return `${API_BASE_URL}/api/admin/audit/export?${search}`;
-}
-
-export function listAdminConversations(
-  params: {
-    workspace?: string;
-    query?: string;
-    limit?: number;
-    offset?: number;
-  } = {},
-): Promise<AdminConversation[]> {
-  const search = new URLSearchParams();
-  if (params.workspace) search.set('workspace', params.workspace);
-  if (params.query) search.set('query', params.query);
-  search.set('limit', String(params.limit ?? 50));
-  search.set('offset', String(params.offset ?? 0));
-  return request<AdminConversation[]>(`/api/admin/conversations?${search}`);
-}
-
-export function getAdminTranscript(id: string): Promise<AdminTranscript> {
-  return request<AdminTranscript>(`/api/admin/conversations/${encodeURIComponent(id)}/transcript`);
-}
-
-export function listSupportGrantRequests(status = ''): Promise<SupportGrantRequest[]> {
-  const search = new URLSearchParams();
-  if (status) search.set('status', status);
-  const suffix = search.toString() ? `?${search}` : '';
-  return request<SupportGrantRequest[]>(`/api/admin/grant-requests${suffix}`);
-}
-
-export function createSupportGrantRequest(body: SupportGrantRequestCreate): Promise<SupportGrantRequest> {
-  return request<SupportGrantRequest>('/api/admin/grant-requests', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
-
-export function updateSupportGrantRequest(
-  requestId: string,
-  body: SupportGrantRequestUpdate,
-): Promise<SupportGrantRequest> {
-  return request<SupportGrantRequest>(`/api/admin/grant-requests/${encodeURIComponent(requestId)}`, {
-    method: 'PATCH',
-    body: JSON.stringify(body),
-  });
-}
-
-export function approveSupportGrantRequest(
-  requestId: string,
-  body: SupportGrantRequestDecision,
-): Promise<SupportGrantRequest> {
-  return request<SupportGrantRequest>(`/api/admin/grant-requests/${encodeURIComponent(requestId)}/approve`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
-
-export function listResourceGrants(): Promise<ResourceGrant[]> {
-  return request<ResourceGrant[]>('/api/admin/grants?active_only=true');
-}
-
-export function revokeResourceGrant(grantId: string): Promise<ResourceGrant> {
-  return request<ResourceGrant>(`/api/admin/grants/${encodeURIComponent(grantId)}/revoke`, {
-    method: 'POST',
-  });
 }
 
 export function getSourceReview(sourceId: string): Promise<SourceReviewDetailResponse> {
@@ -311,12 +194,6 @@ export function listAdminUserSessions(id: string): Promise<AdminUserSession[]> {
   return request<AdminUserSession[]>(`/api/admin/users/${encodeURIComponent(id)}/sessions`);
 }
 
-export function deleteAdminConversation(id: string): Promise<void> {
-  return request<void>(`/api/admin/conversations/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  });
-}
-
 export function listAdminJobs(status = '', limit = 100, offset = 0): Promise<AdminJob[]> {
   const search = new URLSearchParams({
     status,
@@ -341,73 +218,9 @@ export function listAdminSources(workspace = '', limit = 100, offset = 0): Promi
   return request<AdminSource[]>(`/api/admin/sources?${search}`);
 }
 
-export function listAdminArtifacts(limit = 100, offset = 0): Promise<AdminArtifact[]> {
-  const search = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  return request<AdminArtifact[]>(`/api/admin/artifacts?${search}`);
-}
-
 export function listAdminCollections(limit = 100, offset = 0): Promise<AdminCollection[]> {
   const search = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   return request<AdminCollection[]>(`/api/admin/collections?${search}`);
-}
-
-export function createAdminCollection(name: string): Promise<AdminCollection> {
-  return request<AdminCollection>('/api/admin/collections', {
-    method: 'POST',
-    body: JSON.stringify({ name }),
-  });
-}
-
-export function renameAdminCollection(id: string, name: string): Promise<AdminCollection> {
-  return request<AdminCollection>(`/api/admin/collections/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ name }),
-  });
-}
-
-export function deleteAdminCollection(id: string): Promise<void> {
-  return request<void>(`/api/admin/collections/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-  });
-}
-
-export function getDebugSettings(): Promise<DebugSettingsResponse> {
-  return request<DebugSettingsResponse>('/api/debug/settings');
-}
-
-export function createDebugSession(body: {
-  overrides?: { settings?: Record<string, unknown>; retrieval?: Record<string, unknown> };
-  systemPrompt?: string | null;
-}): Promise<DebugSessionCreated> {
-  return request<DebugSessionCreated>('/api/debug/sessions', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
-
-export function getDebugSession(token: string): Promise<DebugSession> {
-  return request<DebugSession>('/api/debug/session', {}, token);
-}
-
-export function updateDebugSession(
-  token: string,
-  body: {
-    overrides?: { settings?: Record<string, unknown>; retrieval?: Record<string, unknown> };
-    systemPrompt?: string | null;
-  },
-): Promise<DebugSession> {
-  return request<DebugSession>(
-    '/api/debug/session',
-    {
-      method: 'PATCH',
-      body: JSON.stringify(body),
-    },
-    token,
-  );
-}
-
-export function deleteDebugSession(token: string): Promise<void> {
-  return request<void>('/api/debug/session', { method: 'DELETE' }, token);
 }
 
 export function getAdminTelemetryUsage(
@@ -435,79 +248,6 @@ export function listAdminPriceSchedules(): Promise<ModelPriceSchedule[]> {
   return request<ModelPriceSchedule[]>('/api/admin/pricing/schedules');
 }
 
-export function listAdminFlags(): Promise<FeatureFlagSummary[]> {
-  return request('/api/admin/flags');
-}
-
-export function listAdminFlagOverrides(name: string): Promise<FeatureFlagOverride[]> {
-  return request(`/api/admin/flags/${encodeURIComponent(name)}/overrides`);
-}
-
-export function setAdminFlagOverride(name: string, body: FeatureFlagOverrideRequest): Promise<FeatureFlagOverride> {
-  return request(`/api/admin/flags/${encodeURIComponent(name)}/overrides`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
-
-export function deleteAdminFlagOverride(override: FeatureFlagOverride): Promise<void> {
-  const query = new URLSearchParams();
-  if (override.updatedAt) query.set('expectedUpdatedAt', override.updatedAt);
-  return request(
-    `/api/admin/flags/${encodeURIComponent(override.flagName)}/overrides/${override.scopeType}/${encodeURIComponent(override.scopeId)}?${query}`,
-    {
-      method: 'DELETE',
-    },
-  );
-}
-
-export function setAdminFlagKill(name: string, body: FeatureFlagKillSwitchRequest): Promise<FeatureFlagSummary> {
-  return request(`/api/admin/flags/${encodeURIComponent(name)}/kill`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-}
-
-export function listAdminCohorts(): Promise<CohortSummary[]> {
-  return request('/api/admin/cohorts');
-}
-
-export function listAdminCohortMembers(cohort: string, offset = 0): Promise<CohortMember[]> {
-  return request(`/api/admin/cohorts/${encodeURIComponent(cohort)}/users?limit=50&offset=${offset}`);
-}
-
-export function assignAdminCohort(cohort: string, userId: string): Promise<CohortAssignmentResponse> {
-  return request(`/api/admin/cohorts/${encodeURIComponent(cohort)}/users`, {
-    method: 'POST',
-    body: JSON.stringify({ userId }),
-  });
-}
-
-export function removeAdminCohort(cohort: string, userId: string): Promise<void> {
-  return request(`/api/admin/cohorts/${encodeURIComponent(cohort)}/users/${encodeURIComponent(userId)}`, {
-    method: 'DELETE',
-  });
-}
-
-export function startCatalogRefresh(body: CatalogRefreshStartRequest): Promise<CatalogRefreshBatchResponse> {
-  return request('/api/admin/catalog-refresh', { method: 'POST', body: JSON.stringify(body) });
-}
-
-export function cancelCatalogRefresh(batchId: string): Promise<CatalogRefreshBatchResponse> {
-  return request(`/api/admin/catalog-refresh/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' });
-}
-
-export function getCatalogRefreshStatus(collectionId: string): Promise<CatalogRefreshStatusResponse> {
-  return request(`/api/admin/catalog-refresh?${new URLSearchParams({ collectionId })}`);
-}
-
-export function publishCatalogRefresh(batchId: string, expectedRevision: number): Promise<CatalogRefreshBatchResponse> {
-  return request(`/api/admin/catalog-refresh/${encodeURIComponent(batchId)}/publish`, {
-    method: 'POST',
-    body: JSON.stringify({ expectedRevision }),
-  });
-}
-
 export function listFeedbackTriage(): Promise<FeedbackTriageListItem[]> {
   return request('/api/feedback/triage');
 }
@@ -518,32 +258,6 @@ export function recordFeedbackTriage(body: FeedbackTriageRequest): Promise<Feedb
 
 export function promoteEvalCandidate(body: EvalCandidatePromotionRequest): Promise<EvalCandidatePromotionResponse> {
   return request('/api/feedback/promotions', { method: 'POST', body: JSON.stringify(body) });
-}
-
-export function startDebugExperiment(body: DebugExperimentCreateRequest): Promise<DebugExperimentResponse> {
-  return request('/api/debug/experiments', { method: 'POST', body: JSON.stringify(body) });
-}
-
-export function registerPromptVersion(body: PromptVersionCreateRequest): Promise<PromptVersionResponse> {
-  return request('/api/admin/prompts', { method: 'POST', body: JSON.stringify(body) });
-}
-
-export function approvePromptVersion(versionId: string): Promise<PromptVersionResponse> {
-  return request(`/api/admin/prompts/${encodeURIComponent(versionId)}/approve`, { method: 'POST' });
-}
-
-export function savePromptFixture(body: PromptFixtureCreateRequest): Promise<PromptFixtureResponse> {
-  return request('/api/admin/prompts/fixtures', { method: 'POST', body: JSON.stringify(body) });
-}
-
-export function promotePromptVersion(
-  versionId: string,
-  body: PromptPromotionRequest,
-): Promise<PromptPromotionResponse> {
-  return request(`/api/admin/prompts/${encodeURIComponent(versionId)}/promote`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
 }
 
 // ---- Reviewed course maintenance (phase B) ---------------------------------

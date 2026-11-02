@@ -764,22 +764,14 @@ export interface AdvisorClient {
     limit?: number,
   ): Promise<ConversationStreamEventsResponse>;
   abandonConversationTurn(id: string, requestId: string): Promise<ConversationTerminalResponse>;
-  inspectConversationMemory(id: string): Promise<ConversationMemoryInspection>;
-  resetConversationMemory(id: string): Promise<ConversationResetResponse>;
-  exportSummary(id: string, request?: ExportSummaryRequest): Promise<NativeArtifactRecord>;
   listGaps(collectionId?: string): Promise<GapListResponse>;
   resolveGap(id: string, request: ResolveGapRequest): Promise<RetrievalGap>;
   listSources(collection?: string): Promise<SourceDoc[]>;
   reindexSource(id: string, expectedIndexRevision: number): Promise<SourceDoc>;
   /** Ingest a file into the backend. The mock rejects; the HttpClient posts. */
   uploadSource(file: File): Promise<SourceDoc>;
-  recommendations(query: string): Promise<Recommendation[]>;
-  retiredCourses(query: string): Promise<RetiredCourse[]>;
-  createArtifact(spec: NativeArtifactSpec): Promise<NativeArtifactRecord>;
-  importArtifact(file: File): Promise<NativeArtifactRecord>;
   getArtifact(id: string, revisionId?: string): Promise<NativeArtifactRecord>;
   listArtifactRevisions(id: string): Promise<ArtifactRevisionSummary[]>;
-  saveArtifactRevision(id: string, request: ArtifactRevisionRequest): Promise<NativeArtifactRecord>;
   previewArtifact(id: string, revisionId?: string): Promise<ArtifactPreview>;
   downloadArtifact(
     id: string,
@@ -787,16 +779,9 @@ export interface AdvisorClient {
     format: 'md' | 'docx' | 'xlsx' | 'html',
   ): Promise<{ blob: Blob; filename: string }>;
   downloadOriginalArtifact(id: string): Promise<{ blob: Blob; filename: string }>;
-  createArtifactRun(request: ArtifactRunRequest): Promise<ArtifactRun>;
-  getArtifactRunLimits(): Promise<ArtifactRunLimits>;
   getArtifactRun(id: string): Promise<ArtifactRun>;
   listArtifactRunEvents(id: string, afterEventId?: number): Promise<ArtifactRunEvent[]>;
   cancelArtifactRun(id: string): Promise<ArtifactRun>;
-  listArtifactBatches(): Promise<ArtifactBatchSummary[]>;
-  createArtifactBatch(request: ArtifactBatchRequest): Promise<ArtifactBatchRecord>;
-  getArtifactBatch(id: string): Promise<ArtifactBatchRecord>;
-  pollArtifactBatch(id: string): Promise<ArtifactBatchRecord>;
-  cancelArtifactBatch(id: string): Promise<ArtifactBatchRecord>;
   listConnectionProfiles(): Promise<ConnectionProfile[]>;
   createConnectionProfile(
     body: ConnectionProfileWrite & { secret?: Record<string, string> },
@@ -816,27 +801,7 @@ export interface AdvisorClient {
   logout(): Promise<void>;
   listArtifacts(): Promise<NativeArtifactSummary[]>;
   beginLogin(): void;
-  getAcademicRecord(): Promise<AcademicRecordDetailResponse>;
-  upsertAcademicAttempt(body: AcademicRecordAttemptUpsertRequest): Promise<AcademicRecordAttemptItem>;
-  previewAcademicImport(body: AcademicRecordImportPreviewRequest): Promise<AcademicRecordImportBatchResponse>;
-  updateAcademicImport(
-    batchId: string,
-    body: AcademicRecordImportUpdateRequest,
-  ): Promise<AcademicRecordImportBatchResponse>;
-  commitAcademicImport(
-    batchId: string,
-    body: AcademicRecordImportCommitRequest,
-  ): Promise<AcademicRecordImportCommitResponse>;
-  getAcademicRecordRevision(revision: number): Promise<AcademicRecordRevisionResponse>;
-  listAuditablePrograms(): Promise<AuditableProgramItem[]>;
-  listProgramAudits(): Promise<DegreeAuditRecordItem[]>;
-  runProgramAudit(body: DegreeAuditRunRequest): Promise<DegreeAuditDetailResponse>;
-  getProgramAudit(auditId: string): Promise<DegreeAuditDetailResponse>;
-  exportProgramAudit(auditId: string): Promise<DegreeAuditDetailResponse>;
-  listProgramComparisons(): Promise<ProgramComparisonSummary[]>;
-  createProgramComparison(body: ProgramComparisonCreateRequest): Promise<ProgramComparisonResponse>;
   submitResponseFeedback(body: ResponseFeedbackRequest): Promise<ResponseFeedbackResponse>;
-  listPrivacyExports(): Promise<PrivacyExportResponse[]>;
   createPrivacyExport(): Promise<PrivacyExportResponse>;
   downloadPrivacyExport(exportId: string, token: string): Promise<PrivacyExportDownloadResponse>;
   deleteMyData(body: PrivacyDeletionRequest): Promise<PrivacyDeletionResponse>;
