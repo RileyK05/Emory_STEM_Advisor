@@ -1,6 +1,7 @@
 # Plan: one chat, artifacts beside it
 
-Status: proposed, 2026-10-30. Nothing here is implemented yet.
+Status: phases 1–2 implemented in `6d45450` (2026-10-30). Phases 3–4 moved to
+[production-readiness.md](production-readiness.md), which supersedes them.
 
 ## Goal
 
