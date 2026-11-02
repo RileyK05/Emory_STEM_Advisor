@@ -99,7 +99,7 @@ Measured with the same method as the plan (`wc -l` equivalent).
 
 | Measure | Before (main `eb968c1`) | After (this commit) | Target |
 | --- | --- | --- | --- |
-| `backend/app` Python lines | 52,308 | 52,164 | ≤ 42,000 |
+| `backend/app` Python lines | 52,308 | 51,939 | ≤ 42,000 |
 | Backend test files | 125 | 125 | ≤ 95 |
 | `frontend/src/admin` + `frontend/src/debug` lines | 4,700 | 3,168 | ≤ 3,300 |
 | `frontend/src/api/types.ts` lines | 2,093 | 2,058 | ≤ 1,400 |
@@ -110,8 +110,9 @@ Measured with the same method as the plan (`wc -l` equivalent).
 ## Run status: stopped before the final gate
 
 This run implemented Phase 0 (R1, R2, R3, R4, R5, R6, R10) and P1.1, P1.2,
-P1.3 and P1.5. It stopped with the final gate **not** met: P1.4, P1.6-P1.15,
-Phases 2-6 and the benchmark work are not done, so no benchmark score exists.
+P1.3, P1.5 and P1.12. It stopped with the final gate **not** met: P1.4,
+P1.6-P1.11, P1.13-P1.15, Phases 2-6 and the benchmark work are not done, so no
+benchmark score exists.
 
 Nothing below is BLOCKED except where the plan makes it depend on a user
 decision or a host. The rest is simply not started, and is `todo` in the tables
