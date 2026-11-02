@@ -56,19 +56,14 @@ export function Shell({ onLogout, showDetails = false }: { onLogout?: () => void
 
   // An answer that arrives while its chat is open can start an artifact run; track it and open the
   // panel. Answers already in a chat when it loads (or pages in earlier) are history: their
-  // artifacts stay in the sidebar list and do not reopen the panel.
+  // artifacts stay in the sidebar list and do not reopen the panel. A chat id seals its baseline
+  // the first time it is seen with its turns loaded; a new chat gets its id before its first
+  // turn exists, so its baseline stays at -1 and its first answer is still tracked.
   useEffect(() => {
     if (chat.loadingConversation) return;
     if (historyThrough.current.chat !== chat.activeId) {
       const sequences = chat.entries.map((entry) => entry.sequence ?? -1);
-      const firstOpen = historyThrough.current.chat === null && historyThrough.current.sequence === -1;
-      historyThrough.current = {
-        chat: chat.activeId,
-        // A brand-new chat's first answer must still be trackable; do not mark
-        // its entries as history on the initial id assignment.
-        sequence: firstOpen ? -1 : Math.max(-1, ...sequences),
-      };
-      if (!firstOpen) return;
+      historyThrough.current = { chat: chat.activeId, sequence: Math.max(-1, ...sequences) };
     }
     for (const entry of chat.entries) {
       if (entry.role !== 'assistant' || !entry.artifactRun) continue;

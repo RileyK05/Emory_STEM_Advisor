@@ -1967,6 +1967,16 @@ async function setupPage({
       });
     if (apiUrl.pathname === '/api/runs/run-1/cancel' && req.method() === 'POST')
       return route.fulfill({ json: { runId: 'run-1', state: 'cancelled' } });
+    if (apiUrl.pathname === '/api/runs/saved-artifact-run' && req.method() === 'GET') {
+      return route.fulfill({
+        json: {
+          runId: 'saved-artifact-run',
+          state: 'succeeded',
+          artifactIds: ['artifact-1'],
+          artifactRevisions: [{ artifactId: 'artifact-1', revisionId: 'rev-1' }],
+        },
+      });
+    }
     if (apiUrl.pathname === '/api/runs/demo-artifact-run' && req.method() === 'GET') {
       demoRunPolls += 1;
       const ready = demoRunPolls > 1;
@@ -3408,6 +3418,77 @@ test("an answer's artifact run survives a status outage and opens the exact revi
     await page.locator('.canvas-title').getByText('Generated draft').waitFor({ timeout: 6000 });
     await revisionShown(page, 'published-r1');
     assert.ok(openedRunRevisions.length > 0 && openedRunRevisions.every((revision) => revision === 'published-r1'));
+  } finally {
+    await context.close();
+  }
+});
+
+test('a saved chat keeps its old artifact run closed and only a new answer opens the panel', async () => {
+  const createdAt = '2026-11-01T00:00:00Z';
+  const summary = {
+    conversationId: 'saved-artifact-chat',
+    title: 'Saved artifact chat',
+    lastSequence: 2,
+    pendingRequestId: null,
+    createdAt,
+    updatedAt: createdAt,
+  };
+  const record = {
+    ...summary,
+    turns: [
+      {
+        sequence: 1,
+        requestId: 'saved-artifact-request',
+        role: 'user',
+        text: 'Make me a plan.',
+        status: 'input',
+        evidence: {
+          request: { query: 'Make me a plan.' },
+          query: 'Make me a plan.',
+          effective: {
+            collectionId: 'browser-test',
+            sourceIds: null,
+            retrievalQuery: 'Make me a plan.',
+            artifactReferences: [],
+          },
+        },
+        createdAt,
+      },
+      {
+        sequence: 2,
+        requestId: 'saved-artifact-request',
+        role: 'assistant',
+        text: 'Here is the saved plan.',
+        status: 'answer',
+        evidence: {
+          type: 'answer',
+          citations: [{ sourceName: 'Linear Algebra Primer', locatorLabel: 'section 2.1', chunkId: 'chunk-la-1' }],
+          contextBlock: trace().contextBlock,
+          traceId: 'saved-artifact-trace',
+          turnReferences: [],
+        },
+        artifactRun: { runId: 'saved-artifact-run', kind: 'document', title: 'Saved plan', purpose: 'create' },
+        createdAt,
+      },
+    ],
+  };
+  const { context, page } = await setupPage({
+    initialConversations: [summary],
+    initialConversationRecords: [record],
+  });
+  try {
+    // Page load opens the newest chat; its old answer's run stays history.
+    await page.getByText('Here is the saved plan.', { exact: true }).waitFor();
+    assert.equal(await page.locator('.artifact-panel').count(), 0);
+    // An explicit open of the saved chat from a new chat is history too.
+    const nav = page.getByRole('navigation', { name: 'Chats and artifacts' });
+    await nav.getByRole('button', { name: 'New chat' }).click();
+    await nav.getByRole('button', { name: 'Saved artifact chat' }).click();
+    await page.getByText('Here is the saved plan.', { exact: true }).waitFor();
+    assert.equal(await page.locator('.artifact-panel').count(), 0);
+    // A new answer that starts a run in that chat opens the panel.
+    await send(page, 'make a shorter plan');
+    await page.locator('.canvas-title').getByText('Generated draft').waitFor();
   } finally {
     await context.close();
   }
