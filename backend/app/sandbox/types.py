@@ -34,8 +34,6 @@ class UnsafeSandboxOutput(SandboxError):
 @dataclass(frozen=True)
 class SandboxConfig:
     work_root: Path
-    python_image: str = "emory-sandbox-python:3.12-v1"
-    javascript_image: str = "emory-sandbox-javascript:22-v1"
     office_image: str = "emory-sandbox-office:7.4.7-v1"
     # Optional dedicated Chromium image for HTML visual review. Empty keeps the
     # existing worker health contract unchanged for deployments that do not use it.
@@ -72,9 +70,7 @@ class SandboxConfig:
             raise ValueError("max_pids must be between 1 and 512")
         if not 1 <= self.create_timeout_seconds <= 60:
             raise ValueError("create_timeout_seconds must be between 1 and 60")
-        for image in (
-            self.python_image, self.javascript_image, self.office_image, self.browser_image,
-        ):
+        for image in (self.office_image, self.browser_image):
             if not image and image == self.browser_image:
                 continue
             if (

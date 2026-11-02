@@ -6,7 +6,6 @@ from app.sandbox.runner import (
     DockerCliRuntime,
     RuntimeResult,
     SandboxRunner,
-    build_create_argv,
 )
 from app.sandbox.types import (
     IsolationUnavailable,
@@ -41,6 +40,5 @@ __all__ = [
     "SandboxRunner",
     "SandboxTimedOut",
     "UnsafeSandboxOutput",
-    "build_create_argv",
     "create_worker_app",
 ]

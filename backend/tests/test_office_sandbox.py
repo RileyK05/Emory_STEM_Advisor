@@ -63,7 +63,7 @@ class RecordingOfficeRuntime:
         return RuntimeResult(self.exit_code, b"", b"", cancelled=self.cancelled)
 
     def probe(self, cfg):
-        return {cfg.python_image: IMAGE_ID, cfg.javascript_image: IMAGE_ID, cfg.office_image: IMAGE_ID}
+        return {cfg.office_image: IMAGE_ID}
 
 
 @pytest.mark.parametrize("operation", ["recalculate_xlsx", "render_xlsx_pdf", "render_docx_pdf"])

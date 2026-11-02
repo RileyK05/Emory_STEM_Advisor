@@ -33,7 +33,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | P1.9 | todo | | |
 | P1.10 | todo | | |
 | P1.11 | todo | | |
-| P1.12 | done | P1.12 | Deleted the `/v1/execute` endpoint, `ExecuteBody`/`InputFile`, `_decode_inputs`/`_program_response`, and the program-execution `run`/`_payload`/`_parse_result` from `sandbox/remote.py`; the worker health now reports the Office image and, when configured, the browser image. `DockerCliRuntime.probe` reads only Office (+browser) image IDs; `host_app` no longer reads the removed image env vars. Deleted `sandbox/Dockerfile.python`, `sandbox/Dockerfile.javascript`, their lines in `WORKER.md` and `compose.worker.yaml`, and `docs/architecture.md`'s code-execution claims. Program-execution tests removed; the shared runtime/transport tests stay. |
+| P1.12 | done | P1.12 | Deleted the `/v1/execute` endpoint, `ExecuteBody`/`InputFile`, `_decode_inputs`/`_program_response`, and the program-execution `run`/`_payload`/`_parse_result` from `sandbox/remote.py`; the worker health now reports the Office image and, when configured, the browser image. `DockerCliRuntime.probe` reads only Office (+browser) image IDs; `host_app` no longer reads the removed image env vars. Deleted `sandbox/Dockerfile.python`, `sandbox/Dockerfile.javascript`, their lines in `WORKER.md` and `compose.worker.yaml`, and `docs/architecture.md`'s code-execution claims. Program-execution tests removed; the shared runtime/transport tests stay. **Follow-up:** deleted `SandboxConfig.python_image`/`javascript_image`, `SandboxRunner.run`, `build_create_argv` and `_check_run_limits` (all program-execution paths), with the seven tests that only drove them; `test_sandbox.py` keeps the screenshot argv, isolation, cleanup, cancellation, path-escape and output-symlink tests. Full-suite gate: 1753 passed, 2 skipped (Windows-only), 0 xfailed in 900.48s; ruff clean. |
 | P1.13 | todo | | |
 | P1.14 | todo | | |
 | P1.15 | todo | | |
@@ -139,8 +139,8 @@ plan entry; each candidate below is left in place.
    it then.
 2. **`api/backoffice.ts` debug helpers and `api/http.ts`'s `setDebugSessionToken`**
    have no caller after P1.2. They are removed with the backend in P1.9.
-3. **`SandboxConfig.python_image` / `javascript_image`** keep their defaults and
-   validation after P1.12 but nothing consumes them. The user approved deleting
-   them in P1.12's follow-up.
-4. **`SandboxRunner.run(SandboxRequest)`** in `sandbox/runner.py` has no app
-   caller after P1.12. The user approved deleting it in P1.12's follow-up.
+3. **`SandboxRequest` / `SandboxResult` types** in `sandbox/types.py` have no
+   consumer after P1.12's follow-up. They stay exported; removing them is not on
+   the cut list.
+4. **`SandboxRunner.probe_production`** has no caller after P1.12's follow-up
+   (the worker health probes the Office and browser runners directly).

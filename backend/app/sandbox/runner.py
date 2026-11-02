@@ -5,27 +5,19 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import stat
 import subprocess
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from uuid import uuid4
 
 from app.sandbox.types import (
     IsolationUnavailable,
-    SandboxCancelled,
     SandboxConfig,
-    SandboxInputFile,
     SandboxOutputFile,
     SandboxOutputLimitExceeded,
-    SandboxRequest,
-    SandboxResult,
-    SandboxTimedOut,
     UnsafeSandboxOutput,
 )
 
@@ -97,13 +89,6 @@ def _memory_limit(value: int) -> str:
     return f"{mib}m"
 
 
-def _check_run_limits(config: SandboxConfig, language: str, timeout_seconds: int) -> None:
-    if language not in {"python", "javascript"}:
-        raise ValueError("unsupported sandbox language")
-    if not 1 <= timeout_seconds <= config.max_timeout_seconds:
-        raise ValueError("timeout exceeds configured sandbox limit")
-
-
 def _retry_after_chmod(function, path, _exc_info) -> None:
     """rmtree error hook: the sandbox leaves read-only inputs behind.
 
@@ -124,100 +109,6 @@ def _validate_image(value: str) -> str:
     if not _IMAGE_RE.fullmatch(value):
         raise ValueError("sandbox image must be a fixed image reference")
     return value
-
-
-def build_create_argv(
-    config: SandboxConfig,
-    *,
-    container_name: str,
-    image: str,
-    language: str,
-    input_dir: Path,
-    output_dir: Path,
-    timeout_seconds: int,
-) -> list[str]:
-    """Build an argv-only Docker create command; no user source enters arguments."""
-    config.validate_isolation()
-    if not re.fullmatch(r"advisor-sbx-[0-9a-f]{32}", container_name):
-        raise ValueError("container name must be generated internally")
-    _check_run_limits(config, language, timeout_seconds)
-
-    root = config.work_root.resolve(strict=True)
-    resolved_mounts = []
-    for original in (input_dir, output_dir):
-        if original.is_symlink():
-            raise ValueError("sandbox bind mount cannot be a symlink")
-        directory = original.resolve(strict=True)
-        try:
-            directory.relative_to(root)
-        except ValueError as exc:
-            raise ValueError("sandbox bind mount must stay under the approved work root") from exc
-        current = original
-        while current != root and current != current.parent:
-            if current.is_symlink():
-                raise ValueError("sandbox bind mount path contains a symlink")
-            current = current.parent
-        if current != root:
-            raise ValueError("sandbox bind mount must stay under the approved work root")
-        if "," in str(directory):
-            raise ValueError("sandbox mount path cannot contain a comma")
-        resolved_mounts.append(directory)
-    input_dir, output_dir = resolved_mounts
-
-    cpus = format(config.max_cpu_count, ".3f").rstrip("0").rstrip(".")
-    args = ["docker"]
-    if config.docker_host:
-        args.extend(["--host", config.docker_host])
-    args.extend(
-        [
-            "create",
-            "--name",
-            container_name,
-            "--label",
-            "app=emory-stem-advisor-sandbox",
-            "--network",
-            "none",
-            "--read-only",
-            "--cap-drop",
-            "ALL",
-            "--security-opt",
-            "no-new-privileges:true",
-            "--user",
-            "65532:65532",
-            "--pids-limit",
-            str(config.max_pids),
-            "--cpus",
-            cpus,
-            "--memory",
-            _memory_limit(config.max_memory_bytes),
-            "--memory-swap",
-            _memory_limit(config.max_memory_bytes),
-            "--ulimit",
-            f"cpu={timeout_seconds}:{timeout_seconds}",
-            "--tmpfs",
-            "/tmp:rw,noexec,nosuid,size=16m",
-            "--mount",
-            f"type=bind,source={str(input_dir).replace(_BACKSLASH, '/')},target=/inputs,readonly",
-            "--mount",
-            f"type=bind,source={str(output_dir).replace(_BACKSLASH, '/')},target=/output",
-        ]
-    )
-    if config.runtime:
-        args.extend(["--runtime", config.runtime])
-    args.extend(
-        [
-            "--env",
-            "PYTHONDONTWRITEBYTECODE=1",
-            "--workdir",
-            "/output",
-            _validate_image(image),
-        ]
-    )
-    if language == "python":
-        args.extend(["python", "-I", "/inputs/main.py"])
-    else:
-        args.extend(["node", "--disable-proto=throw", "/inputs/main.js"])
-    return args
 
 
 class DockerCliRuntime:
@@ -432,119 +323,6 @@ class SandboxRunner:
                 "Production execution requires a probed Docker/gVisor runtime."
             )
         return probe(self.config)
-
-    def run(
-        self,
-        request: SandboxRequest,
-        *,
-        cancel_event: threading.Event | None = None,
-    ) -> SandboxResult:
-        self.config.validate_isolation()
-        timeout = request.timeout_seconds or self.config.max_timeout_seconds
-        _check_run_limits(self.config, request.language, timeout)
-        source_bytes = request.source.encode("utf-8")
-        if not source_bytes or len(source_bytes) > self.config.max_input_bytes:
-            raise ValueError("sandbox source is empty or exceeds the input byte limit")
-        if cancel_event is not None and cancel_event.is_set():
-            raise SandboxCancelled("Sandbox execution was cancelled.")
-
-        root = self.config.work_root
-        if root.is_symlink():
-            raise ValueError("sandbox work root cannot be a symlink")
-        root.mkdir(parents=True, exist_ok=True)
-        approved_root = root.resolve(strict=True)
-        task_dir = Path(tempfile.mkdtemp(prefix="job-", dir=approved_root))
-        try:
-            input_dir = task_dir / "inputs"
-            output_dir = task_dir / "outputs"
-            input_dir.mkdir(mode=0o700)
-            output_dir.mkdir(mode=0o777)
-            self._write_inputs(input_dir, source_bytes, request.inputs)
-            (input_dir / ("main.py" if request.language == "python" else "main.js")).write_bytes(
-                source_bytes
-            )
-            for path in input_dir.iterdir():
-                path.chmod(0o444)
-            input_dir.chmod(0o555)
-            name = "advisor-sbx-" + uuid4().hex
-            image = (
-                self.config.python_image
-                if request.language == "python"
-                else self.config.javascript_image
-            )
-            if self.config.production:
-                image = self.probe_production()[image]
-            argv = build_create_argv(
-                self.config,
-                container_name=name,
-                image=image,
-                language=request.language,
-                input_dir=input_dir,
-                output_dir=output_dir,
-                timeout_seconds=timeout,
-            )
-            started = time.monotonic()
-            result = self.runtime.execute(
-                argv,
-                container_name=name,
-                timeout_seconds=timeout,
-                output_limit_bytes=self.config.max_output_bytes,
-                cancel_event=cancel_event,
-            )
-            runtime_seconds = time.monotonic() - started
-            if result.cancelled:
-                raise SandboxCancelled("Sandbox execution was cancelled.")
-            if result.timed_out:
-                raise SandboxTimedOut("Sandbox exceeded its wall-clock time limit.")
-            if result.output_exceeded:
-                raise SandboxOutputLimitExceeded("Sandbox exceeded its output byte limit.")
-            files = self._collect_outputs(output_dir)
-            total_output = (
-                len(result.stdout) + len(result.stderr) + sum(len(file.content) for file in files)
-            )
-            if total_output > self.config.max_output_bytes:
-                raise SandboxOutputLimitExceeded("Sandbox exceeded its combined output byte limit.")
-            return SandboxResult(
-                language=request.language,
-                exit_code=result.exit_code,
-                stdout=result.stdout.decode("utf-8", errors="replace"),
-                stderr=result.stderr.decode("utf-8", errors="replace"),
-                files=files,
-                runtime_seconds=runtime_seconds,
-            )
-        finally:
-            try:
-                shutil.rmtree(task_dir, onerror=_retry_after_chmod)
-            except OSError:
-                # Cleanup must never replace a successful result or the real
-                # error with a SandboxError, and must not mask a timeout/cancel.
-                pass
-
-    def _write_inputs(
-        self, input_dir: Path, source: bytes, inputs: tuple[SandboxInputFile, ...]
-    ) -> None:
-        total = len(source)
-        filenames = set()
-        resource_ids = set()
-        for item in inputs:
-            if not _RESOURCE_RE.fullmatch(item.resource_id):
-                raise ValueError("input resource ID is invalid")
-            filename = _safe_filename(item.filename)
-            if filename in filenames or filename in {"main.py", "main.js"}:
-                raise ValueError("input filenames must be unique and cannot replace program code")
-            if item.resource_id in resource_ids:
-                raise ValueError("input resource IDs must be unique")
-            if not isinstance(item.content, bytes):
-                raise TypeError("input file content must be bytes")
-            total += len(item.content)
-            if total > self.config.max_input_bytes:
-                raise ValueError("sandbox inputs exceed the configured byte limit")
-            filenames.add(filename)
-            resource_ids.add(item.resource_id)
-            path = input_dir / filename
-            if path.resolve().parent != input_dir.resolve():
-                raise ValueError("sandbox input escaped the approved mount root")
-            path.write_bytes(item.content)
 
     def _collect_outputs(self, output_dir: Path) -> tuple[SandboxOutputFile, ...]:
         root = output_dir.resolve(strict=True)
