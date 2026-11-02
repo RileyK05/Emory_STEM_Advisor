@@ -224,13 +224,18 @@ class DeterministicAuditEngine:
 
     def _options(self, node, parent=None, inherited_grade=None):
         self._tick()
+        grade = node.min_grade or inherited_grade
         if node.coverage_disposition == CoverageDisposition.INFORMATIONAL:
             return [_Candidate(self._not_selected(node, parent))]
         if (node.node_type == RuleNodeType.UNRESOLVED
                 or node.coverage_disposition == CoverageDisposition.UNRESOLVED):
+            if node.children:
+                # A draft root is unresolved itself, but its clauses must still
+                # come back one row each; a single row for the container would
+                # hide them from the reviewer.
+                return self._container_options(node, parent, grade)
             return [_Candidate(self._row(node, parent, "unresolved",
                                          unresolved_reason=node.unresolved_reason))]
-        grade = node.min_grade or inherited_grade
         if grade and grade not in GRADE_POINTS:
             return [_Candidate(self._row(node, parent, "unresolved",
                                          unresolved_reason="The minimum-grade policy is unsupported."))]
@@ -327,9 +332,10 @@ class DeterministicAuditEngine:
         if node.coverage_disposition == CoverageDisposition.INFORMATIONAL:
             yield _Candidate(self._not_selected(node, parent))
             return
-        if (node.node_type == RuleNodeType.UNRESOLVED
+        if ((node.node_type == RuleNodeType.UNRESOLVED
                 or node.coverage_disposition == CoverageDisposition.UNRESOLVED
-                or (grade and grade not in GRADE_POINTS)):
+                or (grade and grade not in GRADE_POINTS))
+                and not node.children):
             if minimum_rank <= _RANK["unresolved"]:
                 yield _Candidate(self._row(node, parent, "unresolved", unresolved_reason=(
                     node.unresolved_reason or "The minimum-grade policy is unsupported.")))

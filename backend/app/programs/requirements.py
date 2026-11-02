@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from app.atlas.records import normalize_code
 
-PARSER_VERSION = "3"
+PARSER_VERSION = "4"
 
 # Words the catalog uses in place of subject codes. Only exact (case-sensitive)
 # forms listed here are read as subjects when not written in capitals.
@@ -74,7 +74,7 @@ _CHOOSE_RES = (
     # "one course from each …" is a per-area rule, not a count.
     re.compile(rf"^\W*(?:at\s+least\s+)?{_COUNT}\b(?:\s*\(\d+\))?"
                rf"(?:\s+[\w()\-]+){{0,6}}?\s+(?:courses?|electives?|classes?)\b"
-               rf"(?!\s+(?:chosen\s+)?from\s+each\b)",
+               rf"(?!\s+(?:chosen\s+)?(?:from|in|across)\s+each\b)",
                re.IGNORECASE),
 )
 # A section heading such as "Mathematics (3 courses required, 11 CU)".
@@ -182,7 +182,18 @@ def course_mentions(text: str) -> tuple[str, ...]:
     return tuple(out)
 
 
+# A clause that only permits or suggests a choice states no required count:
+# "One Study Abroad course may be counted", "Students might consider choosing
+# their four economic electives to fit one of the following areas".
+_ADVICE_RE = re.compile(
+    r"\b(?:might consider|may be counted|may count|can be counted|students? may)\b",
+    re.IGNORECASE,
+)
+
+
 def choose_count(text: str) -> int | None:
+    if _ADVICE_RE.search(text):
+        return None
     for pattern in _CHOOSE_RES:
         match = pattern.search(text)
         if match:

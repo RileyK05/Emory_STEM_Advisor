@@ -64,6 +64,12 @@ def test_choose_count_only_when_explicit():
     # "Three additional 300-level CS courses" is covered by the written-count
     # table in test_program_rule_drafts.py.
     assert choose_count("One course from each of the following three areas") is None
+    assert choose_count("One course in each of the following divisions") is None
+    assert choose_count("One Study Abroad course may be counted for the minor.") is None
+    assert choose_count(
+        "Students might consider choosing their four economic electives to fit one of "
+        "the following areas of specialization."
+    ) is None
     assert choose_count("Choose one course from each area") is None
     # A credit value must not be read as the count.
     assert choose_count("MATH 351 (3 credits) or one of the following") == 1

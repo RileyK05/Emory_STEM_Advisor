@@ -123,6 +123,33 @@ def test_engine_repeats_and_unresolved_zero_false_satisfaction():
     assert res_unres.overall_status == "unresolved"
     assert any("Ambiguous Policy" in b for b in res_unres.blockers)
 
+    # 3. An unresolved draft root still reports one row per clause, not one row
+    #    for the whole program: the reviewer needs the clauses.
+    draft = RuleNode(
+        node_id="root",
+        node_type=RuleNodeType.ALL_OF,
+        title="Draft program",
+        coverage_disposition=CoverageDisposition.UNRESOLVED,
+        unresolved_reason="No requirement clause has reviewed semantics yet.",
+        children=tuple(
+            RuleNode(
+                node_id=f"pos-{index}",
+                node_type=RuleNodeType.UNRESOLVED,
+                title=title,
+                coverage_disposition=CoverageDisposition.UNRESOLVED,
+                unresolved_reason="Review the full clause.",
+            )
+            for index, title in enumerate(("Math 111", "CS 171", "One natural science lab"))
+        ),
+    )
+    res_draft = DeterministicAuditEngine(draft, []).run()
+    assert res_draft.overall_status == "unresolved"
+    clause_rows = [row for row in res_draft.rule_evaluations if row.parent_node_id == "root"]
+    assert [row.title for row in clause_rows] == [
+        "Math 111", "CS 171", "One natural science lab",
+    ]
+    assert all(row.status == "unresolved" for row in clause_rows)
+
 
 @pytest.mark.parametrize("case,expected,credits", [
     ("empty_all_of", "outstanding", 0),
