@@ -1,16 +1,11 @@
 import { useState } from 'react';
-import type { ProgramInspectionResponse, SourceReviewDetailResponse } from '../api/types';
+import type { SourceReviewDetailResponse } from '../api/types';
 import {
-  approveProgramRelease,
   approveSourceProposal,
   changeSourceLifecycle,
   createSourceProposal,
-  draftProgramRules,
-  getProgramInspection,
   getSourceReview,
   getSourceRevisionEvidence,
-  publishProgramRelease,
-  rejectProgramRelease,
   rejectSourceProposal,
 } from '../api/backoffice';
 import { useAsyncAction } from '../lib/useAsyncAction';
@@ -26,11 +21,9 @@ const CATEGORIES = [
 
 export function SourceReviewPanel({ sourceId, indexRevision }: { sourceId: string; indexRevision: number }) {
   const [detail, setDetail] = useState<SourceReviewDetailResponse | null>(null);
-  const [program, setProgram] = useState<ProgramInspectionResponse | null>(null);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('institutional_policy');
   const [proposalId, setProposalId] = useState('');
-  const [releaseId, setReleaseId] = useState('');
   const [evidenceText, setEvidenceText] = useState('');
   const { busy, error, notice, setError, setNotice, run } = useAsyncAction();
   const { loading, reload: load } = useLoad(() => getSourceReview(sourceId), [sourceId], {
@@ -43,7 +36,6 @@ export function SourceReviewPanel({ sourceId, indexRevision }: { sourceId: strin
   });
 
   const metadataRevision = Number(detail?.source?.metadataRevision ?? 1);
-  const programId = String(detail?.dependencies?.programs?.[0]?.programId ?? '');
 
   const propose = () =>
     run(async () => {
@@ -90,38 +82,6 @@ export function SourceReviewPanel({ sourceId, indexRevision }: { sourceId: strin
       setEvidenceText(
         evidence.passages?.map((row) => row.text).join('\n') || 'No preserved evidence for this revision.',
       );
-    });
-
-  const openProgram = async () => {
-    if (!programId) return;
-    await run(async () => setProgram(await getProgramInspection(programId)));
-  };
-
-  const draft = () =>
-    run(async () => {
-      const row = await draftProgramRules(programId, 'Reviewed clauses');
-      setReleaseId(row.releaseId);
-      setNotice('Rule draft saved.');
-      setProgram(await getProgramInspection(programId));
-    });
-
-  const approveRelease = () =>
-    run(async () => {
-      await approveProgramRelease(programId, releaseId);
-      setNotice('Rule release approved.');
-    });
-
-  const publishRelease = () =>
-    run(async () => {
-      await publishProgramRelease(programId, releaseId);
-      setNotice('Rule release published.');
-    });
-
-  const rejectRelease = () =>
-    run(async () => {
-      await rejectProgramRelease(programId, releaseId, 'Ambiguous clause');
-      setNotice('Rule release rejected.');
-      setReleaseId('');
     });
 
   const proposals = detail?.proposals ?? [];
@@ -177,47 +137,6 @@ export function SourceReviewPanel({ sourceId, indexRevision }: { sourceId: strin
         </button>
       </div>
       {evidenceText && <pre className="admin-json">{evidenceText}</pre>}
-      {programId && (
-        <div className="admin-actions">
-          <button type="button" className="secondary-button" disabled={busy} onClick={() => void openProgram()}>
-            Open program review
-          </button>
-          <button type="button" className="primary-button" disabled={busy || !program} onClick={() => void draft()}>
-            Draft rules
-          </button>
-          <button
-            type="button"
-            className="primary-button"
-            disabled={busy || !releaseId}
-            onClick={() => void approveRelease()}
-          >
-            Approve release
-          </button>
-          <button
-            type="button"
-            className="primary-button"
-            disabled={busy || !releaseId}
-            onClick={() => void publishRelease()}
-          >
-            Publish release
-          </button>
-          <button
-            type="button"
-            className="danger-button"
-            disabled={busy || !releaseId}
-            onClick={() => void rejectRelease()}
-          >
-            Reject release
-          </button>
-        </div>
-      )}
-      {program && (
-        <ul>
-          {(program.items ?? []).map((item) => (
-            <li key={item.position}>{item.text}</li>
-          ))}
-        </ul>
-      )}
     </section>
   );
 }

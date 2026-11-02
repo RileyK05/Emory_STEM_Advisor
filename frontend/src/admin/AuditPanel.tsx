@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AdminAuditEntry } from '../api/types';
-import { exportAdminAuditUrl, listAdminAudit } from '../api/backoffice';
+import { listAdminAudit } from '../api/backoffice';
 import type { AdminAuditParams } from '../api/backoffice';
 import { formatTimestamp } from '../lib/format';
 import { useLoad } from '../lib/useLoad';
@@ -120,14 +120,6 @@ export function AuditPanel({ toolbar }: AdminPanelProps) {
             <button type="button" className="secondary-button" disabled={loading} onClick={reset}>
               Reset
             </button>
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.5rem' }}>
-              <a className="secondary-button" href={exportAdminAuditUrl({ format: 'csv', ...applied })} download>
-                Export CSV
-              </a>
-              <a className="secondary-button" href={exportAdminAuditUrl({ format: 'json', ...applied })} download>
-                Export JSON
-              </a>
-            </div>
           </form>
 
           <div className="admin-table-wrap">

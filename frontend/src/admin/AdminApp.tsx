@@ -4,68 +4,29 @@ import type { AuthSession } from '../api/types';
 import { isDemoMode } from '../api/client';
 import { TopBar } from '../components/shell/TopBar';
 import { SessionGate } from '../app/SessionGate';
-import { ArtifactsPanel } from './ArtifactsPanel';
 import { AuditPanel } from './AuditPanel';
 import { ConnectionSettings } from './connection/ConnectionSettings';
-import { GapReviewPanel } from './gap/GapReviewPanel';
-import { CatalogRefreshPanel } from './CatalogRefreshPanel';
-import { ChatsPanel } from './ChatsPanel';
-import { CollectionsPanel } from './CollectionsPanel';
 import { CourseMaintenancePanel } from './CourseMaintenancePanel';
-import { ExperimentPanel } from './ExperimentPanel';
-import { FeatureFlagsPanel } from './FeatureFlagsPanel';
 import { FeedbackTriagePanel } from './FeedbackTriagePanel';
-import { GrantsPanel } from './GrantsPanel';
+import { GapReviewPanel } from './gap/GapReviewPanel';
 import { JobsPanel } from './JobsPanel';
 import { OverviewPanel } from './OverviewPanel';
-import { PromptPromotionPanel } from './PromptPromotionPanel';
+import { ProgramRulesPanel } from './ProgramRulesPanel';
 import { SourcesPanel } from './SourcesPanel';
 import { TelemetryPanel } from './TelemetryPanel';
 import { UsersPanel } from './UsersPanel';
 
-type Tab =
-  | 'overview'
-  | 'users'
-  | 'chats'
-  | 'jobs'
-  | 'sources'
-  | 'artifacts'
-  | 'collections'
-  | 'audit'
-  | 'telemetry'
-  | 'flags'
-  | 'courses'
-  | 'grants'
-  | 'refresh'
-  | 'triage'
-  | 'experiments'
-  | 'prompts'
-  | 'connections'
-  | 'gaps';
+type Tab = 'overview' | 'users' | 'sources' | 'courses' | 'questions' | 'usage' | 'connections';
 
 const TABS: Array<[Tab, string]> = [
   ['overview', 'Overview'],
   ['users', 'Users'],
-  ['chats', 'Chats'],
-  ['jobs', 'Jobs'],
   ['sources', 'Sources'],
-  ['artifacts', 'Artifacts'],
-  ['collections', 'Collections'],
-  ['audit', 'Audit'],
-  ['telemetry', 'Usage & Cost'],
-  ['flags', 'Feature Rollouts'],
-  ['courses', 'Courses'],
-  ['grants', 'Support grants'],
-  ['refresh', 'Catalog refresh'],
-  ['triage', 'Feedback triage'],
-  ['experiments', 'Experiments'],
-  ['prompts', 'Prompt promotion'],
+  ['courses', 'Courses & programs'],
+  ['questions', 'Student questions'],
+  ['usage', 'Usage & cost'],
   ['connections', 'Model connections'],
-  ['gaps', 'Unanswered questions'],
 ];
-
-/** The read-only tabs an auditor may open. */
-const AUDITOR_TABS: Tab[] = ['audit', 'telemetry'];
 
 function GateNotice({
   session,
@@ -87,7 +48,7 @@ function GateNotice({
 }
 
 function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: () => void }) {
-  const [tab, setTab] = useState<Tab>(session.role === 'auditor' ? 'audit' : 'overview');
+  const [tab, setTab] = useState<Tab>('overview');
   // Bumped on every tab click so a listing tab, even the open one, starts fresh at its first page.
   const [visit, setVisit] = useState(0);
   // Listing tabs put their Refresh button at the end of the tab bar.
@@ -102,7 +63,7 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
     );
   }
 
-  if (session.role !== 'admin' && session.role !== 'auditor') {
+  if (session.role !== 'admin') {
     return (
       <GateNotice session={session} onLogout={onLogout}>
         <h2>Administrator access required</h2>
@@ -114,47 +75,42 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
     );
   }
 
-  const isAdmin = session.role === 'admin';
-  const tabs = isAdmin ? TABS : TABS.filter(([value]) => AUDITOR_TABS.includes(value));
-
   const panel = (() => {
     switch (tab) {
       case 'overview':
-        return <OverviewPanel key={visit} toolbar={toolbar} />;
+        return (
+          <>
+            <OverviewPanel key={`overview-${visit}`} toolbar={toolbar} />
+            <JobsPanel key={`jobs-${visit}`} toolbar={toolbar} />
+          </>
+        );
       case 'users':
-        return <UsersPanel key={visit} toolbar={toolbar} />;
-      case 'chats':
-        return <ChatsPanel key={visit} toolbar={toolbar} />;
-      case 'jobs':
-        return <JobsPanel key={visit} toolbar={toolbar} />;
+        return (
+          <>
+            <UsersPanel key={`users-${visit}`} toolbar={toolbar} />
+            <AuditPanel key={`audit-${visit}`} toolbar={toolbar} />
+          </>
+        );
       case 'sources':
-        return <SourcesPanel key={visit} toolbar={toolbar} canReview={isAdmin} />;
-      case 'artifacts':
-        return <ArtifactsPanel key={visit} toolbar={toolbar} />;
-      case 'collections':
-        return <CollectionsPanel key={visit} toolbar={toolbar} />;
-      case 'audit':
-        return <AuditPanel key={visit} toolbar={toolbar} />;
-      case 'telemetry':
-        return <TelemetryPanel key={visit} toolbar={toolbar} />;
-      case 'flags':
-        return <FeatureFlagsPanel />;
+        return <SourcesPanel key={visit} toolbar={toolbar} canReview />;
       case 'courses':
-        return isAdmin && <CourseMaintenancePanel />;
-      case 'grants':
-        return isAdmin && <GrantsPanel />;
-      case 'refresh':
-        return isAdmin && <CatalogRefreshPanel />;
-      case 'triage':
-        return isAdmin && <FeedbackTriagePanel />;
-      case 'experiments':
-        return isAdmin && <ExperimentPanel />;
-      case 'prompts':
-        return isAdmin && <PromptPromotionPanel />;
+        return (
+          <>
+            <CourseMaintenancePanel />
+            <ProgramRulesPanel />
+          </>
+        );
+      case 'questions':
+        return (
+          <>
+            <FeedbackTriagePanel />
+            <GapReviewPanel />
+          </>
+        );
+      case 'usage':
+        return <TelemetryPanel key={visit} toolbar={toolbar} />;
       case 'connections':
-        return isAdmin && <ConnectionSettings />;
-      case 'gaps':
-        return isAdmin && <GapReviewPanel />;
+        return <ConnectionSettings />;
     }
   })();
 
@@ -167,7 +123,7 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
       </div>
       <main className="admin-main">
         <div className="admin-tabs" role="tablist" ref={setToolbar}>
-          {tabs.map(([value, label]) => (
+          {TABS.map(([value, label]) => (
             <button
               key={value}
               type="button"
