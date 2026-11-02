@@ -158,8 +158,13 @@ What stays even though it looks like infrastructure:
   - Never delete anything that is not on a cut list here. If something looks
     dead but is not listed, write it in the ledger under "Candidates for the
     user" and leave it.
-- **Spend:** never exceed the model-spend cap (D3). When it is reached, stop
-  live runs, mark them BLOCKED, and continue offline items.
+- **Live model:**
+  - Live runs use the model the user's `.env` already configures: Ollama Cloud,
+    M3.1. It is billed by usage allowance, not by the dollar, so there is no
+    spend cap. Never read, print or change `.env` to find out what it holds.
+  - If the provider rate-limits you or reports the usage allowance spent, back
+    off and resume later. Never count that as a benchmark failure, and never
+    switch providers to get around it.
 
 ## Phase 0: fix the review findings
 
@@ -244,12 +249,13 @@ and move on.
 
 ## Phase 2: one answering path
 
-Needs D1 (the model) and the key in the user's `.env`. Until then, P2.x is
-BLOCKED; do Phases 1, 3.1, 4.1–4.3 and 6 meanwhile.
+Runs on the configured model (Ollama Cloud, M3.1). If that model cannot run
+the research path (it needs tool calls), P2.x is BLOCKED with the exact error.
+Do Phases 1, 3.1, 4.1–4.3 and 6 meanwhile.
 
 | ID | Item | Done when |
 | --- | --- | --- |
-| P2.1 | Measure research against legacy on the D1 model, three runs each: `scripts.manual.advising_clarity_probe --mode both --tools`, and the 65-probe suite (`docs/audit/TEST-SUITE-SPECIFICATION.md` via `scripts.manual.audit_llm_system`) | The ledger has both scores per run, and p50 and p95 tokens, calls and seconds per turn from `model_calls` |
+| P2.1 | Measure research against legacy on the configured model, three runs each: `scripts.manual.advising_clarity_probe --mode both --tools`, and the 65-probe suite (`docs/audit/TEST-SUITE-SPECIFICATION.md` via `scripts.manual.audit_llm_system`) | The ledger has both scores per run, and p50 and p95 tokens, calls and seconds per turn from `model_calls` |
 | P2.2 | Close any gap by fixing research: prompts in `research_controller.py`, tools in `research_tools.py`, checks in `research_final.py`. Round-4 packages E and G (policy reads, research completeness) are in scope here, if the probes fail on what they describe | Research ≥ legacy on both probe sets in all three runs |
 | P2.3 | Research is the default | `advising_research_enabled` and `tools_enabled` default to true. With no tools-capable provider, the API still starts, `/ready` reports "no advising model configured", and the chat shows "The advisor isn't set up yet." That case's startup `ValueError` is gone. `hf-local` stays for offline smoke scripts. `.env.example` and `infra/modules/apps.bicep` match |
 | P2.4 | Delete the legacy path: the `research = settings.advising_research_enabled and body.mode == "advising"` splits in `routes/conversations.py`, `_effective_scope`, the worker's matching branch, `/api/query` in `routes/corpus.py`, `api/query_service.py`, `generation/query_plan.py`, `generation/answer_tools.py`, the prompt registry (`admin/prompt_registry.py`, `routes/prompts.py`; tables `prompt_versions`, `prompt_promotions`, and `eval_suite_fixtures` if only prompts use it), and whatever `grep` then shows is legacy-only in `generation/controller.py`, `answer.py` and `advising_tools.py` | Shared pieces stay: `canonical_codes_in`, the echo and leak guards, and the sequence tool that research uses. Shared invariants live on as rows in research tests. P2.1's probes rerun green on research alone |
@@ -262,7 +268,7 @@ BLOCKED; do Phases 1, 3.1, 4.1–4.3 and 6 meanwhile.
 - Add `backend/scripts/manual/artifact_benchmark.py`. It is a manual script:
   never in the test suite, and no tests for it.
 - It drives the real API and worker against the development collection, using
-  the D1 model. Each case is a short scripted conversation.
+  the configured model. Each case is a short scripted conversation.
 - The cases live in `backend/scripts/manual/artifact_benchmark_cases.jsonl`,
   committed so any change shows in a diff.
 - The script prints a per-case, per-check table and the totals. It writes JSON
@@ -444,9 +450,7 @@ Still open. Items that need one of these are BLOCKED until it is made:
 
 | ID | Decision | Recommendation |
 | --- | --- | --- |
-| D1 | Production model and provider | Claude Sonnet 5.5 (`claude-sonnet-5-5`). A research turn is up to about 12 calls, so price matters. Opus 5.5 only if P2.2 cannot close the gap on Sonnet |
-| D2 | API key | Put it in your `.env` (the run never touches `.env`) |
-| D3 | Model spend cap for live runs | $150 for the whole run, at most $40 a day, tracked from `model_calls` |
+| D1 | Production model, if it differs from the testing model | Not blocking. All benchmarks run on the configured testing model (Ollama Cloud, M3.1). If production uses a different model, rerun P2.1 and P3.2 on it before launch |
 | D4 | Target load | 300 concurrent turns at peak; first token under 5 s, full answer under 60 s |
 | D5 | Per-student daily limits | 50 turns and 10 artifact runs |
 | D6 | Ground truth | Review the 51 gold-set entries and the 48 eval cases, and score P3.4's sample |
