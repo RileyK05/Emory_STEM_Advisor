@@ -55,7 +55,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | P3.1 | todo | | |
 | P3.2 | todo | | |
 | P3.3 | todo | | |
-| P3.4 | todo | | |
+| P3.4 | BLOCKED | - | Needs the user to score 10 artifacts 1-5 (D6). |
 
 ## Phase 4: sandbox benchmark
 
@@ -63,22 +63,22 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | --- | --- | --- | --- |
 | P4.1 | todo | | |
 | P4.2 | todo | | |
-| P4.3 | todo | | |
-| P4.4 | todo | | |
-| P4.5 | todo | | |
-| P4.6 | todo | | |
-| P4.7 | todo | | |
+| P4.3 | BLOCKED | - | No Linux host with Docker and gVisor: `docker` is not installed on Windows, and `wsl -d Ubuntu -- bash -lc "docker --version; runsc --version"` prints `bash: line 1: docker: command not found` and `bash: line 1: runsc: command not found`. Unblocks with a Linux VM from the user, or permission to install Docker and gVisor `runsc` inside WSL2 and accept its limits. |
+| P4.4 | BLOCKED | - | Depends on P4.3 (host). |
+| P4.5 | BLOCKED | - | Depends on P4.3 (host). |
+| P4.6 | BLOCKED | - | Depends on P4.3 (host). |
+| P4.7 | BLOCKED | - | Depends on P4.3 (host). |
 
 ## Phase 5: scale and cost
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
-| P5.1 | todo | | |
-| P5.2 | todo | | |
+| P5.1 | BLOCKED | - | Needs D4 (target load) and P2.1's numbers; neither exists yet. |
+| P5.2 | BLOCKED | - | Needs D5 (per-student daily limits). |
 | P5.3 | todo | | |
 | P5.4 | todo | | |
-| P5.5 | todo | | |
-| P5.6 | todo | | |
+| P5.5 | BLOCKED | - | Needs D4. |
+| P5.6 | BLOCKED | - | Needs D4 and P2.1. |
 
 ## Phase 6: no dead ends
 
