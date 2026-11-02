@@ -15,7 +15,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | R3 | todo | | |
 | R4 | todo | | |
 | R5 | done | R5 | Deleted `frontend/tests/chat-shell-guards.test.mjs`: it tested copies of Shell logic and no npm script ran it. R1's browser test covers the real code. Gate: typecheck and format:check green; no test, build or script referenced the file (npm test's 41 browser tests unchanged at R1). |
-| R6 | todo | | |
+| R6 | done | R6 | Reverted `Composer.submit` to `if (canSend) chat.send(attachments)`. Shell's `chatForView.send` already clears the manual attachments on accept, so the callback the composer passed (and Shell dropped) was dead. Gate: 41 browser tests pass (attachment clearing included), typecheck and format:check green. |
 | R10 | todo | | |
 
 ## Phase 1: cut the fat

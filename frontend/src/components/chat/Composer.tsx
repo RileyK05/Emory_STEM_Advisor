@@ -22,11 +22,7 @@ export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
   }, [chat.draft]);
 
   const submit = () => {
-    if (!canSend) return;
-    const pending = [...attachments];
-    chat.send(pending, () => {
-      for (const item of pending) onRemoveAttachment(item);
-    });
+    if (canSend) chat.send(attachments);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
