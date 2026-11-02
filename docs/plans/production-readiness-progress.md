@@ -97,24 +97,35 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 
 Measured with the same method as the plan (`wc -l` equivalent).
 
-| Measure | Before (main `eb968c1`) | After (final) | Target |
+| Measure | Before (main `eb968c1`) | After (this commit) | Target |
 | --- | --- | --- | --- |
-| `backend/app` Python lines | 52,308 | | ≤ 42,000 |
-| Backend test files | 125 | | ≤ 95 |
-| `frontend/src/admin` + `frontend/src/debug` lines | 4,700 | | ≤ 3,300 |
-| `frontend/src/api/types.ts` lines | 2,093 | | ≤ 1,400 |
-| `frontend/src/styles.css` lines | 2,887 | | record only |
-| Admin tabs | 18 | | 7 |
-| Roles | 4 | | 2 |
+| `backend/app` Python lines | 52,308 | 52,164 | ≤ 42,000 |
+| Backend test files | 125 | 125 | ≤ 95 |
+| `frontend/src/admin` + `frontend/src/debug` lines | 4,700 | 3,168 | ≤ 3,300 |
+| `frontend/src/api/types.ts` lines | 2,093 | 2,058 | ≤ 1,400 |
+| `frontend/src/styles.css` lines | 2,887 | 2,887 | record only |
+| Admin tabs | 18 | 7 | 7 |
+| Roles | 4 | 4 | 2 |
 
-## Baseline gate (main `eb968c1`, before any item)
+## Run status: stopped before the final gate
 
-Pending: baseline backend and frontend gate recorded below.
+This run implemented Phase 0 (R1, R2, R3, R4, R5, R6, R10) and P1.1, P1.2,
+P1.3 and P1.5. It stopped with the final gate **not** met: P1.4, P1.6-P1.15,
+Phases 2-6 and the benchmark work are not done, so no benchmark score exists.
 
-## Decisions
+Nothing below is BLOCKED except where the plan makes it depend on a user
+decision or a host. The rest is simply not started, and is `todo` in the tables
+above.
 
-Items blocked on the user are recorded here with what unblocks them. See the
-plan's [Decisions the user owns](production-readiness.md#decisions-the-user-owns).
+| Item | Why it cannot be finished by the agent | What unblocks it |
+| --- | --- | --- |
+| P2.1, P2.2 | needs live runs on the configured model; no runs were made in this session | a session that runs the probes |
+| P3.2, P3.3 | needs P3.1's benchmark built and run; P3.3 needs Office on this machine | building and running P3.1 |
+| P3.4 | needs the user to score 10 artifacts 1-5 (D6) | the user's scores |
+| P4.3-P4.7 | needs a Linux host with Docker and gVisor `runsc`; this machine has none | a Linux host or WSL2 with `runsc` working |
+| P5.1, P5.2, P5.5, P5.6 | need D4 (target load) and D5 (per-student limits) | the user's decisions |
+| P5.4 | open risk 3 of `docs/audit/security-attack-notes.md`; not started | implementation |
+| All of D6 | human review of 51 gold entries and 48 eval cases | the user's review |
 
 ## Candidates for the user
 
