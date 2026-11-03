@@ -2161,7 +2161,6 @@ does not send the header.
 | GET/PATCH | `/api/admin/users`, `/api/admin/users/{id}` | Admin-only user search/detail; role/status changes with audit |
 | GET | `/api/admin/users/{id}/sessions` | Admin-only session metadata (no token hashes) |
 | POST | `/api/admin/users/{id}/revoke-sessions` | Admin-only session revocation with audit |
-| GET/DELETE | `/api/admin/conversations`, `.../{id}/transcript`, `.../{id}/transcript/download` | Metadata list; audited transcript read/download; audited conversation delete |
 | GET/POST | `/api/admin/jobs`, `/api/admin/jobs/{id}/cancel` | Admin-only job inspection and audited cancellation |
 | GET | `/api/admin/sources`, `/api/admin/audit` | Authorized operational inspection; audit reads allow auditor |
 | GET/POST | `/api/admin/telemetry/usage`, `/api/admin/pricing/schedules` | Authorized read-only usage, cost, cache, and price views; schedule mutation is admin-only |
