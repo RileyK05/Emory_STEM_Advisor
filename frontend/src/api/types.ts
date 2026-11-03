@@ -824,8 +824,6 @@ export interface AdminOverview {
 }
 
 export type UserRole = 'student' | 'advisor' | 'admin' | 'auditor';
-export type GrantType = 'advisor_access' | 'support_access';
-export type GrantResourceType = 'conversation' | 'plan' | 'all_records';
 
 export interface AdminUser {
   userId: string;
@@ -846,83 +844,6 @@ export interface AdminUser {
 export interface AdminUserUpdate {
   role: UserRole;
   status: 'active' | 'disabled';
-}
-
-export interface ResourceGrantCreate {
-  grantType: GrantType;
-  actorUserId: string;
-  targetWorkspaceKey: string;
-  resourceType: GrantResourceType;
-  resourceId?: string | null;
-  reason: string;
-  expiresAt: string;
-  allowedActions?: string[];
-}
-
-export interface ResourceGrant {
-  grantId: string;
-  grantType: GrantType;
-  actorUserId: string;
-  targetWorkspaceKey: string;
-  resourceType: GrantResourceType;
-  resourceId?: string | null;
-  allowedActions: string[];
-  reason: string;
-  approvedByUserId: string;
-  expiresAt: string;
-  createdAt: string;
-  revokedAt?: string | null;
-  revokedByUserId?: string | null;
-  actorEmail?: string | null;
-  actorDisplayName?: string | null;
-  approvedByEmail?: string | null;
-  approvedByDisplayName?: string | null;
-}
-
-export interface SupportGrantRequestCreate {
-  targetWorkspaceKey: string;
-  resourceType: GrantResourceType;
-  resourceId?: string | null;
-  reason: string;
-  expiresAt: string;
-}
-
-export interface SupportGrantRequestUpdate extends SupportGrantRequestCreate {
-  expectedRevision: number;
-}
-
-export interface SupportGrantRequestDecision {
-  expectedRevision: number;
-  note?: string | null;
-}
-
-export interface SupportGrantRequest {
-  requestId: string;
-  requesterUserId: string;
-  actorUserId: string;
-  targetWorkspaceKey: string;
-  resourceType: GrantResourceType;
-  resourceId?: string | null;
-  allowedActions: string[];
-  reason: string;
-  expiresAt: string;
-  status: 'pending' | 'approved' | 'rejected';
-  revision: number;
-  decisionNote?: string | null;
-  decidedByUserId?: string | null;
-  decidedAt?: string | null;
-  grantId?: string | null;
-  createdAt: string;
-  updatedAt: string;
-  actorEmail?: string | null;
-  actorDisplayName?: string | null;
-}
-
-export interface GrantedResultStaging {
-  stagingId: string;
-  grantId: string;
-  status: 'staged' | 'published' | 'withheld';
-  resourceId: string;
 }
 
 export type PrivacyStatus = 'queued' | 'running' | 'completed' | 'failed';
@@ -975,33 +896,6 @@ export interface AdminAuditEntry {
   createdAt: string;
   actorEmail?: string | null;
   actorDisplayName?: string | null;
-}
-
-export interface AdminConversation {
-  conversationId: string;
-  workspaceKey: string;
-  title: string;
-  lastSequence: number;
-  pendingRequestId?: string | null;
-  turnCount: number;
-  summaryCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface AdminConversationTurn {
-  sequence: number;
-  requestId: string;
-  role: 'user' | 'assistant';
-  text: string;
-  status: string;
-  evidence: Record<string, unknown>;
-  createdAt: string;
-}
-
-export interface AdminTranscript {
-  conversation: AdminConversation;
-  turns: AdminConversationTurn[];
 }
 
 export interface AdminJob {
@@ -1070,16 +964,6 @@ export interface AdminUserSession {
   createdAt: string;
   expiresAt: string;
   revokedAt?: string | null;
-}
-
-export interface AdminArtifact {
-  artifactId: string;
-  workspaceKey: string;
-  kind: string;
-  headRevisionId: string;
-  originalFilename?: string | null;
-  revisionCount: number;
-  createdAt: string;
 }
 
 export interface AdminCollection {

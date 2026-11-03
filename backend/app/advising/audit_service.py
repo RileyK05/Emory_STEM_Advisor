@@ -35,7 +35,7 @@ class DegreeAuditService:
             raise HTTPException(403, "access to academic record is denied")
 
         # 1. Fetch academic record and attempts. The audit creates derived rows
-        # in the student's workspace, so a read-only support grant cannot run it.
+        # in the student's workspace, so it needs write access to it.
         record_data = AcademicRecordService.get_record(
             conn, workspace_key, actor, create=True
         )
