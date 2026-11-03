@@ -309,68 +309,56 @@ class _BoundedCapture:
                 self.total += len(block)
 
 
-class SandboxRunner:
-    def __init__(self, config: SandboxConfig, runtime: ContainerRuntime | None = None):
-        self.config = config
-        self.runtime = runtime or DockerCliRuntime(
-            create_timeout_seconds=config.create_timeout_seconds
-        )
+def collect_outputs(
+    output_dir: Path, *, max_files: int, max_bytes: int
+) -> tuple[SandboxOutputFile, ...]:
+    """Read a finished container's output directory within fixed limits."""
+    root = output_dir.resolve(strict=True)
+    if output_dir.is_symlink():
+        raise UnsafeSandboxOutput("Sandbox output directory became a symlink.")
+    result = []
+    total = 0
+    entry_count = 0
+    for current, directories, filenames in os.walk(root, followlinks=False):
+        entry_count += len(directories) + len(filenames)
+        if entry_count > max_files * 2:
+            raise SandboxOutputLimitExceeded("Sandbox created too many output entries.")
+        current_path = Path(current)
+        for name in directories:
+            check_output_entry(current_path / name, root)
+        for name in filenames:
+            candidate = current_path / name
+            check_output_entry(candidate, root)
+            info = candidate.stat(follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode):
+                raise UnsafeSandboxOutput("Sandbox output contains a non-regular file.")
+            if len(result) >= max_files:
+                raise SandboxOutputLimitExceeded("Sandbox created too many output files.")
+            remaining = max_bytes - total
+            with candidate.open("rb") as stream:
+                data = stream.read(remaining + 1)
+            if len(data) > remaining:
+                raise SandboxOutputLimitExceeded(
+                    "Sandbox output files exceeded the byte limit."
+                )
+            total += len(data)
+            relative = candidate.relative_to(root).as_posix()
+            parts = relative.split("/")
+            if (
+                len(relative) > 1024
+                or len(parts) > 8
+                or any(not _safe_output_component(part) for part in parts)
+            ):
+                raise UnsafeSandboxOutput("Sandbox output path is invalid.")
+            result.append(SandboxOutputFile(path=relative, content=data))
+    return tuple(result)
 
-    def probe_production(self) -> dict[str, str]:
-        probe = getattr(self.runtime, "probe", None)
-        if probe is None:
-            raise IsolationUnavailable(
-                "Production execution requires a probed Docker/gVisor runtime."
-            )
-        return probe(self.config)
 
-    def _collect_outputs(self, output_dir: Path) -> tuple[SandboxOutputFile, ...]:
-        root = output_dir.resolve(strict=True)
-        if output_dir.is_symlink():
-            raise UnsafeSandboxOutput("Sandbox output directory became a symlink.")
-        result = []
-        total = 0
-        entry_count = 0
-        for current, directories, filenames in os.walk(root, followlinks=False):
-            entry_count += len(directories) + len(filenames)
-            if entry_count > self.config.max_output_files * 2:
-                raise SandboxOutputLimitExceeded("Sandbox created too many output entries.")
-            current_path = Path(current)
-            for name in directories:
-                self._check_entry(current_path / name, root)
-            for name in filenames:
-                candidate = current_path / name
-                self._check_entry(candidate, root)
-                info = candidate.stat(follow_symlinks=False)
-                if not stat.S_ISREG(info.st_mode):
-                    raise UnsafeSandboxOutput("Sandbox output contains a non-regular file.")
-                if len(result) >= self.config.max_output_files:
-                    raise SandboxOutputLimitExceeded("Sandbox created too many output files.")
-                remaining = self.config.max_output_bytes - total
-                with candidate.open("rb") as stream:
-                    data = stream.read(remaining + 1)
-                if len(data) > remaining:
-                    raise SandboxOutputLimitExceeded(
-                        "Sandbox output files exceeded the byte limit."
-                    )
-                total += len(data)
-                relative = candidate.relative_to(root).as_posix()
-                parts = relative.split("/")
-                if (
-                    len(relative) > 1024
-                    or len(parts) > 8
-                    or any(not _safe_output_component(part) for part in parts)
-                ):
-                    raise UnsafeSandboxOutput("Sandbox output path is invalid.")
-                result.append(SandboxOutputFile(path=relative, content=data))
-        return tuple(result)
-
-    @staticmethod
-    def _check_entry(path: Path, root: Path) -> None:
-        """Reject symlinks and anything that resolves outside the output root."""
-        if path.is_symlink():
-            raise UnsafeSandboxOutput("Sandbox created a symlink in its output directory.")
-        try:
-            path.resolve(strict=True).relative_to(root)
-        except (OSError, ValueError) as exc:
-            raise UnsafeSandboxOutput("Sandbox output escaped its approved directory.") from exc
+def check_output_entry(path: Path, root: Path) -> None:
+    """Reject symlinks and anything that resolves outside the output root."""
+    if path.is_symlink():
+        raise UnsafeSandboxOutput("Sandbox created a symlink in its output directory.")
+    try:
+        path.resolve(strict=True).relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise UnsafeSandboxOutput("Sandbox output escaped its approved directory.") from exc

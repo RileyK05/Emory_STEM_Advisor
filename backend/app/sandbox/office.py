@@ -15,10 +15,10 @@ from uuid import uuid4
 from app.sandbox.runner import (
     ContainerRuntime,
     DockerCliRuntime,
-    SandboxRunner,
     _memory_limit,
     _retry_after_chmod,
     _validate_image,
+    collect_outputs,
 )
 from app.sandbox.types import (
     IsolationUnavailable,
@@ -109,12 +109,6 @@ class OfficeRunner:
     def __init__(self, config: SandboxConfig, runtime: ContainerRuntime | None = None):
         self.config = config
         self.runtime = runtime or DockerCliRuntime(create_timeout_seconds=config.create_timeout_seconds)
-        # Reuse the audited bounded output walker with a larger but fixed office ceiling.
-        import dataclasses
-
-        self._collector = SandboxRunner(
-            dataclasses.replace(config, max_output_bytes=MAX_OFFICE_OUTPUT_BYTES)
-        )
 
     def probe_office(self) -> str:
         probe = getattr(self.runtime, "probe", None)
@@ -196,7 +190,9 @@ class OfficeRunner:
                 raise SandboxOutputLimitExceeded("Office process output exceeded its limit.")
             if result.exit_code != 0:
                 raise IsolationUnavailable("Isolated Office conversion failed.")
-            outputs = self._collector._collect_outputs(output_dir)
+            # Office files outgrow the generic output limit, so they get a fixed larger one.
+            outputs = collect_outputs(output_dir, max_files=self.config.max_output_files,
+                                      max_bytes=MAX_OFFICE_OUTPUT_BYTES)
             expected = "input." + target_format
             matches = [item for item in outputs if item.path == expected]
             if len(matches) != 1 or len(outputs) != 1 or not matches[0].content:

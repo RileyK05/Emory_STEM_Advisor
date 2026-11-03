@@ -153,9 +153,6 @@ def test_office_mounts_must_stay_under_approved_root(tmp_path):
 
 
 def test_office_readiness_fails_when_image_probe_is_missing(tmp_path):
-    class GenericRunner:
-        def probe_production(self):
-            return {"python": IMAGE_ID, "javascript": IMAGE_ID}
     class MissingOffice:
         def probe_office(self):
             raise IsolationUnavailable("missing Office image")
@@ -169,9 +166,6 @@ def test_office_readiness_fails_when_image_probe_is_missing(tmp_path):
     assert response.status_code == 503
 
 def test_worker_cancel_kills_active_office_request(tmp_path):
-    class GenericRunner:
-        def probe_production(self):
-            return {"python": IMAGE_ID, "javascript": IMAGE_ID, OFFICE_REF: IMAGE_ID}
     class BlockingOffice:
         def __init__(self): self.started = threading.Event()
         def probe_office(self): return IMAGE_ID
@@ -258,9 +252,6 @@ def test_remote_office_client_sends_authenticated_bounded_bytes_and_checks_check
 
 
 def test_worker_office_endpoint_auth_checksum_and_cancel(tmp_path):
-    class GenericRunner:
-        def probe_production(self): return {"python":"sha256:"+"a"*64, "javascript":"sha256:"+"b"*64, OFFICE_REF:IMAGE_ID}
-        def run(self, *args, **kwargs): raise AssertionError("not used")
     class FakeOffice:
         def probe_office(self): return IMAGE_ID
         def run(self, operation, content, *, timeout_seconds, cancel_event):

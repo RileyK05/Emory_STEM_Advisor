@@ -150,6 +150,22 @@ def test_engine_repeats_and_unresolved_zero_false_satisfaction():
     ]
     assert all(row.status == "unresolved" for row in clause_rows)
 
+    # 4. ...and stays unresolved when the student has every course its clauses
+    #    name: an unreviewed container never counts toward satisfaction.
+    for node_type in (RuleNodeType.ALL_OF, RuleNodeType.UNRESOLVED):
+        reviewed_clauses = RuleNode(
+            node_id="root",
+            node_type=node_type,
+            title="Unreviewed group",
+            coverage_disposition=CoverageDisposition.UNRESOLVED,
+            unresolved_reason="Group semantics need review.",
+            children=(RuleNode("c1", RuleNodeType.EXACT_COURSE, "Intro", course_codes=("CS 170",)),),
+        )
+        res_group = DeterministicAuditEngine(reviewed_clauses, attempts_repeat).run()
+        assert res_group.overall_status == "unresolved"
+        assert res_group.completed_credits == 0.0
+        assert [row.title for row in res_group.rule_evaluations] == ["Unreviewed group", "Intro"]
+
 
 @pytest.mark.parametrize("case,expected,credits", [
     ("empty_all_of", "outstanding", 0),

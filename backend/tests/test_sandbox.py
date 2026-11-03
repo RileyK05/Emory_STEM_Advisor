@@ -11,9 +11,9 @@ from app.sandbox import (
     DockerCliRuntime,
     IsolationUnavailable,
     SandboxConfig,
-    SandboxRunner,
     UnsafeSandboxOutput,
 )
+from app.sandbox.runner import check_output_entry, collect_outputs
 
 
 def make_config(tmp_path, **changes):
@@ -78,7 +78,7 @@ def test_output_path_escape_is_rejected(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
     with pytest.raises(UnsafeSandboxOutput):
-        SandboxRunner._check_entry(outside, root)
+        check_output_entry(outside, root)
 
 
 def test_docker_cli_cancellation_kills_and_removes_container(monkeypatch):
@@ -135,7 +135,7 @@ def test_output_symlink_escape_is_rejected_when_host_supports_symlinks(tmp_path)
         link.symlink_to(outside)
     except OSError:
         with pytest.raises(UnsafeSandboxOutput):
-            SandboxRunner._check_entry(outside, output)
+            check_output_entry(outside, output)
     else:
         with pytest.raises(UnsafeSandboxOutput):
-            SandboxRunner(make_config(tmp_path))._collect_outputs(output)
+            collect_outputs(output, max_files=8, max_bytes=1024)

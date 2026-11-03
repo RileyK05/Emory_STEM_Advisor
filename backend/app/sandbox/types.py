@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
 
 
 class SandboxError(RuntimeError):
@@ -97,31 +96,6 @@ class SandboxConfig:
 
 
 @dataclass(frozen=True)
-class SandboxInputFile:
-    resource_id: str
-    filename: str
-    content: bytes
-
-
-@dataclass(frozen=True)
-class SandboxRequest:
-    language: Literal["python", "javascript"]
-    source: str
-    inputs: tuple[SandboxInputFile, ...] = ()
-    timeout_seconds: int | None = None
-
-
-@dataclass(frozen=True)
 class SandboxOutputFile:
     path: str
     content: bytes
-
-
-@dataclass(frozen=True)
-class SandboxResult:
-    language: str
-    exit_code: int
-    stdout: str
-    stderr: str
-    files: tuple[SandboxOutputFile, ...]
-    runtime_seconds: float

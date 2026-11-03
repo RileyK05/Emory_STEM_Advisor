@@ -230,10 +230,7 @@ class DeterministicAuditEngine:
         if (node.node_type == RuleNodeType.UNRESOLVED
                 or node.coverage_disposition == CoverageDisposition.UNRESOLVED):
             if node.children:
-                # A draft root is unresolved itself, but its clauses must still
-                # come back one row each; a single row for the container would
-                # hide them from the reviewer.
-                return self._container_options(node, parent, grade)
+                return [self._unresolved_container(node, parent, grade)]
             return [_Candidate(self._row(node, parent, "unresolved",
                                          unresolved_reason=node.unresolved_reason))]
         if grade and grade not in GRADE_POINTS:
@@ -280,6 +277,15 @@ class DeterministicAuditEngine:
                 )
                 result.append(_Candidate(row, used))
         return self._deduplicate(result)
+
+    def _unresolved_container(self, node, parent, grade):
+        # A draft root is unresolved itself, but its clauses still come back one
+        # row each for the reviewer. The container stays unresolved and claims no
+        # courses, so an unreviewed rule never counts toward satisfaction.
+        children = [max(self._options(child, node.node_id, grade), key=_score).result
+                    for child in node.children]
+        return _Candidate(self._row(node, parent, "unresolved", children=children,
+                                    unresolved_reason=node.unresolved_reason))
 
     def _container_options(self, node, parent, grade):
         children = list(node.children)
@@ -332,13 +338,15 @@ class DeterministicAuditEngine:
         if node.coverage_disposition == CoverageDisposition.INFORMATIONAL:
             yield _Candidate(self._not_selected(node, parent))
             return
-        if ((node.node_type == RuleNodeType.UNRESOLVED
-                or node.coverage_disposition == CoverageDisposition.UNRESOLVED
-                or (grade and grade not in GRADE_POINTS))
-                and not node.children):
+        unresolved = (node.node_type == RuleNodeType.UNRESOLVED
+                      or node.coverage_disposition == CoverageDisposition.UNRESOLVED)
+        if unresolved or (grade and grade not in GRADE_POINTS):
             if minimum_rank <= _RANK["unresolved"]:
-                yield _Candidate(self._row(node, parent, "unresolved", unresolved_reason=(
-                    node.unresolved_reason or "The minimum-grade policy is unsupported.")))
+                if unresolved and node.children:
+                    yield self._unresolved_container(node, parent, grade)
+                else:
+                    yield _Candidate(self._row(node, parent, "unresolved", unresolved_reason=(
+                        node.unresolved_reason or "The minimum-grade policy is unsupported.")))
             return
         if node.children:
             active = [i for i, c in enumerate(node.children)

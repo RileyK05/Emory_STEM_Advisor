@@ -15,10 +15,10 @@ from uuid import uuid4
 from app.sandbox.runner import (
     ContainerRuntime,
     DockerCliRuntime,
-    SandboxRunner,
     _memory_limit,
     _retry_after_chmod,
     _validate_image,
+    collect_outputs,
 )
 from app.sandbox.types import (
     IsolationUnavailable,
@@ -110,11 +110,6 @@ class HtmlScreenshotRunner:
         self.runtime = runtime or DockerCliRuntime(
             create_timeout_seconds=config.create_timeout_seconds
         )
-        import dataclasses
-
-        self._collector = SandboxRunner(
-            dataclasses.replace(config, max_output_bytes=MAX_SCREENSHOT_OUTPUT_BYTES)
-        )
 
     def probe_browser(self) -> str:
         if not self.config.browser_image:
@@ -191,7 +186,8 @@ class HtmlScreenshotRunner:
                 raise SandboxOutputLimitExceeded("Screenshot process output exceeded its limit.")
             if result.exit_code != 0:
                 raise IsolationUnavailable("Isolated screenshot rendering failed.")
-            outputs = self._collector._collect_outputs(output_dir)
+            outputs = collect_outputs(output_dir, max_files=self.config.max_output_files,
+                                      max_bytes=MAX_SCREENSHOT_OUTPUT_BYTES)
             matches = [item for item in outputs if item.path == "screenshot.png"]
             if len(matches) != 1 or len(outputs) != 1 or not matches[0].content:
                 raise IsolationUnavailable("Browser did not produce the expected screenshot.")

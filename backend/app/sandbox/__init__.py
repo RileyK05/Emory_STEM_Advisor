@@ -1,22 +1,18 @@
-"""Disposable isolated execution for explicitly requested Python and JavaScript."""
+"""Disposable isolated Office conversions and HTML screenshots on a separate host."""
 
 from app.sandbox.remote import RemoteSandboxClient, RemoteSandboxConfig
 from app.sandbox.runner import (
     ContainerRuntime,
     DockerCliRuntime,
     RuntimeResult,
-    SandboxRunner,
 )
 from app.sandbox.types import (
     IsolationUnavailable,
     SandboxCancelled,
     SandboxConfig,
     SandboxError,
-    SandboxInputFile,
     SandboxOutputFile,
     SandboxOutputLimitExceeded,
-    SandboxRequest,
-    SandboxResult,
     SandboxTimedOut,
     UnsafeSandboxOutput,
 )
@@ -32,12 +28,8 @@ __all__ = [
     "SandboxCancelled",
     "SandboxConfig",
     "SandboxError",
-    "SandboxInputFile",
     "SandboxOutputFile",
     "SandboxOutputLimitExceeded",
-    "SandboxRequest",
-    "SandboxResult",
-    "SandboxRunner",
     "SandboxTimedOut",
     "UnsafeSandboxOutput",
     "create_worker_app",

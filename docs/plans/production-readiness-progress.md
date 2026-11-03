@@ -47,6 +47,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | P2.3 | todo | | |
 | P2.4 | todo | | |
 | P2.5 | todo | | |
+| P2.6 | todo | | |
 
 ## Phase 3: artifact benchmark
 
@@ -63,7 +64,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | --- | --- | --- | --- |
 | P4.1 | todo | | |
 | P4.2 | todo | | |
-| P4.3 | BLOCKED | - | No Linux host with Docker and gVisor: `docker` is not installed on Windows, and `wsl -d Ubuntu -- bash -lc "docker --version; runsc --version"` prints `bash: line 1: docker: command not found` and `bash: line 1: runsc: command not found`. Unblocks with a Linux VM from the user, or permission to install Docker and gVisor `runsc` inside WSL2 and accept its limits. |
+| P4.3 | BLOCKED | - | No Linux host with Docker and gVisor: `docker` is not installed on Windows, and `wsl -d Ubuntu -- bash -lc "docker --version; runsc --version"` prints `bash: line 1: docker: command not found` and `bash: line 1: runsc: command not found`. Reserved for the user's Claude session, which sets up the WSL2 host; this run installs nothing. |
 | P4.4 | BLOCKED | - | Depends on P4.3 (host). |
 | P4.5 | BLOCKED | - | Depends on P4.3 (host). |
 | P4.6 | BLOCKED | - | Depends on P4.3 (host). |
@@ -73,12 +74,12 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
-| P5.1 | BLOCKED | - | Needs D4 (target load) and P2.1's numbers; neither exists yet. |
-| P5.2 | BLOCKED | - | Needs D5 (per-student daily limits). |
+| P5.1 | todo | | Needs P2.1's numbers (D4 is settled). |
+| P5.2 | todo | | D5 settled: build the limiter, off by default. |
 | P5.3 | todo | | |
 | P5.4 | todo | | |
-| P5.5 | BLOCKED | - | Needs D4. |
-| P5.6 | BLOCKED | - | Needs D4 and P2.1. |
+| P5.5 | todo | | D4 settled: two tiers, 300 gating and 6000 recorded. |
+| P5.6 | todo | | Needs P2.1's numbers (D4 is settled). |
 
 ## Phase 6: no dead ends
 
@@ -123,8 +124,7 @@ above.
 | P2.1, P2.2 | needs live runs on the configured model; no runs were made in this session | a session that runs the probes |
 | P3.2, P3.3 | needs P3.1's benchmark built and run; P3.3 needs Office on this machine | building and running P3.1 |
 | P3.4 | needs the user to score 10 artifacts 1-5 (D6) | the user's scores |
-| P4.3-P4.7 | needs a Linux host with Docker and gVisor `runsc`; this machine has none | a Linux host or WSL2 with `runsc` working |
-| P5.1, P5.2, P5.5, P5.6 | need D4 (target load) and D5 (per-student limits) | the user's decisions |
+| P4.3-P4.7 | needs a Linux host with Docker and gVisor `runsc`; this machine has none | the user's Claude session sets up WSL2 |
 | P5.4 | open risk 3 of `docs/audit/security-attack-notes.md`; not started | implementation |
 | All of D6 | human review of 51 gold entries and 48 eval cases | the user's review |
 
@@ -139,8 +139,3 @@ plan entry; each candidate below is left in place.
    it then.
 2. **`api/backoffice.ts` debug helpers and `api/http.ts`'s `setDebugSessionToken`**
    have no caller after P1.2. They are removed with the backend in P1.9.
-3. **`SandboxRequest` / `SandboxResult` types** in `sandbox/types.py` have no
-   consumer after P1.12's follow-up. They stay exported; removing them is not on
-   the cut list.
-4. **`SandboxRunner.probe_production`** has no caller after P1.12's follow-up
-   (the worker health probes the Office and browser runners directly).
