@@ -13,7 +13,6 @@ from app.admin.store import AdminStore
 from app.api import deps
 from app.api.schemas import (
     AdminAuditEntry,
-    AdminConversation,
     AdminCourse,
     AdminCourseChange,
     AdminCourseChangeCreate,
@@ -33,7 +32,6 @@ from app.api.schemas import (
     AdminOverview,
     AdminRevokedSessions,
     AdminSource,
-    AdminTranscript,
     AdminUser,
     AdminUserSession,
     AdminUserUpdate,
@@ -43,7 +41,6 @@ from app.api.schemas import (
     CatalogRefreshPublishRequest,
     CatalogRefreshStartRequest,
     CatalogRefreshStatusResponse,
-    GrantedResultStaging,
     ModelPriceSchedule,
     ModelPriceScheduleCreate,
     ProgramInspectionResponse,
@@ -54,8 +51,6 @@ from app.api.schemas import (
     ProgramRuleReleaseDetail,
     ProgramRuleReleaseSummary,
     ProgramRuleReviewAction,
-    ResourceGrant,
-    ResourceGrantCreate,
     SourceDependencies,
     SourceImpactPreviewResponse,
     SourceLifecycleChangeRequest,
@@ -67,10 +62,6 @@ from app.api.schemas import (
     SourceReviewProposalReject,
     SourceRevisionEvidenceResponse,
     SourceRevisionPassage,
-    SupportGrantRequest,
-    SupportGrantRequestCreate,
-    SupportGrantRequestDecision,
-    SupportGrantRequestUpdate,
     TelemetryUsageResponse,
 )
 from app.auth.models import Principal
@@ -116,16 +107,6 @@ def _user(row) -> AdminUser:
         activeSessions=row.get("active_sessions", 0),
         createdAt=iso(row["created_at"]), updatedAt=iso(row["updated_at"]),
         lastSeenAt=iso(row["last_seen_at"]),
-    )
-
-
-def _conversation(row) -> AdminConversation:
-    return AdminConversation(
-        conversationId=row["conversation_id"], workspaceKey=row["workspace_key"],
-        title=row["title"], lastSequence=row["last_sequence"],
-        pendingRequestId=row["pending_request_id"],
-        turnCount=row.get("turn_count", 0), summaryCount=row.get("summary_count", 0),
-        createdAt=iso(row["created_at"]), updatedAt=iso(row["updated_at"]),
     )
 
 
@@ -253,22 +234,6 @@ def export_audit(
 
 
 
-@router.get("/conversations", response_model=list[AdminConversation])
-def conversations(conn: Conn, principal: Admin, workspace: str = "", query: str = "",
-                  limit: int = Query(50, ge=1, le=200), offset: int = 0):
-    rows = AdminStore(conn, principal).conversations(
-        workspace=workspace, query=query, limit=limit, offset=offset)
-    return [_conversation(row) for row in rows]
-
-
-@router.get("/conversations/{conversation_id}/transcript", response_model=AdminTranscript)
-def transcript(conversation_id: UUID, conn: Conn, principal: Admin):
-    value = AdminStore(conn, principal).transcript(conversation_id)
-    return AdminTranscript(
-        conversation=_conversation(value["conversation"]), turns=value["turns"],
-    )
-
-
 def _job(row) -> AdminJob:
     return AdminJob(
         jobId=row["job_id"], kind=row["kind"], scopeKey=row["scope_key"],
@@ -303,13 +268,6 @@ def sources(conn: Conn, principal: Admin, workspace: str = "",
         isCurrent=row["is_current"], createdAt=iso(row["created_at"]),
         updatedAt=iso(row["updated_at"]),
     ) for row in rows]
-
-
-@router.delete("/conversations/{conversation_id}", status_code=204, response_class=Response,
-               responses={204: {"description": "Conversation transcript and turn jobs deleted."}})
-def delete_conversation(conversation_id: UUID, conn: Conn, principal: Admin):
-    AdminStore(conn, principal).delete_conversation(conversation_id)
-    return Response(status_code=204)
 
 
 @router.get("/telemetry/usage", response_model=TelemetryUsageResponse)
@@ -373,214 +331,6 @@ def create_price_schedule(body: ModelPriceScheduleCreate, conn: Conn, principal:
     )
     conn.commit()
     return schedule
-
-
-def _grant(row) -> ResourceGrant:
-    return ResourceGrant(
-        grantId=row["grant_id"],
-        grantType=row["grant_type"],
-        actorUserId=row["actor_user_id"],
-        targetWorkspaceKey=row["target_workspace_key"],
-        resourceType=row["resource_type"],
-        resourceId=row.get("resource_id"),
-        allowedActions=row["allowed_actions"],
-        reason=row["reason"],
-        approvedByUserId=row["approved_by_user_id"],
-        expiresAt=iso(row["expires_at"]),
-        createdAt=iso(row["created_at"]),
-        revokedAt=iso(row.get("revoked_at")),
-        revokedByUserId=row.get("revoked_by_user_id"),
-        actorEmail=row.get("actor_email"),
-        actorDisplayName=row.get("actor_display_name"),
-        approvedByEmail=row.get("approved_by_email"),
-        approvedByDisplayName=row.get("approved_by_display_name"),
-    )
-
-
-@router.get("/grants", response_model=list[ResourceGrant])
-def list_grants(
-    conn: Conn,
-    principal: Admin,
-    target_workspace: str = "",
-    actor_user_id: UUID | None = None,
-    grant_type: str = "",
-    active_only: bool = False,
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = 0,
-):
-    rows = AdminStore(conn, principal).list_grants(
-        target_workspace_key=target_workspace,
-        actor_user_id=actor_user_id,
-        grant_type=grant_type,
-        active_only=active_only,
-        limit=limit,
-        offset=offset,
-    )
-    return [_grant(row) for row in rows]
-
-
-@router.post("/grants", response_model=ResourceGrant, status_code=201)
-def create_grant(body: ResourceGrantCreate, conn: Conn, principal: Admin):
-    _operation(principal, "grants.approve")
-    expires_at = _parse_timestamp(body.expiresAt, "expiresAt")
-    row = AdminStore(conn, principal).create_grant(
-        grant_type=body.grantType,
-        actor_user_id=body.actorUserId,
-        target_workspace_key=body.targetWorkspaceKey,
-        resource_type=body.resourceType,
-        resource_id=body.resourceId,
-        reason=body.reason,
-        expires_at=expires_at,
-        allowed_actions=body.allowedActions,
-    )
-    return _grant(row)
-
-
-@router.post("/grants/{grant_id}/revoke", response_model=ResourceGrant)
-def revoke_grant(grant_id: UUID, conn: Conn, principal: Admin):
-    _operation(principal, "grants.revoke")
-    row = AdminStore(conn, principal).revoke_grant(grant_id)
-    return _grant(row)
-
-
-def _support_request(row) -> SupportGrantRequest:
-    return SupportGrantRequest(
-        requestId=row["request_id"],
-        requesterUserId=row["requester_user_id"],
-        actorUserId=row["actor_user_id"],
-        targetWorkspaceKey=row["target_workspace_key"],
-        resourceType=row["resource_type"],
-        resourceId=row.get("resource_id"),
-        allowedActions=row["allowed_actions"],
-        reason=row["reason"],
-        expiresAt=iso(row["expires_at"]),
-        status=row["status"],
-        revision=row["revision"],
-        decisionNote=row.get("decision_note"),
-        decidedByUserId=row.get("decided_by_user_id"),
-        decidedAt=iso(row.get("decided_at")),
-        grantId=row.get("grant_id"),
-        createdAt=iso(row["created_at"]),
-        updatedAt=iso(row["updated_at"]),
-        actorEmail=row.get("actor_email"),
-        actorDisplayName=row.get("actor_display_name"),
-    )
-
-
-@router.get("/grant-requests", response_model=list[SupportGrantRequest])
-def list_grant_requests(
-    conn: Conn,
-    principal: Admin,
-    status: str = "",
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = 0,
-):
-    _operation(principal, "grants.request")
-    rows = AdminStore(conn, principal).list_support_grant_requests(
-        status=status, limit=limit, offset=offset,
-    )
-    return [_support_request(row) for row in rows]
-
-
-@router.post("/grant-requests", response_model=SupportGrantRequest, status_code=201)
-def create_grant_request(body: SupportGrantRequestCreate, conn: Conn, principal: Admin):
-    _operation(principal, "grants.request")
-    row = AdminStore(conn, principal).request_support_grant(
-        target_workspace_key=body.targetWorkspaceKey,
-        resource_type=body.resourceType,
-        resource_id=body.resourceId,
-        reason=body.reason,
-        expires_at=_parse_timestamp(body.expiresAt, "expiresAt"),
-    )
-    return _support_request(row)
-
-
-@router.patch("/grant-requests/{request_id}", response_model=SupportGrantRequest)
-def update_grant_request(
-    request_id: UUID, body: SupportGrantRequestUpdate, conn: Conn, principal: Admin,
-):
-    _operation(principal, "grants.request")
-    row = AdminStore(conn, principal).update_support_grant_request(
-        request_id,
-        target_workspace_key=body.targetWorkspaceKey,
-        resource_type=body.resourceType,
-        resource_id=body.resourceId,
-        reason=body.reason,
-        expires_at=_parse_timestamp(body.expiresAt, "expiresAt"),
-        expected_revision=body.expectedRevision,
-    )
-    return _support_request(row)
-
-
-@router.post("/grant-requests/{request_id}/approve", response_model=SupportGrantRequest)
-def approve_grant_request(
-    request_id: UUID, body: SupportGrantRequestDecision, conn: Conn, principal: Admin,
-):
-    _operation(principal, "grants.approve")
-    row = AdminStore(conn, principal).approve_support_grant_request(
-        request_id, expected_revision=body.expectedRevision,
-    )
-    return _support_request(row)
-
-
-@router.post("/grant-requests/{request_id}/reject", response_model=SupportGrantRequest)
-def reject_grant_request(
-    request_id: UUID, body: SupportGrantRequestDecision, conn: Conn, principal: Admin,
-):
-    _operation(principal, "grants.approve")
-    row = AdminStore(conn, principal).reject_support_grant_request(
-        request_id, expected_revision=body.expectedRevision, note=body.note or "",
-    )
-    return _support_request(row)
-
-
-@router.get(
-    "/conversations/{conversation_id}/transcript/download",
-    response_class=Response,
-    responses={
-        200: {
-            "description": "Owned conversation transcript as plain text.",
-            "content": {"text/plain": {}},
-        }
-    },
-)
-def download_transcript(conversation_id: UUID, conn: Conn, principal: Admin):
-    body = AdminStore(conn, principal).transcript_download(conversation_id)
-    return Response(
-        content=body,
-        media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="transcript.txt"'},
-    )
-
-
-@router.post(
-    "/conversations/{conversation_id}/granted-results",
-    response_model=GrantedResultStaging,
-    status_code=201,
-)
-def stage_granted_result(conversation_id: UUID, conn: Conn, principal: Admin):
-    row = AdminStore(conn, principal).stage_granted_transcript(conversation_id)
-    return GrantedResultStaging(
-        stagingId=row["staging_id"],
-        grantId=row["grant_id"],
-        status=row["status"],
-        resourceId=row["resource_id"],
-    )
-
-
-@router.post(
-    "/granted-results/{staging_id}/publish",
-    response_class=Response,
-    responses={
-        200: {
-            "description": "Published granted transcript as plain text.",
-            "content": {"text/plain": {}},
-        }
-    },
-)
-def publish_granted_result(staging_id: UUID, conn: Conn, principal: Admin):
-    body = AdminStore(conn, principal).publish_granted_result(staging_id)
-    return Response(content=body, media_type="text/plain; charset=utf-8")
 
 
 @router.get("/alerts", response_model=list[AlertStatusResponse], response_model_exclude_unset=True)

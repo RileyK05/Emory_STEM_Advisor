@@ -24,8 +24,6 @@ class Capability(StrEnum):
     MANAGE_DEBUG = "debug:manage"
     MANAGE_CONNECTIONS = "connections:manage"
     MANAGE_PRICE_SCHEDULES = "pricing:manage"
-    GRANT_SUPPORT_ACCESS = "grants:support_create"
-    REVOKE_GRANTS = "grants:revoke"
     SOURCE_REVIEW = "sources:review"
     PROGRAM_RULE_REVIEW = "programs:review"
     COURSE_MAINTENANCE = "courses:maintain"
@@ -59,8 +57,6 @@ ROLE_CAPABILITIES: dict[str, set[Capability]] = {
         Capability.MANAGE_DEBUG,
         Capability.MANAGE_CONNECTIONS,
         Capability.MANAGE_PRICE_SCHEDULES,
-        Capability.GRANT_SUPPORT_ACCESS,
-        Capability.REVOKE_GRANTS,
         Capability.SOURCE_REVIEW,
         Capability.PROGRAM_RULE_REVIEW,
         Capability.COURSE_MAINTENANCE,
@@ -82,9 +78,6 @@ OPERATION_CAPABILITIES: dict[str, Capability] = {
     "debug.manage": Capability.MANAGE_DEBUG,
     "connections.manage": Capability.MANAGE_CONNECTIONS,
     "pricing.manage": Capability.MANAGE_PRICE_SCHEDULES,
-    "grants.request": Capability.GRANT_SUPPORT_ACCESS,
-    "grants.approve": Capability.GRANT_SUPPORT_ACCESS,
-    "grants.revoke": Capability.REVOKE_GRANTS,
     "sources.review": Capability.SOURCE_REVIEW,
     "programs.review": Capability.PROGRAM_RULE_REVIEW,
     "courses.read": Capability.READ_AUDIT,
@@ -139,7 +132,11 @@ def check_workspace_access(
     *,
     record_audit_on_denial: bool = True,
 ) -> bool:
-    """Verify whether principal can access target_workspace_key either by ownership or active grant."""
+    """Verify whether principal can read or write target_workspace_key.
+
+    Ownership is the only route: a workspace belongs to its student, and no
+    staff role reads another user's workspace.
+    """
     if principal.status != "active":
         raise HTTPException(403, "user account is disabled")
 
@@ -149,23 +146,8 @@ def check_workspace_access(
             return has_capability(principal.role, Capability.WRITE_OWN_WORKSPACE)
         return has_capability(principal.role, Capability.READ_OWN_WORKSPACE)
 
-    # If actor has no user_id (e.g. dev CLI without user row), cross-workspace is denied
     if principal.user_id is None:
         return False
-
-    row = conn.execute(
-        queries.get("check_active_resource_grant"),
-        {
-            "actor_user_id": principal.user_id,
-            "target_workspace_key": target_workspace_key,
-            "resource_type": resource_type,
-            "resource_id": resource_id,
-            "action": action,
-        },
-    ).fetchone()
-
-    if row is not None:
-        return True
 
     # Access denied
     if record_audit_on_denial:
@@ -185,7 +167,7 @@ def check_workspace_access(
                         "detail": Jsonb({
                             "target_workspace": target_workspace_key,
                             "action": action,
-                            "reason": "missing_or_expired_grant",
+                            "reason": "not_the_workspace_owner",
                         }),
                     },
                 )

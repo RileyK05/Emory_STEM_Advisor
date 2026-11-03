@@ -531,92 +531,6 @@ class AdminUserUpdate(BaseModel):
     status: Literal["active", "disabled"]
 
 
-_GrantType = Literal["advisor_access", "support_access"]
-_GrantResourceType = Literal["conversation", "plan", "all_records"]
-
-
-class ResourceGrantCreate(BaseModel):
-    grantType: _GrantType
-    actorUserId: UUID
-    targetWorkspaceKey: str
-    resourceType: _GrantResourceType
-    resourceId: str | None = None
-    reason: str = Field(min_length=5, max_length=1000)
-    expiresAt: str
-    allowedActions: list[str] = Field(default_factory=lambda: ["read"])
-
-
-class ResourceGrant(_WireModel):
-    grantId: UUID
-    grantType: _GrantType
-    actorUserId: UUID
-    targetWorkspaceKey: str
-    resourceType: _GrantResourceType
-    resourceId: str | None = None
-    allowedActions: list[str]
-    reason: str
-    approvedByUserId: UUID
-    expiresAt: str
-    createdAt: str
-    revokedAt: str | None = None
-    revokedByUserId: UUID | None = None
-    actorEmail: str | None = None
-    actorDisplayName: str | None = None
-    approvedByEmail: str | None = None
-    approvedByDisplayName: str | None = None
-
-
-class SupportGrantRequestCreate(BaseModel):
-    targetWorkspaceKey: str = Field(min_length=1, max_length=200)
-    resourceType: _GrantResourceType
-    resourceId: str | None = None
-    reason: str = Field(min_length=5, max_length=1000)
-    expiresAt: str
-
-
-class SupportGrantRequestUpdate(BaseModel):
-    targetWorkspaceKey: str = Field(min_length=1, max_length=200)
-    resourceType: _GrantResourceType
-    resourceId: str | None = None
-    reason: str = Field(min_length=5, max_length=1000)
-    expiresAt: str
-    expectedRevision: int = Field(ge=1)
-
-
-class SupportGrantRequestDecision(BaseModel):
-    expectedRevision: int = Field(ge=1)
-    note: str | None = None
-
-
-class SupportGrantRequest(_WireModel):
-    requestId: UUID
-    requesterUserId: UUID
-    actorUserId: UUID
-    targetWorkspaceKey: str
-    resourceType: _GrantResourceType
-    resourceId: str | None = None
-    allowedActions: list[str]
-    reason: str
-    expiresAt: str
-    status: Literal["pending", "approved", "rejected"]
-    revision: int
-    decisionNote: str | None = None
-    decidedByUserId: UUID | None = None
-    decidedAt: str | None = None
-    grantId: UUID | None = None
-    createdAt: str
-    updatedAt: str
-    actorEmail: str | None = None
-    actorDisplayName: str | None = None
-
-
-class GrantedResultStaging(_WireModel):
-    stagingId: UUID
-    grantId: UUID
-    status: Literal["staged", "published", "withheld"]
-    resourceId: str
-
-
 _PrivacyStatus = Literal["queued", "running", "completed", "failed"]
 
 
@@ -669,33 +583,6 @@ class AdminAuditEntry(_WireModel):
     createdAt: str
     actorEmail: str | None = None
     actorDisplayName: str | None = None
-
-
-class AdminConversation(_WireModel):
-    conversationId: UUID
-    workspaceKey: str
-    title: str
-    lastSequence: int
-    pendingRequestId: UUID | None = None
-    turnCount: int
-    summaryCount: int
-    createdAt: str
-    updatedAt: str
-
-
-class AdminConversationTurn(_WireModel):
-    sequence: int
-    requestId: str
-    role: Literal["user", "assistant"]
-    text: str
-    status: str
-    evidence: dict[str, Any]
-    createdAt: str
-
-
-class AdminTranscript(_WireModel):
-    conversation: AdminConversation
-    turns: list[AdminConversationTurn]
 
 
 class AdminJob(_WireModel):

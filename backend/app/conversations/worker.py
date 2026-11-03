@@ -331,9 +331,6 @@ class ConversationTurnExecutor:
 
         try:
             require_workspace_execution(conn, job.scope_key, lock=True)
-            from app.auth.grants import assert_job_support_grant
-
-            assert_job_support_grant(conn, job)
         except HTTPException as exc:
             raise SafeJobError("access_changed", "Workspace access changed; output was withheld.",
                                retryable=False) from exc

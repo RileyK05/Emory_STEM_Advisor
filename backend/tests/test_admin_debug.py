@@ -9,7 +9,6 @@ from psycopg.types.json import Jsonb
 
 from app.auth.dependencies import get_principal
 from app.auth.models import Principal
-from app.conversations.store import ConversationStore
 from app.db import queries
 from tests.fakes import FakeProvider
 from tests.helpers import api_client, collection_name, ingest_text
@@ -167,27 +166,6 @@ def test_non_admin_is_rejected_from_admin_and_debug_surfaces(db, collection, rol
         client.app.dependency_overrides.pop(get_principal, None)
 
 
-def test_admin_transcript_read_is_audited(db, collection):
-    client = api_client(db, collection)
-    store = ConversationStore(db, "development")
-    conversation_id = UUID(store.create("Private chat")["conversationId"])
-    request_id = uuid4()
-    store.begin(conversation_id, request_id, 0, {
-        "query": "hello", "request": {"query": "hello"},
-        "effective": {"collectionId": "course-docs", "sourceIds": None},
-    })
-    store.finish(conversation_id, request_id, {"type": "answer", "answer": "Hi."})
-
-    value = client.get(f"/api/admin/conversations/{conversation_id}/transcript")
-    assert value.status_code == 200, value.text
-    assert value.json()["conversation"]["title"] == "Private chat"
-    assert value.json()["turns"][0]["text"] == "hello"
-
-    audit = client.get("/api/admin/audit").json()
-    assert audit[0]["action"] == "conversation.read"
-    assert audit[0]["targetId"] == str(conversation_id)
-
-
 def test_debug_session_applies_prompt_and_settings_only_with_its_token(db, collection, tmp_path):
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is documented.")
     provider = FakeProvider("Alpha is documented [1].")
@@ -282,51 +260,6 @@ def test_admin_bootstrap_promotes_only_on_first_insert(db):
     }).fetchone()
     assert third["role"] == "student"
     db.commit()
-
-
-def test_admin_user_sessions_and_conversation_delete_are_audited(db, collection):
-    client = api_client(db, collection)
-    user_id = _app_user(db, email="sessions@emory.edu")
-    workspace = db.execute(queries.get("admin_get_user"), {"user_id": user_id}).fetchone()[
-        "workspace_key"]
-    db.execute(
-        "INSERT INTO auth_sessions (session_hash, issuer, subject, workspace_key, expires_at) "
-        "VALUES (%(hash)s, 'issuer', 'subject', %(workspace)s, now() + interval '1 hour')",
-        {"hash": b"session-one", "workspace": workspace},
-    )
-    db.commit()
-
-    sessions = client.get(f"/api/admin/users/{user_id}/sessions")
-    assert sessions.status_code == 200, sessions.text
-    assert len(sessions.json()) == 1
-    assert sessions.json()[0]["revokedAt"] is None
-
-    store = ConversationStore(db, "development")
-    conversation_id = UUID(store.create("Delete me")["conversationId"])
-    request_id = uuid4()
-    store.begin(conversation_id, request_id, 0, {
-        "query": "hello", "request": {"query": "hello"},
-        "effective": {"collectionId": "course-docs", "sourceIds": None},
-    })
-    store.finish(conversation_id, request_id, {"type": "answer", "answer": "Hi."})
-    assert client.get(f"/api/admin/conversations/{conversation_id}/transcript").status_code == 200
-
-    deleted = client.delete(f"/api/admin/conversations/{conversation_id}")
-    assert deleted.status_code == 204, deleted.text
-    assert client.get(f"/api/admin/conversations/{conversation_id}/transcript").status_code == 404
-    audit = client.get("/api/admin/audit").json()
-    assert any(item["action"] == "conversation.deleted" for item in audit)
-    assert any(item["action"] == "conversation.read" for item in audit)
-
-    stream_conversation = UUID(store.create("Stream delete")["conversationId"])
-    stream_request = uuid4()
-    started = store.begin_stream(stream_conversation, stream_request, 0, {
-        "request": {"query": "hello", "requestId": str(stream_request)},
-        "query": "hello",
-        "effective": {"collectionId": "course-docs", "sourceIds": None},
-    })
-    assert client.delete(f"/api/admin/conversations/{stream_conversation}").status_code == 204
-    assert db.execute(queries.get("get_job"), {"job_id": started["job_id"]}).fetchone() is None
 
 
 def test_admin_cancels_a_queued_job(db, collection):

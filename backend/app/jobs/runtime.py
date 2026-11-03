@@ -124,9 +124,6 @@ class RunExecutor:
 
         try:
             require_workspace_execution(conn, workspace_key, lock=True)
-            from app.auth.grants import assert_job_support_grant
-
-            assert_job_support_grant(conn, job)
             if job.payload.get("inputs", {}).get("conversationId"):
                 from app.flags.service import FeatureFlagService
 

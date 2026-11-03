@@ -46,18 +46,8 @@ def test_vote_replacement_and_redacted_candidate(db, collection):
         )
     assert denied.value.status_code == 403
 
-    from datetime import UTC, datetime, timedelta
-
-    from app.admin.store import AdminStore
-
     advisor = create_user(db, role="advisor")
-    AdminStore(db, reviewer).create_grant(
-        grant_type="advisor_access", actor_user_id=advisor.user_id,
-        target_workspace_key=student.workspace_key, resource_type="all_records",
-        allowed_actions=["read"], reason="Read the student's academic record",
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
-    )
-    db.commit()
+    # Staff roles have no route into another user's workspace: ownership decides.
     with pytest.raises(HTTPException) as read_only:
         FeedbackService.submit(
             db, student.workspace_key, response_id, "up", "helpful", None, advisor,

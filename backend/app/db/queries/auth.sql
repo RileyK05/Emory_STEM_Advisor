@@ -53,3 +53,9 @@ WITH expired_transactions AS (
 )
 SELECT (SELECT count(*) FROM expired_transactions) AS transactions,
        (SELECT count(*) FROM expired_sessions) AS sessions;
+
+-- name: workspace_execution_user
+SELECT user_id, role, status FROM app_users WHERE workspace_key = %(workspace_key)s;
+
+-- name: lock_workspace_execution_user
+SELECT user_id, role, status FROM app_users WHERE workspace_key = %(workspace_key)s FOR SHARE;

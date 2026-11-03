@@ -40,7 +40,7 @@ plans and `docs/audit/` the review status.
     dependent runs, provider batches), `conversations/`, `artifacts/`,
     `sandbox/` (isolated Office/HTML execution on a separate worker).
   - Accounts and governance: `auth/` (`get_principal` is the one authentication
-    dependency; capabilities and support grants), `connections/` (encrypted
+    dependency; capabilities), `connections/` (encrypted
     provider profiles, evaluated routing), `admin/`, `debug/` (allowlisted,
     expiring overrides), `records/`, `privacy/`, `quotas/`, `flags/`,
     `pricing/` (price schedules; `record_model_call` writes every model_calls

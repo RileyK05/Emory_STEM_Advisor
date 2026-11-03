@@ -1922,9 +1922,8 @@ semester-completion claim.
 ### Academic records
 
 `app/records/` holds workspace academic records. Verification requires both a
-verification capability and target record authorization, including the explicit
-`verify` grant action for a different workspace. Support grants permit only
-reads, and grants do not cross resource types. Record/audit HTTP handlers
+verification capability and ownership of the record's workspace; no
+cross-workspace path exists. Record/audit HTTP handlers
 explicitly commit persisted mutations so request connection close cannot
 discard apparently successful writes. Each record mutation stores an immutable
 attempt snapshot for that revision; a later edit leaves the older snapshot
@@ -2660,8 +2659,6 @@ configurable.
 | GET/POST/DELETE | `/api/admin/cohorts`, `.../{cohort}/users`, `.../{cohort}/users/{userId}` | Cohort membership |
 | GET/POST | `/api/admin/quotas` | Quota policies (expected-update conflicts) |
 | POST | `/api/admin/prompts`, `.../{versionId}/approve`, `.../fixtures`, `.../{versionId}/promote` | Immutable prompt versions; human approval before promotion |
-| GET/POST/PATCH | `/api/admin/grants`, `.../grants/{id}/revoke`, `/api/admin/grant-requests`, `.../{id}`, `.../{id}/approve`, `.../{id}/reject` | Two-admin support access requests and scoped read-only grants |
-| POST | `/api/admin/conversations/{id}/granted-results`, `/api/admin/granted-results/{stagingId}/publish` | Stage and publish a result under an active support grant |
 | GET | `/api/admin/alerts` | Alert probe readings |
 | GET/POST | `/api/admin/sources/{id}/review`, `.../impact`, `.../proposals`, `.../proposals/{pid}/approve`, `.../proposals/{pid}/reject`, `.../lifecycle`, `.../evidence` | Source review lifecycle and revision evidence |
 | GET/POST | `/api/admin/programs/{id}/inspection`, `.../rules/draft`, `.../rules/{releaseId}/approve`, `.../publish`, `.../reject`, `.../rules/diff` | Program rule release review |
@@ -2671,7 +2668,7 @@ configurable.
 
 ## Governance and operations
 
-### Roles, grants and feature policy
+### Roles and feature policy
 
 The four session roles are student, advisor, admin and auditor. Authenticated
 workspace routes require the corresponding read/write capability; auditor Main
@@ -2679,14 +2676,10 @@ navigation leads to the read-only Audit and Usage & Cost surfaces. Worker entry
 and publication recheck persisted role/status; short shared publication locks
 serialize that decision against role changes.
 
-Support access is requested by one administrator and approved by another. The
-request keeps its draft when the expected revision is stale. Approval pins an
-expiring read-only grant to the workspace and resource. Revocation or expiry
-denies the next transcript read, the direct transcript download, and publication
-of a result already staged under that grant. Worker publication applies the same
-grant fence when a job payload carries `supportGrantId`. A caller-supplied
-workspace key is not authorization: record and audit routes still require
-ownership or an active scoped grant, including verification.
+A workspace belongs to its student. No staff role reads another user's chat,
+artifact or record: workspace routes require ownership, and a caller-supplied
+workspace key is not authorization. Feedback triage shows the answer a student
+chose to flag, and nothing else crosses workspaces.
 
 Feature policy is evaluated from current database overrides and cohort
 membership at execution boundaries. Process settings remain ceilings over
@@ -2722,8 +2715,8 @@ retire the topic graph. Corpus regeneration stays a separate verified import.
 ### Feedback, experiments and prompt versions
 
 Response feedback keeps one current vote per owner and response; a different
-vote replaces that row's current flag. Only the owner may submit a vote; a read
-grant cannot submit on the owner's behalf. Submission verifies a persisted
+vote replaces that row's current flag. Only the owner may submit a vote; a staff
+role has no route onto another user's response. Submission verifies a persisted
 response's trace ownership and returns 404 for unknown or other-workspace IDs.
 The public trace ID is the vote identity; a response UUID aliases that same
 revision chain, and current vote counts are owner-scoped. Feedback is not tied to the original

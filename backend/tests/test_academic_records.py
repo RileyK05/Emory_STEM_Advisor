@@ -1,11 +1,9 @@
 """Tests for academic record import, normalization, verification, and service operations (Item 1)."""
 
-from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
 
-from app.admin.store import AdminStore
 from app.records.importer import (
     infer_status_and_credits,
     normalize_course_code,
@@ -182,69 +180,12 @@ def test_academic_record_service_lifecycle(db):
             db, student.workspace_key, att1["attempt_id"], "manual_staff", "Checked", advisor,
         )
     assert no_grant.value.status_code == 403
-    admin = create_user(db, role="admin")
-    grant = AdminStore(db, admin).create_grant(
-        grant_type="advisor_access", actor_user_id=advisor.user_id,
-        target_workspace_key=student.workspace_key, resource_type="all_records",
-        allowed_actions=["read", "verify"], reason="Review official academic attempts",
-        expires_at=datetime.now(UTC) + timedelta(hours=1),
-    )
-    db.commit()
-    verified_att = AcademicRecordService.verify_attempt(
-        db,
-        student.workspace_key,
-        att1["attempt_id"],
-        "manual_staff",
-        "Official transcript checked",
-        advisor,
-    )
-    assert verified_att["is_verified"]
-    assert verified_att["verification_method"] == "manual_staff"
-    assert verified_att["verified_by_user_id"] == advisor.user_id
-    verified_revision = AcademicRecordService.get_revision(db, student.workspace_key, 3, student)
-    assert verified_revision["attempts"][0]["resolvedCourseCode"] == "CS 171"
-    assert verified_revision["attempts"][0]["verificationMethod"] == "manual_staff"
-    AdminStore(db, admin).revoke_grant(grant["grant_id"])
-    db.commit()
-    with pytest.raises(HTTPException) as revoked:
-        AcademicRecordService.verify_attempt(
-            db, student.workspace_key, att1["attempt_id"], "manual_staff", "Checked", advisor,
-        )
-    assert revoked.value.status_code == 403
-
-    # 4. Editing a verified attempt invalidates verification!
-    edited_att = AcademicRecordService.upsert_attempt(
-        db,
-        student.workspace_key,
-        {
-            "attemptId": str(att1["attempt_id"]),
-            "submittedCourseCode": "CS 170",
-            "term": "Fall 2023",
-            "attemptedCredits": 4.0,
-            "grade": "A-",
-        },
-        student,
-    )
-    assert not edited_att["is_verified"]
-    assert edited_att["verification_method"] is None
-    assert edited_att["grade"] == "A-"
-    prior = AcademicRecordService.get_revision(db, student.workspace_key, 2, student)
-    assert prior["attempts"][0]["grade"] == "A"
-    assert prior["attempts"][0]["provenance"] == "student_manual"
-
-    # Check verification event history
-    full_data = AcademicRecordService.get_record(db, student.workspace_key, student)
-    event_types = [e["event_type"] for e in full_data["recentEvents"]]
-    assert "verification_invalidated" in event_types
-    assert "attempt_verified" in event_types
-    assert "attempt_updated" in event_types
-
-    # 5. Cross-workspace isolation
+    # 4. Cross-workspace isolation
     with pytest.raises(HTTPException) as exc_iso:
         AcademicRecordService.get_record(db, student.workspace_key, other_student)
     assert exc_iso.value.status_code == 403
 
-    # 6. Delete attempt
+    # 5. Delete attempt
     AcademicRecordService.delete_attempt(db, student.workspace_key, att1["attempt_id"], student)
     after_del = AcademicRecordService.get_record(db, student.workspace_key, student)
     assert len(after_del["attempts"]) == 0
