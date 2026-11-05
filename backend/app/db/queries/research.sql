@@ -288,6 +288,44 @@ WHERE co.collection_id = %(collection_id)s
   AND co.source_id = ANY(%(source_ids)s::uuid[])
 ORDER BY co.code;
 
+-- name: research_course_offering_chunks
+SELECT c.chunk_id, c.source_id, c.chunk_index, c.locator_id, l.label AS locator_label,
+       c.text
+FROM chunks c
+JOIN locators l ON l.locator_id = c.locator_id
+JOIN atlas_offering_snapshots s ON s.source_id = c.source_id
+WHERE c.source_id = ANY(%(source_ids)s::uuid[])
+  AND split_part(l.label, ' ', 1) || ' ' || split_part(l.label, ' ', 2) = %(code)s
+ORDER BY split_part(s.term, ' ', 2) DESC,
+         CASE split_part(s.term, ' ', 1) WHEN 'Fall' THEN 3 WHEN 'Summer' THEN 2 ELSE 1 END DESC,
+         c.chunk_index
+LIMIT 3;
+
+-- name: research_courses_requiring
+SELECT m.target_code AS code, array_agg(DISTINCT c.code ORDER BY c.code) AS required_by
+FROM prereq_mentions m
+JOIN courses c ON c.course_id = m.course_id
+WHERE c.collection_id = %(collection_id)s AND m.kind = 'prerequisite'
+  AND m.target_code = ANY(%(codes)s) AND c.lifecycle = 'current'
+GROUP BY m.target_code;
+
+-- name: research_programs_naming_courses
+SELECT m.target_code AS code, array_agg(DISTINCT p.title ORDER BY p.title) AS programs
+FROM program_course_mentions m
+JOIN programs p ON p.program_id = m.program_id
+WHERE p.collection_id = %(collection_id)s AND p.is_active
+  AND m.target_code = ANY(%(codes)s)
+GROUP BY m.target_code;
+
+-- name: research_course_offering_terms
+SELECT DISTINCT r.raw_course_code AS code, s.term
+FROM atlas_offering_rows r
+JOIN atlas_offering_snapshots s USING (source_id)
+JOIN sources src ON src.source_id = s.source_id
+WHERE src.collection_id = %(collection_id)s AND src.is_current
+  AND r.review_status = 'eligible' AND r.raw_course_code = ANY(%(codes)s)
+ORDER BY s.term;
+
 -- name: research_chunks_for_locators
 SELECT c.chunk_id, c.source_id, c.chunk_index, c.locator_id, l.label AS locator_label,
        c.text

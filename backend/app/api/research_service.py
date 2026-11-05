@@ -37,6 +37,15 @@ from app.retrieval.types import RetrievalTrace, Retrieved
 from app.tools.executions import ToolExecutionLedger, ToolLedgerError
 
 
+def research_sampling(settings) -> dict[str, str]:
+    """The sampling fields research sets, leaving a connection's own choice alone."""
+    if (settings.research_reasoning_effort is None or settings.llm_reasoning_effort is not None
+            or settings.llm_provider not in {"openai", "openai-compatible"}):
+        return {}
+    return {"llm_sampling_policy": "model_default",
+            "llm_reasoning_effort": settings.research_reasoning_effort}
+
+
 def research_response(body, conn, settings, config, embedder, provider, *, collection_id,
                       source_ids, source_snapshot, workspace_key, connection_profiles,
                       connection_runtime, check_cancelled, on_progress, on_profile_selection,
@@ -60,7 +69,8 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
     settings = replace(settings, operation_max_calls=settings.research_max_calls,
         operation_timeout_seconds=settings.research_operation_timeout_seconds,
         operation_token_budget=settings.research_operation_token_budget,
-        llm_max_output_tokens=min(settings.research_max_output_tokens, settings.llm_max_output_tokens))
+        llm_max_output_tokens=settings.research_max_output_tokens,
+        **research_sampling(settings))
     scope = build_scope(conn, collection_id=collection_id, workspace_key=workspace_key,
                         source_ids=source_ids, frozen_snapshot=source_snapshot)
     conn.commit()

@@ -41,7 +41,7 @@ MAX_CRITERIA = 8
 MAX_OPEN_QUESTIONS = 8
 MAX_STATE_BYTES = 8_000
 MAX_DECISION_BLOCKS = 20
-MAX_DECISION_TEXT_BYTES = 16_000
+MAX_DECISION_TEXT_BYTES = 3_200
 MAX_QUESTIONS_PER_TURN = 2
 MAX_UNRESOLVED_QUESTIONS = 8
 
@@ -341,7 +341,8 @@ def validate_decision_limits(decision: FinalDecision) -> list[str]:
         problems.append(f"more than {MAX_DECISION_BLOCKS} blocks")
     total = decision_text_bytes(decision)
     if total > MAX_DECISION_TEXT_BYTES:
-        problems.append(f"block text is {total} bytes, over {MAX_DECISION_TEXT_BYTES}")
+        problems.append(f"reply is {total} bytes, over {MAX_DECISION_TEXT_BYTES}: cut it to the "
+                        "direct answer and the next step, under 250 words")
     if question_blocks(decision) > MAX_QUESTIONS_PER_TURN:
         problems.append(f"more than {MAX_QUESTIONS_PER_TURN} questions in one turn")
     if len(decision.unresolved_questions) > MAX_UNRESOLVED_QUESTIONS:

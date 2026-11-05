@@ -86,6 +86,33 @@ def test_a_value_that_is_not_a_whole_number_is_left_alone(value):
     assert _repair({"count": value})["count"] == value
 
 
+@pytest.mark.parametrize("empty", [None, {}, ""])
+def test_an_empty_array_sent_as_another_empty_value_is_repaired(empty):
+    """Providers spell an empty array as null, {} or ""; all mean no items."""
+    assert _repair({"names": empty})["names"] == ()
+    assert _valid({"names": empty})
+
+
+def test_null_stays_null_for_a_field_that_allows_it():
+    """Only a required array turns null into empty; an optional keeps its null."""
+    class Maybe(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+        names: tuple[str, ...] | None = None
+
+    assert repair_arguments({"names": None}, Maybe)["names"] is None
+    assert repair_arguments({"names": {}}, Maybe)["names"] == ()
+
+
+def test_an_empty_object_for_an_optional_object_means_none():
+    class Holder(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+        inner: Inner | None = None
+
+    assert repair_arguments({"inner": {}}, Holder)["inner"] is None
+    assert repair_arguments({"inner": {"n": 1, "s": "a"}}, Holder)["inner"] == {"n": 1, "s": "a"}
+    assert _repair({"maybe": {}})["maybe"] is None  # An optional number, too.
+
+
 def test_a_boolean_is_not_coerced_to_an_integer():
     """True is not 1 here; strict validation must still reject it."""
     assert _repair({"count": True})["count"] is True

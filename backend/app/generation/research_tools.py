@@ -12,6 +12,7 @@ from pydantic import Field, ValidationError, field_validator
 from app.advising.catalog import load_advising_context, load_campus_equivalents
 from app.advising.comparison import compare_mentions
 from app.advising.research_repository import (
+    MAX_COURSE_CODES,
     NotInScope,
     exact_chunks,
     read_courses,
@@ -25,15 +26,18 @@ from app.advising.research_store import (
     InvalidResearchRecord,
     StateConflict,
 )
-from app.advising.research_types import FinalDecision, ResearchState
+from app.advising.research_types import MAX_DECISION_TEXT_BYTES, FinalDecision, ResearchState
 from app.advising.research_workspace import ConversationWorkspace
 from app.advising.sequence import CourseRequirement, plan_sequence
+from app.atlas.authority import term_order
 from app.atlas.equivalence import is_oxford
+from app.atlas.records import SUBJECT_RENAMES, normalize_code
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
 from app.generation.advising_tools import CourseCode
 from app.generation.research_final import DecisionRejected, validate_final
 from app.retrieval.retrieve import retrieve
+from app.retrieval.seams.prereq import is_reverse_query
 from app.retrieval.types import CitedChunk
 from app.tools.registry import (
     ToolCapability,
@@ -48,7 +52,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "11"
+RESEARCH_TOOLS_VERSION = "13"
 
 
 class SearchInput(ToolInputModel):
@@ -264,6 +268,40 @@ class ResearchRegistry(ToolRegistry):
             return ResearchResult(status="conflict", limitations=problems)
 
 
+#: What the server read about a course that no evidence passage holds.
+COURSE_FACT_FIELDS = ("title", "required_by", "named_by_programs")
+COURSE_FACT_TERMS = 4
+COURSE_FACT_COURSES = 20
+#: The most one evidence step may read.
+MAX_READ_BYTES = 48_000
+#: Requirement items in one program read.
+PROGRAM_PAGE_ITEMS = 30
+#: Programs listed on one course record.
+MAX_NAMING_PROGRAMS = 40
+#: Courses opened for the model in one step; the evidence register has its own limit.
+MAX_AUTO_READ_COURSES = 12
+
+
+def _term_offerings(pin) -> bool:
+    return "course_offerings" in pin.document_roles
+
+
+def _opened_chunks(reads):
+    """A course opened in bulk is its record: cards would crowd out the other courses."""
+    return [c for r in reads for c in r.chunks[:1]]
+
+
+def _within_read_limit(chunks):
+    """Chunks in order, without repeats, up to what one evidence step may read."""
+    kept, size = {}, 0
+    for chunk in chunks:
+        length = len(chunk.text.encode())
+        if chunk.chunk_id not in kept and size + length <= MAX_READ_BYTES:
+            kept[chunk.chunk_id] = chunk
+            size += length
+    return list(kept.values())
+
+
 class ResearchSession:
     def __init__(self, conn, scope, store, run, *, settings, config, embedder,
                  artifact_references=()):
@@ -290,9 +328,13 @@ class ResearchSession:
         self.active: list[str] = []
         self.supplied: set[str] = set()
         self.decision = None
+        self.rejected_decision = None
+        self.question = None
         self.execution_id = None
         self.new_evidence = 0
         self.read_count = 0
+        self.course_facts: dict[str, dict] = {}
+        self.follow_on_codes: set[str] = set()
         self.read_keys: set[tuple] = set()
         self.discovery_count = 0
         self.state = None
@@ -449,7 +491,7 @@ class ResearchSession:
                 or sum(len(e.exact_text.encode()) for e in existing)
                 + sum(len(c.text.encode()) for c in added) > self.config.research.max_evidence_bytes):
             raise EvidenceLimit("configured evidence register limit reached")
-        if read_bytes > 48_000:
+        if read_bytes > MAX_READ_BYTES:
             raise EvidenceLimit("read is too large; use a smaller source page")
         result = self.store.acquire(self.run.run_id, [
             Acquired(c, self.scope.sources[c.source_id],
@@ -468,7 +510,7 @@ class ResearchSession:
         key = progress_key if progress_key is not None else (action,)
         if key not in self.read_keys:
             self.read_keys.add(key)
-            self.read_count += 1
+            self.read_count += bool(added)
         return list(result.evidence_ids)
 
     def browse(self, value, _scope):
@@ -489,7 +531,8 @@ class ResearchSession:
                         "institutional_department", "institutional_publication"}
         sources = [s.source_id for s in self.scope.sources.values() if
                    (value.kind != "policy" or s.source_kind in policy_kinds)
-                   and (value.kind != "career_reference" or s.source_kind == "career_reference")]
+                   and (value.kind != "career_reference" or s.source_kind == "career_reference")
+                   and not (value.kind in {"policy", "document"} and _term_offerings(s))]
         verify_sources(self.conn, self.scope, sources)
         self.conn.commit()
         outcome = retrieve(self.conn, collection_id=self.scope.collection_id, query=value.query,
@@ -545,7 +588,7 @@ class ResearchSession:
                         if c.chunk_id in lexical_rank]
             for pin in [*exact_names, *grounded, *matches,
                         *(self.scope.sources[c.source_id] for c in chunks)]:
-                if pin.source_id in seen:
+                if pin.source_id in seen or _term_offerings(pin):
                     continue
                 seen.add(pin.source_id)
                 metadata = _source_metadata(pin, compact=True)
@@ -618,7 +661,7 @@ class ResearchSession:
         read = read_program(self.conn, self.scope, pid)
         self.conn.commit()
         try:
-            items, cursor = self.page(list(read.items), value, 8, "program")
+            items, cursor = self.page(list(read.items), value, PROGRAM_PAGE_ITEMS, "program")
         except NotInScope:
             raise InvalidResearchRecord([
                 ("This cursor belongs to a different program handle. Use the handle "
@@ -642,8 +685,11 @@ class ResearchSession:
         if unsupported_fields:
             limitations.append("Program fields without evidence are discovery only: "
                                + ", ".join(sorted(unsupported_fields)) + ".")
+        renamed = {old: new for old, new in SUBJECT_RENAMES.items()
+                   if any(re.search(rf"\b{old}\b", i.line.text) for i in items)}
         return ResearchResult(data={"title": read.pin.title, "handle": value.handle,
             "binding_status": read.pin.binding_status,
+            **({"renamed_subjects": renamed} if renamed else {}),
             **_source_metadata(self.scope.sources[read.pin.source_id]),
             "fields": {k: {"text": v.text, "evidence_ids": evidence(v),
                            "discovery_only": not v.cited} for k, v in read.fields.items()},
@@ -673,13 +719,54 @@ class ResearchSession:
             return ResearchResult(status="conflict", limitations=["Read one to four course codes."])
         reads = read_courses(self.conn, self.scope, codes)
         self.conn.commit()
-        chunks = list({c.chunk_id: c for r in reads for c in r.chunks}.values())
+        required_by = {row["code"]: row["required_by"][:24] for row in self.conn.execute(
+            queries.get("research_courses_requiring"), {
+                "collection_id": self.scope.collection_id, "codes": [r.code for r in reads]})}
+        named_by = {row["code"]: row["programs"][:MAX_NAMING_PROGRAMS]
+                    for row in self.conn.execute(queries.get("research_programs_naming_courses"), {
+                        "collection_id": self.scope.collection_id,
+                        "codes": [r.code for r in reads]})}
+        self.conn.commit()
+        # "What can I take after X?" is answered by the graph. Open the courses it
+        # names here, so the answer rests on them instead of on what a search finds.
+        follow_ons = []
+        if self.question and is_reverse_query(self.question):
+            wanted = sorted({code for r in reads if r.code not in self.follow_on_codes
+                             for code in required_by.get(r.code, ())} - set(codes))
+            for start in range(0, min(len(wanted), MAX_AUTO_READ_COURSES), MAX_COURSE_CODES):
+                follow_ons.extend(read_courses(self.conn, self.scope,
+                                               wanted[start:start + MAX_COURSE_CODES]))
+                self.conn.commit()
+        self.follow_on_codes.update(r.code for r in follow_ons)
+        everything = [*reads, *follow_ons]
+        chunks = _within_read_limit([*(c for r in reads for c in r.chunks),
+                                     *_opened_chunks(follow_ons)])
         ids = self.acquire(chunks, refs={c.chunk_id: (r.code, r.canonical_code)
-                                        for r in reads for c in r.chunks}, action="read_courses",
+                                        for r in everything for c in r.chunks},
+                           action="read_courses",
                            progress_key=("read_courses", tuple(sorted(codes))))
-        return ResearchResult(data={"courses": [
-            {"code": r.code, "title": r.title, "requisites_raw": r.requisites_raw,
-             "parse_status": r.parse_status, "canonical_code": r.canonical_code} for r in reads],
+        terms: dict[str, list[str]] = {}
+        for row in self.conn.execute(queries.get("research_course_offering_terms"), {
+                "collection_id": self.scope.collection_id,
+                "codes": [r.code for r in everything]}):
+            terms.setdefault(row["code"], []).append(row["term"])
+        self.conn.commit()
+
+        def record(r):
+            data = {"code": r.code, "title": r.title, "requisites_raw": r.requisites_raw,
+                    "parse_status": r.parse_status, "canonical_code": r.canonical_code,
+                    "offered_terms": terms.get(r.code, []),
+                    "required_by": required_by.get(r.code, []),
+                    "named_by_programs": named_by.get(r.code, [])}
+            self.course_facts.pop(r.code, None)  # The newest reads stay in a full prompt.
+            self.course_facts[r.code] = {key: data[key] for key in COURSE_FACT_FIELDS if data.get(key)}
+            self.course_facts[r.code]["offered_terms"] = sorted(
+                data["offered_terms"], key=term_order)[-COURSE_FACT_TERMS:]
+            self.course_facts[r.code]["evidence_ids"] = sorted(self.entity_evidence.get(r.code, ()))
+            return data
+
+        return ResearchResult(data={"courses": [record(r) for r in reads],
+            "follow_on_courses": [record(r) for r in follow_ons],
             "evidence_ids": ids, "missing_codes": sorted(set(codes) - {r.code for r in reads})},
             status="ok" if reads else "not_found")
 
@@ -848,16 +935,87 @@ class ResearchSession:
                                else (self.state.revision if self.state is not None else 0)))
         self.validation_hint = ""
         self.active = list(self.state.active_evidence_ids)
+        # A course the model is weighing will be recommended or dropped; opening
+        # it now saves the rejected finish that would otherwise ask for the read.
+        self._open_courses(code for candidate in state.candidates
+                           for code in candidate.course_codes)
         return ResearchResult(data={"state_revision": self.state.revision})
 
     def finish(self, value, _scope):
         finishable_checks = {check_id: check for check_id, check in self.checks.items()
                              if check_id not in self.unavailable_preparation_check_ids}
-        validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
-                       self.supplied, finishable_checks, self.entity_evidence,
-                       self.artifact_references, self._known_course_codes())
+        try:
+            validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
+                           self.supplied, finishable_checks, self.entity_evidence,
+                           self.artifact_references, self._known_course_codes())
+        except DecisionRejected as exc:
+            self.rejected_decision = value.decision
+            opened = self._open_courses(value.decision.recommended_course_codes)
+            if not opened:
+                raise
+            raise DecisionRejected(
+                f"{exc}; the course records for {', '.join(opened)} are now in "
+                "exact_evidence_untrusted: read them and cite them, and do not "
+                "say they could not be read") from None
         self.decision = value.decision
         return ResearchResult(data={"accepted": True})
+
+    def salvage(self):
+        """The valid blocks of the last rejected proposal, or None.
+
+        A run that used up its corrections has usually read the right sources
+        and failed on one clause. Each block is held to the same rules alone, so
+        a salvaged reply claims nothing an accepted one could not. It says less,
+        which is why it is published as partial.
+        """
+        proposal = self.rejected_decision
+        if proposal is None:
+            return None
+        records = self.store.evidence(self.run.run_id)
+        known = self.supplied | {record.evidence_id for record in records}
+        kept, used = [], 0
+        for block in proposal.blocks:
+            single = proposal.model_copy(update={
+                "outcome": "information", "completeness": "partial", "blocks": (block,),
+                "candidate_ids": (), "recommended_course_codes": (), "preparation_check_ids": (),
+                "preparation_claims": (), "artifact": None, "unresolved_questions": ()})
+            size = len(block.text.encode("utf-8"))
+            try:
+                validate_final(single, self.state, records, known, {}, self.entity_evidence,
+                               None, self._known_course_codes())
+            except DecisionRejected:
+                continue
+            if used + size > MAX_DECISION_TEXT_BYTES:
+                continue
+            kept.append(block)
+            used += size
+        if not any(block.kind == "fact" for block in kept):
+            return None
+        self.supplied = known
+        return proposal.model_copy(update={
+            "outcome": "information", "completeness": "partial", "blocks": tuple(kept),
+            "candidate_ids": (), "recommended_course_codes": (), "preparation_check_ids": (),
+            "preparation_claims": (), "artifact": None})
+
+    def _open_courses(self, codes) -> list[str]:
+        """Read named courses the run has not opened, without spending a model round."""
+        wanted = {normalize_code(code) for code in codes} - {None}
+        unread = sorted(code for code in wanted if not self.entity_evidence.get(code))
+        reads = []
+        for start in range(0, min(len(unread), MAX_AUTO_READ_COURSES), MAX_COURSE_CODES):
+            reads.extend(read_courses(self.conn, self.scope, unread[start:start + MAX_COURSE_CODES]))
+            self.conn.commit()
+        if not reads:
+            return []
+        # One acquisition: a tool execution owns exactly one evidence step.
+        chunks = _within_read_limit(_opened_chunks(reads))
+        try:
+            self.acquire(chunks, refs={c.chunk_id: (r.code, r.canonical_code)
+                                       for r in reads for c in r.chunks}, action="read_courses",
+                         progress_key=("read_courses", tuple(r.code for r in reads)))
+        except EvidenceLimit:
+            return []
+        return [r.code for r in reads]
 
     def _known_course_codes(self) -> frozenset[str]:
         """The collection's course identities, for the identity check.

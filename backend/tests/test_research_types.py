@@ -147,7 +147,7 @@ def test_block_candidate_references_are_checked_too():
         # Block text is counted in UTF-8 bytes, so multi-byte characters count.
         (
             (DecisionBlock(kind="judgment", text="x" * 20_000),),
-            "block text is",
+            "reply is",
         ),
     ],
 )
@@ -297,7 +297,7 @@ def test_entry_point_claims_need_a_read_course_without_prerequisites():
                    None, records, {"e3"}, {})
 
 
-@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(9000, False), (12000, False), (48000, True)])
+@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(14060, False), (15500, False), (48000, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
     ("unknown", None, "edition_not_recorded"),
@@ -596,7 +596,7 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
                               program_handles=("h_a",)),))
     session = SimpleNamespace(
         settings=replace(load_settings(), research_max_prompt_bytes=(
-            16000 if support == "preparation" else 9000 if support == "oversized_preparation" else 12000)),
+            19500 if support == "preparation" else 12500 if support == "oversized_preparation" else 15500)),
         store=SimpleNamespace(evidence=lambda _run: records), run=SimpleNamespace(run_id=uuid4()),
         active=[r.evidence_id for r in records], state=state, entity_evidence={"h_a": {"e20"}},
         scope=SimpleNamespace(sources={}, programs={}),
@@ -635,3 +635,104 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
     if support == "preparation":
         assert {"e19", "e20"} <= session.supplied
         assert json.loads(user)["executed_preparation_checks"][0]["check_id"] == "p_test"
+
+
+def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone():
+    from types import SimpleNamespace
+
+    from app.advising.research_types import EvidenceRecord
+    from app.generation.research_tools import ResearchSession
+
+    record = EvidenceRecord(evidence_id="e1", source_id=str(uuid4()), source_revision=1,
+        source_kind="institutional_policy", source_name="Policy", chunk_id=str(uuid4()),
+        locator_label="Rules", exact_text="Students must earn 124 credit hours.",
+        text_digest="a" * 64, acquired_step=1, content_completeness="complete")
+    session = ResearchSession(None, SimpleNamespace(sources={}, programs={}),
+        SimpleNamespace(evidence=lambda _run: [record]), SimpleNamespace(run_id=uuid4()),
+        settings=None, config=None, embedder=None)
+    session._course_codes = frozenset()
+    good = DecisionBlock(kind="fact", text="You need 124 credit hours.", evidence_ids=("e1",))
+    unsupported = DecisionBlock(kind="fact", text="You need a 3.0.", evidence_ids=("e9",))
+    assert session.salvage() is None  # Nothing was proposed.
+
+    session.rejected_decision = _decision(blocks=(good, unsupported), candidate_ids=("gone",))
+    salvaged = session.salvage()
+    assert salvaged.blocks == (good,)
+    assert (salvaged.outcome, salvaged.completeness, salvaged.candidate_ids) == (
+        "information", "partial", ())
+
+    session.rejected_decision = _decision(blocks=(unsupported,))
+    assert session.salvage() is None  # No supported fact means no reply to keep.
+
+
+@pytest.mark.parametrize("failure", ["TransientProviderError", "RateLimitError"])
+def test_a_provider_dropout_keeps_what_the_run_already_proposed(monkeypatch, failure):
+    from types import SimpleNamespace
+
+    from app import llm
+    from app.generation.research_controller import ResearchController
+
+    error = getattr(llm.base, failure)("dropped", provider="fake")
+
+    def dropped_after_one_call(session, *_args, **_kwargs):
+        session.last_call = ("system", "user", "model")
+        raise error
+
+    controller = ResearchController()
+    monkeypatch.setattr(controller, "_run", dropped_after_one_call)
+    salvaged = _decision()
+    session = SimpleNamespace(salvage=lambda: salvaged)
+    decision, *_ = controller.run(session, None, None)
+    assert decision is session.decision is salvaged
+
+    with pytest.raises(type(error)):  # Nothing to keep, so the student is told to retry.
+        controller.run(SimpleNamespace(salvage=lambda: None), None, None)
+
+
+def test_opening_many_courses_is_one_evidence_step(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.generation import research_tools
+    from app.generation.research_tools import ResearchSession
+
+    def fake_read(_conn, _scope, codes):
+        assert len(codes) <= 4
+        return [SimpleNamespace(code=code, canonical_code=code, chunks=tuple(
+            SimpleNamespace(chunk_id=f"{code}-{n}", text="x" * 6_000) for n in range(4)))
+            for code in codes]
+
+    monkeypatch.setattr(research_tools, "read_courses", fake_read)
+    session = ResearchSession(SimpleNamespace(commit=lambda: None), None, None, None,
+                              settings=None, config=None, embedder=None)
+    steps = []
+    session.acquire = lambda chunks, **_kwargs: steps.append(len(chunks))
+    session.entity_evidence["CS 100"] = {"e1"}
+
+    opened = session._open_courses([f"CS {code}" for code in range(100, 110)])
+    # One step, or the ledger breaks. One record a course, cut to the read limit, or
+    # the term cards overflow the read and the student gets no answer.
+    assert steps == [8]
+    assert "CS 100" not in opened and len(opened) == 9
+
+
+
+@pytest.mark.parametrize("provider,own_effort,research_effort,expected", [
+    ("openai-compatible", None, "medium", "medium"),
+    ("openai", None, "low", "low"),
+    ("openai-compatible", "high", "medium", "high"),  # A connection's own choice stands.
+    ("openai-compatible", "none", "medium", "none"),
+    ("openai-compatible", None, None, None),  # Empty setting: greedy.
+    ("anthropic", None, "medium", None),  # These reject the field outright.
+    ("hf-local", None, "medium", None),
+])
+def test_research_asks_only_a_supporting_provider_for_reasoning(
+        provider, own_effort, research_effort, expected):
+    from app.api.research_service import research_sampling
+
+    fields = research_sampling(SimpleNamespace(
+        llm_provider=provider, llm_reasoning_effort=own_effort,
+        research_reasoning_effort=research_effort))
+    assert fields.get("llm_reasoning_effort", own_effort) == expected
+    assert bool(fields) == (own_effort is None and expected is not None)
+    if fields:  # The temperature rule: reasoning effort never travels with greedy.
+        assert fields["llm_sampling_policy"] == "model_default"

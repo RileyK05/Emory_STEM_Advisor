@@ -70,10 +70,11 @@ class ToolScope:
 ToolHandler = Callable[[BaseModel, ToolScope], Any]
 
 # An OpenAI-compatible provider (deepseek via Ollama) re-encodes tool arguments:
-# a field's value arrives as {"item": value}, and an empty array as "". These are
-# serialization artifacts, not the model's choices, so they are undone exactly,
-# guided by the input schema. No value the model did not send is ever invented;
-# anything else is left for validation to accept or reject.
+# a field's value arrives as {"item": value}, and an empty array as "". Others
+# (minimax) send an empty array as null or {}. These are serialization artifacts,
+# not the model's choices, so they are undone exactly, guided by the input schema.
+# No value the model did not send is ever invented; anything else is left for
+# validation to accept or reject.
 _WRAPPER_KEY = "item"
 _INTEGER_RE = re.compile(r"-?\d{1,18}")
 
@@ -88,10 +89,21 @@ def _concrete(annotation: Any) -> Any:
     return annotation
 
 
+def _allows_none(annotation: Any) -> bool:
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _allows_none(get_args(annotation)[0])
+    return origin in (Union, types.UnionType) and type(None) in get_args(annotation)
+
+
 def repair_arguments(value: Any, annotation: Any) -> Any:
     """Undo provider re-encodings of a tool argument against its declared type."""
+    nullable = _allows_none(annotation)
     annotation = _concrete(annotation)
     is_model = isinstance(annotation, type) and issubclass(annotation, BaseModel)
+    if nullable and value == {} and annotation is not dict and get_origin(annotation) not in (
+            dict, tuple, list):
+        return None
     wrapped = (isinstance(value, dict) and set(value) == {_WRAPPER_KEY}
                and not (is_model and _WRAPPER_KEY in annotation.model_fields))
     if wrapped:
@@ -99,7 +111,7 @@ def repair_arguments(value: Any, annotation: Any) -> Any:
     origin = get_origin(annotation)
     if origin in (tuple, list):
         args = get_args(annotation)
-        if value == "":
+        if value == "" or value == {} or (value is None and not nullable):
             value = []
         elif wrapped and not isinstance(value, (list, tuple)):
             value = [value]

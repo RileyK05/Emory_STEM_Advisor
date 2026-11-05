@@ -19,7 +19,7 @@ from app.generation.answer import _NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-17"
+RESEARCH_PROMPT_VERSION = "research-30"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
 # A fact block that asserts a course is required, listed or part of a program

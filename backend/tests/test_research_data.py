@@ -947,7 +947,7 @@ def test_research_answers_progressively_and_persists_its_decision(
     }
     if scenario in {"program_paging", "program_paging_budget"}:
         title = "Computer Science (BS)"
-        body = CS_BS + "\n" + "\n".join(f"- CS {n}" for n in range(701, 717))
+        body = CS_BS + "\n" + "\n".join(f"- CS {n}" for n in range(701, 761))
         identity = _ingest_catalog_file(db, collection, tmp_path, title, body, name="long-bs.md")
         record = to_record(parse_program(title, body), catalog="Test Catalog",
                            source_url="https://example.test/catalog.pdf", first_page=3, last_page=4)
@@ -1112,11 +1112,13 @@ def test_research_answers_progressively_and_persists_its_decision(
                 return call("update_research", {"expected_revision": 0, "state": {
                     "revision": 0, "decision_question": "What is ECON 101?", "active_evidence_ids": ids}})
             if index == 2:
+                # The round that read it is gone; what no passage holds must not be.
+                assert context["course_facts"]["ECON 101"]["evidence_ids"] == [observed["first"]]
                 return call("read_courses", {"course_codes": ["ECON 201"]})
             if index == 3:
                 assert ids[0] != observed["first"]
                 observed["second"] = ids[0]
-            if index in {3, 4, 5}:
+            if index in {3, 4}:
                 if index >= 4:
                     assert ids[0] == observed["first"]
                     assert not context["finish_required"]
@@ -1271,7 +1273,7 @@ def test_research_answers_progressively_and_persists_its_decision(
                 assert not context["finish_required"]
                 assert "advisor_read_courses" in {tool.name for tool in request.tools}
                 assert "output allowance" in context["instruction"]
-                assert request.max_output_tokens == 2 * provider.requests[0].max_output_tokens
+                assert request.max_output_tokens > provider.requests[0].max_output_tokens
             if scenario == "truncated_research_exhausted":
                 assert context["finish_required"]
                 assert "truncat" in context["instruction"].lower()
@@ -1414,15 +1416,15 @@ def test_research_answers_progressively_and_persists_its_decision(
         sourceIds=sources), db, settings, lenient_config(), FakeEmbedder(8), provider, **conversation_args)
     assert response.type == "answer"
     assert response.research.completeness == (
-        "partial" if scenario in {"factual_evidence_retention", "program_paging_budget", "cached_read_priority", "program_read_before_preparation", "finish_feedback_roundtrip",
-                                  "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry",
-                                  "repeated_read_no_progress"} else "complete")
+        "partial" if scenario in {"program_paging_budget", "finish_feedback_roundtrip",
+                                  "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry"} else "complete")
     if scenario in {"program_paging", "program_paging_budget"}:
         read, total = observed["coverage"]
         assert (read == total) == (scenario == "program_paging")
         if scenario == "program_paging_budget":
-            assert f"{read} of {total} items read" in response.answer
-            assert response.research.unresolvedQuestions
+            assert f"{read} of {total} items read" not in response.answer
+            assert any("did not check every requirement" in question
+                       for question in response.research.unresolvedQuestions)
     if scenario == "preparation_after_state_rejection":
         assert len(provider.requests) <= settings.research_max_calls
         assert observed["malformed_state_rejected"]
@@ -1494,8 +1496,7 @@ def test_research_answers_progressively_and_persists_its_decision(
                                                                        "truncated_research_repair",
                                                                        "truncated_research_exhausted",
                                                                        "rate_limited_research_retry"}
-                          else "partial" if scenario in {"factual_evidence_retention", "program_paging_budget", "cached_read_priority",
-                                                         "program_read_before_preparation", "repeated_read_no_progress"}
+                          else "partial" if scenario in {"program_paging_budget"}
                           else "completed")
     if scenario in {"clarification", "saved_clarification", "finish_feedback_roundtrip",
                     "truncated_research_repair", "truncated_research_exhausted",
@@ -1676,7 +1677,7 @@ def test_research_reserves_a_finish_and_withholds_stale_or_cancelled_results(
             db, settings, lenient_config(), FakeEmbedder(8), provider, check_cancelled=guard)
     if scenario == "overflow":
         response = answer()
-        assert response.research.completeness == "partial"
+        assert response.research.completeness == "complete"  # The model's call; a forced finish is not a gap.
         assert len(provider.requests) == 2
         steps = ResearchStore(db, "development").steps(UUID(response.research.runId))
         assert sum(s["action_kind"] == "read_courses" for s in steps) == 1

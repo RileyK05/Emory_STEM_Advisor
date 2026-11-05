@@ -197,12 +197,19 @@ class Settings:
     # replace the legacy answer limits for that operation rather than stacking
     # on top of them. Reservation units are serialized prompt bytes, so the
     # token budget is an accounting ceiling, not a promised token bill.
-    research_max_calls: int = 12
+    research_max_calls: int = 14
     research_max_tool_calls: int = 24
-    research_operation_timeout_seconds: float = 240.0
+    # Effort a research round asks of a provider that supports it, unless the
+    # connection sets its own; empty sends none. Measured 2026-11-04 on 12 live
+    # questions: medium cut the median run from 213 s to 80 s and kept the facts low
+    # dropped. Research alone gives up greedy reproducibility for this.
+    research_reasoning_effort: str | None = "medium"
+    research_operation_timeout_seconds: float = 360.0
     research_operation_token_budget: int = 640_000
-    research_max_prompt_bytes: int = 48_000
-    research_max_output_tokens: int = 4096
+    research_max_prompt_bytes: int = 52_000
+    # Reasoning models spend most of this on hidden deliberation: a structured
+    # state update or final answer routinely takes 5,000 to 9,000 tokens.
+    research_max_output_tokens: int = 10_240
     # A reply cut off at the output limit is retried with a doubled allowance up
     # to this ceiling: reasoning models spend hidden tokens before any tool call.
     research_truncation_max_output_tokens: int = 16_384
@@ -292,6 +299,9 @@ class Settings:
             raise ValueError("LLM_SAMPLING_POLICY must be greedy or model_default")
         if self.llm_reasoning_effort not in {None, "none", "minimal", "low", "medium", "high", "xhigh", "max"}:
             raise ValueError("LLM_REASONING_EFFORT is unsupported")
+        if self.research_reasoning_effort not in {None, "none", "minimal", "low", "medium", "high",
+                                                   "xhigh", "max"}:
+            raise ValueError("RESEARCH_REASONING_EFFORT is unsupported")
         if self.llm_compatible_thinking not in {None, "enabled", "disabled"}:
             raise ValueError("LLM_COMPATIBLE_THINKING must be enabled or disabled")
         if self.llm_sampling_policy == "greedy" and self.llm_reasoning_effort not in {None, "none"}:
@@ -501,12 +511,13 @@ def load_settings() -> Settings:
         query_planning_enabled=_bool("QUERY_PLANNING_ENABLED", False),
         query_planning_token_budget=_int("QUERY_PLANNING_TOKEN_BUDGET", 300_000),
         advising_research_enabled=_bool("ADVISING_RESEARCH_ENABLED", False),
-        research_max_calls=_int("RESEARCH_MAX_CALLS", 12),
+        research_max_calls=_int("RESEARCH_MAX_CALLS", 14),
         research_max_tool_calls=_int("RESEARCH_MAX_TOOL_CALLS", 24),
-        research_operation_timeout_seconds=_float("RESEARCH_OPERATION_TIMEOUT_SECONDS", 240),
+        research_reasoning_effort=os.environ.get("RESEARCH_REASONING_EFFORT", "medium") or None,
+        research_operation_timeout_seconds=_float("RESEARCH_OPERATION_TIMEOUT_SECONDS", 360),
         research_operation_token_budget=_int("RESEARCH_OPERATION_TOKEN_BUDGET", 640_000),
-        research_max_prompt_bytes=_int("RESEARCH_MAX_PROMPT_BYTES", 48_000),
-        research_max_output_tokens=_int("RESEARCH_MAX_OUTPUT_TOKENS", 4096),
+        research_max_prompt_bytes=_int("RESEARCH_MAX_PROMPT_BYTES", 52_000),
+        research_max_output_tokens=_int("RESEARCH_MAX_OUTPUT_TOKENS", 10_240),
         research_truncation_max_output_tokens=_int("RESEARCH_TRUNCATION_MAX_OUTPUT_TOKENS", 16_384),
         audit_max_search_states=_int("AUDIT_MAX_SEARCH_STATES", 50_000),
         office_enabled=_bool("OFFICE_ENABLED", False),

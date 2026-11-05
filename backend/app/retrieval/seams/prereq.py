@@ -49,7 +49,8 @@ def is_reverse_query(query: str) -> bool:
 
 
 _REVERSE_RE = re.compile(
-    r"\b(?:unlock|opens?\s+(?:up)?|what\s+courses?\s+can\s+I\s+take\s+after|"
+    r"\b(?:unlock|opens?\s+(?:up)?|what\s+(?:courses?\s+|classes\s+)?can\s+I\s+take\s+after|"
+    r"comes?\s+after|"
     r"which\s+courses\s+(?:require|need|have|list|name)|"
     r"what\s+courses\s+(?:require|need|have|list|name)|"
     r"after\s+(?:I\s+)?(?:complet|finish|tak)(?:e|ed|es|ing)|downstream|reverse\s+prereq)\b",

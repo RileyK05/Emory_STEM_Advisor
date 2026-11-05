@@ -328,6 +328,9 @@ def test_program_binds_only_to_its_exact_current_source(db, collection, tmp_path
 
     counts = import_programs(db, collection_id=collection, path=path)
     assert counts[status] == 1
+    assert db.execute(queries.get("research_programs_naming_courses"), {
+        "collection_id": collection, "codes": ["MATH 111"],
+    }).fetchone()["programs"] == ["Computer Science (BS)"]
     pid = program_id(collection, "Computer Science (BS)")
     binding = db.execute(queries.get("get_program_binding"), {"program_id": pid}).fetchone()
     assert binding["binding_status"] == status

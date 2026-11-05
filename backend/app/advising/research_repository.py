@@ -457,9 +457,15 @@ def read_courses(conn, scope: ResearchScope, codes) -> list[CourseRead]:
     for row in chunk_rows:
         by_locator.setdefault(row["locator_id"], []).append(
             _chunk(row, scope.sources[row["source_id"]].index_revision))
+    cards: dict[str, list[ChunkRead]] = {}
+    for row in rows:
+        for card in conn.execute(queries.get("research_course_offering_chunks"), {
+                "source_ids": list(scope.sources), "code": row["code"]}).fetchall():
+            cards.setdefault(row["code"], []).append(
+                _chunk(card, scope.sources[card["source_id"]].index_revision))
     return [CourseRead(row["code"], row["title"], row["canonical_code"],
                        row["requisites_raw"], row["parse_status"],
-                       tuple(by_locator.get(row["locator_id"], ())),
+                       (*by_locator.get(row["locator_id"], ()), *cards.get(row["code"], ())),
                        row["lifecycle"])
             for row in rows]
 
