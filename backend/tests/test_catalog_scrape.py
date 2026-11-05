@@ -585,6 +585,22 @@ def test_reviewed_advising_preparation_preserves_evidence_and_ignores_acquisitio
     assert second.manifest()["sources"]["documents/page.md"]["acquired_at"] == "2026-10-16"
 
 
+def test_a_reviewed_body_range_drops_site_chrome_and_needs_exact_markers(tmp_path):
+    registry, _body = _reviewed_advising_batch(tmp_path)
+    page = registry["document"][0]
+    wrapper = (b"# acquired-name\n\nSource: https://example.test/program\n"
+               b"Retrieved: 2026-10-15 (ET)\n\n---\n\n")
+    original = wrapper + b"Menu\nBODY keeps this\nSidebar\nFeed\n"
+    (tmp_path / "page.md").write_bytes(original)
+    page["original_sha256"] = hashlib.sha256(original).hexdigest()
+    page["body_starts_at"], page["body_ends_before"] = "BODY", "Sidebar"
+    prepared = prepare_documents(registry, input_root=tmp_path, registry_sha256="a" * 64)
+    assert prepared.documents[0].content == b"BODY keeps this\n"
+    page["body_ends_before"] = "e"
+    with pytest.raises(ValueError, match="exactly once"):
+        prepare_documents(registry, input_root=tmp_path, registry_sha256="a" * 64)
+
+
 @pytest.mark.parametrize("change,error", [
     ("changed_original", "reviewed SHA-256"),
     ("path_escape", "within the input directory"),

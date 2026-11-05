@@ -23,6 +23,7 @@ _REGISTRY_FIELDS = {"schema_version", "input_subdir", "acquired_at", "review_not
 _DOCUMENT_FIELDS = {
     "id", "disposition", "original_path", "original_sha256", "reason", "origin_key",
     "canonical_filename", "normalization", "provenance", "alias_of", "superseded_by",
+    "body_starts_at", "body_ends_before",
 }
 
 
@@ -61,6 +62,22 @@ def _original(root: Path, relative) -> Path:
     if not resolved.is_file():
         raise ValueError(f"original_path is not a file: {relative}")
     return resolved
+
+
+def _body_range(content: bytes, record: dict, identifier: str) -> bytes:
+    """Keep the reviewed body between two literal markers that occur exactly once."""
+    start, end = record.get("body_starts_at"), record.get("body_ends_before")
+    if start is not None:
+        marker = start.encode("utf-8")
+        if content.count(marker) != 1:
+            raise ValueError(f"{identifier}: body_starts_at must occur exactly once")
+        content = content[content.index(marker):]
+    if end is not None:
+        marker = end.encode("utf-8")
+        if content.count(marker) != 1:
+            raise ValueError(f"{identifier}: body_ends_before must occur exactly once")
+        content = content[:content.index(marker)]
+    return content
 
 
 def prepare_documents(registry: dict, *, input_root: Path,
@@ -154,11 +171,11 @@ def prepare_documents(registry: dict, *, input_root: Path,
             if wrapper is None:
                 raise ValueError(f"{identifier}: expected exact acquisition wrapper")
             if (wrapper[1].decode("utf-8") != provenance["source_url"]
-                    or wrapper[2].decode("ascii") != acquired):
+                    or wrapper[2].decode("ascii") not in {acquired, provenance.get("acquired_at")}):
                 raise ValueError(f"{identifier}: acquisition wrapper disagrees with registry")
             item["removed_wrapper"] = content[:wrapper.end()].decode("utf-8")
             item["canonical_byte_start"] = wrapper.end()
-            content = content[wrapper.end():]
+            content = _body_range(content[wrapper.end():], record, identifier)
             content.decode("utf-8")
             if not content.strip():
                 raise ValueError(f"{identifier}: Markdown body is empty")

@@ -398,3 +398,1555 @@ applicability_status = "unknown"
 [document.provenance.applicability]
 school = ["Emory College of Arts and Sciences"]
 program = ["QSSBS"]
+
+[[document]]
+id = "policy-ap-credit"
+disposition = "include"
+original_path = "policies-calendar/catalog-2026-27-ap-credit.md"
+original_sha256 = "334ae329c5a8a2502b50f26c0cc75d427c5203a6bf8f47ccfa9ee479cb4e83ed"
+reason = "College AP, IB and test credit policy."
+origin_key = "advising:emory:policy-ap-credit"
+canonical_filename = "emory-policy-ap-credit.md"
+normalization = "acquisition_wrapper"
+body_starts_at = "ADVANCED PLACEMENT AND EXEMPTION"
+body_ends_before = "ACADEMIC CATALOGS"
+
+[document.provenance]
+title = "Advanced Placement and Exemption"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/ecaspolicies/ap"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-changing-courses"
+disposition = "include"
+original_path = "policies-calendar/catalog-2026-27-changing-courses-add-drop-withdraw.md"
+original_sha256 = "fa55e00577a4de5209bac51321942cf7e9ab6ee08502d4d3bf17c937369c12fc"
+reason = "College course-change rules."
+origin_key = "advising:emory:policy-changing-courses"
+canonical_filename = "emory-policy-changing-courses.md"
+normalization = "acquisition_wrapper"
+body_starts_at = "CHANGING COURSES"
+body_ends_before = "ACADEMIC CATALOGS"
+
+[document.provenance]
+title = "Changing Courses: Add, Drop, Swap and Withdrawal"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/ecaspolicies/changingcourses"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-course-load"
+disposition = "include"
+original_path = "policies-calendar/catalog-2026-27-course-load.md"
+original_sha256 = "541d71f072a87360cfa73f1c9f6d7f53170cea500a6c4843575535465c777183"
+reason = "College minimum, maximum and overload rules."
+origin_key = "advising:emory:policy-course-load"
+canonical_filename = "emory-policy-course-load.md"
+normalization = "acquisition_wrapper"
+body_starts_at = "COURSE LOAD REQUIREMENTS"
+body_ends_before = "ACADEMIC CATALOGS"
+
+[document.provenance]
+title = "Course Load Requirements"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/ecaspolicies/courseload"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-su"
+disposition = "include"
+original_path = "policies-calendar/catalog-2026-27-su-policy.md"
+original_sha256 = "b49b92f4d521bf605cf15b9b0b47b6e2a1a4005aeb653f686c87952d6f3de8ad"
+reason = "College S/U rules."
+origin_key = "advising:emory:policy-su"
+canonical_filename = "emory-policy-su.md"
+normalization = "acquisition_wrapper"
+body_starts_at = "SATISFACTORY/UNSATISFACTORY OPTION"
+body_ends_before = "ACADEMIC CATALOGS"
+
+[document.provenance]
+title = "Satisfactory/Unsatisfactory Option"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/ecaspolicies/satisfactory-unsatisfactory-courses"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-grading"
+disposition = "include"
+original_path = "policies-calendar/catalog-2026-27-grading-policy.md"
+original_sha256 = "647e3a1799c1dc26a77f0daf117f6c8352c92d9e70c8bb1e123c679596d159fa"
+reason = "College grading rules."
+origin_key = "advising:emory:policy-grading"
+canonical_filename = "emory-policy-grading.md"
+normalization = "acquisition_wrapper"
+body_ends_before = "ACADEMIC CATALOGS"
+
+[document.provenance]
+title = "Grading System"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/ecaspolicies/grading"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-honors"
+disposition = "include"
+original_path = "policies-calendar/catalog-2026-27-honors-latin-honors.md"
+original_sha256 = "b882949d2e0817e9c4222466b46ee827dd434650b1969e1ce79445fd6bb332a0"
+reason = "College honors rules."
+origin_key = "advising:emory:policy-honors"
+canonical_filename = "emory-policy-honors.md"
+normalization = "acquisition_wrapper"
+body_starts_at = "HONORS RECOGNITIONS"
+body_ends_before = "ACADEMIC CATALOGS"
+
+[document.provenance]
+title = "Honors Recognitions"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/ecasstudentresources/honors"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-abroad"
+disposition = "include"
+original_path = "policies-calendar/catalog-2026-27-education-abroad.md"
+original_sha256 = "f88c143447ff866bfee7062a5b9c87c22b4b30a0755d0cecf9af3cf3fa42f4c6"
+reason = "College education abroad rules."
+origin_key = "advising:emory:policy-abroad"
+canonical_filename = "emory-policy-abroad.md"
+normalization = "acquisition_wrapper"
+body_starts_at = "EMORY COLLEGE EDUCATION ABROAD"
+body_ends_before = "ACADEMIC CATALOGS"
+
+[document.provenance]
+title = "Emory College Education Abroad"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/ecasstudentresources/abroad"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "college-dates-2026-27"
+disposition = "include"
+original_path = "policies-calendar/registrar-2026-27-college-oxford-dates.md"
+original_sha256 = "8505c0ef752499d9cd66da111b135956af19a66c004a899d5fe36c9434d54b86"
+reason = "Emory College and Oxford College columns only, hand-copied from the held registrar calendar PDF and checked column by column on 2026-11-04."
+origin_key = "advising:emory:college-dates-2026-27"
+canonical_filename = "emory-college-dates-2026-27.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Emory College and Oxford College Key Dates 2026-27"
+source_category = "institutional_policy"
+publisher = "Emory University — Office of the University Registrar"
+institution = "Emory University"
+issuing_unit = "Office of the University Registrar"
+source_url = "https://registrar.emory.edu/_includes/documents/sections/academic-calendar/2026-2027-academic-calendar-dates-050525.pdf"
+document_roles = ["calendar"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+academic_year = ["2026-27"]
+
+[[document]]
+id = "prehealth-physician-assistant"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-physician-assistant-prereqs.md"
+original_sha256 = "9c77b43df132e421c36925216202116688ccc0ee2ac23bef75b894682b0c0ccc"
+reason = "Official advising guidance about PA school generally; programs vary."
+origin_key = "advising:emory:prehealth-physician-assistant"
+canonical_filename = "emory-prehealth-physician-assistant.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Physician Assistant"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/explore/physician-assistant.html"
+document_roles = ["advising_guidance", "admissions_preparation"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-dentistry"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-dentistry-prereqs-and-dat.md"
+original_sha256 = "f9a94ebd8021d518001fc20a11d5cf9647a1ba5ac1a7a23e8bac549b5e7df164"
+reason = "Official advising guidance; schools vary."
+origin_key = "advising:emory:prehealth-dentistry"
+canonical_filename = "emory-prehealth-dentistry.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Dentistry and DAT"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/explore/dentistry.html"
+document_roles = ["advising_guidance", "admissions_preparation"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-pharmacy"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-pharmacy-prereqs.md"
+original_sha256 = "8c16b3990237a2b8c033668c690280a9b88cedf14065740f7ea0dec44b063ac5"
+reason = "Official advising guidance; schools vary."
+origin_key = "advising:emory:prehealth-pharmacy"
+canonical_filename = "emory-prehealth-pharmacy.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Pharmacy"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/explore/pharmacy.html"
+document_roles = ["advising_guidance", "admissions_preparation"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-veterinary"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-veterinary-medicine-prereqs.md"
+original_sha256 = "99cfc52448189480e7c097172b919f9489d5b26444fab0e93d211d026c77d036"
+reason = "Official advising guidance; schools vary."
+origin_key = "advising:emory:prehealth-veterinary"
+canonical_filename = "emory-prehealth-veterinary.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Veterinary Medicine"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/explore/veterinary-medicine.html"
+document_roles = ["advising_guidance", "admissions_preparation"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-nursing"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-nursing.md"
+original_sha256 = "b375990bd281f91bcf66f9df7b5acb9d18879e3a126f003c5fb9736599c30a86"
+reason = "Official advising guidance."
+origin_key = "advising:emory:prehealth-nursing"
+canonical_filename = "emory-prehealth-nursing.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Nursing"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/explore/nursing.html"
+document_roles = ["advising_guidance", "admissions_preparation"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-more-careers"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-more-health-careers.md"
+original_sha256 = "dd2d45fe611b43174047bed26893c9195bd414c27e691b5ed367dff8c59aa99a"
+reason = "Official overview of other health careers."
+origin_key = "advising:emory:prehealth-more-careers"
+canonical_filename = "emory-prehealth-more-careers.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: More Health Careers"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/explore/more-health-careers.html"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-academics-faq"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-academics-faq.md"
+original_sha256 = "f5517bd4ff134dbb80fd9e59e88497edce2fb613e1b07505ab9d77a05a09e7f6"
+reason = "Official advising FAQ."
+origin_key = "advising:emory:prehealth-academics-faq"
+canonical_filename = "emory-prehealth-academics-faq.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Academics FAQ"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/prepare/academics.html"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-timeline"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-apply-timeline-and-entrance-exams.md"
+original_sha256 = "6081ea31227354f111d7cef96be9ff1c38b2f76c5bac3745ce183706514a3304"
+reason = "Official advising guidance; cycle dates may shift."
+origin_key = "advising:emory:prehealth-timeline"
+canonical_filename = "emory-prehealth-timeline.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Application Timeline and Entrance Exams"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/apply/index.html"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-composite-letter"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-composite-letter.md"
+original_sha256 = "b537ead50bc57323c7daa20709c8093a42abaa354b693e512addcdf3108ce2ec"
+reason = "Official advising guidance."
+origin_key = "advising:emory:prehealth-composite-letter"
+canonical_filename = "emory-prehealth-composite-letter.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Composite Letter"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/apply/composite-letter.html"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-gap-year"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-gap-year.md"
+original_sha256 = "0741e3189cb4a79251e1f7f47cc09d7777c3f9c86fe428a975fe9e82fc6546fe"
+reason = "Official advising guidance."
+origin_key = "advising:emory:prehealth-gap-year"
+canonical_filename = "emory-prehealth-gap-year.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Gap Year"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/apply/gap-year.html"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prehealth-outcomes"
+disposition = "include"
+original_path = "prehealth-prelaw/prehealth-outcomes.md"
+original_sha256 = "28db198839d1126eb8f2b16fa479f2ef7fc562a5d45116209402c1a17b36e1e3"
+reason = "Published outcomes; year coverage stated in the page."
+origin_key = "advising:emory:prehealth-outcomes"
+canonical_filename = "emory-prehealth-outcomes.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Pre-Health Advising: Outcomes"
+source_category = "institutional_publication"
+publisher = "Emory University — Pre-Health Advising"
+institution = "Emory University"
+issuing_unit = "Pre-Health Advising"
+source_url = "https://prehealth.emory.edu/outcomes.html"
+document_roles = ["outcomes"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prelaw-advising"
+disposition = "include"
+original_path = "prehealth-prelaw/prelaw-cpd-law-school-advising.md"
+original_sha256 = "e9d9b24eeafcb27115c8e3dac010b3d593ffa68162b6e0bb8b19b4a29308f873"
+reason = "Official pre-law advising page."
+origin_key = "advising:emory:prelaw-advising"
+canonical_filename = "emory-prelaw-advising.md"
+normalization = "acquisition_wrapper"
+body_ends_before = "Sidebar\n"
+
+[document.provenance]
+title = "Pre-Law Advising"
+source_category = "institutional_publication"
+publisher = "Emory University — Career and Professional Development"
+institution = "Emory University"
+issuing_unit = "Career and Professional Development"
+source_url = "https://cpd.emory.edu/channels/law-school/"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "prelaw-outcomes"
+disposition = "include"
+original_path = "prehealth-prelaw/prelaw-law-school-outcomes.md"
+original_sha256 = "368de559cff23a71c48724a231b4621ce4a5c32c920e98ecbc319bbfa8e6a5df"
+reason = "Published law school outcomes."
+origin_key = "advising:emory:prelaw-outcomes"
+canonical_filename = "emory-prelaw-outcomes.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Law School Outcomes"
+source_category = "institutional_publication"
+publisher = "Emory University — Career and Professional Development"
+institution = "Emory University"
+issuing_unit = "Career and Professional Development"
+source_url = "https://pathways.emory.edu/offices/cpd/law-outcomes.html"
+document_roles = ["outcomes"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "cpd-technology-data"
+disposition = "include"
+original_path = "careers/cpd-technology-data-physical-sciences.md"
+original_sha256 = "e6608a6df3b2c9b5a22aa27f54f1f2c443d0538ffd1f6e46f7635a4664d02030"
+reason = "Career guidance body only; the sidebar feed is cut at its marker."
+origin_key = "advising:emory:cpd-technology-data"
+canonical_filename = "emory-cpd-technology-data.md"
+normalization = "acquisition_wrapper"
+body_ends_before = "Sidebar\n"
+
+[document.provenance]
+title = "Career Community: Technology, Data and Physical Sciences"
+source_category = "institutional_publication"
+publisher = "Emory University — Career and Professional Development"
+institution = "Emory University"
+issuing_unit = "Career and Professional Development"
+source_url = "https://cpd.emory.edu/channels/stem/"
+document_roles = ["career_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "cpd-health-life-sciences"
+disposition = "include"
+original_path = "careers/cpd-health-care-life-sciences.md"
+original_sha256 = "436822f17b33e14546c7128de78791949760e60fb13ff4b256c06b7904a840d9"
+reason = "Career guidance body only; the sidebar feed is cut at its marker."
+origin_key = "advising:emory:cpd-health-life-sciences"
+canonical_filename = "emory-cpd-health-life-sciences.md"
+normalization = "acquisition_wrapper"
+body_ends_before = "Sidebar\n"
+
+[document.provenance]
+title = "Career Community: Health Care and Life Sciences"
+source_category = "institutional_publication"
+publisher = "Emory University — Career and Professional Development"
+institution = "Emory University"
+issuing_unit = "Career and Professional Development"
+source_url = "https://cpd.emory.edu/channels/health/"
+document_roles = ["career_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "cpd-business"
+disposition = "include"
+original_path = "careers/cpd-business-consulting-finance.md"
+original_sha256 = "87c3ba04f86976d515461362ffe25bd32ee3d9936f71ba3020214e62123257e4"
+reason = "Career guidance body only; the sidebar feed is cut at its marker."
+origin_key = "advising:emory:cpd-business"
+canonical_filename = "emory-cpd-business.md"
+normalization = "acquisition_wrapper"
+body_ends_before = "Sidebar\n"
+
+[document.provenance]
+title = "Career Community: Business, Consulting and Finance"
+source_category = "institutional_publication"
+publisher = "Emory University — Career and Professional Development"
+institution = "Emory University"
+issuing_unit = "Career and Professional Development"
+source_url = "https://cpd.emory.edu/channels/business/"
+document_roles = ["career_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "cpd-law-policy"
+disposition = "include"
+original_path = "careers/cpd-law-policy-government.md"
+original_sha256 = "b52748323ca2fd430be935e8b41c077e58dbfc2c5515ab0b11ebf4c7e8ce839f"
+reason = "Career guidance body only; the sidebar feed is cut at its marker."
+origin_key = "advising:emory:cpd-law-policy"
+canonical_filename = "emory-cpd-law-policy.md"
+normalization = "acquisition_wrapper"
+body_ends_before = "Sidebar\n"
+
+[document.provenance]
+title = "Career Community: Law, Policy and Government"
+source_category = "institutional_publication"
+publisher = "Emory University — Career and Professional Development"
+institution = "Emory University"
+issuing_unit = "Career and Professional Development"
+source_url = "https://cpd.emory.edu/channels/law-policy-government/"
+document_roles = ["career_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "cpd-nonprofit"
+disposition = "include"
+original_path = "careers/cpd-nonprofit-education-advocacy.md"
+original_sha256 = "84cddcc5953e381e4391f06c39416e42db70c6c6d33b9ecadd0bed0a099a7920"
+reason = "Career guidance body only; the sidebar feed is cut at its marker."
+origin_key = "advising:emory:cpd-nonprofit"
+canonical_filename = "emory-cpd-nonprofit.md"
+normalization = "acquisition_wrapper"
+body_ends_before = "Sidebar\n"
+
+[document.provenance]
+title = "Career Community: Nonprofit, Education and Advocacy"
+source_category = "institutional_publication"
+publisher = "Emory University — Career and Professional Development"
+institution = "Emory University"
+issuing_unit = "Career and Professional Development"
+source_url = "https://cpd.emory.edu/channels/non-profit-education-advocacy/"
+document_roles = ["career_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "cpd-major-careers"
+disposition = "include"
+original_path = "careers/cpd-what-can-i-do-with-this-major.md"
+original_sha256 = "889ccc57a007e06bf4f812269669bae87d97bf78fffdec538bcf447e53471d4e"
+reason = "Career guidance body only."
+origin_key = "advising:emory:cpd-major-careers"
+canonical_filename = "emory-cpd-major-careers.md"
+normalization = "acquisition_wrapper"
+body_ends_before = "Archives\n"
+
+[document.provenance]
+title = "What Can I Do With This Major?"
+source_category = "institutional_publication"
+publisher = "Emory University — Career and Professional Development"
+institution = "Emory University"
+issuing_unit = "Career and Professional Development"
+source_url = "https://cpd.emory.edu/resources/what-can-i-do-with-this-major/"
+document_roles = ["career_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "oue-extended-degrees"
+disposition = "include"
+original_path = "4plus1/oue-extended-degree-programs.md"
+original_sha256 = "7c6a29f439860e7a178a514f41e02b63fa7de3e88696544a97e6f3c35023b02f"
+reason = "Official overview of 4+1 style programs."
+origin_key = "advising:emory:oue-extended-degrees"
+canonical_filename = "emory-oue-extended-degrees.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Extended Degree Programs"
+source_category = "institutional_publication"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://oue.college.emory.edu/dual-degree/extended-degree/index.html"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "dual-degree-engineering"
+disposition = "include"
+original_path = "dual-degree/emory-dual-degree-engineering-advising.md"
+original_sha256 = "ca4d79e9c9168776af7cb9c19cfe9f2043e858d88bad8519dd798e3a01bcccf3"
+reason = "Official dual degree advising page. The equivalency table stays on hold."
+origin_key = "advising:emory:dual-degree-engineering"
+canonical_filename = "emory-dual-degree-engineering.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Dual Degree Engineering Advising"
+source_category = "institutional_publication"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://oue.college.emory.edu/dual-degree/engineering/advising.html"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "policy-degree-requirements"
+disposition = "include"
+original_path = "policies-catalog/policy-degree-requirements.md"
+original_sha256 = "f24fc70c88d6d21b046975c61a991285f359aad074df5abb40dada5e82ff3154"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-degree-requirements"
+canonical_filename = "emory-policy-degree-requirements.md"
+normalization = "acquisition_wrapper"
+body_ends_before = "COURSE LOAD REQUIREMENTS"
+
+[document.provenance]
+title = "Degree Requirements: Credit Hours to Graduate, Majors and Minors"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-absences"
+disposition = "include"
+original_path = "policies-catalog/policy-absences.md"
+original_sha256 = "e316a1bc913a5e02d82c096e4f4a8d1dff408261587e223ea94603087a8f0738"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-absences"
+canonical_filename = "emory-policy-absences.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Absences"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-exam-absences"
+disposition = "include"
+original_path = "policies-catalog/policy-exam-absences.md"
+original_sha256 = "c5bbc2b85645f8a31bdfb0eacb2b89d6ec55406e29592467d875e6a2c1e44969"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-exam-absences"
+canonical_filename = "emory-policy-exam-absences.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Absences from Examinations"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-academic-standing"
+disposition = "include"
+original_path = "policies-catalog/policy-academic-standing.md"
+original_sha256 = "0353983ac3d0452e62c61d6a65fb79f1f92c0a96c25bef36d70e0f6cca6e1a57"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-academic-standing"
+canonical_filename = "emory-policy-academic-standing.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Academic Standing, Warning and Probation"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-audit"
+disposition = "include"
+original_path = "policies-catalog/policy-audit.md"
+original_sha256 = "4e34ff22559af63b7550d393be48bddf322b90f87e262eae3828082b61f3b761"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-audit"
+canonical_filename = "emory-policy-audit.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Audit Courses"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-cancellations"
+disposition = "include"
+original_path = "policies-catalog/policy-cancellations.md"
+original_sha256 = "c0a8f106ea4266e3dd8b998f75e63da79b57685d8a871e3ff8f4f74b62191f33"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-cancellations"
+canonical_filename = "emory-policy-cancellations.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Cancellations"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-cross-registration"
+disposition = "include"
+original_path = "policies-catalog/policy-cross-registration.md"
+original_sha256 = "392ed2bcd7062031ebcd163440be11e17d94b7e09826dee16a3d02b9a0adc8e6"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-cross-registration"
+canonical_filename = "emory-policy-cross-registration.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Cross Registration (ARCHE): Taking Classes at Other Atlanta Schools"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-exceptions"
+disposition = "include"
+original_path = "policies-catalog/policy-exceptions.md"
+original_sha256 = "2de7319d28e5ce722de7a664631062864272d4542fa1ebf4484fe28874ae1c54"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-exceptions"
+canonical_filename = "emory-policy-exceptions.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Exceptions to Academic Regulations"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-final-exams"
+disposition = "include"
+original_path = "policies-catalog/policy-final-exams.md"
+original_sha256 = "977ebbbdb325af1716eb147d2f622f3567b3b0ba4aa0ca9de6cfbc528a49064b"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-final-exams"
+canonical_filename = "emory-policy-final-exams.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Final Exams and the Exam Period"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-independent-study"
+disposition = "include"
+original_path = "policies-catalog/policy-independent-study.md"
+original_sha256 = "3ee9c83d79032b70b0f18ac0e785fa448c03a87acf84b7ed45a81703dbc0c29f"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-independent-study"
+canonical_filename = "emory-policy-independent-study.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Independent Study"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-withdrawals"
+disposition = "include"
+original_path = "policies-catalog/policy-withdrawals.md"
+original_sha256 = "fcc8e32552d79b9d4236d0967cca887bf2b52596b4b64a1ad4dd40a0e049fc22"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-withdrawals"
+canonical_filename = "emory-policy-withdrawals.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Partial and Semester Withdrawals"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-readmission"
+disposition = "include"
+original_path = "policies-catalog/policy-readmission.md"
+original_sha256 = "5beebb3435baba2d1b5478bff7911b08eaf062f0adce272f20248dbe664c61e5"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-readmission"
+canonical_filename = "emory-policy-readmission.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Readmission"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-incomplete"
+disposition = "include"
+original_path = "policies-catalog/policy-incomplete.md"
+original_sha256 = "c1d06c08fac9f7878d41dd9bf7fb93d4580630654c0766addd0194b9d9982228"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-incomplete"
+canonical_filename = "emory-policy-incomplete.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Incomplete Work"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "policy-repeating"
+disposition = "include"
+original_path = "policies-catalog/policy-repeating.md"
+original_sha256 = "ae789d4952fe9362939fdcdcbb459e432e195064c33e1ed5bc2973194763b003"
+reason = "One policy section copied verbatim from the catalog-of-record text and split by its heading, so the rule is reachable by name. Page furniture removed."
+origin_key = "advising:emory:policy-repeating"
+canonical_filename = "emory-policy-repeating.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Repeating Courses: Retaking a Failed or Passed Class"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/"
+edition = "Emory College of Arts and Sciences Catalog 2026-2027"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "ap-ib-chart"
+disposition = "include"
+original_path = "policies-calendar/ap-ib-chart.pdf"
+original_sha256 = "86cc352ed1e1c3e72ee0ad51480f5566bccdae580d6cce92b8f584349fcc850a"
+reason = "Official College PDF fetched 2026-11-04 from the Office for Undergraduate Education."
+origin_key = "advising:emory:ap-ib-chart"
+canonical_filename = "emory-ap-ib-chart.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "High School Test Credit Equivalencies and GER Completion"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://oue.college.emory.edu/includes/documents/ap-ib-chart.pdf"
+acquired_at = "2026-11-04"
+document_roles = ["policy", "credit_equivalency"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "ger-guide"
+disposition = "include"
+original_path = "policies-calendar/ger-guide.pdf"
+original_sha256 = "6e4c541ccf925543311b1623bd7c59a4859a6a7abb6bd2cd54216d2a5d2c5b91"
+reason = "Official College PDF fetched 2026-11-04 from the Office for Undergraduate Education."
+origin_key = "advising:emory:ger-guide"
+canonical_filename = "emory-ger-guide.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "General Education Requirements: Faculty and Staff Guide"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://oue.college.emory.edu/faculty-resources/policies/ger-guide.pdf"
+acquired_at = "2026-11-04"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "policy-transfer-credit"
+disposition = "include"
+original_path = "policies-catalog/policy-transfer-credit.md"
+original_sha256 = "3857b149f0d5bea7569c21a70fe4d787cd339d67ceaacd9d082f45651c536d59"
+reason = "The incoming transfer section of the reviewed AP and exemption page, split out verbatim so the rule is reachable by name."
+origin_key = "advising:emory:policy-transfer-credit"
+canonical_filename = "emory-policy-transfer-credit.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Transfer Credit: How Many Credits Transfer Students Can Bring"
+source_category = "institutional_policy"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://college.catalog.emory.edu/ecaspolicies/ap"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+catalog_edition = ["Emory College of Arts and Sciences Catalog 2026-2027"]
+
+[[document]]
+id = "math-placement-calc-bc"
+disposition = "include"
+original_path = "policies-calendar/advanced-math-placement-guide.pdf"
+original_sha256 = "969501b2f6a34fa7b64b4b304e3466a80bf90942e280914a732facac7177c4a4"
+reason = "Official Mathematics department PDF fetched 2026-11-05. It is the only source naming the courses a student with AP Calculus BC credit starts in."
+origin_key = "advising:emory:math-placement-calc-bc"
+canonical_filename = "emory-math-placement-after-ap-calculus-bc.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "Math Placement After AP Calculus BC: Which Math Class to Start In"
+source_category = "institutional_department"
+publisher = "Emory University — Department of Mathematics"
+institution = "Emory University"
+issuing_unit = "Department of Mathematics"
+source_url = "https://mathematics.emory.edu/documents/advanced-math-placement-guide.pdf"
+acquired_at = "2026-11-05"
+document_roles = ["advising_guidance", "placement"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "isss-enrollment"
+disposition = "include"
+original_path = "reviewed-2026-11-05/isss-enrollment.md"
+original_sha256 = "dc82121d7e7ec2ea9aa48f8698a9e44145248c7b2eba75439c4c8dd28c24ce01"
+reason = "Rules F-1 and J-1 students must follow on full-time enrollment. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:isss-enrollment"
+canonical_filename = "isss-enrollment.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "F-1 and J-1 Enrollment Requirements and Reduced Course Loads"
+source_category = "institutional_policy"
+publisher = "Emory University — International Student and Scholar Services"
+institution = "Emory University"
+issuing_unit = "International Student and Scholar Services"
+source_url = "https://isss.emory.edu/students/enrollment"
+acquired_at = "2026-11-05"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "isss-opt"
+disposition = "include"
+original_path = "reviewed-2026-11-05/isss-opt.md"
+original_sha256 = "c0618ffb91db7b821050df674f49b0f7d48d1ff6befdd18f415a70373dfaec40"
+reason = "OPT eligibility and timing; the application steps are cut, so the rules are findable. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:isss-opt"
+canonical_filename = "isss-opt.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Optional Practical Training (OPT) for F-1 Students: Eligibility and Timelines"
+source_category = "institutional_policy"
+publisher = "Emory University — International Student and Scholar Services"
+institution = "Emory University"
+issuing_unit = "International Student and Scholar Services"
+source_url = "https://isss.emory.edu/students/employment_and_training/optional_practical_training.html"
+acquired_at = "2026-11-05"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "isss-stem-opt"
+disposition = "include"
+original_path = "reviewed-2026-11-05/isss-stem-opt.md"
+original_sha256 = "15dc68df02a5301af7461f647fdd7659f081a45f2f35aca307fc43824f8cfc58"
+reason = "STEM OPT eligibility and limits; the application steps are cut. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:isss-stem-opt"
+canonical_filename = "isss-stem-opt.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "STEM OPT Extension: 24 More Months of Work Authorization for F-1 STEM Graduates"
+source_category = "institutional_policy"
+publisher = "Emory University — International Student and Scholar Services"
+institution = "Emory University"
+issuing_unit = "International Student and Scholar Services"
+source_url = "https://isss.emory.edu/students/employment_and_training/stem-opt-extension.html"
+acquired_at = "2026-11-05"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "isss-out-of-status"
+disposition = "include"
+original_path = "reviewed-2026-11-05/isss-out-of-status.md"
+original_sha256 = "430d03e69eca51ce3fbdef5ad0ef8aa0fb51d0a8916e52aced8683885cebd94f"
+reason = "How status is lost and regained. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:isss-out-of-status"
+canonical_filename = "isss-out-of-status.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Losing F-1 or J-1 Status and How to Regain It"
+source_category = "institutional_policy"
+publisher = "Emory University — International Student and Scholar Services"
+institution = "Emory University"
+issuing_unit = "International Student and Scholar Services"
+source_url = "https://isss.emory.edu/students/out-of-status-options"
+acquired_at = "2026-11-05"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "aid-eligibility"
+disposition = "include"
+original_path = "reviewed-2026-11-05/aid-eligibility.md"
+original_sha256 = "64844aeba7d7565934a816d923a20a2dab0cdddff06b47f1d710dc997bb0269d"
+reason = "Who qualifies for federal and Emory aid. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:aid-eligibility"
+canonical_filename = "aid-eligibility.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Who is Eligible for Financial Aid at Emory"
+source_category = "institutional_policy"
+publisher = "Emory University — Office of Financial Aid"
+institution = "Emory University"
+issuing_unit = "Office of Financial Aid"
+source_url = "https://studentaid.emory.edu/undergraduate/how-aid-works/eligibility/index.html"
+acquired_at = "2026-11-05"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "aid-state-grants"
+disposition = "include"
+original_path = "reviewed-2026-11-05/aid-state-grants.md"
+original_sha256 = "45ab499471fefe79a2c1b873a2f2be24ae8d0d3e318e59943dd5737367e47464"
+reason = "Pell, HOPE, Zell Miller and GTEG at Emory. Two sentences giving amounts are cut: they say recipients were awarded money in 2027-2028, a year that has not happened. The state chart hope-zell-amounts-2026-27 has the same figures for the right year. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:aid-state-grants"
+canonical_filename = "aid-state-grants.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Federal and Georgia Grants at Emory: Pell, HOPE, Zell Miller and GTEG"
+source_category = "institutional_policy"
+publisher = "Emory University — Office of Financial Aid"
+institution = "Emory University"
+issuing_unit = "Office of Financial Aid"
+source_url = "https://studentaid.emory.edu/undergraduate/types/grants-scholarships/federal-state.html"
+acquired_at = "2026-11-05"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "hope-college-eligibility"
+disposition = "include"
+original_path = "reviewed-2026-11-05/hope-college-eligibility.md"
+original_sha256 = "41554cd59ae213d439fdc8d73684e899e18f3fa419e7603b2ed0a3c58653590c"
+reason = "State of Georgia page on keeping HOPE in college. Page navigation is cut. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:hope-college-eligibility"
+canonical_filename = "hope-college-eligibility.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Keeping the HOPE Scholarship in College: GPA Checkpoints and Attempted Hours"
+source_category = "institutional_policy"
+publisher = "Georgia Student Finance Commission"
+institution = "Georgia Student Finance Commission"
+issuing_unit = "GAfutures"
+source_url = "https://www.gafutures.org/hope-state-aid-programs/hope-zell-miller-scholarships/hope-scholarship/academic-eligibility-in-college/"
+acquired_at = "2026-11-05"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+geography = ["Georgia"]
+
+[[document]]
+id = "zell-college-eligibility"
+disposition = "include"
+original_path = "reviewed-2026-11-05/zell-college-eligibility.md"
+original_sha256 = "e281a25d7546121ca1e7fda6c5271eb60c7fe2e61ef5eef5eff6cabec677029c"
+reason = "State of Georgia page on keeping Zell Miller in college. Page navigation is cut. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:zell-college-eligibility"
+canonical_filename = "zell-college-eligibility.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Keeping the Zell Miller Scholarship in College: GPA Checkpoints and Attempted Hours"
+source_category = "institutional_policy"
+publisher = "Georgia Student Finance Commission"
+institution = "Georgia Student Finance Commission"
+issuing_unit = "GAfutures"
+source_url = "https://www.gafutures.org/hope-state-aid-programs/hope-zell-miller-scholarships/zell-miller-scholarship/academic-eligibility-in-college/"
+acquired_at = "2026-11-05"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+geography = ["Georgia"]
+
+[[document]]
+id = "gt-dual-degree-pathway"
+disposition = "include"
+original_path = "reviewed-2026-11-05/gt-dual-degree-pathway.md"
+original_sha256 = "43a4a1825718a9bb971a7be8f1548c0a42b2e4dac269aa37a2349195a42194e1"
+reason = "Georgia Tech's own transfer rules for the Emory dual degree. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:gt-dual-degree-pathway"
+canonical_filename = "gt-dual-degree-pathway.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Georgia Tech Dual Degree Engineering Transfer Requirements"
+source_category = "institutional_department"
+publisher = "Georgia Institute of Technology — Undergraduate Admission"
+institution = "Georgia Institute of Technology"
+issuing_unit = "Undergraduate Admission"
+source_url = "https://admission.gatech.edu/transfer/dual-degree-pathway"
+acquired_at = "2026-11-05"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+geography = ["United States"]
+
+[[document]]
+id = "yale-ds-status"
+disposition = "include"
+original_path = "reviewed-2026-11-05/yale-ds-status.md"
+original_sha256 = "7279afdbcefaab3d758e5d4e4749280ef4f71c2cc5598263eea95376859f26fe"
+reason = "Current status of the federal rule. Taken instead of the rule text because the rule is enjoined: the text alone would read as law. Emory's own notice is behind a login. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:yale-ds-status"
+canonical_filename = "yale-ds-status.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "F-1 and J-1 Duration of Status Rule: Blocked by a Court, Not in Effect (Yale OISS Tracker)"
+source_category = "institutional_publication"
+publisher = "Yale University — Office of International Students & Scholars"
+institution = "Yale University"
+issuing_unit = "Office of International Students & Scholars"
+source_url = "https://oiss.yale.edu/immigration/immigration-changes"
+acquired_at = "2026-11-05"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+geography = ["United States"]
+
+[[document]]
+id = "yale-cpt-status"
+disposition = "include"
+original_path = "reviewed-2026-11-05/yale-cpt-status.md"
+original_sha256 = "3c4222955bcbf1bf1d86f9695b80b36ca74ea7e43f70f9405fb439f7fb8480f6"
+reason = "Current status of SEVP CPT guidance. Emory's CPT page is behind a login. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:yale-cpt-status"
+canonical_filename = "yale-cpt-status.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Federal Guidance Narrowing F-1 CPT, and the Lawsuit Against It (Yale OISS Tracker)"
+source_category = "institutional_publication"
+publisher = "Yale University — Office of International Students & Scholars"
+institution = "Yale University"
+issuing_unit = "Office of International Students & Scholars"
+source_url = "https://oiss.yale.edu/immigration/immigration-changes"
+acquired_at = "2026-11-05"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+geography = ["United States"]
+
+[[document]]
+id = "yale-opt-fees-status"
+disposition = "include"
+original_path = "reviewed-2026-11-05/yale-opt-fees-status.md"
+original_sha256 = "f22acfb2a432c8d8f69becc733d2d8714c9fcf4834616fdea21cdc0dc2e788a1"
+reason = "Marks the OPT fee as a proposal. Verified against the Federal Register notice 2026-20660. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:yale-opt-fees-status"
+canonical_filename = "yale-opt-fees-status.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "Proposed $70,000 OPT Fee: A Proposal, Not in Effect (Yale OISS Tracker)"
+source_category = "institutional_publication"
+publisher = "Yale University — Office of International Students & Scholars"
+institution = "Yale University"
+issuing_unit = "Office of International Students & Scholars"
+source_url = "https://oiss.yale.edu/immigration/immigration-changes"
+acquired_at = "2026-11-05"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+geography = ["United States"]
+
+[[document]]
+id = "yale-ead-status"
+disposition = "include"
+original_path = "reviewed-2026-11-05/yale-ead-status.md"
+original_sha256 = "1e67a671981edc723c851a27d12106edd8334ec3f1cb0e3ec0b0f0c0342840dd"
+reason = "Separates the ended EAD extensions from the unchanged STEM OPT extension. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:yale-ead-status"
+canonical_filename = "yale-ead-status.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "End of Automatic Work Permit Extensions and What Stays for STEM OPT (Yale OISS Tracker)"
+source_category = "institutional_publication"
+publisher = "Yale University — Office of International Students & Scholars"
+institution = "Yale University"
+issuing_unit = "Office of International Students & Scholars"
+source_url = "https://oiss.yale.edu/immigration/immigration-changes"
+acquired_at = "2026-11-05"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+geography = ["United States"]
+
+[[document]]
+id = "emory-sap"
+disposition = "include"
+original_path = "reviewed-2026-11-05/emory-sap.pdf"
+original_sha256 = "513529c9965d7108c33439c916dc5aaf6a88cc9033e863d2333edeaba65d0a95"
+reason = "Official SAP policy, revised 10/22/2024. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:emory-sap"
+canonical_filename = "emory-financial-aid-satisfactory-academic-progress-2024.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "Keeping Financial Aid: Satisfactory Academic Progress (SAP) Policy"
+source_category = "institutional_policy"
+publisher = "Emory University — Office of Financial Aid"
+institution = "Emory University"
+issuing_unit = "Office of Financial Aid"
+source_url = "https://studentaid.emory.edu/_includes/documents/sections/undergraduate/eligibility/satisfactory-academic-progress-policy.pdf"
+acquired_at = "2026-11-05"
+edition = "Revised 10/22/2024"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "dual-degree-handbook"
+disposition = "include"
+original_path = "reviewed-2026-11-05/emory-dual-handbook.pdf"
+original_sha256 = "1d44cf557bcce373909ac8f182f12812306fe698a85eb0a50117d4cb856be3ee"
+reason = "Official handbook, updated February 2026. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:dual-degree-handbook"
+canonical_filename = "emory-georgia-tech-dual-degree-handbook-2026.pdf"
+normalization = "preserve_pdf"
+
+[document.provenance]
+title = "Emory College and Georgia Tech Dual Degree Engineering Handbook"
+source_category = "institutional_department"
+publisher = "Emory College of Arts and Sciences — Office for Undergraduate Education"
+institution = "Emory University"
+issuing_unit = "Office for Undergraduate Education"
+source_url = "https://oue.college.emory.edu/dual-degree/includes/documents/dual-degree-handbook.pdf"
+acquired_at = "2026-11-05"
+edition = "Updated February 2026"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+school = ["Emory College of Arts and Sciences"]
+
+[[document]]
+id = "hope-zell-amounts-2026-27"
+disposition = "include"
+original_path = "reviewed-2026-11-05/hope-zell-amounts-2026-27.md"
+original_sha256 = "3eef09098942ea3f4af5fcc4a9479c2ed0c78a690a049ae4e7e73aad0f029012"
+reason = "Private-school row of the state's FY2027 chart, written out from its table. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:hope-zell-amounts-2026-27"
+canonical_filename = "hope-zell-amounts-2026-27.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "HOPE and Zell Miller Award Amounts at Private Colleges, 2026-27"
+source_category = "institutional_policy"
+publisher = "Georgia Student Finance Commission"
+institution = "Georgia Student Finance Commission"
+issuing_unit = "GSFC"
+source_url = "https://gsfc.georgia.gov/document/document/2027-award-amounts/download"
+acquired_at = "2026-11-05"
+document_roles = ["policy"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+geography = ["Georgia"]
+
+[[document]]
+id = "yale-cpt-notice"
+disposition = "include"
+original_path = "reviewed-2026-11-05/yale-cpt-notice.md"
+original_sha256 = "48f55008db4eb29187bf70f0d16dd4062c27c8ccd9ea4443e314d96beac7a1ad"
+reason = "States the narrowed CPT rule plainly. Consistent with SEVP broadcast messages 2608-01 and 2608-02 as other schools quote them; ice.gov refuses automated fetches. Fetched and read 2026-11-05."
+origin_key = "advising:reviewed:yale-cpt-notice"
+canonical_filename = "yale-cpt-notice.md"
+normalization = "acquisition_wrapper"
+
+[document.provenance]
+title = "F-1 CPT Now Limited to Training Required of All Students: SEVP Messages and Lawsuit (Yale OISS, October 7, 2026)"
+source_category = "institutional_publication"
+publisher = "Yale University — Office of International Students & Scholars"
+institution = "Yale University"
+issuing_unit = "Office of International Students & Scholars"
+source_url = "https://oiss.yale.edu/news/cpt-update-sevp-broadcast-messages-and-pending-litigation"
+acquired_at = "2026-11-05"
+document_roles = ["advising_guidance"]
+applicability_status = "unknown"
+
+[document.provenance.applicability]
+geography = ["United States"]

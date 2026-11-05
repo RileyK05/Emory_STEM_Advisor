@@ -1,0 +1,154 @@
+# Occupations with federal pay data, read by `python -m scripts.fetch_bls_wages`.
+# Hand-written: `soc` is the BLS Standard Occupational Classification code and
+# `paths` names what an Emory student would ask about. Keep titles as BLS has them.
+schema_version = 1
+
+[[occupation]]
+soc = "15-2051"
+title = "Data Scientists"
+paths = ["data science", "statistics", "machine learning"]
+
+[[occupation]]
+soc = "15-1252"
+title = "Software Developers"
+paths = ["software engineering", "computer science"]
+
+[[occupation]]
+soc = "15-1212"
+title = "Information Security Analysts"
+paths = ["cybersecurity", "computer science"]
+
+[[occupation]]
+soc = "15-1211"
+title = "Computer Systems Analysts"
+paths = ["computer science", "business technology"]
+
+[[occupation]]
+soc = "15-1221"
+title = "Computer and Information Research Scientists"
+paths = ["computer science research", "machine learning research"]
+
+[[occupation]]
+soc = "15-1242"
+title = "Database Administrators"
+paths = ["databases", "data engineering"]
+
+[[occupation]]
+soc = "15-2031"
+title = "Operations Research Analysts"
+paths = ["applied mathematics", "analytics"]
+
+[[occupation]]
+soc = "15-2041"
+title = "Statisticians"
+paths = ["statistics", "biostatistics"]
+
+[[occupation]]
+soc = "15-2011"
+title = "Actuaries"
+paths = ["mathematics", "actuarial science", "insurance"]
+
+[[occupation]]
+soc = "19-3011"
+title = "Economists"
+paths = ["economics", "quantitative economics"]
+
+[[occupation]]
+soc = "19-1021"
+title = "Biochemists and Biophysicists"
+paths = ["biochemistry", "biophysics", "biology research"]
+
+[[occupation]]
+soc = "19-1042"
+title = "Medical Scientists, Except Epidemiologists"
+paths = ["biomedical research", "neuroscience research"]
+
+[[occupation]]
+soc = "19-1041"
+title = "Epidemiologists"
+paths = ["public health", "epidemiology"]
+
+[[occupation]]
+soc = "19-1029"
+title = "Biological Scientists, All Other"
+paths = ["biology"]
+
+[[occupation]]
+soc = "19-2031"
+title = "Chemists"
+paths = ["chemistry"]
+
+[[occupation]]
+soc = "19-2012"
+title = "Physicists"
+paths = ["physics"]
+
+[[occupation]]
+soc = "19-2041"
+title = "Environmental Scientists and Specialists, Including Health"
+paths = ["environmental science", "sustainability"]
+
+[[occupation]]
+soc = "17-2031"
+title = "Bioengineers and Biomedical Engineers"
+paths = ["biomedical engineering", "engineering sciences"]
+
+[[occupation]]
+soc = "29-1071"
+title = "Physician Assistants"
+paths = ["physician assistant", "pre-health"]
+
+[[occupation]]
+soc = "29-1216"
+title = "General Internal Medicine Physicians"
+paths = ["medicine", "pre-med"]
+
+[[occupation]]
+soc = "29-1215"
+title = "Family Medicine Physicians"
+paths = ["medicine", "pre-med"]
+
+[[occupation]]
+soc = "29-1021"
+title = "Dentists, General"
+paths = ["dentistry", "pre-dental"]
+
+[[occupation]]
+soc = "29-1051"
+title = "Pharmacists"
+paths = ["pharmacy", "pre-pharmacy"]
+
+[[occupation]]
+soc = "29-1131"
+title = "Veterinarians"
+paths = ["veterinary medicine", "pre-vet"]
+
+[[occupation]]
+soc = "29-1141"
+title = "Registered Nurses"
+paths = ["nursing"]
+
+[[occupation]]
+soc = "29-1171"
+title = "Nurse Practitioners"
+paths = ["nursing", "advanced practice nursing"]
+
+[[occupation]]
+soc = "29-1123"
+title = "Physical Therapists"
+paths = ["physical therapy", "pre-health"]
+
+[[occupation]]
+soc = "19-3034"
+title = "School Psychologists"
+paths = ["psychology"]
+
+[[occupation]]
+soc = "19-3033"
+title = "Clinical and Counseling Psychologists"
+paths = ["psychology", "clinical psychology"]
+
+[[occupation]]
+soc = "25-1022"
+title = "Mathematical Science Teachers, Postsecondary"
+paths = ["mathematics", "academia"]

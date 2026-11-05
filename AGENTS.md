@@ -51,7 +51,8 @@ plans and `docs/audit/` the review status.
   `routing.toml`, `simgraph_nudges.toml` and `departments.toml` (hand-written),
   `programs.toml`, `advising_sources.toml` (the reviewed upload allowlist),
   `requirement_gold.toml` (hand-checked expected requirement trees, checked by
-  `scripts.manual.data_audit`; an entry is ground truth only once `reviewed`), and
+  `scripts.manual.data_audit`; an entry is ground truth only once `reviewed`),
+  `career_occupations.toml` (hand-written SOC codes for federal pay data), and
   `catalog-directory.md` (planning directory; not citable evidence).
 - `backend/scripts/` — run as `python -m scripts.<name>` from `backend/`; they
   use `DATABASE_URL`, or an embedded `pgserver` under `DATA_DIR/pgserver`.
@@ -137,6 +138,8 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.requirement_hold --help          # curator hold on a conflicting course rule
 ../.venv/Scripts/python -m scripts.record_profile_evaluation --help # bind an eval result to a connection profile
 ../.venv/Scripts/python -m scripts.prepare_advising_documents           # reviewed uploads -> data/staging/
+../.venv/Scripts/python -m scripts.fetch_bls_wages               # federal pay data -> data/staging/career-references-*/ (index with scripts.ingest --origin-manifest)
+../.venv/Scripts/python -m scripts.fetch_scorecard_fields        # federal earnings by field -> data/staging/career-references-scorecard-*/ (same ingest)
 ../.venv/Scripts/python -m scripts.eval_retrieval [--cases FILE]
 ../.venv/Scripts/python -m scripts.serve                 # HTTP API on :8000
 ../.venv/Scripts/python -m scripts.worker                # background jobs and saved conversation turns
@@ -251,5 +254,14 @@ The suite is small on purpose. Before adding a test:
   `pg_ctl stop -D data/pgserver -m fast`, `pg_ctl start -D data/pgserver -o "-p 62999" -l <elsewhere>/pg.log -w`,
   `pg_ctl stop -D data/pgserver -m fast` (`pg_ctl` is under
   `.venv/Lib/site-packages/pgserver/pginstall/bin`).
+- BLS refuses automated clients on www.bls.gov (including the Handbook XML).
+  Use the public data API at api.bls.gov; never route around the block.
+- `ice.gov` and `studyinthestates.dhs.gov` refuse automated clients, and Emory's
+  ISSS CPT and rule-change pages sit behind a login: leave those gaps. Immigration
+  and aid pages change fast, so check a rule's current status before ingesting its
+  text; the 2026 fixed-admission rule was enjoined the day before it took effect.
+- Short single-topic policy documents are what research actually finds. A rule
+  buried in a long document, or written as words ("one hundred and twenty-four"),
+  gets missed. Prefer splitting a policy by heading to tuning retrieval.
 - Local generation on CPU (MiniCPM-2B, no GPU) needs more than the 60 s
   default: set `LLM_TIMEOUT_SECONDS` / `OPERATION_TIMEOUT_SECONDS`.
