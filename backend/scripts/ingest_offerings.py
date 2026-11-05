@@ -1,7 +1,7 @@
 """Validate and explicitly publish term-scoped Atlas captures.
 
 Usage (from backend/):
-    python -m scripts.ingest_offerings --captures ../data/atlas/spring-2027-capture \
+    python -m scripts.ingest_offerings --term "Fall 2026" \
         --career "Graduate Allied Health" --collection emory --publish
 
 Without ``--publish`` this only validates the capture set; it does not load a
@@ -22,7 +22,6 @@ from app.atlas.offerings import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_CAPTURES = ROOT / "data" / "atlas" / "spring-2027-capture"
 DEFAULT_STAGING = ROOT / "data" / "atlas" / "offerings"
 
 
@@ -67,7 +66,8 @@ def _collection_id(conn, name: str):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--captures", type=Path, default=DEFAULT_CAPTURES)
+    parser.add_argument("--captures", type=Path, default=None,
+                        help="capture folder (default: data/atlas/<term>-capture)")
     parser.add_argument("--career", required=True)
     parser.add_argument("--term", default="Spring 2027")
     parser.add_argument("--collection", required=True)
@@ -76,8 +76,9 @@ def main() -> None:
                         help="write the deterministic staging document and index it")
     args = parser.parse_args()
 
+    captures = args.captures or ROOT / "data" / "atlas" / f"{capture_slug(args.term)}-capture"
     try:
-        index_value, detail_values = _load_captures(args.captures, args.career, args.term)
+        index_value, detail_values = _load_captures(captures, args.career, args.term)
         snapshot = validate_offering_captures(index_value, detail_values)
     except (OSError, TypeError, ValueError) as exc:
         parser.error(str(exc))
