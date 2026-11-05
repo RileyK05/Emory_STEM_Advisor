@@ -11,6 +11,13 @@ from app.atlas.records import AtlasCourse, normalize_code
 from app.atlas.requisites import requisite_text
 
 ATLAS_URL = "https://atlas.emory.edu/"
+#: With fewer Atlas terms, a course on a slower cycle looks the same as a retired one.
+MIN_OFFERING_TERMS = 4
+
+
+def term_order(term: str) -> tuple[int, int]:
+    season, year = term.split()
+    return int(year), ("Spring", "Summer", "Fall").index(season)
 
 
 def shared_title(titles: Iterable[str]) -> str:
@@ -155,3 +162,32 @@ def prepare_authoritative_courses(
         if remaining != course.crosslisted:
             result[code] = course.model_copy(update={"crosslisted": remaining})
     return [result[code] for code in sorted(result)]
+
+
+def prepare_courses_across_terms(
+    base: list[AtlasCourse], snapshots: Iterable[ValidatedOfferings]
+) -> list[AtlasCourse]:
+    """Every course from its newest Atlas term, the catalog only for the rest.
+
+    A catalog course no checked term shows is retired once enough terms were
+    checked. It keeps its row, so a student who names it can still be told so.
+    """
+    by_term: dict[str, list[ValidatedOfferings]] = defaultdict(list)
+    for snapshot in snapshots:
+        by_term[snapshot.term].append(snapshot)
+    if not by_term:
+        raise ValueError("no offering snapshots to prepare from")
+    terms = sorted(by_term, key=term_order)
+    latest: dict[str, AtlasCourse] = {}
+    for term in terms:  # Oldest first, so a newer term's record replaces an older one.
+        for course in prepare_authoritative_courses(base, by_term[term], term=term):
+            if course.authority == "atlas":
+                latest[course.code] = course
+    lifecycle = "retired" if len(terms) >= MIN_OFFERING_TERMS else "current"
+    for course in prepare_authoritative_courses(base, (), term=terms[-1]):
+        if course.code not in latest:
+            latest[course.code] = course.model_copy(update={
+                "lifecycle": lifecycle,
+                "crosslisted": [alias for alias in course.crosslisted if alias not in latest],
+            })
+    return [latest[code] for code in sorted(latest)]

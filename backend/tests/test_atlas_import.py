@@ -445,6 +445,10 @@ def test_class_section_scope_excludes_other_class_but_group_scope_keeps_children
     assert _section_scope(sections) == (
         "sections 001, 002; campuses Atlanta, Oxford; types Lab, Lecture"
     )
+    taught = [{"crn": "100", "section": "1", "instructor": "S. Tang", "meeting": "TTh 2:30-3:45p"}]
+    assert _section_scope(taught, "100") == (
+        "sections 1; instructors S. Tang; meets TTh 2:30-3:45p"
+    )
 
 
 def test_only_placeholder_offerings_cannot_publish(db, collection, tmp_path):
@@ -579,6 +583,26 @@ def test_metadata_repair_preserves_manual_course_corrections(db, collection, tmp
         "collection_id": collection, "code": "MATH 112",
     }).fetchone()
     assert row["requisites_raw"] == "MATH 119"
+
+
+def test_a_new_master_carries_reviewed_corrections_onto_the_current_source(
+        db, collection, tmp_path):
+    def master(description):
+        return "\n".join(json.dumps(record) for record in [
+            {"code": "MATH 111", "title": "Calculus I", "description": description},
+            {"code": "MATH 112", "title": "Calculus II", "description": description},
+        ])
+
+    _import(db, collection, tmp_path, master("First edition."))
+    db.execute("UPDATE courses SET authority = 'admin_correction', title = 'Reviewed Title' "
+               "WHERE collection_id = %(c)s AND code = 'MATH 111'", {"c": collection})
+    db.commit()
+
+    current = _import(db, collection, tmp_path, master("Second edition."))
+    corrected = db.execute(
+        "SELECT source_id, title FROM courses WHERE collection_id = %(c)s AND code = 'MATH 111'",
+        {"c": collection}).fetchone()
+    assert (corrected["source_id"], corrected["title"]) == (current, "Reviewed Title")
 
 
 def test_metadata_repair_keeps_reviewed_corrections(db, collection, tmp_path):
@@ -1063,6 +1087,23 @@ def test_cross_listed_aliases_count_once_with_a_combined_label(db, collection, t
     love = [chunk for chunk in outcome.chunks if "Black Love" in chunk.text]
     assert len(love) == 1
     assert love[0].locator_label == "AAS 325 / REL 325"
+
+
+@pytest.mark.parametrize("query,found", [("organic reactions", False),
+                                         ("organic reactions CHEM 221", True)])
+def test_a_retired_course_is_found_only_by_name(db, collection, tmp_path, query, found):
+    text = "\n".join(json.dumps(record) for record in [
+        {"code": "CHEM 221", "title": "Organic Chemistry", "description": "Organic reactions.",
+         "lifecycle": "retired"},
+        {"code": "CHEM 203", "title": "Organic Chemistry", "description": "Organic reactions."},
+    ])
+    _import(db, collection, tmp_path, text)
+    outcome = retrieve(
+        db, collection_id=collection, query=query,
+        embedder=FakeEmbedder(dim=8), embed_model=_MODEL, config=_embed_off(),
+    )
+    assert any(chunk.text.startswith("CHEM 221") for chunk in outcome.chunks) is found
+    assert found or any(chunk.text.startswith("CHEM 203") for chunk in outcome.chunks)
 
 
 def test_cross_listed_alias_label_survives_when_fusion_dedupe_is_off(

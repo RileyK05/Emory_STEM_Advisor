@@ -12,7 +12,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from app.atlas.authority import prepare_authoritative_courses
+from app.atlas.authority import prepare_courses_across_terms
 from app.atlas.live import IndexRecord, read_capture
 from app.atlas.offerings import select_latest_offering_captures, validate_offering_captures
 from app.atlas.records import load_atlas
@@ -20,8 +20,8 @@ from app.util.digest import canonical_json_bytes
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CATALOG = ROOT / "data" / "atlas" / "emory_college.jsonl"
-DEFAULT_CAPTURES = ROOT / "data" / "atlas" / "spring-2027-capture"
-DEFAULT_OUTPUT = ROOT / "data" / "atlas" / "atlas-primary-spring-2027.jsonl"
+DEFAULT_CAPTURES = ROOT / "data" / "atlas"
+DEFAULT_OUTPUT = ROOT / "data" / "atlas" / "atlas-primary.jsonl"
 
 
 def _snapshots(directory: Path, term: str):
@@ -45,12 +45,12 @@ def _snapshots(directory: Path, term: str):
             details.append(value)
         else:
             raise ValueError(f"capture {path.name} has an unknown kind")
-    if not by_career:
-        raise ValueError(f"no cached captures found for {term}")
     snapshots = []
     for career, (indexes, details) in sorted(by_career.items()):
         if not indexes:
             raise ValueError(f"no index capture for {career} / {term}")
+        if not details:  # A term that was only listed, as the oldest ones are.
+            continue
         def capture_time(value):
             raw = value.get("observed_at")
             if not isinstance(raw, str):
@@ -75,8 +75,17 @@ def _snapshots(directory: Path, term: str):
         snapshot = validate_offering_captures(index, selected)
         if snapshot.eligible_count:
             snapshots.append(snapshot)
+    return snapshots
+
+
+def _all_snapshots(captures: Path):
+    """Every eligible snapshot in the term folders; a term nothing ran in adds none."""
+    snapshots = []
+    for directory in sorted(captures.glob("*-capture")):
+        season, year = directory.name.removesuffix("-capture").split("-")
+        snapshots.extend(_snapshots(directory, f"{season.title()} {year}"))
     if not snapshots:
-        raise ValueError(f"no eligible cached offering snapshots found for {term}")
+        raise ValueError(f"no eligible cached offering snapshots under {captures}")
     return snapshots
 
 
@@ -85,7 +94,6 @@ def main() -> None:
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     parser.add_argument("--captures", type=Path, default=DEFAULT_CAPTURES)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--term", default="Spring 2027")
     parser.add_argument("--collection", default="default")
     parser.add_argument("--database-url", default=None)
     parser.add_argument("--publish", action="store_true",
@@ -94,9 +102,9 @@ def main() -> None:
     if args.output.resolve() == args.catalog.resolve():
         parser.error("--output must not overwrite the catalog fallback input")
     try:
-        snapshots = _snapshots(args.captures, args.term)
+        snapshots = _all_snapshots(args.captures)
         catalog = load_atlas(args.catalog)
-        courses = prepare_authoritative_courses(catalog, snapshots, term=args.term)
+        courses = prepare_courses_across_terms(catalog, snapshots)
         document = "".join(
             json.dumps(course.model_dump(mode="json"), ensure_ascii=False,
                        sort_keys=True, separators=(",", ":")) + "\n"
@@ -117,7 +125,9 @@ def main() -> None:
         Path(temp_name).unlink(missing_ok=True)
         raise
     atlas_count = sum(course.authority == "atlas" for course in courses)
-    print(f"prepared {len(courses)} courses ({atlas_count} Atlas-primary) at {args.output}")
+    retired = sum(course.lifecycle == "retired" for course in courses)
+    print(f"prepared {len(courses)} courses ({atlas_count} Atlas-primary, {retired} retired) "
+          f"from {sorted({snapshot.term for snapshot in snapshots})} at {args.output}")
     if not args.publish:
         print("validation only; pass --publish to index this prepared snapshot")
         return

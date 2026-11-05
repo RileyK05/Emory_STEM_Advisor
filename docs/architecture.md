@@ -850,7 +850,11 @@ proofs are retained separately; structured restrictions control prerequisite
 parsing. Different section rules retain all variants and fail closed instead of
 choosing a section or majority. Courses absent from the captured term remain
 explicitly labelled catalog fallbacks, so term-limited or historical records are
-not presented as current verified Atlas rules.
+not presented as current verified Atlas rules. `prepare_courses_across_terms`
+repeats this for every captured term, so each course takes its newest Atlas record.
+Once at least four terms were checked, a catalog course none of them shows is
+`retired`: it keeps its row and stays readable by name, and retrieval drops its
+chunks unless the query names it.
 
 `scripts.reconcile_atlas` writes a separate canonical JSONL atomically, without
 overwriting the catalog input. Validation/build is the default; `--publish` uses

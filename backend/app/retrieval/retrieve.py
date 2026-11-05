@@ -421,6 +421,13 @@ def _finish(conn, collection_id, query, embed_model, config, source_ids, workspa
         held = {row["chunk_id"] for row in held_rows}
         held_codes = {row["course_code"] for row in held_rows}
         fused = [item for item in fused if item.chunk_id not in held]
+        named = set(course_codes_in_query(query))
+        retired = {row["chunk_id"] for row in conn.execute(
+            queries.get("retired_course_chunks"), {
+                "chunk_ids": [item.chunk_id for item in fused],
+                "collection_id": collection_id,
+            }) if row["course_code"] not in named}
+        fused = [item for item in fused if item.chunk_id not in retired]
         _add_timing(timings, "held_ms", held_started)
 
     cite_started = time.perf_counter()

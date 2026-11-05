@@ -98,3 +98,7 @@ FROM program_course_mentions pcm
 JOIN programs p ON p.program_id = pcm.program_id
 LEFT JOIN courses target ON target.course_id = pcm.target_course_id
 WHERE p.collection_id = %(collection_id)s;
+
+-- name: diagnostic_audit_retired_codes
+SELECT code FROM courses
+WHERE collection_id = %(collection_id)s AND lifecycle = 'retired';

@@ -11,7 +11,7 @@ from pydantic import BaseModel, ConfigDict
 # digit-bearing subjects, and longer section/program suffixes. Preserve the
 # displayed identity instead of truncating it to the College catalog shape.
 _CODE_RE = re.compile(
-    r"^\s*([A-Za-z][A-Za-z0-9]{0,5}[A-Za-z](?:_OX)?)\s*"
+    r"^\s*([A-Za-z](?:[A-Za-z0-9]{0,5}[A-Za-z])?(?:_OX)?)\s*"
     r"(\d{2,4})([A-Za-z][A-Za-z0-9]{0,7})?\s*$"
 )
 _REFERENCE_RE = re.compile(

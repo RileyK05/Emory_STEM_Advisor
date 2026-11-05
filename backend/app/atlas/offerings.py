@@ -380,6 +380,10 @@ def _section_scope(sections: list[dict], class_number: str | None = None) -> str
                        if section.get("campus")})
     kinds = sorted({str(section.get("section_type") or "") for section in sections
                     if section.get("section_type")})
+    instructors = sorted({str(section.get("instructor") or "") for section in sections
+                          if section.get("instructor")})
+    meetings = sorted({str(section.get("meeting") or "") for section in sections
+                       if section.get("meeting")})
     parts = []
     if identities:
         parts.append("sections " + ", ".join(identities))
@@ -387,6 +391,10 @@ def _section_scope(sections: list[dict], class_number: str | None = None) -> str
         parts.append("campuses " + ", ".join(campuses))
     if kinds:
         parts.append("types " + ", ".join(kinds))
+    if instructors:
+        parts.append("instructors " + ", ".join(instructors))
+    if meetings:
+        parts.append("meets " + ", ".join(meetings))
     return "; ".join(parts) if parts else "not shown"
 
 

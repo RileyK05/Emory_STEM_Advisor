@@ -184,6 +184,18 @@ VALUES (
     %(collection_id)s, %(oxford_code)s, %(atlanta_code)s, %(basis)s
 );
 
+-- name: repoint_admin_courses_to_source
+-- A reviewed correction keeps its own fields across publications, but must point
+-- at the current source or its text stops being a current read.
+UPDATE courses co
+SET source_id = %(source_id)s, locator_id = l.locator_id
+FROM locators l
+WHERE co.collection_id = %(collection_id)s
+  AND co.authority IN ('admin_correction', 'admin_created')
+  AND co.source_id <> %(source_id)s
+  AND l.source_id = %(source_id)s
+  AND l.label = co.code;
+
 -- name: list_courses_for_source
 SELECT course_id, code, subject, title, requisites_raw, parse_status,
        locator_id, parser_version, canonical_code, lifecycle, authority,

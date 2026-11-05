@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.atlas.authority import prepare_authoritative_courses
+from app.atlas.authority import prepare_authoritative_courses, prepare_courses_across_terms
 from app.atlas.importer import unresolved_courses
 from app.atlas.offerings import OfferingRecord, ValidatedOfferings
 from app.atlas.records import AtlasCourse, canonical_code_map, normalize_code
@@ -98,6 +98,7 @@ def test_catalog_cross_campus_codes_bare_alternates_and_square_brackets_have_exp
     assert normalize_code("MATH 221") != normalize_code("MATH_OX 221")
     # A renamed subject keeps the course number; Oxford's code is left as written.
     assert normalize_code("QTM100") == "DATASCI 100"
+    assert normalize_code("M 697") == "M 697"  # Atlas shows Theology's one-letter subject.
     assert parse_requisites("QTM 110 or QTM_OX 110").trees["prerequisite"] == AnyOf((
         CourseRef("DATASCI 110"), CourseRef("QTM_OX 110")
     ))
@@ -114,6 +115,34 @@ def test_catalog_cross_campus_codes_bare_alternates_and_square_brackets_have_exp
         )),
         AnyOf((CourseRef("DATASCI 100"), CourseRef("QTM_OX 100"))),
     ))
+
+
+@pytest.mark.parametrize("terms,kept_term,unseen", [
+    (["Fall 2024", "Spring 2024", "Fall 2023", "Summer 2024"], "Fall 2024", "retired"),
+    (["Spring 2027", "Fall 2026"], "Spring 2027", "current"),  # Too few terms to tell.
+])
+def test_each_course_takes_its_newest_term(terms, kept_term, unseen):
+    def snapshot(term):
+        row = OfferingRecord(
+            result_cursor=0, raw_course_code="CS 253", title="Data Structures",
+            class_number="1", group_identity="g1", is_grouped=False, matched_identity="CS 253",
+            srcdb="db", credits="4", description="Trees.", restrictions=f"Rule from {term}",
+            notes=None, notices=(), raw_metadata={}, evidence_hash=f"e{term}",
+            review_status="eligible", observed_at="2026-01-01T00:00:00Z",
+            capture_envelope_hash=f"c{term}",
+        )
+        return ValidatedOfferings(
+            term=term, career="Undergraduate", announced_count=1, search_criteria="all",
+            index_evidence_hash="index", index_observed_at="2026-01-01T00:00:00Z",
+            index_capture_envelope_hash="index-envelope", records=(row,), capture_envelopes=(),
+        )
+
+    base = [AtlasCourse(code="CS 253", title="Catalog", requisites="Old rule"),
+            AtlasCourse(code="CHEM 221", title="Organic Chemistry")]
+    by_code = {c.code: c for c in prepare_courses_across_terms(base, map(snapshot, terms))}
+    assert (by_code["CS 253"].authority, by_code["CS 253"].term) == ("atlas", kept_term)
+    assert by_code["CS 253"].requisites == f"Rule from {kept_term}"
+    assert (by_code["CHEM 221"].authority, by_code["CHEM 221"].lifecycle) == ("catalog", unseen)
 
 
 def test_live_offerings_override_catalog_and_preserve_exact_provenance_without_aliases():

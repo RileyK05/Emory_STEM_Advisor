@@ -458,7 +458,7 @@ def _atomic_write(path: Path, content: str) -> None:
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     parser = argparse.ArgumentParser(description=__doc__)
-    default_primary = repo_root / "data/atlas/atlas-primary-spring-2027.jsonl"
+    default_primary = repo_root / "data/atlas/atlas-primary.jsonl"
     default_master = (default_primary if default_primary.exists()
                       else repo_root / "data/atlas/emory_college.jsonl")
     parser.add_argument("--master", type=Path, default=default_master)

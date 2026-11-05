@@ -172,6 +172,16 @@ WHERE ch.chunk_id = ANY(%(chunk_ids)s::uuid[])
   AND src.collection_id = %(collection_id)s
   AND src.status = 'indexed' AND src.is_current;
 
+-- name: retired_course_chunks
+-- A retired course stays readable by name but is not a search result: it would
+-- otherwise outrank the course that replaced it.
+SELECT DISTINCT ch.chunk_id, co.code AS course_code
+FROM chunks ch
+JOIN courses co ON co.source_id = ch.source_id AND co.locator_id = ch.locator_id
+WHERE ch.chunk_id = ANY(%(chunk_ids)s::uuid[])
+  AND co.collection_id = %(collection_id)s
+  AND co.lifecycle = 'retired';
+
 -- name: get_requirement_hold_course
 SELECT course_id
 FROM courses

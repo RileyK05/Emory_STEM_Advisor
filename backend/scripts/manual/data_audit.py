@@ -40,7 +40,7 @@ from app.db import queries
 from scripts._db import open_connection
 
 GOLD = Path(__file__).resolve().parents[2] / "configs" / "requirement_gold.toml"
-ATLAS = Path(__file__).resolve().parents[3] / "data" / "atlas" / "atlas-primary-spring-2027.jsonl"
+ATLAS = Path(__file__).resolve().parents[3] / "data" / "atlas" / "atlas-primary.jsonl"
 KINDS = ("prerequisite", "corequisite", "recommended")
 
 
@@ -145,6 +145,8 @@ def main() -> None:
         mentions = conn.execute(queries.get("diagnostic_audit_prereq_mentions"), scope).fetchall()
         slots = conn.execute(queries.get("diagnostic_audit_program_slots"), scope).fetchall()
         equivalents = conn.execute(queries.get("list_campus_equivalents"), scope).fetchall()
+        retired = {row["code"] for row in conn.execute(
+            queries.get("diagnostic_audit_retired_codes"), scope)}
 
     by_code = {row["code"]: row for row in courses}
     nodes_by = defaultdict(lambda: defaultdict(list))
@@ -158,7 +160,7 @@ def main() -> None:
     stored: dict[str, dict[str, Req]] = {}
     problems: list[str] = []
     for pair in equivalents:
-        if pair["atlanta_code"] not in by_code:
+        if pair["atlanta_code"] not in by_code and pair["atlanta_code"] not in retired:
             problems.append(f"campus equivalence {pair['oxford_code']} -> "
                             f"{pair['atlanta_code']} names an Atlanta course the "
                             "master does not carry")

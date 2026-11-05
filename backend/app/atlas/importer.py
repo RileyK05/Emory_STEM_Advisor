@@ -34,16 +34,17 @@ ATLAS_PROVENANCE = SourceProvenance(
     "institutional_catalog", publisher="Emory College of Arts and Sciences",
     source_url="https://college.catalog.emory.edu/")
 
-def _primary_atlas_provenance(term: str) -> SourceProvenance:
+def _primary_atlas_provenance(terms: list[str]) -> SourceProvenance:
+    span = terms[0] if len(terms) == 1 else f"{terms[0]} to {terms[-1]}"
     return SourceProvenance(
         "institutional_catalog", publisher="Emory University",
         source_url="https://atlas.emory.edu/",
-        title=f"Emory Course Atlas — {term}",
+        title=f"Emory Course Atlas — {span}",
         institution="Emory University", issuing_unit="Office of the Registrar",
-        document_roles=("course_catalog",), applicability={"term": (term,)},
+        document_roles=("course_catalog",), applicability={"term": tuple(terms)},
         applicability_status="unknown",
         attribution=(f"Atlas course records are primary where an explicitly cited eligible "
-                     f"{term} offering exists; other records retain their catalog fallback."),
+                     f"{span} offering exists; other records retain their catalog fallback."),
     )
 
 
@@ -181,6 +182,9 @@ def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Pat
         }).fetchone()
         if source is None:
             raise ValueError("reparse requires the exact current indexed atlas file")
+        conn.execute(queries.get("repoint_admin_courses_to_source"), {
+            "collection_id": collection_id, "source_id": source["source_id"],
+        })
         rows = conn.execute(queries.get("list_courses_for_source"), {
             "source_id": source["source_id"],
         }).fetchall()
@@ -420,16 +424,14 @@ def import_authoritative_atlas(
 
     if not snapshots or any(not isinstance(value, ValidatedOfferings) for value in snapshots):
         raise ValueError("authoritative publication requires validated offering snapshots")
-    terms = {snapshot.term for snapshot in snapshots}
-    if len(terms) != 1:
-        raise ValueError("authoritative publication requires one exact offering term")
-    term = next(iter(terms))
-    from app.atlas.authority import prepare_authoritative_courses
+    from app.atlas.authority import prepare_courses_across_terms, term_order
+
+    terms = sorted({snapshot.term for snapshot in snapshots}, key=term_order)
 
     courses = load_atlas_lines(path.read_text(encoding="utf-8").splitlines())
     expected_atlas = {
         course.code: course
-        for course in prepare_authoritative_courses(catalog or [], snapshots, term=term)
+        for course in prepare_courses_across_terms(catalog or [], snapshots)
         if course.authority == "atlas"
     }
     incoming_by_code = {course.code: course for course in courses if course.authority == "atlas"}
@@ -522,14 +524,14 @@ def import_authoritative_atlas(
                 tx_conn, hold_id=hold["hold_id"], source_id=hold["source_id"],
                 course_code=hold["course_code"], master_file_hash=hold["master_file_hash"],
                 curator="verified_atlas_import",
-                release_note=(f"Explicit {term} Atlas authority supersedes the cited "
+                release_note=(f"Explicit {terms[-1]} Atlas authority supersedes the cited "
                               "conflicting requirement."),
             )
 
     return import_atlas(
         conn, collection_id=collection_id, path=path, embedder=embedder,
         embed_model=embed_model, count_tokens=count_tokens, config=config,
-        allow_course_removal=False, _trusted_provenance=_primary_atlas_provenance(term),
+        allow_course_removal=False, _trusted_provenance=_primary_atlas_provenance(terms),
         _before_course_write=release_proven_holds,
     )
 
