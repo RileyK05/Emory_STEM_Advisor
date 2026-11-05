@@ -32,6 +32,14 @@ Electives (select 2 courses required, 6 CU)
     ("Math 211, 250, 318, 321, 421-422", ["MATH 211", "MATH 250", "MATH 318", "MATH 321",
                                           "MATH 421", "MATH 422"]),
     ("Physics 151-152", ["PHYS 151", "PHYS 152"]),
+    # The catalog's own punctuation: a missing comma, a plus, a hyphenated subject.
+    ("Physics 212, 220 253, 311", ["PHYS 212", "PHYS 220", "PHYS 253", "PHYS 311"]),
+    ("Math 221 (or 321) 250, 315", ["MATH 221", "MATH 321", "MATH 250", "MATH 315"]),
+    ("CHEM 202 + 202L", ["CHEM 202", "CHEM 202L"]),
+    ("LING-333, 340 and 401", ["LING 333", "LING 340", "LING 401"]),
+    ("Ital 301/302", ["ITAL 301", "ITAL 302"]),
+    ("DANC 212R - Topics in Dance, 213R - African Dance, or 215R - Kuchipudi",
+     ["DANC 212R", "DANC 213R", "DANC 215R"]),
     ("Biology 141 and 141L plus Biology 142 and 142L", ["BIOL 141", "BIOL 141L", "BIOL 142",
                                                         "BIOL 142L"]),
     ("Biol/Psych 320, Biol 356/NBB 358", ["BIOL 320", "PSYC 320", "BIOL 356", "NBB 358"]),
@@ -45,7 +53,12 @@ Electives (select 2 courses required, 6 CU)
     ("Enrollment in ALL 300-level and above", []),
     ("at least 18 credit hours, 3 courses at the 200 level", []),
     # A non-subject word before a number must not carry the previous subject.
-    ("Math 211, 250, and Classics 350", ["MATH 211", "MATH 250"]),
+    ("Math 211, 250, and Environmental 350", ["MATH 211", "MATH 250"]),
+    # A subject never crosses into another course's parenthesis, and neither a
+    # stray HTML entity nor a credit count is a course.
+    ("Business Economics (FIN 201), and Macroeconomics (112)", ["FIN 201"]),
+    ("list:andamp;#160; Math 212", ["MATH 212"]),
+    ("CS 170, 120 credit hours", ["CS 170"]),
     ("Two QTM 100-level courses", []),
     ("MATH 200-300 level", []),
     # Student spellings answer a question (retrieval/seams/prereq.py) but are
@@ -289,13 +302,16 @@ def _ingest_catalog_file(db, collection, tmp_path, title, text, *, name=None):
 
 @pytest.mark.parametrize("case, status", [
     ("exact identity", "bound"),
+    ("degree stated only by the title", "bound"),
     ("wrong content hash", "unbound"),
     ("superseded version", "unbound"),
     ("line absent from source", "evidence_unresolved"),
 ])
 def test_program_binds_only_to_its_exact_current_source(db, collection, tmp_path, case, status):
-    identity = _ingest_catalog_file(db, collection, tmp_path, "Computer Science (BS)", CS_BS)
     text = CS_BS
+    if case == "degree stated only by the title":
+        text = CS_BS.replace("DEGREE AWARDED BS", "DEGREE AWARDED 85")
+    identity = _ingest_catalog_file(db, collection, tmp_path, "Computer Science (BS)", text)
     if case == "wrong content hash":
         identity = {**identity, "content_sha256": "0" * 64}
     if case == "superseded version":

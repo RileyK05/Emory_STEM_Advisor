@@ -200,6 +200,9 @@ def align(record: dict, text: SourceText) -> tuple[dict[int, tuple[Support, ...]
         if found:
             fields[field] = text.support(*found)
             cursor = max(cursor, found[1])
+        elif field == "degree" and title and record["title"].endswith(f"({value})"):
+            # The catalog's malformed "DEGREE AWARDED 85": the title states the degree.
+            fields[field] = fields["title"]
         else:
             missing.append(field)
     items: dict[int, tuple[Support, ...]] = {}

@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 
 from app.atlas.records import normalize_code
 
-PARSER_VERSION = "4"
+PARSER_VERSION = "5"
 
 # Words the catalog uses in place of subject codes. Only exact (case-sensitive)
 # forms listed here are read as subjects when not written in capitals.
@@ -32,7 +32,8 @@ SUBJECT_ALIASES = {
     "Latin": "LAT", "Greek": "GRK", "Anthropology": "ANT", "Ant": "ANT",
     "History": "HIST", "Hist": "HIST", "Philosophy": "PHIL", "Phil": "PHIL",
     "Religion": "REL", "Sociology": "SOC", "Linguistics": "LING", "Ling": "LING",
-    "English": "ENG", "Music": "MUS", "Theater": "THEA", "Film": "FILM",
+    "English": "ENG", "Music": "MUS", "Theater": "THEA", "Theatre": "THEA", "Film": "FILM",
+    "Ital": "ITAL", "Port": "PORT", "Classics": "CL", "Dance": "DANC", "Business": "BUS",
     # The catalog's own nonstandard capitals.
     "BIO": "BIOL", "BIOLOGY": "BIOL", "ANTH": "ANT", "Bio": "BIOL",
 }
@@ -48,11 +49,18 @@ _WRAP_WIDTH = 80
 # "ENVS OX 230" is how the catalog sometimes writes ENVS_OX 230.
 _SUBJECT_WORD = r"[A-Z]{2,7}(?:_OX|\s+OX(?=\s?\d))?|[A-Z][a-z]{1,20}"
 _SUBJECTS = rf"(?P<subjects>(?:{_SUBJECT_WORD})(?:\s*/\s*(?:{_SUBJECT_WORD}))*)"
-_CODE_RE = re.compile(rf"\b{_SUBJECTS}\s?(?P<number>{_NUMBER})\b")
-_BARE_RE = re.compile(rf"\b(?P<number>{_NUMBER})\b")
+# "LING-101" is how the catalog writes Linguistics.
+_CODE_RE = re.compile(rf"\b{_SUBJECTS}(?:\s|-)?(?P<number>{_NUMBER})\b")
+# A number after "#" is a stray HTML entity ("&#160;"), never a course.
+_BARE_RE = re.compile(rf"(?<!#)\b(?P<number>{_NUMBER})\b")
 # What may sit between a code and a following bare number for the subject to
-# carry: commas, slashes, and/or/plus, a range hyphen.
-_CARRY_SEP_RE = re.compile(r"^\s*(?:(?:,|/|-|–|&|and|or|plus)\s*)+$", re.IGNORECASE)
+# carry: punctuation, and/or/plus, a range hyphen, or nothing at all, because
+# the catalog drops commas ("220 253", "221 (or 321) 250").
+_CARRY_SEP_RE = re.compile(r"^\s*(?:(?:[,/&+();]|-|–|and|or|plus)\s*)*$", re.IGNORECASE)
+# A course's title between two codes: "DANC 212R - Topics, 213R - African Dance".
+# No digits, so it cannot hide another code.
+_CARRY_TITLE_RE = re.compile(r"^\s*[:–—-]\s*[A-Za-z][^\d.]*,\s*(?:(?:and|or)\s+)?$")
+_NOT_A_COURSE_RE = re.compile(r"\s*(?:credits?|hours?|units?)\b", re.IGNORECASE)
 _BULLET_RE = re.compile(r"^(?:[-•◦●]\s+|\d{1,2}[.)]\s+|[a-z][.)]\s+)")
 _COUNT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
                 "seven": 7, "eight": 8, "nine": 9, "ten": 10}
@@ -166,7 +174,8 @@ def course_mentions(text: str) -> tuple[str, ...]:
                 continue
         if subjects is None:
             between = text[previous_end:start]
-            if last_subjects is None or not _CARRY_SEP_RE.match(between):
+            if (last_subjects is None or _NOT_A_COURSE_RE.match(text[end:])
+                    or not (_CARRY_SEP_RE.match(between) or _CARRY_TITLE_RE.match(between))):
                 continue
             subjects = last_subjects
             start = start + match.group(0).index(number)
