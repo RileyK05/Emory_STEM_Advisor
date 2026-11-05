@@ -19,7 +19,7 @@ from app.generation.answer import _NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-30"
+RESEARCH_PROMPT_VERSION = "research-31"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
 # A fact block that asserts a course is required, listed or part of a program
@@ -54,6 +54,35 @@ def _program_requirement_mentions(records, cited: set[str]) -> set[str]:
     return mentioned
 
 
+_RETIRED_SAID = re.compile(r"no longer (?:offered|runs?|available)|not offered|retired|discontinued",
+                           re.IGNORECASE)
+
+
+def retired_course_problems(decision: FinalDecision, recommended: set[str],
+                            retired: frozenset[str]) -> list[str]:
+    """A course the Atlas shows in no checked term is never presented as current.
+
+    The record is deterministic and the instruction alone does not hold: a model
+    that has read "no longer offered" can still recommend the course from its
+    catalog description. So each sentence naming one has to say so itself.
+    """
+    if not retired:
+        return []
+    problems = [f"recommended course {code} is no longer offered; recommend the course that "
+                "replaced it" for code in sorted({normalize_code(c) for c in recommended} & retired)]
+    unsaid = set()
+    for block in decision.blocks:
+        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
+            if not _RETIRED_SAID.search(clause):
+                unsaid |= set(canonical_codes_in(clause)) & retired
+    if unsaid:
+        problems.append(
+            f"{', '.join(sorted(unsaid))} no longer offered: no Course Atlas term shows it. "
+            "Drop it, or say it is no longer offered in the same sentence, and name the current "
+            "course from the program list or requisites instead")
+    return problems
+
+
 class DecisionRejected(ValueError):
     pass
 
@@ -62,7 +91,8 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
                    evidence: list[EvidenceRecord], supplied: set[str],
                    checks: dict[str, dict], entity_evidence: dict[str, set[str]] | None = None,
                    artifact_references: set[tuple[str, str]] | None = None,
-                   known_course_codes: frozenset[str] | None = None) -> None:
+                   known_course_codes: frozenset[str] | None = None,
+                   retired_courses: frozenset[str] = frozenset()) -> None:
     candidates = {c.id: c for c in state.candidates} if state else {}
     records = {e.evidence_id: e for e in evidence}
     problems = (validate_decision_limits(decision) + validate_fact_support(decision)
@@ -203,6 +233,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
         referenced = artifact_references or set()
         if revises is None or (str(revises.artifact_id), str(revises.revision_id)) not in referenced:
             problems.append("artifact revision was not referenced by this turn")
+    problems += retired_course_problems(decision, course_recommendations, retired_courses)
     if problems:
         raise DecisionRejected("; ".join(problems))
 

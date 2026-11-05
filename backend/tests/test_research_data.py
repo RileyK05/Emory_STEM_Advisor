@@ -5,6 +5,7 @@ Real Postgres, real ingest and program binding, no model.
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from uuid import UUID, uuid4, uuid5
 
 import pytest
@@ -389,6 +390,64 @@ def test_course_and_document_reads_stay_in_scope_and_page_whole_chunks(db, colle
     assert tiny.incomplete and not tiny.chunks  # never cut a chunk mid-text
     with pytest.raises(NotInScope):
         read_document(db, scope, corpus["private"])
+
+
+def _atlas_terms(db, source_id, shown):
+    """One offering snapshot per term; each code maps to its review status."""
+    hash_of = "0" * 64
+    for number, (term, codes) in enumerate(shown.items()):
+        capture = f"{number:064x}"
+        held = sum(status != "eligible" for status in codes.values())
+        db.execute(queries.get("insert_atlas_offering_snapshot"), {
+            "source_id": source_id, "capture_set_hash": capture, "career": "Emory College",
+            "term": term, "index_evidence_hash": hash_of, "announced_count": 1,
+            "result_row_count": max(len(codes), 1), "eligible_row_count": max(len(codes), 1) - held,
+            "held_row_count": held, "search_criteria": "test", "capture_hashes": "[]",
+            "observed_from": "2026-01-01T00:00:00Z", "observed_until": "2026-01-01T00:00:00Z"})
+        for ordinal, (code, status) in enumerate(codes.items()):
+            db.execute(queries.get("insert_atlas_offering_row"), {
+                "source_id": source_id, "capture_set_hash": capture, "row_ordinal": ordinal,
+                "result_cursor": ordinal, "raw_course_code": code, "title": code,
+                "class_number": None, "group_identity": code, "is_grouped": True,
+                "matched_identity": code, "srcdb": "1", "credits": None, "description": code,
+                "restrictions": None, "notes": None, "notices": "[]", "raw_metadata": "{}",
+                "evidence_hash": hash_of, "review_status": status,
+                "observed_at": "2026-01-01T00:00:00Z", "capture_envelope_hash": hash_of})
+
+
+@pytest.mark.parametrize(("terms", "expected"), [
+    (["Fall 2026", "Spring 2024", "Fall 2024", "Spring 2027"], {
+        "ECON 101": None,
+        "ECON 201": "from Spring 2024 to Spring 2027, but ECON 201W, ECON_OX 201",
+        "MATH 111": "from Spring 2024 to Spring 2027. It is no longer offered"}),
+    # Too few terms to tell a slower cycle from a retired course.
+    (["Fall 2026", "Spring 2024", "Spring 2027"],
+     {"ECON 101": None, "ECON 201": None, "MATH 111": None}),
+])
+def test_course_read_states_what_the_atlas_terms_show(db, collection, tmp_path, terms, expected):
+    from app.config import load_settings
+    from app.generation.research_tools import ResearchSession
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import lenient_config
+
+    corpus, scope, store, run = _run(db, collection, tmp_path)
+    _atlas_terms(db, corpus["policy"], {term: {"ECON 101": "eligible"} for term in terms[:-1]} | {
+        terms[-1]: {"ECON 101": "eligible", "ECON 201W": "eligible", "ECON_OX 201": "eligible",
+                    "MATH 111": "held_placeholder"}})
+    session = ResearchSession(db, scope, store, run, settings=load_settings(),
+                              config=lenient_config(), embedder=FakeEmbedder(8))
+    read = session.registry().invoke(
+        "advisor_read_courses", {"course_codes": list(expected)}, session.tool_scope(lambda: None))
+    courses = {course["code"]: course for course in read.data["courses"]}
+    assert set(courses) == set(expected)
+    for code, note in expected.items():
+        assert bool(courses[code]["offered_terms"]) == (code == "ECON 101")
+        assert (note in courses[code]["offering_note"]) if note else (
+            "offering_note" not in courses[code])
+    answer = SimpleNamespace(recommended_course_codes=(), candidate_ids=(), blocks=[
+        SimpleNamespace(text="ECON 101, ECON 201 and MATH 111")])
+    assert session._retired_courses(answer) == (
+        {"MATH 111"} if expected["MATH 111"] else frozenset())
 
 
 @pytest.mark.parametrize("read", ["program", "courses", "document", "metadata"])

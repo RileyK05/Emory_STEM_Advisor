@@ -137,3 +137,24 @@ def test_a_limitation_saying_the_evidence_lacks_a_code_is_allowed():
     ])
     validate_final(decision, None, _evidence(), {"e1"}, {})
 
+
+@pytest.mark.parametrize(("text", "recommended", "rejected"), [
+    ("CS 171 comes before CS 253.", (), True),
+    # The next sentence is too late: a student can stop reading at the first.
+    ("CS 171 comes before CS 253. It is no longer offered.", (), True),
+    ("CS 253 accepts CS 171, which is no longer offered.", (), False),
+    ("CS 171 was retired, so start from CS 253.", (), False),
+    ("CS 253 accepts CS 171, which is no longer offered.", ("CS 171",), True),
+])
+def test_a_course_the_atlas_no_longer_shows_is_never_presented_as_current(
+        text, recommended, rejected):
+    decision = _decision([DecisionBlock(kind="fact", text=text, evidence_ids=("e1",))]).model_copy(
+        update={"recommended_course_codes": recommended})
+    known = frozenset({"CS 171", "CS 253"})
+    check = lambda: validate_final(decision, None, _evidence(), {"e1"}, {},
+                                   known_course_codes=known, retired_courses=frozenset({"CS 171"}))
+    if rejected:
+        with pytest.raises(DecisionRejected, match="no longer offered"):
+            check()
+    else:
+        check()

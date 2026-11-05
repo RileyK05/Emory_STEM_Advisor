@@ -29,7 +29,7 @@ from app.advising.research_store import (
 from app.advising.research_types import MAX_DECISION_TEXT_BYTES, FinalDecision, ResearchState
 from app.advising.research_workspace import ConversationWorkspace
 from app.advising.sequence import CourseRequirement, plan_sequence
-from app.atlas.authority import term_order
+from app.atlas.authority import MIN_OFFERING_TERMS, term_order
 from app.atlas.equivalence import is_oxford
 from app.atlas.records import SUBJECT_RENAMES, normalize_code
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
@@ -52,7 +52,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "13"
+RESEARCH_TOOLS_VERSION = "14"
 
 
 class SearchInput(ToolInputModel):
@@ -269,7 +269,7 @@ class ResearchRegistry(ToolRegistry):
 
 
 #: What the server read about a course that no evidence passage holds.
-COURSE_FACT_FIELDS = ("title", "required_by", "named_by_programs")
+COURSE_FACT_FIELDS = ("title", "required_by", "named_by_programs", "offering_note")
 COURSE_FACT_TERMS = 4
 COURSE_FACT_COURSES = 20
 #: The most one evidence step may read.
@@ -280,6 +280,21 @@ PROGRAM_PAGE_ITEMS = 30
 MAX_NAMING_PROGRAMS = 40
 #: Courses opened for the model in one step; the evidence register has its own limit.
 MAX_AUTO_READ_COURSES = 12
+
+
+def course_stem(code: str) -> str:
+    """Subject and number without the campus mark or suffix: ENG_OX 341W is ENG 341."""
+    return re.sub(r"[A-Z]+$", "", code.replace("_OX", ""))
+
+
+def offering_note(code: str, checked: list[str], variants: list[str]) -> str:
+    """Say what the Atlas terms show for a course that none of them list."""
+    span = f"{checked[0]} to {checked[-1]}"
+    if variants:
+        return (f"{code} is in no Course Atlas term from {span}, but {', '.join(variants)} "
+                "is. Advise from that code.")
+    return (f"{code} is in no Course Atlas term from {span}. It is no longer offered, even "
+            "though a catalog record or a requisite may still name it.")
 
 
 def _term_offerings(pin) -> bool:
@@ -745,12 +760,7 @@ class ResearchSession:
                                         for r in everything for c in r.chunks},
                            action="read_courses",
                            progress_key=("read_courses", tuple(sorted(codes))))
-        terms: dict[str, list[str]] = {}
-        for row in self.conn.execute(queries.get("research_course_offering_terms"), {
-                "collection_id": self.scope.collection_id,
-                "codes": [r.code for r in everything]}):
-            terms.setdefault(row["code"], []).append(row["term"])
-        self.conn.commit()
+        terms, checked, variants = self._offerings([r.code for r in everything])
 
         def record(r):
             data = {"code": r.code, "title": r.title, "requisites_raw": r.requisites_raw,
@@ -758,6 +768,9 @@ class ResearchSession:
                     "offered_terms": terms.get(r.code, []),
                     "required_by": required_by.get(r.code, []),
                     "named_by_programs": named_by.get(r.code, [])}
+            if r.code not in terms and len(checked) >= MIN_OFFERING_TERMS:
+                data["offering_note"] = offering_note(
+                    r.code, checked, variants.get(course_stem(r.code), []))
             self.course_facts.pop(r.code, None)  # The newest reads stay in a full prompt.
             self.course_facts[r.code] = {key: data[key] for key in COURSE_FACT_FIELDS if data.get(key)}
             self.course_facts[r.code]["offered_terms"] = sorted(
@@ -769,6 +782,44 @@ class ResearchSession:
             "follow_on_courses": [record(r) for r in follow_ons],
             "evidence_ids": ids, "missing_codes": sorted(set(codes) - {r.code for r in reads})},
             status="ok" if reads else "not_found")
+
+    def _offerings(self, codes):
+        """Each course's Atlas terms, every term checked, and running variants by stem."""
+        terms: dict[str, list[str]] = {}
+        for row in self.conn.execute(queries.get("research_course_offering_terms"), {
+                "collection_id": self.scope.collection_id, "codes": list(codes)}):
+            terms.setdefault(row["code"], []).append(row["term"])
+        checked = sorted((row["term"] for row in self.conn.execute(
+            queries.get("research_offering_terms_checked"),
+            {"collection_id": self.scope.collection_id})), key=term_order)
+        variants: dict[str, list[str]] = {}
+        for row in self.conn.execute(queries.get("research_course_offering_variants"), {
+                "collection_id": self.scope.collection_id,
+                "stems": [course_stem(code) for code in codes if code not in terms]}):
+            variants.setdefault(course_stem(row["code"]), []).append(row["code"])
+        self.conn.commit()
+        return terms, checked, variants
+
+    def _retired_courses(self, decision) -> frozenset[str]:
+        """Courses an answer names that no checked Atlas term shows, under any code.
+
+        Taken from the answer, not from what the run read, so skipping the read
+        cannot hide one.
+        """
+        candidates = {candidate.id: candidate for candidate in (
+            self.state.candidates if self.state else ())}
+        named = {code for block in decision.blocks for code in canonical_codes_in(block.text)}
+        named |= {normalize_code(code) for code in decision.recommended_course_codes}
+        named |= {code for cid in decision.candidate_ids if cid in candidates
+                  for code in candidates[cid].course_codes}
+        named &= self._known_course_codes()
+        if not named:
+            return frozenset()
+        terms, checked, variants = self._offerings(sorted(named))
+        if len(checked) < MIN_OFFERING_TERMS:
+            return frozenset()
+        return frozenset(code for code in named
+                         if code not in terms and course_stem(code) not in variants)
 
     def document(self, value, _scope):
         kind, identity = self.handles.get(value.handle, (None, None))
@@ -947,7 +998,8 @@ class ResearchSession:
         try:
             validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
                            self.supplied, finishable_checks, self.entity_evidence,
-                           self.artifact_references, self._known_course_codes())
+                           self.artifact_references, self._known_course_codes(),
+                           self._retired_courses(value.decision))
         except DecisionRejected as exc:
             self.rejected_decision = value.decision
             opened = self._open_courses(value.decision.recommended_course_codes)
@@ -973,6 +1025,7 @@ class ResearchSession:
             return None
         records = self.store.evidence(self.run.run_id)
         known = self.supplied | {record.evidence_id for record in records}
+        retired = self._retired_courses(proposal)
         kept, used = [], 0
         for block in proposal.blocks:
             single = proposal.model_copy(update={
@@ -982,7 +1035,7 @@ class ResearchSession:
             size = len(block.text.encode("utf-8"))
             try:
                 validate_final(single, self.state, records, known, {}, self.entity_evidence,
-                               None, self._known_course_codes())
+                               None, self._known_course_codes(), retired)
             except DecisionRejected:
                 continue
             if used + size > MAX_DECISION_TEXT_BYTES:

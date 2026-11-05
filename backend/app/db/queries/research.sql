@@ -326,6 +326,22 @@ WHERE src.collection_id = %(collection_id)s AND src.is_current
   AND r.review_status = 'eligible' AND r.raw_course_code = ANY(%(codes)s)
 ORDER BY s.term;
 
+-- name: research_offering_terms_checked
+SELECT DISTINCT s.term
+FROM atlas_offering_snapshots s
+JOIN sources src ON src.source_id = s.source_id
+WHERE src.collection_id = %(collection_id)s AND src.is_current;
+
+-- name: research_course_offering_variants
+SELECT DISTINCT r.raw_course_code AS code
+FROM atlas_offering_rows r
+JOIN atlas_offering_snapshots s USING (source_id)
+JOIN sources src ON src.source_id = s.source_id
+WHERE src.collection_id = %(collection_id)s AND src.is_current
+  AND r.review_status = 'eligible'
+  AND regexp_replace(replace(r.raw_course_code, '_OX', ''), '[A-Z]+$', '') = ANY(%(stems)s)
+ORDER BY code;
+
 -- name: research_chunks_for_locators
 SELECT c.chunk_id, c.source_id, c.chunk_index, c.locator_id, l.label AS locator_label,
        c.text
