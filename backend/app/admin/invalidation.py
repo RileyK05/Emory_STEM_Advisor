@@ -6,7 +6,7 @@ from app.db import queries
 
 
 def consume_source_invalidations(conn, worker_id: str, *, limit: int = 20, lease_seconds: int = 60) -> int:
-    """Mark dependents stale and complete each claimed outbox row once.
+    """Complete each claimed outbox row once.
 
     A second call does not claim a completed row. A row whose lease is still
     held by another worker is left alone. The caller commits.
@@ -23,9 +23,6 @@ def consume_source_invalidations(conn, worker_id: str, *, limit: int = 20, lease
     for row in claimed:
         try:
             with conn.transaction():
-                conn.execute(queries.get("mark_audits_stale_for_source"), {
-                    "source_id": row["source_id"],
-                })
                 done = conn.execute(queries.get("complete_source_invalidation_outbox"), {
                     "outbox_id": row["outbox_id"],
                     "lease_token": lease_token,

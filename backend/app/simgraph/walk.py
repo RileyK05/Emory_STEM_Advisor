@@ -86,6 +86,8 @@ def recommend(
         if not members:
             continue
         seen.update(row["course_id"] for row in members)
+        members.sort(key=lambda row: (-float(np.dot(query_vec, _to_array(row["embedding"]))),
+                                      row["code"]))
         recommendations.append(
             Recommendation(
                 cluster_id=node,

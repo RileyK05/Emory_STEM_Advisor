@@ -21,7 +21,11 @@ from app.generation.controller import (
     retry_transient,
 )
 from app.generation.research_final import RESEARCH_PROMPT_VERSION
-from app.generation.research_tools import COURSE_FACT_COURSES, RESEARCH_TOOLS_VERSION
+from app.generation.research_tools import (
+    COURSE_FACT_COURSES,
+    RESEARCH_TOOLS_VERSION,
+    source_conflicts,
+)
 from app.llm.base import (
     AssistantToolMessage,
     GenerationRequest,
@@ -96,7 +100,7 @@ PROGRAMS AND COURSES
 - Never call a course an entry point when the same evidence lists a prerequisite first; state school, level, and restrictions before recommending.
 - Avoid unsupported "only" claims.
 - required_by lists courses that name this one as a prerequisite, and follow_on_courses gives their records. For "what can I take after X", answer from those, list every one, say which other prerequisites each one still needs, and never list a course that comes before X. Their records are enough: cite each record and finish, without opening them for their terms.
-- named_by_programs lists every program whose requirements name a course. For "which majors need X", list them from it, then read a program before saying how it counts X.
+- named_by_programs lists programs naming a course, program_lines each line with evidence_ids. For "which majors need X", answer and cite from those without reading programs.
 - renamed_subjects gives subjects Emory has renamed. Use the new code; the catalog's old one is only its wording.
 - course_facts keeps what you read about each course across rounds, with its evidence_ids. Never reread a course it lists.
 - Do not expand an acronym unless the source spells it out.
@@ -111,6 +115,7 @@ PROGRAMS AND COURSES
 READINESS AND LIMITS
 - Readiness claims require advisor_check_preparation; preparation_claims must link executed check IDs to the same student-asserted courses.
 - Dependency stages are not a semester or graduation plan or verified eligibility.
+- For what is left in a program, read all of it, then run advisor_audit_program on their reported courses. If reviewed_rules is false, say which lines name them and which do not, and that this is no official audit.
 - Do not invent fit scores, job probabilities or skills, course coverage, or a universal best major.
 - Career statistics need source dates and geography; disclose missing career evidence.
 - For what Emory graduates earn or what a major pays, read "What Emory Graduates Earn by Major" before BLS pay data, which covers all workers.
@@ -414,7 +419,8 @@ class ResearchController:
                          and not (read_due or unread_programs or continuing)
                          or tools_used >= nonterminal_limit
                          or status.remaining_seconds <= _FINISH_RESERVE_SECONDS)
-            finishing = repairing or limited
+            answer_in_hand = getattr(session, "answer_in_hand", "")
+            finishing = repairing or limited or bool(answer_in_hand)
             transcript_complete = session.conversation_page is not None and any(
                 t.get("complete") for t in session.conversation_page.get("data", {}).get("turns_untrusted", []))
             state_required = session.state is None and (session.new_evidence > 0 or transcript_complete) and not finishing
@@ -451,6 +457,8 @@ class ResearchController:
                               "elsewhere. Use advisor_read_program with these exact handle/cursor pairs: "
                               + json.dumps(continuing)
                               + ". These pages remain unread; an opening page is not the entire checklist.")
+            if answer_in_hand and not hint:
+                round_hint = answer_in_hand
             if hint and (state_required or read_required):
                 round_hint += " Previous validation feedback: " + hint
             if retry_truncated:
@@ -554,7 +562,8 @@ class ResearchController:
                 identity = (call.name, _canonical_arguments(call.arguments))
                 if call.id in calls and calls[call.id][0] != identity:
                     raise ToolCallChanged("a repeated tool call ID changed its request")
-                cacheable = call.name not in {"advisor_update_research", "advisor_finish"}
+                cacheable = call.name not in {
+                    "advisor_update_research", "advisor_finish", "advisor_audit_program"}
                 cached = calls.get(call.id)
                 replayed = False
                 if cached:
@@ -663,6 +672,14 @@ class ResearchController:
                     "complete", "conclusion", "evidence_ids", "unexplored_codes",
                     "enrollment_eligibility_verified", "scope")}
                     for check in session.checks.values()],
+                **({"program_lines": lines} if (lines := getattr(session, "line_facts", None)) else {}),
+                **({"source_conflicts": [entry["note"] for entry in conflicts]}
+                   if (conflicts := source_conflicts(question)) else {}),
+                **({"no_current_course": unknown, "no_current_course_note": (
+                    "The Course Atlas has no current course with these exact codes. Open with "
+                    "\"There is no\" and the code, then offer only the real codes listed.")}
+                   if (unknown := session.unknown_question_codes()
+                       if hasattr(session, "unknown_question_codes") else None) else {}),
                 "finish_required": finishing, "instruction": hint,
                 "state_update_requested": state_required,
                 "source_read_requested": read_required,

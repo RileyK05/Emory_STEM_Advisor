@@ -69,6 +69,27 @@ WHERE p.program_id = m.program_id
   AND c.code = m.target_code
   AND m.target_course_id IS DISTINCT FROM c.course_id;
 
+-- name: resolve_program_mentions_by_suffix_variant
+-- A program line often drops a suffix ("PHYS 499" for PHYS 499R). With exactly one
+-- current course of that number, that is the course; with two it stays unresolved.
+WITH variants AS (
+    SELECT m.program_id, m.position, m.target_code, min(c.course_id::text)::uuid AS course_id
+    FROM program_course_mentions m
+    JOIN programs p ON p.program_id = m.program_id
+    JOIN courses c ON c.collection_id = p.collection_id AND c.lifecycle = 'current'
+     AND c.code ~ ('^' || m.target_code || '[A-Z]+$')
+    WHERE p.collection_id = %(collection_id)s
+      AND p.is_active
+      AND m.target_course_id IS NULL
+    GROUP BY m.program_id, m.position, m.target_code
+    HAVING count(*) = 1
+)
+UPDATE program_course_mentions m
+SET target_course_id = v.course_id
+FROM variants v
+WHERE m.program_id = v.program_id AND m.position = v.position
+  AND m.target_code = v.target_code;
+
 -- name: resolve_program_mentions_by_campus_equivalence
 -- A program slot that names an Oxford course the master has no row for still
 -- identifies a course: the catalog pairs it with the Atlanta course it is the

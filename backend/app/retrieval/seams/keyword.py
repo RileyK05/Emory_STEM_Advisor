@@ -17,6 +17,23 @@ _PROGRAM_INTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Short names students use for a program. Query side only: the deterministic
+# parser tables never see these.
+PROGRAM_NICKNAMES = {
+    "ai": "artificial intelligence", "bio": "biology", "chem": "chemistry",
+    "double major": "double major two majors", "dual major": "dual major two majors",
+    "cs": "computer science", "econ": "economics", "envs": "environmental sciences",
+    "math": "mathematics", "nbb": "neuroscience and behaviour biology",
+    "polisci": "political science", "poli sci": "political science",
+    "psych": "psychology", "qss": "quantitative sciences",
+    "stats": "statistics", "wgss": "women's, gender and sexuality studies",
+}
+_NICKNAME_RE = re.compile(
+    r"\b(" + "|".join(sorted(PROGRAM_NICKNAMES, key=len, reverse=True)) + r")\b", re.IGNORECASE)
+# Words that say a question is about a program but never say which one.
+_PROGRAM_WORDS = frozenset(("major", "majors", "minor", "minors", "requirement", "requirements",
+                            "degree", "degrees", "program", "programs", "bs", "ba"))
+
 _NUMERIC_REF_RE = re.compile(r"\b\d+(?:[./+\-]\d+)+\b")
 # Match only explicit Atlas-shaped subject/number codes. Keep `_OX` as a
 # separate searchable token; it is part of the course identity, not an alias.
@@ -29,7 +46,7 @@ _TEMPORAL_SUBJECTS = frozenset({"spring", "summer", "fall", "winter", "autumn", 
 # Conversational scaffolding otherwise lets repeated catalog boilerplate
 # outrank the actual subject. Numbers and department/course codes are retained.
 QUERY_SCAFFOLD = frozenset(
-    ["course", "courses", "catalog", "current", "take", "taking", "explore", "interested", "want", "wants", "recommend", "recommends", "recommendation", "recommendations", "suggest", "relevant", "help", "helps", "supported", "descriptions", "described", "teaches", "teach", "find", "here", "which", "what", "should", "would", "could", "can", "need", "know", "study", "studying", "career", "provide", "information", "based", "context", "available", "list", "listed"]
+    ["course", "courses", "class", "classes", "emory", "catalog", "current", "take", "taking", "explore", "interested", "want", "wants", "recommend", "recommends", "recommendation", "recommendations", "suggest", "relevant", "help", "helps", "supported", "descriptions", "described", "teaches", "teach", "find", "here", "which", "what", "should", "would", "could", "can", "need", "know", "study", "studying", "career", "provide", "information", "based", "context", "available", "list", "listed"]
 )
 # Standard English function words, the closed class already ignored by the
 # english text search configuration. This is not a list of words from one
@@ -87,13 +104,25 @@ def _course_code_header_pattern(query: str) -> str | None:
     return r"(^|\n)##[ \t]+(" + alternatives + r")(?![a-z0-9])"
 
 
-def _specific_tokens(tokens: list[str]) -> list[str]:
-    """Longest tokens, when shorter tokens are also present.
+def expand_program_names(query: str) -> str:
+    """Spell out a program's short name in a question about a program."""
+    if not _PROGRAM_INTENT_RE.search(query):
+        return query
+    return _NICKNAME_RE.sub(lambda match: PROGRAM_NICKNAMES[match.group(1).lower()], query)
 
-    Repeated shorter words such as "work" or "first" must not outrank a
-    longer subject token. When every token is the same length there is no
-    shorter competitor, so no token gets the bonus.
+
+def _specific_tokens(tokens: list[str]) -> list[str]:
+    """The subject of the question: the tokens that are not program vocabulary.
+
+    "Chemistry major requirements" is about chemistry, however long the word
+    "requirements" is. Without program vocabulary, the longest tokens when
+    shorter ones are present: repeated shorter words such as "work" or "first"
+    must not outrank a longer subject token. When every token is the same
+    length there is no shorter competitor, so no token gets the bonus.
     """
+    subject = [token for token in tokens if token not in _PROGRAM_WORDS]
+    if subject and len(subject) < len(tokens):
+        return subject
     if len(tokens) < 2:
         return []
     longest = max(len(token) for token in tokens)
@@ -122,7 +151,9 @@ def keyword_seam(
             name="keyword", enabled=True, state="dormant", reason="explicitly empty source scope"
         )
 
-    tokens = _tokens(query, config.min_token_len)
+    program_query = expand_program_names(query)
+    tokens = _tokens(f"{query} {program_query}" if program_query != query else query,
+                     config.min_token_len)
     if not tokens:
         return SeamResult(
             name="keyword", enabled=True, state="dormant", reason="no searchable terms"
@@ -134,19 +165,19 @@ def keyword_seam(
     specific = _specific_tokens(tokens)
     specific_q = " | ".join(specific) if specific else None
     course_code_header_pattern = _course_code_header_pattern(query)
-    program_query = re.sub(r"\bAI\s+(minor|major)\b", r"Artificial Intelligence \1", query,
-                           flags=re.IGNORECASE)
-    program_query = re.sub(r"\bCS\s+(minor|major|BS|BA)\b", r"Computer Science \1",
-                           program_query, flags=re.IGNORECASE)
     # A course lookup should not run the program-title lateral once per
     # candidate chunk. Program evidence is only relevant when the question names
     # a program, degree, major/minor, checklist, concentration, or track.
     if not _PROGRAM_INTENT_RE.search(query):
         program_query = None
-    # A contiguous named subject in a locator/filename beats an incidental body
-    # mention. Single generic words ("minor", "policy") confer no title band.
-    title_pairs = [f"({a} <-> {b})" for a, b in pairwise(tokens)
+    # A named subject in a locator, title or filename beats an incidental body
+    # mention. Titles are short, so two query words in one count as naming it.
+    # Single generic words ("minor", "policy") confer no title band, but the
+    # subject of a question about a program does ("ger requirements").
+    title_pairs = [f"({a} & {b})" for a, b in pairwise(tokens)
                    if not a.isdigit() and not b.isdigit()]
+    if len(tokens) != len(subject := [t for t in tokens if t not in _PROGRAM_WORDS]):
+        title_pairs.extend(token for token in subject if not token.isdigit())
     numeric_refs = _NUMERIC_REF_RE.findall(query)
     numeric_pattern = (
         r"(^|[^0-9])(" + "|".join(re.escape(ref) for ref in numeric_refs) + r")([^0-9]|$)"
@@ -154,7 +185,7 @@ def keyword_seam(
     )
     rows = conn.execute(
         queries.get("keyword_search"),
-        {"q": q, "collection_id": collection_id, "limit": config.limit,
+        {"q": q, "full_query": " ".join(tokens), "collection_id": collection_id, "limit": config.limit,
          "source_ids": source_ids, "workspace_key": workspace_key,
          "numeric_pattern": numeric_pattern, "specific_q": specific_q,
          "title_queries": title_pairs,

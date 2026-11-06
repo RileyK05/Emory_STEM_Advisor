@@ -2,15 +2,19 @@
 
 import json
 import re
+import tomllib
 from dataclasses import asdict, replace
+from functools import lru_cache
 from itertools import zip_longest
+from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid5
 
 from pydantic import Field, ValidationError, field_validator
 
+from app.advising.audit_engine import audit_reported_courses
 from app.advising.catalog import load_advising_context, load_campus_equivalents
-from app.advising.comparison import compare_mentions
+from app.advising.comparison import compare_mentions, match_reported_courses
 from app.advising.research_repository import (
     MAX_COURSE_CODES,
     NotInScope,
@@ -36,9 +40,12 @@ from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
 from app.generation.advising_tools import CourseCode
 from app.generation.research_final import DecisionRejected, validate_final
+from app.programs.rules import RuleValidationError
 from app.retrieval.retrieve import retrieve
-from app.retrieval.seams.prereq import is_reverse_query
+from app.retrieval.seams.keyword import expand_program_names
+from app.retrieval.seams.prereq import course_codes_in_query, is_reverse_query
 from app.retrieval.types import CitedChunk
+from app.simgraph.walk import recommend
 from app.tools.registry import (
     ToolCapability,
     ToolInputError,
@@ -52,7 +59,22 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "14"
+RESEARCH_TOOLS_VERSION = "20"
+
+
+_CONFLICTS_PATH = Path(__file__).resolve().parents[2] / "configs" / "source_conflicts.toml"
+
+
+@lru_cache(maxsize=1)
+def _load_conflicts() -> tuple[dict, ...]:
+    with _CONFLICTS_PATH.open("rb") as handle:
+        return tuple({**entry, "pattern": re.compile(entry["question"])}
+                     for entry in tomllib.load(handle)["conflict"])
+
+
+def source_conflicts(question: str | None) -> list[dict]:
+    """The known disagreements between Emory sources that a question runs into."""
+    return [entry for entry in _load_conflicts() if entry["pattern"].search(question or "")]
 
 
 class SearchInput(ToolInputModel):
@@ -86,6 +108,15 @@ class CompareInput(ToolInputModel):
 class PreparationInput(ToolInputModel):
     selected_codes: list[CourseCode] = Field(min_length=1, max_length=30)
     completed_codes: list[CourseCode] = Field(max_length=30)
+
+
+class AuditInput(ToolInputModel):
+    handle: str = Field(min_length=1, max_length=128)
+    completed_codes: list[CourseCode] = Field(max_length=60)
+
+
+class SuggestInput(ToolInputModel):
+    goal: str = Field(min_length=1, max_length=300)
 
 
 class RecallInput(ToolInputModel):
@@ -278,8 +309,25 @@ MAX_READ_BYTES = 48_000
 PROGRAM_PAGE_ITEMS = 30
 #: Programs listed on one course record.
 MAX_NAMING_PROGRAMS = 40
+#: Program lines a course read carries, and how much of each line.
+MAX_PROGRAM_LINES = 30
+MAX_PROGRAM_LINE_CHARS = 160
+_PROGRAM_QUESTION_RE = re.compile(r"\b(?:majors?|minors?|programs?|degrees?)\b", re.IGNORECASE)
+# A line match names a course; it never shows a degree requirement is done.
+_REQUIREMENT_MET_RE = re.compile(
+    r"\b(?:satisf(?:y|ies|ied|ying)|fulfil+(?:s|ed|ling)?|meets?|met|completed?|finish(?:es|ed)?)\b"
+    r"[^.;\n]{0,60}\b(?:requirements?|lines?)\b", re.IGNORECASE)
+_NEGATED_RE = re.compile(r"\b(?:not|never|cannot|can't|isn't|aren't|whether)\b[^.;\n]{0,30}$",
+                         re.IGNORECASE)
+# "Which majors need MATH 221": program_lines is already the whole answer.
+_WHICH_PROGRAMS_RE = re.compile(
+    r"\b(?:which|what|any)\b.*\b(?:majors?|minors?|programs?|degrees?)\b.*"
+    r"\b(?:need|needs|require|requires|use|uses|include|includes)\b", re.IGNORECASE)
 #: Courses opened for the model in one step; the evidence register has its own limit.
 MAX_AUTO_READ_COURSES = 12
+#: Topic groups and courses per group a suggestion returns, closest to the goal first.
+MAX_SUGGESTED_GROUPS = 3
+MAX_SUGGESTED_COURSES = 12
 
 
 def course_stem(code: str) -> str:
@@ -350,6 +398,11 @@ class ResearchSession:
         self.read_count = 0
         self.course_facts: dict[str, dict] = {}
         self.follow_on_codes: set[str] = set()
+        # Set when the server already holds the whole answer, so the next step is writing it.
+        self.answer_in_hand = ""
+        self.must_name: set[str] = set()
+        self.line_facts: dict[str, list] = {}
+        self.audit_matched_lines_only = False
         self.read_keys: set[tuple] = set()
         self.discovery_count = 0
         self.state = None
@@ -559,7 +612,8 @@ class ResearchSession:
         chunks = getattr(outcome, "chunks", [])
         leads = []
         if value.kind in {"any", "program"}:
-            terms = [word for word in re.findall(r"\w+", value.query) if len(word) > 2]
+            terms = [word for word in re.findall(r"\w+", expand_program_names(value.query))
+                     if len(word) > 2]
             patterns = [f"%{word}%" for word in terms]
             found = self.conn.execute(queries.get("research_search_programs"), {
                 "collection_id": self.scope.collection_id, "source_ids": sources,
@@ -661,6 +715,14 @@ class ResearchSession:
         return ResearchResult(data={"leads": page, "requirement_documents": requirement_documents,
                                     "discovery_only": True}, next_cursor=cursor)
 
+    def _exact_chunks(self, chunk_ids, sources):
+        with self.conn.transaction():
+            verify_sources(self.conn, self.scope, sources)
+            found = exact_chunks(
+                self.conn, {s: p.index_revision for s, p in self.scope.sources.items()}, chunk_ids)
+        self.conn.commit()
+        return found
+
     def _lead_chunks(self, chunks):
         from app.advising.research_repository import exact_chunks
 
@@ -737,11 +799,29 @@ class ResearchSession:
         required_by = {row["code"]: row["required_by"][:24] for row in self.conn.execute(
             queries.get("research_courses_requiring"), {
                 "collection_id": self.scope.collection_id, "codes": [r.code for r in reads]})}
-        named_by = {row["code"]: row["programs"][:MAX_NAMING_PROGRAMS]
-                    for row in self.conn.execute(queries.get("research_programs_naming_courses"), {
-                        "collection_id": self.scope.collection_id,
-                        "codes": [r.code for r in reads]})}
+        # A program names one campus's code; the course a student read may be the other's.
+        equivalents = load_campus_equivalents(self.conn, collection_id=self.scope.collection_id)
+        sharing = {code: r.code for r in reads
+                   for code in (r.code, *equivalents.get(r.code, ()))}
+        named_by: dict[str, list] = {}
+        for row in self.conn.execute(queries.get("research_programs_naming_courses"), {
+                "collection_id": self.scope.collection_id, "codes": list(sharing)}):
+            titles = named_by.setdefault(sharing[row["code"]], [])
+            titles.extend(title for title in row["programs"] if title not in titles)
+        named_by = {code: titles[:MAX_NAMING_PROGRAMS] for code, titles in named_by.items()}
+        program_lines: dict[str, list] = {}
+        if self.question and _PROGRAM_QUESTION_RE.search(self.question):
+            for row in self.conn.execute(queries.get("research_program_lines_naming_courses"), {
+                    "collection_id": self.scope.collection_id, "codes": list(sharing)}):
+                if row["source_id"] in self.scope.sources:
+                    program_lines.setdefault(sharing[row["code"]], []).append(row)
         self.conn.commit()
+        program_lines = {code: rows[:MAX_PROGRAM_LINES] for code, rows in program_lines.items()}
+        if program_lines and self.question and _WHICH_PROGRAMS_RE.search(self.question):
+            self.answer_in_hand = (
+                "program_lines is every program line naming this course. List every program "
+                "from it, quote how its line uses the course, say so when a line offers it as "
+                "one option, and cite each line's evidence_ids.")
         # "What can I take after X?" is answered by the graph. Open the courses it
         # names here, so the answer rests on them instead of on what a search finds.
         follow_ons = []
@@ -753,14 +833,32 @@ class ResearchSession:
                                                wanted[start:start + MAX_COURSE_CODES]))
                 self.conn.commit()
         self.follow_on_codes.update(r.code for r in follow_ons)
+        if follow_ons:
+            self.answer_in_hand = (
+                "required_by is every course naming this one, and follow_on_courses holds their "
+                "records. List every one, say which other prerequisites each still needs, and "
+                "cite each record.")
         everything = [*reads, *follow_ons]
-        chunks = _within_read_limit([*(c for r in reads for c in r.chunks),
-                                     *_opened_chunks(follow_ons)])
-        ids = self.acquire(chunks, refs={c.chunk_id: (r.code, r.canonical_code)
-                                        for r in everything for c in r.chunks},
-                           action="read_courses",
-                           progress_key=("read_courses", tuple(sorted(codes))))
+        # A which-programs answer needs each course's record, not its term listings.
+        course_chunks = [*(_opened_chunks(reads) if self.answer_in_hand
+                           else (c for r in reads for c in r.chunks)),
+                         *_opened_chunks(follow_ons)]
+        refs = {c.chunk_id: (r.code, r.canonical_code) for r in everything for c in r.chunks}
+        # The program lines arrive with their passages, so an answer can cite a
+        # line without opening every program that names the course.
+        rows = [row for lines in program_lines.values() for row in lines]
+        line_chunks = list(self._exact_chunks({cid for row in rows for cid in row["chunk_ids"]},
+                                              {row["source_id"] for row in rows}).values())
+        progress = ("read_courses", tuple(sorted(codes)))
+        try:
+            ids = self.acquire(_within_read_limit([*course_chunks, *line_chunks]), refs=refs,
+                               action="read_courses", progress_key=progress)
+        except EvidenceLimit:
+            ids = self.acquire(_within_read_limit(course_chunks), refs=refs,
+                               action="read_courses", progress_key=progress)
+        records = {e.chunk_id: e.evidence_id for e in self.store.evidence(self.run.run_id)}
         terms, checked, variants = self._offerings([r.code for r in everything])
+        self.must_name |= {r.code for r in follow_ons if r.code in terms}
 
         def record(r):
             data = {"code": r.code, "title": r.title, "requisites_raw": r.requisites_raw,
@@ -768,6 +866,15 @@ class ResearchSession:
                     "offered_terms": terms.get(r.code, []),
                     "required_by": required_by.get(r.code, []),
                     "named_by_programs": named_by.get(r.code, [])}
+            if r.code in program_lines:
+                data["program_lines"] = [{
+                    "program": row["program"], "line": row["line"][:MAX_PROGRAM_LINE_CHARS],
+                    "choose": row["choose"],
+                    "evidence_ids": [records[str(cid)] for cid in row["chunk_ids"]
+                                     if str(cid) in records],
+                } for row in program_lines[r.code]]
+                if self.answer_in_hand:
+                    self.line_facts[r.code] = data["program_lines"]
             if r.code not in terms and len(checked) >= MIN_OFFERING_TERMS:
                 data["offering_note"] = offering_note(
                     r.code, checked, variants.get(course_stem(r.code), []))
@@ -958,6 +1065,76 @@ class ResearchSession:
         self.store.record_action(self.run.run_id, action_kind="preparation_check", details=result)
         return ResearchResult(status="ok" if result["complete"] else "incomplete", data=result)
 
+    def audit(self, value, _scope):
+        self.resolve(value.handle, "program")
+        read = self.program_reads.get(value.handle)
+        if read is None or self.program_cursors[value.handle]:
+            return ResearchResult(status="conflict", limitations=[
+                "Read the whole program first, following every cursor."])
+        equivalents = load_campus_equivalents(self.conn, collection_id=self.scope.collection_id)
+        release = self.conn.execute(queries.get("get_current_rule_release"),
+                                    {"program_id": read.pin.program_id}).fetchone()
+        self.conn.commit()
+        records = {e.chunk_id: e.evidence_id for e in self.store.evidence(self.run.run_id)}
+        evidence = {item.position: list(dict.fromkeys(
+            records[str(c.chunk_id)] for c, _s, _e in item.line.support)) for item in read.items}
+        cited = list(dict.fromkeys(i for ids in evidence.values() for i in ids))
+        self.active = list(dict.fromkeys([*cited, *self.active]))
+        base = {"program": read.pin.title, "handle": value.handle,
+                "completed_codes": value.completed_codes, "evidence_ids": cited}
+        if release is None:
+            self.audit_matched_lines_only = True
+            matches, unmatched = match_reported_courses(
+                read.items, value.completed_codes, equivalents)
+            return ResearchResult(status="incomplete", data={
+                **base, "reviewed_rules": False, "unmatched_codes": list(unmatched),
+                "lines": [{"position": m.item.position, "text": m.item.line.text,
+                           "choose": m.item.choose, "state": m.state,
+                           "reported_codes": list(m.reported),
+                           "evidence_ids": evidence[m.item.position]} for m in matches]},
+                limitations=[("No staff-reviewed rules exist for this program. Lines show where "
+                              "reported courses are named, not that a requirement is met.")])
+        try:
+            result = audit_reported_courses(
+                release["rules_tree"], value.completed_codes, equivalents=equivalents,
+                rules_digest=release["rules_digest"],
+                max_search_states=self.settings.audit_max_search_states)
+        except (RuleValidationError, ValueError) as exc:
+            return ResearchResult(status="conflict", limitations=[f"Unsupported audit: {exc}"])
+        return ResearchResult(data={
+            **base, "reviewed_rules": True, "overall_status": result.overall_status,
+            "blockers": result.blockers,
+            "rules": [{"title": row.title, "status": row.status,
+                       "required_count": row.required_count,
+                       "satisfied_count": row.satisfied_count,
+                       "unresolved_reason": row.unresolved_reason,
+                       "evidence_ids": evidence.get(row.raw_position, [])}
+                      for row in result.rule_evaluations if row.status != "not_selected"]},
+            limitations=[("Uses the student's report, not a transcript: grades, credit hours and "
+                          "transfer rules are unverified.")])
+
+    def suggest(self, value, _scope):
+        groups = recommend(self.conn, collection_id=self.scope.collection_id,
+                           query_vec=self.embedder.embed_query(value.goal),
+                           simgraph=self.config.simgraph)[:MAX_SUGGESTED_GROUPS]
+        self.conn.commit()
+        terms, checked, variants = self._offerings(
+            [code for group in groups for _id, code, _title in group.courses])
+
+        def current(code):
+            return (len(checked) < MIN_OFFERING_TERMS or code in terms
+                    or course_stem(code) in variants)
+
+        suggestions = [{"topic": " > ".join(group.path), "courses": [
+            {"code": code, "title": title} for _id, code, title in group.courses
+            if current(code)][:MAX_SUGGESTED_COURSES]} for group in groups]
+        suggestions = [group for group in suggestions if group["courses"]]
+        return ResearchResult(
+            status="ok" if suggestions else "not_found",
+            data={"suggestions": suggestions, "discovery_only": True},
+            limitations=[("Suggestions come from topic similarity. They are not requirements "
+                          "and do not show that a course counts toward any program.")])
+
     def update(self, value, _scope):
         state = value.state
         if len(state.candidates) > self.config.research.max_candidates:
@@ -996,6 +1173,18 @@ class ResearchSession:
         finishable_checks = {check_id: check for check_id, check in self.checks.items()
                              if check_id not in self.unavailable_preparation_check_ids}
         try:
+            if self.audit_matched_lines_only:
+                self._refuse_met_claims(value.decision)
+            written = " ".join(block.text for block in value.decision.blocks)
+            for conflict in source_conflicts(self.question):
+                if not all(term in written for term in conflict["must_mention"]):
+                    raise DecisionRejected(conflict["note"])
+            named = {code for block in value.decision.blocks
+                     for code in canonical_codes_in(block.text)}
+            if self.must_name - named:
+                raise DecisionRejected(
+                    "the prerequisite graph lists these too; name each one and what else it "
+                    f"needs: {', '.join(sorted(self.must_name - named))}")
             validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
                            self.supplied, finishable_checks, self.entity_evidence,
                            self.artifact_references, self._known_course_codes(),
@@ -1011,6 +1200,16 @@ class ResearchSession:
                 "say they could not be read") from None
         self.decision = value.decision
         return ResearchResult(data={"accepted": True})
+
+    @staticmethod
+    def _refuse_met_claims(decision):
+        for block in decision.blocks:
+            for claim in _REQUIREMENT_MET_RE.finditer(block.text):
+                if not _NEGATED_RE.search(block.text[:claim.start()]):
+                    raise DecisionRejected(
+                        "no reviewed rules exist for this program, so a reported course cannot "
+                        f"be said to meet a requirement ({claim.group()!r}); say which lines name "
+                        "the course and which remain")
 
     def salvage(self):
         """The valid blocks of the last rejected proposal, or None.
@@ -1070,6 +1269,15 @@ class ResearchSession:
             return []
         return [r.code for r in reads]
 
+    def unknown_question_codes(self) -> dict[str, list[str]]:
+        """Codes the question names that are not current courses, with their nearest real codes."""
+        named = course_codes_in_query(self.question or "")
+        if not named:
+            return {}
+        known = self._known_course_codes()
+        return {code: sorted(k for k in known if course_stem(k) == course_stem(code))[:6]
+                for code in named if code not in known}
+
     def _known_course_codes(self) -> frozenset[str]:
         """The collection's course identities, for the identity check.
 
@@ -1128,6 +1336,8 @@ class ResearchSession:
             ("read_document", "Read source or section evidence; follow cursor for remaining chunks.", ReadInput, self.document, ("handle",)),
             ("compare_mentions", "Compare already read programs; overlap is mentions, never credit savings.", CompareInput, self.compare, ("handles",)),
             ("check_preparation", "Run deterministic dependency checks, never eligibility. completed_codes is required and must reflect the student's explicit report; use [] only when the student explicitly reports no completed courses, and ask if history is unknown. In blocker alternative_groups, each inner group requires all entries and the outer list offers alternative paths. If alternative_groups_truncated is true, more paths were omitted; do not treat the shown groups as exhaustive.", PreparationInput, self.preparation, ()),
+            ("audit_program", "Check a student's reported courses against a fully read program. Ask if unknown. reviewed_rules false gives only the lines naming them, never that a requirement is met.", AuditInput, self.audit, ("handle",)),
+            ("suggest_courses", "Courses related to a goal, from the topic graph: suggestions, never requirements.", SuggestInput, self.suggest, ()),
             ("update_research", "Replace bounded comparison state, set active exact evidence and expected revision.", StateInput, self.update, ()),
             ("finish", "Propose typed final answer. Must be the sole tool call. Cite active evidence IDs, never raw markers. Optional artifact requests a follow-on document/workbook/page only when the student asks to keep or export something; revise requires the exact referenced revision.", FinishInput, self.finish, ()),
         ]

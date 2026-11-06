@@ -29,6 +29,7 @@ SUBJECT_ALIASES = {
     "Arabic": "ARAB", "Chinese": "CHN", "Japanese": "JPN", "Korean": "KRN",
     "French": "FREN", "German": "GER", "Spanish": "SPAN", "Italian": "ITAL",
     "Hebrew": "HEBR", "Hindi": "HNDI", "Persian": "PERS", "Portuguese": "PORT",
+    "Russian": "RUSS", "Tibetan": "TBT",
     "Latin": "LAT", "Greek": "GRK", "Anthropology": "ANT", "Ant": "ANT",
     "History": "HIST", "Hist": "HIST", "Philosophy": "PHIL", "Phil": "PHIL",
     "Religion": "REL", "Sociology": "SOC", "Linguistics": "LING", "Ling": "LING",

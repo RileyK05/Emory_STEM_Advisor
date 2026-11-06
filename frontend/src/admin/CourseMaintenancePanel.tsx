@@ -127,7 +127,7 @@ export function CourseMaintenancePanel() {
     await run(
       async () => {
         await publishCourseChange(change.changeId);
-        setNotice('Course change published. Affected audits are marked stale.');
+        setNotice('Course change published.');
         setChange(null);
         setPreview(null);
         if (detail) await openCourse(detail.course.code);
@@ -391,10 +391,7 @@ export function CourseMaintenancePanel() {
               <span className="mono">{preview.dependents.map((row) => row.code).join(', ')}</span>
             </p>
           )}
-          <p>
-            {preview.staleAuditCount} saved audit(s) will be marked stale; {preview.activeTopicBuilds} active topic
-            build(s) will be retired.
-          </p>
+          <p>{preview.activeTopicBuilds} active topic build(s) will be retired.</p>
           {preview.warnings.map((warning) => (
             <p key={warning} role="status">
               {warning}

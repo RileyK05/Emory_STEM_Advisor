@@ -33,8 +33,6 @@ def test_invalidation_consumption_is_idempotent_and_keeps_history(db, collection
 
     program_id = uuid.uuid4()
     release_id = uuid.uuid4()
-    record_id = uuid.uuid4()
-    audit_id = uuid.uuid4()
     gap_id = uuid.uuid4()
     db.execute(
         """
@@ -59,19 +57,6 @@ def test_invalidation_consumption_is_idempotent_and_keeps_history(db, collection
         )
         """,
         (release_id, program_id, collection, test_source, "a" * 64, '{"nodeType": "all_of"}', "c" * 64),
-    )
-    db.execute(
-        "INSERT INTO student_academic_records (record_id, workspace_key) VALUES (%s, 'development')",
-        (record_id,),
-    )
-    db.execute(
-        """
-        INSERT INTO degree_audits (
-            audit_id, workspace_key, program_id, rule_release_id, record_id, record_revision,
-            rules_digest, overall_status
-        ) VALUES (%s, 'development', %s, %s, %s, 1, %s, 'outstanding')
-        """,
-        (audit_id, program_id, release_id, record_id, "c" * 64),
     )
     db.execute(
         """
@@ -102,10 +87,6 @@ def test_invalidation_consumption_is_idempotent_and_keeps_history(db, collection
 
     assert consume_source_invalidations(db, "worker-a") == 1
     db.commit()
-    stale = db.execute(
-        "SELECT is_stale FROM degree_audits WHERE audit_id = %s", (audit_id,),
-    ).fetchone()
-    assert stale["is_stale"] is True
     consumed = db.execute(
         "SELECT published, consumed_at, attempts FROM source_invalidation_outbox WHERE outbox_id = %s",
         (outbox_id,),
@@ -120,13 +101,9 @@ def test_invalidation_consumption_is_idempotent_and_keeps_history(db, collection
     ).fetchone()
     assert again["attempts"] == 1
 
-    # The saved approval history and the audit row remain addressable.
+    # The saved approval history remains addressable.
     detail = api_client(db, collection).get(f"/api/admin/sources/{test_source}/review")
     assert detail.status_code == 200
-    saved = db.execute(
-        "SELECT audit_id, overall_status FROM degree_audits WHERE audit_id = %s", (audit_id,),
-    ).fetchone()
-    assert saved["overall_status"] == "outstanding"
 
 
 def test_historical_source_revision_evidence_survives_reindex(db, collection, tmp_path):

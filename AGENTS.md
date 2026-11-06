@@ -42,7 +42,7 @@ plans and `docs/audit/` the review status.
   - Accounts and governance: `auth/` (`get_principal` is the one authentication
     dependency; capabilities), `connections/` (encrypted
     provider profiles, evaluated routing), `admin/`, `debug/` (allowlisted,
-    expiring overrides), `records/`, `privacy/`, `quotas/`, `flags/`,
+    expiring overrides), `privacy/`, `quotas/`, `flags/`,
     `pricing/` (price schedules; `record_model_call` writes every model_calls
     row), `gaps/`, `observability/`, `ops/` (readiness, backup).
   - `storage/` — local/blob/dual-read storage seam and `storage_objects`
@@ -52,7 +52,9 @@ plans and `docs/audit/` the review status.
   `programs.toml`, `advising_sources.toml` (the reviewed upload allowlist),
   `requirement_gold.toml` (hand-checked expected requirement trees, checked by
   `scripts.manual.data_audit`; an entry is ground truth only once `reviewed`),
-  `career_occupations.toml` (hand-written SOC codes for federal pay data), and
+  `career_occupations.toml` (hand-written SOC codes for federal pay data),
+  `source_conflicts.toml` (hand-written disagreements between Emory sources that answers
+  must disclose), and
   `catalog-directory.md` (planning directory; not citable evidence).
 - `backend/scripts/` — run as `python -m scripts.<name>` from `backend/`; they
   use `DATABASE_URL`, or an embedded `pgserver` under `DATA_DIR/pgserver`.
@@ -133,6 +135,7 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.import_atlas --collection NAME FILE
 ../.venv/Scripts/python -m scripts.reconcile_atlas               # prepare Atlas-primary JSONL from verified saved captures
 ../.venv/Scripts/python -m scripts.reconcile_atlas --publish     # publish Atlas-primary records; retains labeled catalog fallbacks
+../.venv/Scripts/python -m scripts.refresh_term_cards --collection NAME  # hide repeated term cards from search; imports do this themselves
 ../.venv/Scripts/python -m scripts.ingest_offerings --captures DIR --career NAME --collection NAME [--publish]   # term offerings
 ../.venv/Scripts/python -m scripts.build_simgraph --collection NAME [--nudges FILE]
 ../.venv/Scripts/python -m scripts.requirement_hold --help          # curator hold on a conflicting course rule
@@ -146,6 +149,7 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.load_test --scenario query --requests 200 --concurrency 20   # fake-model load harness
 ../.venv/Scripts/python -m scripts.schema_baseline       # baseline == legacy final schema, disposable DBs
 ../.venv/Scripts/python -m scripts.restore_consolidated BACKUP --data-dir NEW_DIRECTORY
+../.venv/Scripts/python -m scripts.team_snapshot --backup FILE --maintenance-confirmed  # public data only, for teammates; never share a plain backup
 ../.venv/Scripts/python -m scripts.smoke.local_model    # slow, downloads weights
 ../.venv/Scripts/python -m scripts.smoke.embeddings     # ~250 MB download
 ```

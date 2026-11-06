@@ -32,7 +32,7 @@ WITH matched AS MATERIALIZED (
           AND p.is_active AND p.source_index_revision = s.index_revision
           AND p.binding_status IN ('bound', 'evidence_unresolved')
           AND to_tsvector('english', %(program_query)s)
-              @@ phraseto_tsquery('english', p.title)
+              @@ phraseto_tsquery('english', regexp_replace(p.title, '\s*\(.*$', ''))
           AND (EXISTS (SELECT 1 FROM program_item_evidence e
                        WHERE e.program_id = p.program_id AND e.chunk_id = c.chunk_id)
                OR EXISTS (SELECT 1 FROM program_field_evidence e
@@ -44,6 +44,7 @@ WITH matched AS MATERIALIZED (
       AND s.is_current
       AND (s.workspace_key IS NULL OR s.workspace_key = %(workspace_key)s)
       AND (%(source_ids)s::uuid[] IS NULL OR c.source_id = ANY(%(source_ids)s::uuid[]))
+      AND NOT c.search_hidden
       AND (pm.matched
            OR (c.search_vector || to_tsvector('english', coalesce(l.label, '')))
               @@ to_tsquery('english', %(q)s)
@@ -55,13 +56,18 @@ title_scores AS MATERIALIZED (
     -- vector instead of recomputing to_tsvector inside the unnest loop.
     SELECT m.locator_id,
            (SELECT count(*) FROM unnest(%(title_queries)s::text[]) AS title_query
-            WHERE tv.title_vector @@ to_tsquery('english', title_query)) AS title_matches
+            WHERE tv.title_vector @@ to_tsquery('english', title_query)) AS title_matches,
+           -- The question, without its scaffolding, names this course by its full title.
+           coalesce(to_tsvector('english', %(full_query)s)
+                    @@ phraseto_tsquery('english', co.title), false) AS names_course
     FROM (SELECT DISTINCT locator_id, source_id FROM matched) m
     JOIN sources s ON s.source_id = m.source_id
     JOIN locators l ON l.locator_id = m.locator_id
     LEFT JOIN source_provenance pv ON pv.source_id = m.source_id
+    LEFT JOIN courses co ON co.locator_id = m.locator_id
     CROSS JOIN LATERAL (
         SELECT to_tsvector('english', coalesce(pv.title, '') || ' ' || coalesce(l.label, '') || ' ' ||
+               coalesce(co.title, '') || ' ' ||
                regexp_replace(s.filename, '[-_.]', ' ', 'g')) AS title_vector
     ) tv
 )
@@ -69,9 +75,10 @@ SELECT m.chunk_id, m.source_id, m.chunk_index, m.program_match,
        (
            CASE WHEN m.program_match THEN 4.0
                 WHEN m.role_match AND t.title_matches > 0 THEN 3.5
-                WHEN m.course_code_heading THEN 3.0
+                WHEN m.course_code_heading OR t.names_course THEN 3.0
                 WHEN m.numeric_match THEN 2.0
                 WHEN t.title_matches >= 2 THEN 2.0
+                WHEN m.specific AND t.title_matches > 0 THEN 1.5
                 WHEN m.specific THEN 1.0
                 WHEN t.title_matches > 0 THEN 0.5
                 ELSE 0.0 END

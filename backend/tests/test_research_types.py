@@ -297,7 +297,7 @@ def test_entry_point_claims_need_a_read_course_without_prerequisites():
                    None, records, {"e3"}, {})
 
 
-@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(14060, False), (15500, False), (48000, True)])
+@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(14500, False), (15500, False), (48000, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
     ("unknown", None, "edition_not_recorded"),

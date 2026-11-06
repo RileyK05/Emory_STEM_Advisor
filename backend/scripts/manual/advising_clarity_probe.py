@@ -217,7 +217,8 @@ def _mentions_asserting(text: str, code: str) -> list[str]:
     usable.
     """
     subject, number = code.rsplit(" ", 1)
-    pattern = re.compile(re.escape(subject) + r"[ -]?" + re.escape(number))
+    # A longer real code is another course: CS 495A says nothing about CS 495.
+    pattern = re.compile(re.escape(subject) + r"[ -]?" + re.escape(number) + r"(?![A-Za-z0-9])")
     out = []
     for sentence in _sentences(text):
         if pattern.search(sentence) and not REFUTED.search(sentence):

@@ -419,11 +419,11 @@ share-locks each bound source at its exact revision and fails (`SourceChanged`)
 if it was republished meanwhile.
 
 Program imports update stable program identities and retire missing projections
-using `programs.is_active`; publication does not delete rule releases, reviews
-or saved audits. Identical reimports preserve the active release pointer.
+using `programs.is_active`; publication does not delete rule releases or
+reviews. Identical reimports preserve the active release pointer.
 Changed source identity, parsed content or retirement clears incompatible
 current pointers and archives the old published and pending releases. Historical
-releases/audits restrict parent deletion rather than cascading with a current
+releases restrict parent deletion rather than cascading with a current
 projection. Current discovery and research exclude retired programs.
 
 Program semantics stay narrow. Mentioned codes include alternatives and
@@ -909,8 +909,8 @@ not a mutable row edit:
    artifacts that publication will invalidate.
 3. Publication applies in one transaction: it replaces the course values,
    re-runs the deterministic requisites parser, replaces mentions and nodes,
-   re-resolves mention targets, unresolves dependents of a retired course, marks
-   affected audits stale, retires the collection's current topic build, advances
+   re-resolves mention targets, unresolves dependents of a retired course,
+   retires the collection's current topic build, advances
    `courses.admin_revision`, and writes the audit record. A failed parse still
    publishes the raw wording with `parse_status` `unparsed`/`ambiguous` and
    writes no invented edges.
@@ -1636,7 +1636,8 @@ privacy service.
 
 `generation/research_tools.py` implements scoped discovery, program browsing,
 paged program/document reads, exact course reads, mention comparison,
-deterministic preparation checks, state replacement and finish. Run-local
+deterministic preparation checks, program audits of reported courses, topic-graph
+course suggestions, state replacement and finish. Run-local
 opaque handles and cursors authorize reads within the pinned manifest.
 `CORPUS_RESEARCH` grants discovery/state/finish only; handle reads retain
 `SOURCE_READ` resource checks. Search snippets are discovery leads. Discovery
@@ -1648,7 +1649,9 @@ evidence or widen the source selection. The tool version participates in the
 execution fingerprint.
 
 Program comparison uses only read requirement items and reports
-`mention_overlap_only`, never credit savings. Course checks expand at most 30
+`mention_overlap_only`, never credit savings. `advisor_suggest_courses` returns
+the closest topic groups for a goal, minus courses no checked Atlas term shows,
+labelled as suggestions and never as requirements or evidence. Course checks expand at most 30
 codes, use the citation-scoped deterministic parser trees and sequence planning,
 and disclose blockers, unexplored dependencies and unverified completed courses.
 Preparation checks may discover prerequisite alternatives for evidence, but only
@@ -1881,11 +1884,33 @@ repeats one check; ceilings apply across all selected checks). Curated career
 references use the verified origin-manifest import; there is no arbitrary live
 URL fetch tool.
 
-## Academic records, program audits and comparisons
+## Term cards in search
+
+Each Atlas term publishes a result card for every class, so a course that runs every
+term had up to 13 near-identical cards. They filled the keyword and embedding candidate
+pools before ranking began. `chunks.search_hidden` takes a chunk out of those two seams
+only: it stays readable and citable, and exact reads such as `advisor_read_courses`
+still reach it. `atlas/offerings.py` `refresh_term_card_search` hides a card when the
+master record already says the same thing, when a newer term's card has the same title
+and description, or when the course is retired. A topic title or section-specific
+description stays searchable in its newest term. 999-numbered placeholder courses leave
+search with their cards. Offering publication and Atlas imports refresh this;
+`scripts.refresh_term_cards` does it by hand.
+
+## Answers the server already holds
+
+For "which majors need X" and "what does X unlock", the database holds the complete answer,
+so `research_tools.py` sets `answer_in_hand` and the next round is the final answer. A
+which-majors read carries `program_lines`, each program's requirement line with its evidence
+opened, and an unlock read names the courses the answer must list (`must_name`). A question
+naming a code that is no current course reaches the model as `no_current_course`.
+
+## Program audits and comparisons
 
 `program_items` preserve raw lines and course mentions, not executable
-whole-degree rules. Program audits evaluate reviewed rule releases against an
-academic record. Dependency stages from the sequence planner do not verify
+whole-degree rules. A program audit evaluates a reviewed rule release against the
+courses a student reports in the chat, and keeps nothing beyond that conversation.
+Dependency stages from the sequence planner do not verify
 semester schedules or graduation, and semester planning with actual offerings,
 loads, approvals and student constraints is not implemented. An audit exposes
 satisfied, outstanding and unresolved conditions rather than replacing missing
@@ -1915,50 +1940,25 @@ planned contributions are `conditional_satisfied`, in-progress work remains
 `in_progress_satisfied`, and unused alternatives are `not_selected`. Unknown
 pass/fail equivalence for a letter-grade threshold remains unresolved.
 
-Current audit detail, list and export responses derive staleness from the same
-database view, including record revision, release pointer and source
-lifecycle/binding. A later source index leaves the saved program audit readable
-and visibly stale, and drops that program from the applicable published list
-until its release matches the current evidence again. Detail and export name
-the coverage `program_audit`; the result is not a whole-degree or
-semester-completion claim.
-
-### Academic records
-
-`app/records/` holds workspace academic records. Verification requires both a
-verification capability and ownership of the record's workspace; no
-cross-workspace path exists. Record/audit HTTP handlers
-explicitly commit persisted mutations so request connection close cannot
-discard apparently successful writes. Each record mutation stores an immutable
-attempt snapshot for that revision; a later edit leaves the older snapshot
-readable, including its resolved course identity and verification details.
-Record writers lock the parent record before changing attempts. Manual edits
-stay `student_manual` even when a client sends another provenance.
-
-CSV commit uses the reviewed preview digest and the selected rows; repeating
-that commit does not insert the rows again. A stale record revision leaves the
-saved preview unchanged. Corrected CSV rows are normalized and validated before
-their review digest is saved; a changed grade recalculates inferred status and
-earned credit. Credit values must be finite, and an explicit zero earned-credit
-value is preserved. The import UI requires saving an edited grade before
-committing.
+`advisor_audit_program` runs on a program the run has read in full. With a
+published release that still matches current evidence (`get_current_rule_release`),
+it runs the allocator over the reported codes. A reported course is an unverified
+pass with no grade or credit hours, so it never reaches `satisfied`, and grade
+floors and credit rules stay unresolved. A course from the other campus counts as
+the code the rules name. With no such release, `comparison.match_reported_courses`
+reports only which raw lines name the courses, as `reviewed_rules: false`. A line
+match is never a claim that a requirement is met; that wording rests on the tool
+contract and the system prompt, with no final-answer validator behind it.
+Neither path is a whole-degree or semester-completion claim.
 
 ### Comparisons
 
 A comparison is a bounded, evidence-linked result, not a degree audit and not a
 registration clearance.
 
-- A program comparison (`advising/comparison_service.py`, `/api/comparisons`)
-  pins one record revision and two or three published releases. Added or
-  removed courses stay on the comparison overlay; they are not inserted into the
-  academic record, and a repeated comparison does not create another scenario.
-  Shared requirement-line mentions stay `mention_overlap_only` with no credit
-  savings while sharing policy is unknown. Unequal unresolved coverage blocks
-  any ease ranking.
-- `POST /api/comparisons` runs the academic-record/audit path and can create a
-  workspace academic record, so it is not the entry point for ordinary
-  conversation comparisons. A conversation comparison never creates or mutates
-  an academic record.
+- Shared requirement-line mentions stay `mention_overlap_only` with no credit
+  savings while sharing policy is unknown. Nothing about a comparison is saved
+  apart from its conversation.
 - Inputs are conversation identity, exact course/program identities, a term or
   cohort when known, stated goals and reported course statuses. Statuses stay
   distinct: completed, in progress, planned and explicitly not completed.
@@ -2641,17 +2641,10 @@ and [Python reference](https://developers.openai.com/api/reference/python/resour
 account availability and live quality are unverified, and model IDs stay
 configurable.
 
-### Advising records, governance and policy routes
+### Governance and policy routes
 
 | Method | Path | Contract |
 | --- | --- | --- |
-| GET | `/api/academic-record` | Workspace academic record detail |
-| POST/DELETE | `/api/academic-record/attempts`, `.../attempts/{id}` | Add or remove a course attempt (new record revision) |
-| POST | `/api/academic-record/attempts/{id}/verify` | Verification; requires capability and target authorization |
-| POST | `/api/academic-record/imports/preview`, `.../imports/{batchId}/rows`, `.../imports/{batchId}/commit` | CSV preview, row correction, digest-bound idempotent commit |
-| GET | `/api/academic-record/revisions/{revision}` | Immutable record snapshot |
-| POST/GET | `/api/audits/run`, `/api/audits`, `/api/audits/{id}`, `/api/audits/{id}/export`, `/api/audits/programs` | Run and read program audits with derived staleness; applicable published programs |
-| POST/GET | `/api/comparisons`, `/api/comparisons/{id}` | Program comparison over pinned record revision and releases |
 | POST | `/api/feedback` | Owner's current vote on a response |
 | GET/POST | `/api/feedback/triage` | Reviewer triage with expected revision |
 | POST | `/api/feedback/promotions`, `/api/feedback/eval-candidates` | Redacted eval-candidate promotion |
@@ -2704,7 +2697,7 @@ the admin review surface. Approval is pinned to the expected metadata revision;
 a stale revision keeps the typed draft. The worker consumes source-invalidation
 events once under a lease. A resolved gap whose source appears in that outbox is
 ineligible as soon as the event exists, before consumption finishes. An
-identical program reimport keeps saved releases, reviews, and audits.
+identical program reimport keeps saved releases and reviews.
 
 A catalog refresh batch stages the next edition without becoming current. The
 staged edition pins the collection's current indexed institutional sources and
@@ -2784,7 +2777,7 @@ Deployed alert delivery and legal retention are outside this behavior.
 ### Privacy export and deletion
 
 A privacy export inventories conversations, artifacts, research, gaps, sessions,
-academic records, import batches, program audits, feedback, and jobs. The create
+feedback, and jobs. The create
 response reveals the download token once; later list and detail responses omit
 it. Download requires the owner session and that token, and it expires. The
 manifest digest is the checksum of the stored bundle.

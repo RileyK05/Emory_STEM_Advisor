@@ -245,10 +245,7 @@ test.after(async () => {
 
 /** Routes that answer after a short pause so their loading states can be observed. */
 const SLOW_ROUTES = new Set([
-  'GET /api/academic-record',
-  'GET /api/comparisons',
   'GET /api/feedback/triage',
-  'GET /api/audits',
   'GET /api/admin/grant-requests',
   'GET /api/admin/sources/src-1/review',
 ]);
@@ -333,12 +330,6 @@ async function setupPage({
   let promptApproved = false;
   let promptFixture = false;
   let promptVersionId = '33333333-3333-4333-8333-333333333333';
-  let comparisons = [];
-  let auditListReads = 0;
-  let auditRuns = 0;
-  const auditProgramId = '11111111-1111-4111-8111-111111111111';
-  let programAudits = [];
-  let recordRevision = 1;
   let recordAttempts = [];
   let importDigest = 'd'.repeat(64);
   const reviewSource = {
@@ -435,145 +426,6 @@ async function setupPage({
       return route.fulfill({ status, json: { detail } });
     }
     if (apiUrl.pathname === '/api/flags/effective') return route.fulfill({ json: { flags: effectiveFlags } });
-    if (apiUrl.pathname === '/api/academic-record' && req.method() === 'GET') {
-      return route.fulfill({
-        json: {
-          record: {
-            recordId: 'rec-1',
-            workspaceKey: 'student-ws',
-            recordRevision,
-            createdAt: '2026-10-19T12:00:00Z',
-            updatedAt: '2026-10-19T12:00:00Z',
-          },
-          attempts: recordAttempts,
-          recentEvents: [],
-        },
-      });
-    }
-    if (apiUrl.pathname === '/api/academic-record/attempts' && req.method() === 'POST') {
-      const body = req.postDataJSON();
-      recordRevision += 1;
-      const attempt = {
-        attemptId: `att-${recordAttempts.length + 1}`,
-        recordId: 'rec-1',
-        workspaceKey: 'student-ws',
-        institution: 'Emory University',
-        submittedCourseCode: body.submittedCourseCode,
-        term: body.term,
-        attemptedCredits: body.attemptedCredits ?? 3,
-        earnedCredits: 3,
-        grade: body.grade,
-        status: 'completed',
-        provenance: 'student_manual',
-        isVerified: false,
-        createdAt: '2026-10-19T12:00:00Z',
-        updatedAt: '2026-10-19T12:00:00Z',
-      };
-      recordAttempts = [...recordAttempts, attempt];
-      return route.fulfill({ json: attempt });
-    }
-    if (apiUrl.pathname === '/api/academic-record/imports/preview' && req.method() === 'POST') {
-      return route.fulfill({
-        json: {
-          batchId: 'batch-1',
-          recordId: 'rec-1',
-          workspaceKey: 'student-ws',
-          expectedRecordRevision: recordRevision,
-          status: 'preview',
-          filename: 'courses.csv',
-          parsedRows: [{ submittedCourseCode: 'CHEM 150', term: 'Spring 2024', grade: 'A' }],
-          rowDecisions: ['select'],
-          previewDigest: importDigest,
-          createdAt: '2026-10-19T12:01:00Z',
-        },
-      });
-    }
-    if (apiUrl.pathname === '/api/academic-record/imports/batch-1/rows' && req.method() === 'POST') {
-      const body = req.postDataJSON();
-      importDigest = 'e'.repeat(64);
-      return route.fulfill({
-        json: {
-          batchId: 'batch-1',
-          recordId: 'rec-1',
-          workspaceKey: 'student-ws',
-          expectedRecordRevision: recordRevision,
-          status: 'preview',
-          filename: 'courses.csv',
-          parsedRows: [
-            { submittedCourseCode: 'CHEM 150', term: 'Spring 2024', grade: body.corrections?.[0]?.grade ?? 'A' },
-          ],
-          rowDecisions: ['select'],
-          previewDigest: importDigest,
-          createdAt: '2026-10-19T12:01:00Z',
-        },
-      });
-    }
-    if (apiUrl.pathname === '/api/academic-record/imports/batch-1/commit' && req.method() === 'POST') {
-      if (!recordAttempts.some((row) => row.submittedCourseCode === 'CHEM 150')) {
-        recordRevision += 1;
-        recordAttempts = [
-          ...recordAttempts,
-          {
-            attemptId: 'att-chem',
-            recordId: 'rec-1',
-            workspaceKey: 'student-ws',
-            institution: 'Emory University',
-            submittedCourseCode: 'CHEM 150',
-            term: 'Spring 2024',
-            attemptedCredits: 3,
-            earnedCredits: 3,
-            grade: 'A-',
-            status: 'completed',
-            provenance: 'csv_import',
-            isVerified: false,
-            createdAt: '2026-10-19T12:02:00Z',
-            updatedAt: '2026-10-19T12:02:00Z',
-          },
-        ];
-      }
-      return route.fulfill({
-        json: { batchId: 'batch-1', status: 'committed', attemptsImported: 1, newRecordRevision: recordRevision },
-      });
-    }
-    if (apiUrl.pathname === '/api/audits/programs' && req.method() === 'GET') {
-      return route.fulfill({
-        json: [
-          {
-            programId: auditProgramId,
-            title: 'CS Minor',
-            kind: 'minor',
-            ruleReleaseId: '22222222-2222-4222-8222-222222222222',
-          },
-          {
-            programId: '33333333-3333-4333-8333-333333333333',
-            title: 'Open Minor',
-            kind: 'minor',
-            ruleReleaseId: '44444444-4444-4444-8444-444444444444',
-          },
-        ],
-      });
-    }
-    if (apiUrl.pathname === '/api/comparisons' && req.method() === 'GET') {
-      return route.fulfill({ json: comparisons });
-    }
-    if (apiUrl.pathname === '/api/comparisons' && req.method() === 'POST') {
-      const row = {
-        comparisonId: 'comparison-1',
-        workspaceKey: 'student-ws',
-        recordId: 'rec-1',
-        recordRevision: 1,
-        sharingPolicy: 'unknown',
-        mentionKind: 'mention_overlap_only',
-        sharedMentions: ['CS 170'],
-        creditSavings: null,
-        coverageComparable: false,
-        rankingBlockedReason: 'unequal unresolved coverage',
-        members: [],
-        createdAt: '2026-10-19T12:00:00Z',
-      };
-      comparisons = [row];
-      return route.fulfill({ json: row });
-    }
     if (apiUrl.pathname.startsWith('/api/admin/catalog-refresh')) {
       const edition = (revision, editionKey, isCurrent) => ({
         editionId: `edition-${revision}`,
@@ -759,96 +611,6 @@ async function setupPage({
           fixtureDigest: 'b'.repeat(64),
           status: 'published',
           createdAt: '2026-10-20T12:00:00Z',
-        },
-      });
-    }
-    if (apiUrl.pathname === '/api/audits' && req.method() === 'GET') {
-      auditListReads += 1;
-      if (auditListReads === 3) {
-        programAudits = programAudits.map((audit) => ({ ...audit, isStale: true }));
-      }
-      return route.fulfill({ json: programAudits });
-    }
-    if (apiUrl.pathname === '/api/audits/run' && req.method() === 'POST') {
-      auditRuns += 1;
-      if (auditRuns === 2) {
-        return route.fulfill({
-          status: 409,
-          json: { detail: 'program evidence is retired or superseded; review current rules' },
-        });
-      }
-      const auditId = `audit-${auditRuns}`;
-      const audit = {
-        auditId,
-        workspaceKey: 'student-ws',
-        programId: auditProgramId,
-        ruleReleaseId: '22222222-2222-4222-8222-222222222222',
-        recordId: 'rec-1',
-        recordRevision: 1,
-        rulesDigest: 'd'.repeat(64),
-        overallStatus: 'outstanding',
-        isStale: false,
-        completedCredits: 0,
-        inProgressCredits: 0,
-        unverifiedCredits: 0,
-        programTitle: 'CS Minor',
-        programKind: 'minor',
-        createdAt: '2026-10-19T12:00:00Z',
-      };
-      programAudits = [audit, ...programAudits.filter((row) => row.auditId !== auditId)];
-      return route.fulfill({
-        json: {
-          audit,
-          evaluations: [
-            {
-              evaluationId: `eval-${auditRuns}`,
-              auditId,
-              nodeId: 'm1',
-              nodeType: 'exact_course',
-              title: 'CS 170',
-              status: 'outstanding',
-              allocatedCredits: 0,
-              createdAt: '2026-10-19T12:00:00Z',
-            },
-          ],
-          programTitle: 'CS Minor',
-          programKind: 'minor',
-          coverageScope: 'program_audit',
-        },
-      });
-    }
-    if (apiUrl.pathname.startsWith('/api/audits/') && req.method() === 'GET') {
-      const parts = apiUrl.pathname.split('/');
-      const auditId = parts[3];
-      const audit = programAudits.find((row) => row.auditId === auditId);
-      if (!audit) return route.fulfill({ status: 404, json: { detail: 'audit not found' } });
-      return route.fulfill({
-        json: {
-          audit,
-          evaluations: [
-            {
-              evaluationId: `eval-${auditId}`,
-              auditId,
-              nodeId: 'm1',
-              nodeType: 'exact_course',
-              title: 'CS 170',
-              status: audit.overallStatus,
-              allocatedCredits: 0,
-              createdAt: audit.createdAt,
-            },
-          ],
-          programTitle: 'CS Minor',
-          programKind: 'minor',
-          coverageScope: 'program_audit',
-        },
-      });
-    }
-    if (apiUrl.pathname === '/api/academic-record/revisions/1' && req.method() === 'GET') {
-      return route.fulfill({
-        json: {
-          recordId: 'rec-1',
-          revision: 1,
-          attempts: [{ submittedCourseCode: 'CS 170', grade: 'A', provenance: 'student_manual' }],
         },
       });
     }

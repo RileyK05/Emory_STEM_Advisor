@@ -1,15 +1,12 @@
 """Tests for deterministic degree audit engine, service, and routes (Item 2)."""
 
-from uuid import uuid4
+from types import SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
-from psycopg.types.json import Jsonb
 
-from app.advising.audit_engine import DeterministicAuditEngine
-from app.advising.audit_service import DegreeAuditService
+from app.advising.audit_engine import DeterministicAuditEngine, audit_reported_courses
+from app.advising.comparison import match_reported_courses
 from app.programs.rules import CoverageDisposition, RuleNode, RuleNodeType
-from tests.helpers import api_client, create_user
 
 
 @pytest.mark.parametrize("grade,status,verified,expected", [
@@ -241,193 +238,36 @@ def test_engine_supported_allocation_boundaries(case, expected, credits):
         assert result.results_summary["searchLimitReached"]
 
 
-@pytest.fixture
-def audit_test_data(db, collection):
-    source_id = uuid4()
-    db.execute(
-        """
-        INSERT INTO sources (source_id, collection_id, filename, content_type, file_hash, raw_path, status, index_revision, is_current)
-        VALUES (%s, %s, 'cs_catalog.md', 'text/markdown', %s, '/tmp/cs.md', 'indexed', 1, true)
-        """,
-        (source_id, collection, "c" * 64),
-    )
-    prog_id = uuid4()
-    db.execute(
-        """
-        INSERT INTO programs (
-            program_id, collection_id, title, kind, catalog, source_url,
-            first_page, last_page, parser_version, source_id, source_index_revision,
-            source_sha256, origin_key, binding_status
-        ) VALUES (
-            %s, %s, 'CS Minor', 'minor', 'emory_college', 'https://college.emory.edu/cs-minor',
-            1, 2, '1', %s, 1, %s, 'origin-cs-minor', 'bound'
-        )
-        """,
-        (prog_id, collection, source_id, "c" * 64),
-    )
-    # Insert published rule release
-    release_id = uuid4()
-    rules_tree = {
-        "nodeId": "root",
-        "nodeType": "all_of",
-        "title": "CS Minor Requirements",
-        "coverageDisposition": "supported",
-        "children": [
-            {
-                "nodeId": "m1",
-                "nodeType": "exact_course",
-                "title": "CS 170",
-                "coverageDisposition": "supported",
-                "courseCodes": ["CS 170"],
-            },
-            {
-                "nodeId": "m2",
-                "nodeType": "exact_course",
-                "title": "CS 171",
-                "coverageDisposition": "supported",
-                "courseCodes": ["CS 171"],
-            },
-        ],
-    }
-    db.execute(
-        """
-        INSERT INTO program_rule_releases (
-            release_id, program_id, collection_id, source_id, source_index_revision,
-            source_sha256, release_version, status, rules_tree, rules_digest,
-            coverage_summary
-        ) VALUES (
-            %s, %s, %s, %s, 1, %s, 1, 'published', %s, %s, '{}'::jsonb
-        )
-        """,
-        (release_id, prog_id, collection, source_id, "c" * 64, Jsonb(rules_tree), "d" * 64),
-    )
-    db.execute(
-        "UPDATE programs SET current_rule_release_id = %s WHERE program_id = %s",
-        (release_id, prog_id),
-    )
-    db.commit()
-    return prog_id, release_id
+_CS_170 = {"nodeId": "r", "nodeType": "exact_course", "title": "CS 170", "courseCodes": ["CS 170"]}
 
 
-def test_degree_audit_service_lifecycle_and_staleness(db, collection, audit_test_data):
-    prog_id, _release_id = audit_test_data
-    student = create_user(db, role="student")
-    other_student = create_user(db, role="student")
-
-    # 1. Add attempt CS 170 to student record
-    db.execute(
-        """
-        INSERT INTO student_academic_records (record_id, workspace_key, record_revision)
-        VALUES (%s, %s, 1)
-        """,
-        (uuid4(), student.workspace_key),
-    )
-    rec = db.execute(
-        "SELECT record_id FROM student_academic_records WHERE workspace_key = %s",
-        (student.workspace_key,),
-    ).fetchone()
-    record_id = rec["record_id"]
-
-    db.execute(
-        """
-        INSERT INTO academic_record_attempts (
-            attempt_id, record_id, workspace_key, institution, submitted_course_code,
-            term, attempted_credits, earned_credits, grade, status, provenance, is_verified
-        ) VALUES (
-            %s, %s, %s, 'Emory University', 'CS 170', 'Fall 2024', 4.0, 4.0, 'A', 'completed', 'student_manual', true
-        )
-        """,
-        (uuid4(), record_id, student.workspace_key),
-    )
-    db.commit()
-
-    # 2. Run audit: CS 170 satisfied, CS 171 outstanding -> overall status is outstanding
-    audit_res = DegreeAuditService.run_audit(db, student.workspace_key, prog_id, student)
-    audit = audit_res["audit"]
-    audit_id = audit["audit_id"]
-    assert audit["overall_status"] == "outstanding"
-    assert audit["completed_credits"] == 4.0
-    assert not audit["is_stale"]
-
-    evals = audit_res["evaluations"]
-    assert len(evals) >= 3
-
-    # 3. Read audit
-    read_res = DegreeAuditService.get_audit(db, student.workspace_key, audit_id, student)
-    assert not read_res["audit"]["is_stale"]
-
-    # 4. Cross-workspace isolation
-    with pytest.raises(HTTPException) as exc_iso:
-        DegreeAuditService.get_audit(db, student.workspace_key, audit_id, other_student)
-    assert exc_iso.value.status_code == 403
-
-    # 5. Staleness detection: Student adds new course attempt (bumps record revision)
-    db.execute(
-        "UPDATE student_academic_records SET record_revision = record_revision + 1 WHERE record_id = %s",
-        (record_id,),
-    )
-    db.commit()
-
-    # Re-reading marks audit stale!
-    listed = DegreeAuditService.list_audits(db, student.workspace_key, student)
-    assert next(a for a in listed if a["audit_id"] == audit_id)["is_stale"]
-    stale_check = DegreeAuditService.get_audit(db, student.workspace_key, audit_id, student)
-    assert stale_check["audit"]["is_stale"]
+@pytest.mark.parametrize("rule,reported,expected", [
+    (_CS_170, ["CS 170"], "conditional_satisfied"),
+    (_CS_170, [], "outstanding"),
+    (_CS_170, ["CS_OX 170"], "conditional_satisfied"),
+    ({**_CS_170, "minGrade": "C"}, ["CS 170"], "unresolved"),
+    ({"nodeId": "r", "nodeType": "credit_threshold", "title": "Hours", "minCredits": 12.0},
+     ["CS 170", "CS 171"], "unresolved"),
+    ({"nodeId": "r", "nodeType": "choose_count", "title": "Two", "count": 2,
+      "courseCodes": ["CS 170", "CS 171"]}, ["CS 170", "CS_OX 170"], "outstanding"),
+], ids=["named", "missing", "other_campus", "grade_floor", "credit_rule", "campus_not_two"])
+def test_reported_courses_are_never_verified_passes(rule, reported, expected):
+    equivalents = {"CS_OX 170": frozenset({"CS 170"}), "CS 170": frozenset({"CS_OX 170"})}
+    assert audit_reported_courses(
+        rule, reported, equivalents=equivalents).overall_status == expected
 
 
-def test_degree_audit_http_routes(db, collection, audit_test_data):
-    prog_id, _ = audit_test_data
-    client = api_client(db, collection)
-
-    # 1. Run audit via HTTP
-    run_resp = client.post(
-        "/api/audits/run",
-        json={"programId": str(prog_id)},
-    )
-    assert run_resp.status_code == 200, run_resp.text
-    data = run_resp.json()
-    audit_id = data["audit"]["auditId"]
-    assert data["programTitle"] == "CS Minor"
-    assert data["audit"]["overallStatus"] in ("satisfied", "outstanding", "unresolved")
-
-    # 2. Get audit via HTTP
-    get_resp = client.get(f"/api/audits/{audit_id}")
-    assert get_resp.status_code == 200, get_resp.text
-    assert get_resp.json()["audit"]["auditId"] == audit_id
-
-    # 3. List audits via HTTP
-    list_resp = client.get("/api/audits")
-    assert list_resp.status_code == 200, list_resp.text
-    audits = list_resp.json()
-    assert len(audits) >= 1
-    saved = next(a for a in audits if a["auditId"] == audit_id)
-    assert saved["isStale"] is False
-    assert data["coverageScope"] == "program_audit"
-    assert get_resp.json()["audit"]["isStale"] is False
-
-    programs = client.get("/api/audits/programs")
-    assert programs.status_code == 200, programs.text
-    assert any(row["programId"] == str(prog_id) for row in programs.json())
-
-    exported = client.get(f"/api/audits/{audit_id}/export")
-    assert exported.status_code == 200, exported.text
-    assert exported.json()["audit"]["isStale"] is False
-    assert exported.json()["audit"]["overallStatus"] == data["audit"]["overallStatus"]
-    assert exported.json()["coverageScope"] == "program_audit"
-
-    # A newer source index leaves the saved release in place and marks the audit stale.
-    db.execute(
-        "UPDATE sources SET index_revision = index_revision + 1 WHERE filename = 'cs_catalog.md'",
-    )
-    db.commit()
-    stale_list = next(
-        a for a in client.get("/api/audits").json() if a["auditId"] == audit_id
-    )
-    stale_detail = client.get(f"/api/audits/{audit_id}").json()
-    stale_export = client.get(f"/api/audits/{audit_id}/export").json()
-    assert stale_list["isStale"] is True
-    assert stale_detail["audit"]["isStale"] is True
-    assert stale_export["audit"]["isStale"] is True
-    assert stale_detail["audit"]["overallStatus"] == stale_export["audit"]["overallStatus"]
-    assert stale_export["coverageScope"] == "program_audit"
-    assert all(row["programId"] != str(prog_id) for row in client.get("/api/audits/programs").json())
+@pytest.mark.parametrize("codes,choose,completed,state,unmatched", [
+    (("CS 170",), None, ["CS 170"], "all_named_reported", []),
+    (("CS 370", "CS 371W"), 1, ["CS 370"], "all_named_reported", []),
+    (("CS 334", "CS 377"), None, ["CS 334"], "some_named_reported", []),
+    (("CS 170",), None, ["CS_OX 170"], "all_named_reported", []),
+    (("CS 170",), None, ["MATH 111"], "none_reported", ["MATH 111"]),
+    ((), None, ["CS 170"], "no_course_named", ["CS 170"]),
+], ids=["named", "choose_one", "maybe_alternatives", "other_campus", "absent", "no_code"])
+def test_reported_courses_match_lines_without_claiming_them_met(
+        codes, choose, completed, state, unmatched):
+    line = SimpleNamespace(mentioned_course_codes=codes, choose=choose)
+    matches, leftover = match_reported_courses(
+        [line], completed, {"CS_OX 170": frozenset({"CS 170"})})
+    assert (matches[0].state, list(leftover)) == (state, unmatched)

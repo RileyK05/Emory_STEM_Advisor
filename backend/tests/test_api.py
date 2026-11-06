@@ -8,7 +8,6 @@ from pydantic import ValidationError
 from app.api.routes.conversations import ConversationQuery
 from app.api.routes.corpus import ReindexRequest
 from app.api.schemas import (
-    AcademicRecordImportPreviewRequest,
     ExportSummaryRequest,
     PrivacyDeletionRequest,
     QueryRequest,
@@ -28,11 +27,7 @@ from tests.helpers import api_client, collection_name, ingest_text
     lambda: ExportSummaryRequest(title="x" * 501),
     lambda: ExportSummaryRequest(throughSequence=-1),
     lambda: PrivacyDeletionRequest(confirmation="x" * 201),
-    lambda: AcademicRecordImportPreviewRequest(
-        filename="transcript.csv", rawContent="x" * 2_000_001, expectedRecordRevision=1),
     lambda: ExportSummaryRequest(throughSequence=10**100),
-    lambda: AcademicRecordImportPreviewRequest(
-        filename="transcript.csv", rawContent="x", expectedRecordRevision=10**100),
     lambda: ReindexRequest(expectedIndexRevision=10**100),
     lambda: ConversationQuery(
         query="q", requestId="00000000-0000-0000-0000-000000000001",

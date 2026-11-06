@@ -18,8 +18,6 @@ from app.util.json import iso
 from app.util.localpath import io_path
 
 _DELETE_STEPS = (
-    "delete_workspace_comparison_members",
-    "delete_workspace_comparisons",
     "delete_workspace_feedback_events",
     "delete_workspace_feedback",
     "delete_workspace_research",
@@ -44,7 +42,6 @@ _DELETE_STEPS = (
     # Private uploads, after the jobs whose run plans pinned them.
     "delete_workspace_sources",
     "delete_workspace_operations",
-    "delete_workspace_academic_records",
     "delete_workspace_quota_settlements",
     "delete_workspace_quota_buckets",
     "delete_workspace_privacy_exports",
@@ -152,22 +149,8 @@ class PrivacyService:
             {"workspace_key": workspace_key},
         ).fetchall()
         artifacts_data = [_plain_row(row) for row in art_rows]
-        record = conn.execute(
-            queries.get("get_academic_record_by_workspace"),
-            {"workspace_key": workspace_key},
-        ).fetchone()
-        attempts = []
-        if record is not None:
-            attempts = conn.execute(
-                queries.get("get_academic_record_attempts"),
-                {"record_id": record["record_id"]},
-            ).fetchall()
         feedback_rows = conn.execute(
             queries.get("list_workspace_feedback_for_export"),
-            {"workspace_key": workspace_key},
-        ).fetchall()
-        audit_rows = conn.execute(
-            queries.get("list_workspace_audits_for_export"),
             {"workspace_key": workspace_key},
         ).fetchall()
 
@@ -179,10 +162,7 @@ class PrivacyService:
             "data": {
                 "conversations": conversations_data,
                 "artifacts": artifacts_data,
-                "academicRecord": None if record is None else _plain_row(record),
-                "attempts": [_plain_row(row) for row in attempts],
                 "feedback": [_plain_row(row) for row in feedback_rows],
-                "audits": [_plain_row(row) for row in audit_rows],
             },
         }
         manifest["contentDigest"] = privacy_export_digest(

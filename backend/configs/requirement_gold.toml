@@ -232,8 +232,9 @@ reviewed = false
 [[course]]
 code = "BIOL 141L"
 text = "BIOL 141 or BIOL_OX 141 as co-requisite or CHEM 141 or CHEM_OX 141 as prerequisite or equivalent transfer credit as co-requisite or prerequisite."
-status = "unparsed"
-note = "either a corequisite path or a prerequisite path; two kind trees cannot express that OR"
+status = "parsed"
+corequisite = "any(BIOL 141, BIOL_OX 141, CHEM 141, CHEM_OX 141, cond:equivalent transfer credit)"
+note = "a corequisite path or a prerequisite path reads as one concurrent alternative (user decision, 2026-11-06)"
 reviewed = false
 
 [[course]]
@@ -312,8 +313,9 @@ reviewed = false
 [[course]]
 code = "PHYS 212"
 text = "(PHYS 151 or PHYS_OX 151) or [(PHYS 141 or PHYS_OX 141) and (MATH 112 or MATH 112Z or MATH_OX 112 or MATH_OX 112Z0] or [(PHYS 141 or PHYS_OX 141) and MATH 116)] or equivalent transfer credit as prerequisite."
-status = "ambiguous"
-note = "unbalanced brackets and a typo ('MATH_OX 112Z0]') in the source"
+status = "parsed"
+prerequisite = "any(any(PHYS 151, PHYS_OX 151), all(any(PHYS 141, PHYS_OX 141), any(MATH 112, MATH 112Z, MATH_OX 112, MATH_OX 112Z)), all(any(PHYS 141, PHYS_OX 141), MATH 116), cond:equivalent transfer credit)"
+note = "the source's 'MATH_OX 112Z0]' is read as 'MATH_OX 112Z)]'; both brackets are alternatives"
 reviewed = false
 
 [[course]]

@@ -310,12 +310,29 @@ WHERE c.collection_id = %(collection_id)s AND m.kind = 'prerequisite'
 GROUP BY m.target_code;
 
 -- name: research_programs_naming_courses
-SELECT m.target_code AS code, array_agg(DISTINCT p.title ORDER BY p.title) AS programs
+SELECT coalesce(c.code, m.target_code) AS code,
+       array_agg(DISTINCT p.title ORDER BY p.title) AS programs
 FROM program_course_mentions m
 JOIN programs p ON p.program_id = m.program_id
+LEFT JOIN courses c ON c.course_id = m.target_course_id
 WHERE p.collection_id = %(collection_id)s AND p.is_active
-  AND m.target_code = ANY(%(codes)s)
-GROUP BY m.target_code;
+  AND coalesce(c.code, m.target_code) = ANY(%(codes)s)
+GROUP BY coalesce(c.code, m.target_code);
+
+-- name: research_program_lines_naming_courses
+-- The requirement line itself, so "which majors need X" can say how each one uses X.
+SELECT coalesce(c.code, m.target_code) AS code, p.title AS program, p.source_id,
+       i.text AS line, i.choose,
+       ARRAY(SELECT e.chunk_id FROM program_item_evidence e
+             WHERE e.program_id = m.program_id AND e."position" = m.position
+             ORDER BY e.ordinal) AS chunk_ids
+FROM program_course_mentions m
+JOIN programs p ON p.program_id = m.program_id
+JOIN program_items i ON i.program_id = m.program_id AND i.position = m.position
+LEFT JOIN courses c ON c.course_id = m.target_course_id
+WHERE p.collection_id = %(collection_id)s AND p.is_active
+  AND coalesce(c.code, m.target_code) = ANY(%(codes)s)
+ORDER BY p.title, i.position;
 
 -- name: research_course_offering_terms
 SELECT DISTINCT r.raw_course_code AS code, s.term

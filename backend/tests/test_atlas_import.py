@@ -1130,3 +1130,33 @@ def test_cross_listed_alias_label_survives_when_fusion_dedupe_is_off(
     love = [chunk for chunk in outcome.chunks if "Black Love" in chunk.text]
     assert love, "expected the cross-listed course among citations"
     assert all(chunk.locator_label == "AAS 325 / REL 325" for chunk in love)
+
+
+_CARD_MASTER = {"code": "CS 253", "title": "Data Structures", "lifecycle": "current",
+                "locator_id": "master", "text": "CS 253: Data Structures\n\nTrees and graphs."}
+
+
+def _card(locator, title="Data Structures", term="Fall 2026", description="Trees and graphs.",
+          code="CS 253"):
+    return {"locator_id": locator, "label": f"{code} — {title} (class 1)",
+            "text": f"## {code}\n\n- Term: {term}\n- Description: {description}\n"}
+
+
+@pytest.mark.parametrize("cards,master,repeated", [
+    ([_card("a")], _CARD_MASTER, {"a"}),
+    ([_card("a", title="Data Structures: Graphs")], _CARD_MASTER, set()),
+    ([_card("a", description="A section on proofs.")], _CARD_MASTER, set()),
+    ([_card("old", term="Fall 2024", description="Proofs."), _card("new", description="Proofs.")],
+     _CARD_MASTER, {"old"}),
+    ([_card("new", description="Proofs."), _card("old", term="Spring 2025", description="Proofs.")],
+     _CARD_MASTER, {"old"}),
+    ([_card("a")], {**_CARD_MASTER, "lifecycle": "retired"}, {"a"}),
+    ([_card("a", description="Proofs.")], {**_CARD_MASTER, "code": "CS 370"}, set()),
+    ([_card("a", code="RES 999")], _CARD_MASTER, {"a"}),
+    ([_card("a", code="RES 999")], {**_CARD_MASTER, "code": "RES 999"}, {"a", "master"}),
+], ids=["repeats_master", "topic_title", "section_text", "older_term", "older_term_second",
+        "retired_course", "other_course", "placeholder_card", "placeholder_master"])
+def test_only_repeated_term_cards_leave_search(cards, master, repeated):
+    from app.atlas.offerings import repeated_term_cards
+
+    assert repeated_term_cards(cards, [master]) == repeated

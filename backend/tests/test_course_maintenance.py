@@ -322,7 +322,7 @@ def test_unparsed_requisites_never_invent_edges(db, collection, atlas):
             "code": "MATH 200",
             "changeKind": "update",
             "title": "Calculus III",
-            "requisitesRaw": "Prerequisite: approval of adviser.",
+            "requisitesRaw": "Prerequisite: a strong interest in mathematics.",
             "reason": "Catalog wording is prose only.",
             "expectedRevision": 0,
         },

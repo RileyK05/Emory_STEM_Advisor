@@ -18,7 +18,41 @@ def _c(*codes):
 
 
 # (text, expected prerequisite tree, expected mention codes in order)
+_TRANSFER = Condition("equivalent transfer credit")
 _PARSED = {
+    "counted subject courses": ("Two PHIL courses or equivalent transfer credit as prerequisite.",
+                                AnyOf((Condition("two phil courses"), _TRANSFER)), []),
+    "counted level courses": ("One 300 level SPAN or SPAN_OX course",
+                              Condition("one 300 level span or span_ox course"), []),
+    "another person's approval": (
+        "Prerequisite: approval of adviser and the director of undergraduate studies.",
+        Condition("approval of adviser and the director of undergraduate studies"), []),
+    "description after the label": (
+        "Prerequisites: Arabic 101 or permission of instructor. Second in a series of courses.",
+        AnyOf((CourseRef("ARAB 101"), Condition("permission of instructor"))), ["ARAB 101"]),
+    "cross-listing is not a requirement": (
+        "Prerequisite: EPI 530 or EPI 504. Cross listed with EPI 542.",
+        AnyOf(_c("EPI 530", "EPI 504")), ["EPI 530", "EPI 504"]),
+    "capital AND joins groups": (
+        "ECON 201 AND ECON 220 or MATH 207 or equivalent transfer credit as a prerequisite.",
+        AnyOf((AllOf((CourseRef("ECON 201"), AnyOf(_c("ECON 220", "MATH 207")))), _TRANSFER)), None),
+    "campus pairs": ("FREN 310 or FREN_OX 310 and FREN 314 or FREN_OX 314",
+                     AllOf((AnyOf(_c("FREN 310", "FREN_OX 310")),
+                            AnyOf(_c("FREN 314", "FREN_OX 314")))), None),
+    "campus pair by comma": ("Econ_OX 101, Econ 101 as prerequisite",
+                             AnyOf(_c("ECON_OX 101", "ECON 101")), None),
+    "stray space in Oxford code": ("ECON _OX 100 or ECON 101",
+                                   AnyOf(_c("ECON_OX 100", "ECON 101")), None),
+    "lost opening parenthesis": (
+        "BIOL 142 and BIOL 142L) or BIOL_OX 142 or equivalent transfer credit as prerequisites.",
+        AnyOf((AllOf(_c("BIOL 142", "BIOL 142L")), CourseRef("BIOL_OX 142"), _TRANSFER)), None),
+    "student group alternative": ("MKT 340 or SPECSTUBUS students",
+                                  AnyOf((CourseRef("MKT 340"),
+                                         Condition("specstubus students"))), None),
+    "exam stands in": ("AP Calculus BC or equivalent transfer credit as prerequisite.",
+                       AnyOf((Condition("ap calculus bc"), _TRANSFER)), []),
+    "two-word subject": ("prerequisite: Political Science 110 or 120.",
+                         AnyOf(_c("POLS 110", "POLS 120")), None),
     "four-digit Atlas code": ("PAE 8100", CourseRef("PAE 8100"), ["PAE 8100"]),
     "short Atlas code": ("ARCH 16", CourseRef("ARCH 16"), ["ARCH 16"]),
     "long Oxford suffix": ("BIOL_OX 385RWE", CourseRef("BIOL_OX 385RWE"),
@@ -219,6 +253,15 @@ def test_transfer_with_combined_label_preserves_corequisite_timing(text, tree):
     (("CHEM_OX 150 and CHEM_OX 150L prerequisites & CHEM_OX 202L co-requisite. Students must "
       "enroll in CHEM_OX 202 and CHEM_OX 202L together."),
      "CHEM_OX 202", "parsed", CourseRef("CHEM_OX 202L")),
+    # Enrolling first only orders a corequisite already stated.
+    ("CHEM 202Z as co-requisite. Students must enroll in CHEM 202Z first.", "CHEM 202ZL",
+     "parsed", CourseRef("CHEM 202Z")),
+    # Either one will do, and a course taken earlier meets a concurrent requirement.
+    ("BIOL 141 as co-requisite or CHEM 141 as prerequisite.", "BIOL 141L",
+     "parsed", AnyOf(_c("BIOL 141", "CHEM 141"))),
+    (("MATH_OX 210 or MATH 211 as prerequisite or MATH_OX 210 as co-requisite "
+      "or equivalent transfer credit."), None, "parsed",
+     AnyOf((*_c("MATH_OX 210", "MATH 211", "MATH_OX 210"), Condition("equivalent transfer credit")))),
     # A bare label word inside prose is not a label.
     ("MATH 111 prerequisite waivers are granted by the department.", None, "unparsed", None),
     ("Students must enroll in the lecture and lab together.", "CHEM_OX 204L", "unparsed", None),
@@ -227,6 +270,8 @@ def test_explicit_corequisite_wordings_name_the_corequisite(text, course_code, s
     result = parse_requisites(text, course_code=course_code)
     assert result.status == status
     assert result.trees.get("corequisite") == corequisite
+    if result.trees.keys() == {"corequisite"}:
+        assert {mention.kind for mention in result.mentions} == {"corequisite"}
 
 
 def test_description_requirements_are_extracted_only_when_explicit():
@@ -336,8 +381,11 @@ def test_prohibitions_and_exclusions_are_not_requirements(text):
     # A restriction sentence that names a course is never dropped as one.
     ("Prerequisite: CHEM 150; BS students only.", "parsed"),
     # Requirements without a course code are still requirements.
-    ("Prerequisite: approval of the Director of Undergraduate Studies.", "unparsed"),
-    ("Two PHIL courses as prerequisites", "unparsed"),
+    ("Prerequisite: approval of the Director of Undergraduate Studies.", "parsed"),
+    ("Two PHIL courses as prerequisites", "parsed"),
+    # Who may enroll is never dropped as description; other prose is.
+    ("Prerequisite: approval of adviser. Open to students writing honors theses.", "unparsed"),
+    ("Prerequisite: none. Knowledge of Russian is not needed.", "none"),
     (("Atlas section restrictions differ; prerequisite status is unresolved. "
       "(no restriction text captured); HPMMPH or HPMMPHOL students only."), "unparsed"),
 ])
@@ -397,10 +445,6 @@ def test_transfer_alternative_after_joined_parts_applies_to_each(text, prerequis
 
 
 @pytest.mark.parametrize("text", [
-    # An alternative across kinds cannot be two required trees.
-    ("MATH_OX 210 or MATH 211 as prerequisite or MATH_OX 210 as co-requisite "
-     "or equivalent transfer credit."),
-    "ECON 101 as prerequisite or ECON 102 as co-requisite.",
     # Mixed conjunctions between labelled parts would choose a precedence.
     "ECON 101 as prerequisite and ECON 102 or ECON 103 as prerequisite or ECON 104.",
 ])

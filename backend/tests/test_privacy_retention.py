@@ -144,14 +144,13 @@ def test_privacy_deletion_fences_and_deletes_dependency_order(db, tmp_path):
     assert gone.value.status_code == 410
 
 
-@pytest.mark.parametrize("write", ["record", "conversation", "job", "execution", "feedback"])
+@pytest.mark.parametrize("write", ["conversation", "job", "execution", "feedback"])
 def test_deleted_workspaces_cannot_recreate_private_data(db, migrated_dsn, tmp_path, write):
     from app.auth.capabilities import require_workspace_execution
     from app.auth.models import Principal
     from app.db.connection import connect
     from app.gaps.feedback import FeedbackService
     from app.jobs.store import JobStore
-    from app.records.service import AcademicRecordService
 
     workspace = f"deleted-{write}"
     user_id, _, _ = _setup_workspace_data(db, workspace, tmp_path)
@@ -159,9 +158,7 @@ def test_deleted_workspaces_cannot_recreate_private_data(db, migrated_dsn, tmp_p
                       issuer="https://auth.emory.edu", subject=str(user_id))
     PrivacyService.delete_workspace(db, workspace, user_id=user_id, data_dir=tmp_path)
     with pytest.raises(HTTPException) as blocked:
-        if write == "record":
-            AcademicRecordService.get_or_create_record(db, workspace)
-        elif write == "conversation":
+        if write == "conversation":
             ConversationStore(db, workspace).create("After deletion")
         elif write == "job":
             JobStore(lambda: connect(migrated_dsn)).create(
@@ -273,10 +270,6 @@ def test_owner_download_hides_token_and_inventory_covers_student_domains(db, col
     ws = "development"
     _setup_workspace_data(db, ws, tmp_path)
     db.execute(
-        queries.get("get_or_create_academic_record"),
-        {"record_id": uuid4(), "workspace_key": ws},
-    )
-    db.execute(
         queries.get("insert_response_feedback"),
         {
             "feedback_id": uuid4(),
@@ -310,10 +303,7 @@ def test_owner_download_hides_token_and_inventory_covers_student_domains(db, col
     inventory = body["manifest"]["inventory"]
     assert inventory["conversations"] == 1
     assert inventory["artifacts"] == 1
-    assert inventory["academic_records"] == 1
     assert inventory["response_feedback"] == 1
-    assert inventory["degree_audits"] == 0
-    assert inventory["academic_imports"] == 0
     assert inventory["jobs"] == 1
     assert body["manifest"]["data"]["feedback"][0]["comment"] == "student note stays in the owner bundle"
     listed = client.get("/api/privacy/exports")
@@ -331,7 +321,7 @@ def test_owner_download_hides_token_and_inventory_covers_student_domains(db, col
     assert downloaded.status_code == 200, downloaded.text
     payload = downloaded.json()
     assert payload["contentDigest"] == privacy_export_digest(payload["manifest"])
-    assert payload["manifest"]["inventory"]["academic_records"] == 1
+    assert payload["manifest"]["inventory"]["response_feedback"] == 1
     assert "downloadToken" not in payload
     denied = client.get(
         f"/api/privacy/exports/{body['exportId']}/download",
@@ -375,10 +365,6 @@ def test_deletion_resume_does_not_restore_local_originals(db, collection, tmp_pa
     upload = Path(db.execute("SELECT raw_path FROM sources WHERE source_id = %(s)s",
                              {"s": upload_id}).fetchone()["raw_path"])
     assert io_path(upload).is_file()
-    db.execute(
-        queries.get("get_or_create_academic_record"),
-        {"record_id": uuid4(), "workspace_key": ws},
-    )
     db.execute(
         queries.get("insert_response_feedback"),
         {
@@ -429,9 +415,7 @@ def test_deletion_resume_does_not_restore_local_originals(db, collection, tmp_pa
     )
     assert inventory["conversations"] == 0
     assert inventory["artifacts"] == 0
-    assert inventory["academic_records"] == 0
     assert inventory["response_feedback"] == 0
-    assert inventory["degree_audits"] == 0
     assert inventory["sources"] == 0
     with pytest.raises(HTTPException) as gone:
         PrivacyService.start_export(db, ws, user_id=user_id)

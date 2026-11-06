@@ -1,0 +1,10 @@
+# Emory sources that disagree, and how answers must disclose it. Hand-written.
+#
+# When `question` matches, the model is told `note`, and a final answer must contain
+# every string in `must_mention`. Remove an entry once Emory settles the conflict.
+
+[[conflict]]
+id = "graduation-credits"
+question = "(?i)\\b(?:how many|how much|total|number of)\\b[^.?]{0,30}\\b(?:credits?|hours?)\\b[^.?]{0,40}\\bgraduat|\\b(?:credits?|hours?)\\b[^.?]{0,20}\\b(?:need|needed|required)\\b[^.?]{0,20}\\bgraduat"
+note = "Emory's sources disagree. The catalog policy requires 124 academic hours plus 2 PE and 1 personal health, 127 in all. The Office for Undergraduate Education registration guide says 126 total credit hours. Give the catalog's rule, say the other page says 126, and tell the student to confirm with the Office for Undergraduate Education."
+must_mention = ["126", "127"]

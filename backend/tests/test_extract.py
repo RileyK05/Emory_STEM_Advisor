@@ -76,6 +76,13 @@ def test_markdown_with_no_headings_is_all_line_range():
     _assert_tiling(result.text, result.locators)
 
 
+def test_a_heading_with_no_title_names_no_section():
+    doc = "# Title\n\n###\nBody under no heading.\n\n###   \nMore body.\n"
+    result = extract(doc.encode(), "text/markdown")
+    assert [loc.label for loc in result.locators] == ["Title"]
+    _assert_tiling(result.text, result.locators)
+
+
 def test_bodyless_heading_merges_into_next_section():
     # A lone `##` heading must not become a passage holding only its own title.
     doc = "# Doc\n\nintro body\n\n## Only title\n\nreal body text\n"

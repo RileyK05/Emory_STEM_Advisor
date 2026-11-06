@@ -272,3 +272,30 @@ SELECT node_id, kind, parent_node_id, position, node_type, target_code,
 FROM prereq_nodes
 WHERE course_id = %(course_id)s
 ORDER BY kind, position;
+
+-- name: list_term_cards
+-- One row per Atlas result card; a long card's first chunk holds its fields.
+SELECT DISTINCT ON (c.locator_id) c.locator_id, l.label, c.text
+FROM chunks c
+JOIN sources s ON s.source_id = c.source_id
+JOIN locators l ON l.locator_id = c.locator_id
+JOIN source_provenance pv ON pv.source_id = s.source_id
+WHERE s.collection_id = %(collection_id)s
+  AND s.status = 'indexed'
+  AND s.is_current
+  AND pv.document_roles ? 'course_offerings'
+ORDER BY c.locator_id, c.chunk_index;
+
+-- name: list_course_card_masters
+SELECT co.code, co.title, co.lifecycle, co.locator_id,
+       coalesce(string_agg(ch.text, E'\n' ORDER BY ch.chunk_index), '') AS text
+FROM courses co
+LEFT JOIN chunks ch ON ch.locator_id = co.locator_id
+WHERE co.collection_id = %(collection_id)s
+GROUP BY co.code, co.title, co.lifecycle, co.locator_id;
+
+-- name: set_term_cards_hidden
+UPDATE chunks
+SET search_hidden = (locator_id = ANY(%(hidden)s::uuid[]))
+WHERE locator_id = ANY(%(cards)s::uuid[])
+  AND search_hidden <> (locator_id = ANY(%(hidden)s::uuid[]));

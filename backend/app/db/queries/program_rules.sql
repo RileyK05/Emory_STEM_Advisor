@@ -115,3 +115,25 @@ INSERT INTO program_rule_reviews (
 ) VALUES (
     %(review_id)s, %(release_id)s, %(reviewer_user_id)s, %(action)s, %(review_notes)s
 ) RETURNING *;
+
+-- name: get_current_rule_release
+-- The published release, only while it still matches the program's current evidence.
+SELECT release.rules_tree, release.rules_digest
+FROM programs p
+JOIN program_rule_releases release ON release.release_id = p.current_rule_release_id
+JOIN sources source ON source.source_id = p.source_id
+LEFT JOIN source_provenance provenance ON provenance.source_id = source.source_id
+WHERE p.program_id = %(program_id)s
+  AND p.is_active
+  AND release.status = 'published'
+  AND release.program_id = p.program_id
+  AND source.is_current
+  AND source.status = 'indexed'
+  AND coalesce(provenance.lifecycle_status, 'active') NOT IN ('staged', 'deprecated', 'archived')
+  AND p.source_id = release.source_id
+  AND p.source_index_revision = source.index_revision
+  AND p.source_sha256 = source.file_hash
+  AND source.index_revision = release.source_index_revision
+  AND source.file_hash = release.source_sha256
+  AND p.parsed_content_digest IS NOT DISTINCT FROM release.bound_program_digest
+  AND coalesce(provenance.metadata_revision, 0) = release.source_metadata_revision;

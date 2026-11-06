@@ -7,7 +7,7 @@ is unambiguous. Mixed and/or precedence is never chosen: such input is
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.atlas.records import normalize_code
 from app.programs.requirements import (
@@ -16,7 +16,7 @@ from app.programs.requirements import (
     _is_level_descriptor,
 )
 
-PARSER_VERSION = "21"
+PARSER_VERSION = "24"
 
 # A two-letter suffix (AAS 490RW) and a 6-7 letter subject (DATASCI 355) must be
 # uppercase, so ordinary words and "111or" are not read as codes. Spelled-out
@@ -53,8 +53,35 @@ _LABEL_RE = re.compile(
     re.IGNORECASE,
 )
 _CONDITIONS = [
-    (re.compile(r"(permission|consent)\s+of\s+(the\s+)?instructor", re.IGNORECASE),
+    (re.compile(r"(permission|consent)\s+of\s+(the\s+)?instructor(?!\s+and\b)", re.IGNORECASE),
      "permission of instructor"),
+    # Someone else's approval, kept verbatim: "approval of adviser and the director
+    # of undergraduate studies". It ends with its clause.
+    (re.compile(r"(?:prior\s+|written\s+)?(?:permission|consent|approval)\s+(?:of|by|from)\s+"
+                r"[^.;,()]{3,90}?(?=\s*(?:[.;,)]|\bor\b|$))", re.IGNORECASE), None),
+    (re.compile(r"(?:the\s+)?instructor(?:'s)?\s+consent\b", re.IGNORECASE),
+     "permission of instructor"),
+    # "Two PHIL courses", "one 300 level SPAN or SPAN_OX course", "Any NBB or WGS
+    # course", "One HIST course 200 level or above", "two courses in literature".
+    (re.compile(r"(?:at\s+least\s+)?(?:any|one|two|three|four|five)\s+(?:\d{3}[- ]level\s+)?"
+                r"(?:[A-Za-z_]+\s+(?:or\s+[A-Za-z_]+\s+)?)??(?:courses?|class(?:es)?)\b"
+                r"(?:\s+(?:in\s+[a-z]+|\d{3}\s+level\s+or\s+above))?", re.IGNORECASE), None),
+    (re.compile(r"any\s+(?-i:[A-Z_]{2,})\s+or\s+(?-i:[A-Z_]{2,})(?=\s+or\b|\s*$)",
+                re.IGNORECASE), None),
+    (re.compile(r"\d{3}[- ]level\s+[a-z]+\s+(?:course|class)\b", re.IGNORECASE), None),
+    (re.compile(r"(?-i:[A-Z]{2,7})\s+course\s+at\s+the\s+\d{3}\s+level", re.IGNORECASE), None),
+    # A placement or an exam score stands in for a course.
+    (re.compile(r"(?:AP|IB)\s+(?:[A-Z][a-z]+\s+)?score\s+of\s+\d(?:\s*,\s*\d\s*,?)?"
+                r"(?:\s+or\s+(?:\d|higher))?", re.IGNORECASE), None),
+    (re.compile(r"AP\s+Calculus\s+(?:BC|AB)\b"), None),
+    (re.compile(r"(?-i:[A-Z]{2,7})\s+AP/AB\s+or\s+IB\s+credits?\b", re.IGNORECASE), None),
+    (re.compile(r"(?:by\s+)?placement(?:\s+recommendation)?\b", re.IGNORECASE), None),
+    (re.compile(r"academic\s+eligibility\b|admission\s+to\s+the\s+honors\s+program\b"
+                r"|qualification\s+for\s+honors\b", re.IGNORECASE), None),
+    (re.compile(r"juniors?\s+or\s+seniors?\s+only\b", re.IGNORECASE), None),
+    # A student group or a transfer placeholder that Atlas lists as an alternative.
+    (re.compile(r"(?-i:[A-Z]{4,})\s+students?\b", re.IGNORECASE), None),
+    (re.compile(r"(?-i:[A-Z]{2,7}(?:_OX)?\s+(?:ELEC|XFR))\b"), None),
     (re.compile(r"equivalent\s+transfer\s+credits?\s+as\s+(?:a\s+)?prerequisites?\b",
                 re.IGNORECASE),
      "equivalent transfer credit"),
@@ -106,6 +133,8 @@ _PROGRAM_ONLY_RE = re.compile(
     r"This\s+section\s+is\s+reserved\s+for\s+[^.!?;\d]*\bprograms?"
     r"|Program\s+restrictions\s+apply\b[^.!?;\d]*"
     r"|Only\s+[^.!?;\d]*\bhave\s+permission\s+to\s+enroll\b[^.!?;\d]*"
+    r"|(?:^\s*|(?<=[.!?;])\s*)[^.!?;\d]*\bstudents?\s+(?:can|may|(?:are\s+)?allowed\s+to)\s+enroll\b"
+    r"[^.!?;\d]*"
     r"|(?:^\s*|(?<=[.!?;])\s*)[^.!?;\d]*\bstudents\s+only"
     r"|(?:^\s*|(?<=[.!?;])\s*)[^.!?;\d]*\bprogram\s+students"
     r"|(?:^\s*|(?<=[.!?;])\s*)(?-i:[A-Z][A-Z&]{2,})"
@@ -313,7 +342,7 @@ def split_requisite_segments(
 
 
 def _requisite_parts(text: str, course_code: str | None) -> tuple[tuple[str, str, str], ...]:
-    stripped = _REPEATED_SENTENCE_RE.sub(r"\1", text.strip())
+    stripped = _repair_typing(_REPEATED_SENTENCE_RE.sub(r"\1", text.strip()))
     stripped = _OPENER_RE.sub("", stripped)
     stripped = _MISSPELLED_LABEL_RE.sub(r"prerequisite\1", stripped)
     stripped = _OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", stripped)
@@ -339,6 +368,10 @@ def _requisite_parts(text: str, course_code: str | None) -> tuple[tuple[str, str
     stripped = _USED_FOR_RE.sub("", stripped)
     stripped = _REPEAT_RE.sub("", stripped)
     stripped = _CONTACT_RE.sub("", stripped)
+    stripped = _CROSS_LISTED_RE.sub("", stripped)
+    stripped = _ENROLL_FIRST_RE.sub("", stripped)
+    stripped = _NO_CREDIT_CLAUSE_RE.sub("", stripped)
+    stripped = _REQUIRED_TAIL_RE.sub("", stripped)
     labels = list(_LABEL_RE.finditer(stripped))
     segments: list[tuple[str, str, str]] = []
     if not labels:
@@ -363,9 +396,34 @@ def _requisite_parts(text: str, course_code: str | None) -> tuple[tuple[str, str
 
 # A requirement stated twice back to back (BIOL 260) is stated once.
 _REPEATED_SENTENCE_RE = re.compile(r"^(.{20,}?[.!?])\s*\1\s*$", re.DOTALL)
-_OPENER_RE = re.compile(r"^(?:This\s+course\s+requires|This\s+requisite\s+mandates)\s+",
+_OPENER_RE = re.compile(r"^(?:This\s+course\s+(?:requires|mandates)|This\s+requisite\s+mandates)\s+",
                         re.IGNORECASE)
-_MISSPELLED_LABEL_RE = re.compile(r"\bprerequiste(s?)\b", re.IGNORECASE)
+_MISSPELLED_LABEL_RE = re.compile(r"\bprerequ(?:iste|site)(s?)\b", re.IGNORECASE)
+# Registrar typing that has one reading. Each pair is (wrong, right).
+_TYPING_REPAIRS = (
+    (re.compile(r"\b([A-Z]{2,7})\s*_\s*OX\b"), r"\1_OX"),
+    (re.compile(r"\b([A-Z]{2,7})_(?:X|OC)\b"), r"\1_OX"),
+    (re.compile(r"\b([A-Z]{2,7})\?([A-Z]{2,7})\b"), r"\1/\2"),
+    (re.compile(r"\b(\d{3}Z)0\]"), r"\1)]"),
+    (re.compile(r"\bstudentsor\b"), "students or"),
+    (re.compile(r"\btransfer/test\b"), "transfer"),
+    (re.compile(r"\bas\s+prereq\b", re.IGNORECASE), "as prerequisite"),
+    (re.compile(r"\bPolitical\s+Science\s+(?=\d)"), "POLS "),
+)
+# "Students must enroll in CHEM 202Z first." orders a corequisite already stated.
+_ENROLL_FIRST_RE = re.compile(
+    r"\(?\b(?:Students?\s+)?must\s+enroll\s+in\s+[^.)]*\bfirst\b[^.)]*[.)]?", re.IGNORECASE)
+# "Cross-listed with GH 562." names the same course, never a requirement on it.
+_CROSS_LISTED_RE = re.compile(r"\bCross[- ]?listed\s+with\b[^.]*\.?", re.IGNORECASE)
+# "; may not receive credit for NBB 497WR" limits credit, not entry.
+_NO_CREDIT_CLAUSE_RE = re.compile(r";\s*(?:may\s+not|cannot)\b[^.!?]*", re.IGNORECASE)
+_REQUIRED_TAIL_RE = re.compile(r"\s+required\s*\.?\s*$", re.IGNORECASE)
+# What follows the first sentence of a label is course description, unless it
+# names a course or says who may enroll. A restriction is never dropped.
+_SENTENCE_END_RE = re.compile(r"(?<=[a-z0-9)])\s*[.;]\s*(?=[A-Za-z])")
+_RESTRICTION_WORDS_RE = re.compile(
+    r"\b(?:open|only|restricted|limited|must|requires?|required|permission|consent|approval"
+    r"|eligib\w+|majors?|minors?|candidates?|seniors?|juniors?)\b", re.IGNORECASE)
 # "Math 112_OX" puts Oxford's suffix after the number; the code is MATH_OX 112.
 _OX_AFTER_NUMBER_RE = re.compile(r"\b([A-Za-z]{2,8})\s+(\d{3}[A-Z]{0,4})_OX\b")
 # "BIOL/ENVS 247" names one cross-listed number under two subjects.
@@ -414,6 +472,24 @@ _ENROLL_TOGETHER_RE = re.compile(
     r"\bStudents\s+must\s+enroll\s+in\s+(?P<courses>[^.]+?)\s+together\b\.?"
     r"(?:\s*If\s+not\s+enrolled\s+in\s+(?:both\s+)?(?:the\s+)?lecture\s+and\s+lab\b[^.]*\.?)?",
     re.IGNORECASE)
+
+
+def _repair_typing(text: str) -> str:
+    for wrong, right in _TYPING_REPAIRS:
+        text = wrong.sub(right, text)
+    # "BIOL 142 and BIOL 142L) or BIOL_OX 142" lost its opening parenthesis.
+    return "(" + text if text.count(")") == text.count("(") + 1 else text
+
+
+def _requirement_sentence(segment: str) -> str:
+    """Drop a course description that runs on after the requirement itself."""
+    end = _SENTENCE_END_RE.search(segment)
+    if end is None:
+        return segment
+    rest = segment[end.end():]
+    if _CODE_ONLY_RE.search(rest) or _RESTRICTION_WORDS_RE.search(rest):
+        return segment
+    return segment[:end.start()]
 
 
 def _enroll_together(match: re.Match, self_code: str | None) -> str:
@@ -658,9 +734,37 @@ def _parse_tokens(tokens: list[tuple[str, str]]) -> Req:
         return _Parser(tokens).parse()
     except _Ambiguous:
         grouped = _group_labs(tokens, separators=(["and"],))
-        if grouped == tokens:
+        if grouped != tokens:
+            try:
+                return _Parser(grouped).parse()
+            except _Ambiguous:
+                pass
+        paired = _group_campus_pairs(tokens)
+        if paired == tokens:
             raise
-        return _Parser(grouped).parse()
+        return _Parser(paired).parse()
+
+
+def _group_campus_pairs(tokens: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Bind "FREN 310 or FREN_OX 310": one course at either campus.
+
+    "FREN 310 or FREN_OX 310 and FREN 314 or FREN_OX 314" has one reading, since
+    the two sides of each "or" are the same course.
+    """
+    output: list[tuple[str, str]] = []
+    index = 0
+    while index < len(tokens):
+        window = tokens[index:index + 3]
+        if (len(window) == 3 and window[0][0] == "code" and window[1][0] == "op"
+                and window[1][1] in {"or", "comma"}
+                and window[2][0] == "code" and window[0][1] != window[2][1]
+                and window[0][1].replace("_OX", "") == window[2][1].replace("_OX", "")):
+            output.extend([("paren", "("), window[0], ("op", "or"), window[2], ("paren", ")")])
+            index += 3
+            continue
+        output.append(tokens[index])
+        index += 1
+    return output
 
 
 def _group_labs(tokens: list[tuple[str, str]], *,
@@ -730,6 +834,32 @@ def _parse_whole(segment: str) -> Req | None:
         return None
 
 
+def _parse_on_capital_and(segment: str) -> Req | None:
+    """Split "ECON 201 AND ECON 220 or MATH 207" where only the AND is capitalized.
+
+    Atlas writes groups this way: a capital AND between lowercase ors joins the
+    groups. Any other mix stays ambiguous.
+    """
+    parts = re.split(r"\s+AND\s+", segment)
+    if len(parts) < 2 or re.search(r"\bOR\b|\band\b", segment):
+        return None
+    trees = [_parse_whole(part) for part in parts]
+    return None if any(tree is None for tree in trees) else AllOf(tuple(trees))
+
+
+def _as_corequisites(mentions: list[Mention], kinds: set[str]) -> list[Mention]:
+    output: list[Mention] = []
+    codes: set[str] = set()
+    for mention in mentions:
+        if mention.kind in kinds:
+            if mention.code in codes:
+                continue
+            codes.add(mention.code)
+            mention = replace(mention, kind="corequisite")
+        output.append(replace(mention, position=len(output)))
+    return output
+
+
 def _combine(joiner: str, left: Req, right: Req) -> Req:
     group = AllOf if joiner == "and" else AnyOf
     items: list[Req] = []
@@ -776,14 +906,20 @@ def parse_requisites(
 
     for kind, raw, joiner in segments:
         before, previous_kind = previous_kind, kind
-        segment = _strip_grades(raw).strip().strip(".").strip()
-        if not segment:
+        segment = _requirement_sentence(_strip_grades(raw).strip().strip(".").strip())
+        if not segment or segment.casefold() == "none":
             continue
         whole = segment
         transfer_tail = _TRANSFER_TAIL_RE.search(segment)
         if transfer_tail is not None:
             prefix = segment[:transfer_tail.start()].strip()
             if not prefix:
+                if joiner == "or" and before in trees:
+                    # "... as co-requisite or equivalent transfer credit" closes
+                    # the alternatives already read.
+                    trees[before] = _combine("or", trees[before],
+                                             Condition("equivalent transfer credit"))
+                    continue
                 # A split-off transfer clause may qualify an earlier prerequisite,
                 # corequisite, or the whole statement. Its scope is not known.
                 # Keep it unresolved rather than silently publishing a partial tree.
@@ -819,7 +955,7 @@ def parse_requisites(
         try:
             tree = _parse_tokens(tokens)
         except _Ambiguous:
-            tree = _parse_with_transfer_tail(segment)
+            tree = _parse_on_capital_and(segment) or _parse_with_transfer_tail(segment)
             if tree is None and transfer_tail is not None:
                 # "CHEM 221, CHEM 221Z, CHEM_OX 221, or equivalent transfer credit":
                 # the clause is the last item of the list, not a modifier of it.
@@ -831,10 +967,15 @@ def parse_requisites(
         if transfer_tail is not None:
             tree = _attach_transfer_condition(tree, transfer_tail.group("connector"))
         if joiner == "or" and before is not None and before != kind:
-            # An alternative between a prerequisite and a corequisite has no
-            # representation as two required trees.
-            ambiguous = True
-            continue
+            if before not in trees or kind in trees:
+                ambiguous = True
+                continue
+            # "A as co-requisite or B as prerequisite": either satisfies it, and a
+            # course taken earlier also meets a concurrent requirement, so the
+            # whole alternative is the weaker, concurrent form.
+            tree = _combine("or", trees.pop(before), tree)
+            mentions[:] = _as_corequisites(mentions, {before, kind})
+            kind = previous_kind = "corequisite"
         if kind in trees:
             # "MATH 111 as prerequisite AND MATH 112 or ...", "ENVS 371 as a
             # prerequisite OR permission of instructor": the label closes the

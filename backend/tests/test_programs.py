@@ -1,7 +1,6 @@
 """Program requirement parsing and import. Deterministic; no models."""
 
 import json
-import uuid
 
 import pytest
 
@@ -192,7 +191,7 @@ def test_duplicate_catalog_programs_keep_first_and_conflicts_fail():
         dedupe_programs([first, changed])
 
 
-def test_reimport_keeps_saved_release_and_audit(db, collection, tmp_path):
+def test_reimport_keeps_saved_release(db, collection, tmp_path):
     """An identical program reimport leaves the published release and saved audit in place."""
     from tests.helpers import api_client
 
@@ -213,21 +212,6 @@ def test_reimport_keeps_saved_release_and_audit(db, collection, tmp_path):
     assert client.post(f"/api/admin/programs/{pid}/rules/{release_id}/approve", json={}).status_code == 200
     published = client.post(f"/api/admin/programs/{pid}/rules/{release_id}/publish", json={})
     assert published.status_code == 200, published.text
-    record_id = uuid.uuid4()
-    audit_id = uuid.uuid4()
-    db.execute(
-        "INSERT INTO student_academic_records (record_id, workspace_key) VALUES (%s, 'development')",
-        (record_id,),
-    )
-    db.execute(
-        """
-        INSERT INTO degree_audits (
-            audit_id, workspace_key, program_id, rule_release_id, record_id, record_revision,
-            rules_digest, overall_status
-        ) VALUES (%s, 'development', %s, %s, %s, 1, %s, 'outstanding')
-        """,
-        (audit_id, pid, release_id, record_id, published.json()["rulesDigest"]),
-    )
     db.commit()
     reviews_before = db.execute(
         "SELECT count(*) AS n FROM program_rule_reviews WHERE release_id = %s", (release_id,),
@@ -238,14 +222,10 @@ def test_reimport_keeps_saved_release_and_audit(db, collection, tmp_path):
     release = db.execute(
         "SELECT status FROM program_rule_releases WHERE release_id = %s", (release_id,),
     ).fetchone()
-    audit = db.execute(
-        "SELECT overall_status FROM degree_audits WHERE audit_id = %s", (audit_id,),
-    ).fetchone()
     reviews_after = db.execute(
         "SELECT count(*) AS n FROM program_rule_reviews WHERE release_id = %s", (release_id,),
     ).fetchone()["n"]
     assert release["status"] == "published"
-    assert audit["overall_status"] == "outstanding"
     assert reviews_after == reviews_before
 
 
@@ -331,6 +311,11 @@ def test_program_binds_only_to_its_exact_current_source(db, collection, tmp_path
     assert db.execute(queries.get("research_programs_naming_courses"), {
         "collection_id": collection, "codes": ["MATH 111"],
     }).fetchone()["programs"] == ["Computer Science (BS)"]
+    lines = db.execute(queries.get("research_program_lines_naming_courses"), {
+        "collection_id": collection, "codes": ["CS 370"],
+    }).fetchall()
+    assert [(row["program"], row["line"], row["choose"]) for row in lines] == [
+        ("Computer Science (BS)", "One from the following: CS 370, CS 371W", 1)]
     pid = program_id(collection, "Computer Science (BS)")
     binding = db.execute(queries.get("get_program_binding"), {"program_id": pid}).fetchone()
     assert binding["binding_status"] == status
@@ -425,9 +410,7 @@ def test_rule_release_allows_unresolved_requirement_items_with_supported_identit
 
 
 @pytest.mark.parametrize("change", ["same", "changed", "removed", "unbound"])
-def test_program_refresh_retains_released_rules_and_saved_audits(db, collection, tmp_path, change):
-    from app.advising.audit_service import DegreeAuditService
-    from app.auth.models import Principal
+def test_program_refresh_retains_released_rules(db, collection, tmp_path, change):
     from app.programs.review_service import ProgramReviewService
 
     title = "Computer Science (BS)"
@@ -442,8 +425,6 @@ def test_program_refresh_retains_released_rules_and_saved_audits(db, collection,
     release = ProgramReviewService.create_rule_draft(db, pid, None)
     ProgramReviewService.approve_rule_release(db, release["release_id"], None)
     ProgramReviewService.publish_rule_release(db, release["release_id"], None)
-    student = Principal("development", None, "development")
-    saved = DegreeAuditService.run_audit(db, student.workspace_key, pid, student)
     db.commit()
 
     if change == "changed":
@@ -473,11 +454,8 @@ def test_program_refresh_retains_released_rules_and_saved_audits(db, collection,
     }).fetchone()
     assert retained["rules_tree"] == release["rules_tree"]
     assert retained["status"] == ("published" if change == "same" else "archived")
-    audit = DegreeAuditService.get_audit(
-        db, student.workspace_key, saved["audit"]["audit_id"], student,
-    )["audit"]
-    assert audit["is_stale"] == (change != "same")
-    assert audit["rules_digest"] == release["rules_digest"]
+    usable = db.execute(queries.get("get_current_rule_release"), {"program_id": pid}).fetchone()
+    assert (usable is not None) == (change == "same")
     listed = db.execute(queries.get("list_programs"), {"collection_id": collection}).fetchall()
     active_ids = {row["program_id"] for row in listed}
     if change == "removed":
@@ -503,3 +481,22 @@ def test_alignment_steps_over_separator_gaps_but_never_long_holes():
     holed = text([(0, "Choose any 4 courses"), (30, "at the 300 level.")])
     found = holed.find("Choose any 4 courses at the 300 level.")
     assert found is None or holed.support(*found) == ()
+
+
+@pytest.mark.parametrize("text,subject,expected", [
+    ("209 Perception and Action", "PSYC", ["PSYC 209"]),
+    ("Ballet (221R, 321R)", "DANC", ["DANC 221R", "DANC 321R"]),
+    ("one elective numbered 212 or higher", "PSYC", []),
+    ("209 Perception and Action", None, []),
+    ("300 or 400 level electives", "PSYC", []),
+    ("A total of 128 academic hours", "PSYC", []),
+    ("Psychology 209 and 212", "PSYC", ["PSYC 212"]),
+    ("999 is not a course here", "PSYC", []),
+], ids=["number_alone", "suffixed", "floor", "no_home_subject", "level", "hours",
+        "already_named", "unknown_number"])
+def test_a_bare_number_is_a_course_only_when_the_subject_has_it(text, subject, expected):
+    from app.programs.importer import bare_course_mentions
+
+    known = {"PSYC 209", "PSYC 212", "PSYC 128", "PSYC 300", "DANC 221R", "DANC 321R"}
+    assert bare_course_mentions(text, subject, known, {"PSYC 209"} if "and 212" in text else set()
+                                ) == expected

@@ -359,9 +359,6 @@ class CourseMaintenanceService:
                 {"collection_id": collection_id, "code": code},
             ).fetchall()
         ]
-        stale_audits = conn.execute(
-            queries.get("count_stale_audits_for_course"), {"code": code}
-        ).fetchone()["total"]
         topic_builds = conn.execute(
             queries.get("count_current_topic_builds"), {"collection_id": collection_id}
         ).fetchone()["total"]
@@ -395,7 +392,6 @@ class CourseMaintenanceService:
             "parsed": parsed,
             "programs": programs,
             "dependents": dependents,
-            "staleAuditCount": stale_audits,
             "activeTopicBuilds": topic_builds,
             "warnings": warnings,
         }
@@ -440,9 +436,6 @@ class CourseMaintenanceService:
                 state=state,
             )
 
-            conn.execute(
-                queries.get("mark_degree_audits_stale_for_course"), {"code": code}
-            )
             conn.execute(
                 queries.get("retire_current_topic_builds"), {"collection_id": collection_id}
             )

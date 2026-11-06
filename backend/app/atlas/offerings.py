@@ -10,6 +10,7 @@ import hashlib
 import os
 import re
 import tempfile
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -370,6 +371,71 @@ def render_offerings_markdown(snapshot: ValidatedOfferings) -> bytes:
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
+_CARD_LABEL_RE = re.compile(r"^(?P<code>.+?) — (?P<title>.+?)(?: \([^()]*\))?$")
+_CARD_FIELD_RE = re.compile(r"^- (Term|Description): (.*)$", re.MULTILINE)
+
+
+def _folded(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _placeholder(code: str) -> bool:
+    """Emory's 999-numbered courses are registration devices, not things to study."""
+    return re.search(r" 999", code) is not None
+
+
+def repeated_term_cards(cards: Iterable[dict], masters: Iterable[dict]) -> set:
+    """The records that add nothing to search, by their locator id.
+
+    A course that runs every term has a card per term saying the same thing. A
+    card repeats when the course's master record already says it, or when a
+    newer term's card has the same title and description. A topic title or a
+    section-specific description is new text and stays searchable, in its newest
+    term. A retired course is not a search result, so its cards go too, and a
+    placeholder's master record goes with its cards.
+    """
+    from app.atlas.authority import term_order  # authority imports this module
+
+    by_code = {row["code"]: row for row in masters}
+    newest: dict[tuple, tuple] = {}
+    repeated = {row["locator_id"] for row in by_code.values() if _placeholder(row["code"])}
+    for card in cards:
+        label = _CARD_LABEL_RE.match(card["label"])
+        if label is None:
+            continue
+        fields = dict(_CARD_FIELD_RE.findall(card["text"]))
+        title, description = _folded(label["title"]), _folded(fields.get("Description", ""))
+        master = by_code.get(label["code"])
+        if _placeholder(label["code"]) or master is not None and (
+                master["lifecycle"] == "retired" or (
+                _folded(master["title"]) == title and description in _folded(master["text"]))):
+            repeated.add(card["locator_id"])
+            continue
+        key = (label["code"], title, description)
+        rank = (term_order(fields["Term"]) if "Term" in fields else (0, 0), str(card["locator_id"]))
+        previous = newest.get(key)
+        if previous is None or rank > previous[0]:
+            if previous is not None:
+                repeated.add(previous[1])
+            newest[key] = (rank, card["locator_id"])
+        else:
+            repeated.add(card["locator_id"])
+    return repeated
+
+
+def refresh_term_card_search(conn: Connection, *, collection_id: UUID) -> int:
+    """Hide repeated cards from search. They stay readable and citable."""
+    cards = conn.execute(queries.get("list_term_cards"),
+                         {"collection_id": collection_id}).fetchall()
+    masters = conn.execute(queries.get("list_course_card_masters"),
+                           {"collection_id": collection_id}).fetchall()
+    hidden = repeated_term_cards(cards, masters)
+    conn.execute(queries.get("set_term_cards_hidden"), {
+        "hidden": list(hidden),
+        "cards": [row["locator_id"] for row in (*cards, *masters)]})
+    return len(hidden)
+
+
 def _section_scope(sections: list[dict], class_number: str | None = None) -> str:
     """Expose useful section scope without indexing complete registration payloads."""
     if class_number is not None:
@@ -548,6 +614,7 @@ def publish_offerings(
     # canonical content. Preserve each newly observed raw capture set append-only.
     with conn.transaction():
         store_snapshot(conn, source_id, [])
+        refresh_term_card_search(conn, collection_id=collection_id)
     conn.commit()
     return source_id
 

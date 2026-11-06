@@ -161,8 +161,6 @@ const CONVERSATIONS = 'Saved conversations require the HTTP backend; the mock cl
 const GAPS =
   'Human retrieval-gap review requires the private HTTP backend; the mock client does not store gap observations.';
 const CONNECTIONS = 'Local connection settings are not enabled by this mock backend.';
-const RECORDS = 'Academic records require the HTTP backend.';
-const AUDITS = 'Program audits require the HTTP backend.';
 const PRIVACY = 'Privacy export requires the HTTP backend.';
 const DEMO_ARTIFACT: NativeArtifactRecord = {
   artifactId: 'demo-artifact',
@@ -340,20 +338,6 @@ export class MockClient implements AdvisorClient {
   deleteConnectionProfile = unavailable(CONNECTIONS, 404);
   diagnoseConnection = unavailable(CONNECTIONS, 404);
 
-  getAcademicRecord = unavailable(RECORDS);
-  upsertAcademicAttempt = unavailable(RECORDS);
-  previewAcademicImport = unavailable(RECORDS);
-  updateAcademicImport = unavailable(RECORDS);
-  commitAcademicImport = unavailable(RECORDS);
-  getAcademicRecordRevision = unavailable(RECORDS);
-
-  listAuditablePrograms = unavailable(AUDITS);
-  listProgramAudits = unavailable(AUDITS);
-  runProgramAudit = unavailable(AUDITS);
-  getProgramAudit = unavailable(AUDITS);
-  exportProgramAudit = unavailable(AUDITS);
-  listProgramComparisons = unavailable(AUDITS);
-  createProgramComparison = unavailable(AUDITS);
   async submitResponseFeedback(body: {
     responseId: string;
     vote: 'up' | 'down';

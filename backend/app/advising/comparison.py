@@ -7,11 +7,11 @@ twice, or that the combination is permitted. The result says so in its `kind`
 and keeps every raw line it rests on, so nothing has to be re-derived.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.advising.research_repository import ProgramRead
+from app.advising.research_repository import ProgramItem, ProgramRead
 
 MENTION_OVERLAP_ONLY = "mention_overlap_only"
 
@@ -65,3 +65,40 @@ def compare_mentions(programs: Sequence[ProgramRead]) -> MentionComparison:
         unresolved_positions={read.pin.program_id: read.unresolved_positions
                               for read in programs},
     )
+
+
+@dataclass(frozen=True)
+class LineMatch:
+    """Which reported courses one raw requirement line names. Never that it is met."""
+
+    item: ProgramItem
+    reported: tuple[str, ...]
+    state: str  # all_named_reported | some_named_reported | none_reported | no_course_named
+
+
+def match_reported_courses(
+    items: Sequence[ProgramItem], completed_codes: Sequence[str],
+    equivalents: Mapping[str, frozenset[str]],
+) -> tuple[tuple[LineMatch, ...], tuple[str, ...]]:
+    """Match reported courses to raw lines, and list the courses no line names.
+
+    Lines can name alternatives and exclusions, and one course can appear on two
+    lines, so a match only says where a course is mentioned. A campus's course
+    matches the code a line names.
+    """
+    same = {code: {code, *equivalents.get(code, ())} for code in completed_codes}
+    matches, named = [], set()
+    for item in items:
+        codes = set(item.mentioned_course_codes)
+        named |= codes
+        reported = tuple(code for code, names in same.items() if names & codes)
+        if not codes:
+            state = "no_course_named"
+        elif not reported:
+            state = "none_reported"
+        elif len(reported) >= (item.choose or len(codes)):
+            state = "all_named_reported"
+        else:
+            state = "some_named_reported"
+        matches.append(LineMatch(item, reported, state))
+    return tuple(matches), tuple(code for code, names in same.items() if not names & named)

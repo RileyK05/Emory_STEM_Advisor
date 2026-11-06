@@ -64,7 +64,31 @@ against the same collection today gives:
 | E. mention/code mismatch | 0 | 0 | 0 (keep) | **yes** |
 | F. level inversions | 53 edges | 54 edges | a drop | no — see below |
 
-Two of the remaining probes moved for reasons worth recording:
+Re-measured 2026-11-06 after the Atlas-primary rebuild and parser 24, over 6,014
+courses (P1.14):
+
+| Probe | 2026-10-30 | 2026-11-06 | Target | Met |
+| --- | --- | --- | --- | --- |
+| A. mentions that resolve to nothing | 716 | 340 of 3,518 | < 300 | no, see below |
+| B. self-loops | 0 | 0 | 0 | **yes** |
+| C. impossible subject codes | 0 | 0 | 0 | **yes** |
+| D. `kind` coverage | two kinds | `prerequisite` 3,370, `corequisite` 148 | more than one | **yes** |
+| E. mention/code mismatch | 0 | 229 | 0 | **yes, by design** |
+| F. level inversions | 54 | 56, 5 of them `999` placeholders | a drop | no |
+| Cycles | 11 originally | 0 | 0 | **yes** |
+
+- **E is not a regression.** All 229 are Oxford mentions resolved to their Atlanta
+  course through `course_campus_equivalents`, which the mention lookups are meant to
+  honour. Every one was checked against that table.
+- **A** fell by more than half and is still over its target: 90% of mentions now
+  resolve, up from 75% on 2026-10-30. The remainder are mostly numbers no captured
+  Atlas term shows, a coverage gap rather than a parse error.
+- **Parse status**: `parsed` 1,137, `none` 4,686, `unparsed` 166, `ambiguous` 25. Of
+  1,479 current courses with requirement text, 1,324 are usable by the planner, up from
+  1,107. Blocked courses in BIOL, CHEM, CS, DATASCI, MATH, NBB and PHYS fell from 25
+  to 8, and 7 of those 8 are Oxford wordings.
+
+Two of the 2026-10-30 probes moved for reasons worth recording:
 
 - **F grew by one, not because a real inversion appeared.** Three of the 54
   edges point at `DATASCI 999XFR` / `QTM 999XFR`, Emory's placeholder for a

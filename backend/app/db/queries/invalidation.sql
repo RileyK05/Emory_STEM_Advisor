@@ -14,15 +14,6 @@ WHERE outbox_id IN (
 )
 RETURNING outbox_id, source_id, event_type, payload, attempts;
 
--- name: mark_audits_stale_for_source
-UPDATE degree_audits
-SET is_stale = true
-WHERE is_stale = false
-  AND rule_release_id IN (
-      SELECT release_id FROM program_rule_releases WHERE source_id = %(source_id)s
-  )
-RETURNING audit_id;
-
 -- name: complete_source_invalidation_outbox
 UPDATE source_invalidation_outbox
 SET published = true,

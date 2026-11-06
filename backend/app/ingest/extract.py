@@ -92,10 +92,11 @@ def _heading_spans(text: str) -> list[tuple[int, int, str]]:
                 fence = stripped[:3]
             elif stripped.startswith("#"):
                 hashes = len(stripped) - len(stripped.lstrip("#"))
-                if 1 <= hashes <= 6 and (
-                    len(stripped) == hashes or stripped[hashes] == " "
-                ):
-                    spans.append((offset, hashes, stripped[hashes:].strip()))
+                title = stripped[hashes:].strip()
+                # A title-less "###" names no section: a locator with an empty
+                # label would break the citation contract for any search reaching it.
+                if 1 <= hashes <= 6 and title and stripped[hashes] == " ":
+                    spans.append((offset, hashes, title))
         elif stripped.startswith(fence):
             fence = None
         offset += len(line) + 1

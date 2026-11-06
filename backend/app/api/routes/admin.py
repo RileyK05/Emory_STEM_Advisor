@@ -1077,7 +1077,6 @@ def preview_course_change(
         ),
         programs=[_admin_course_program(p) for p in data["programs"]],
         dependents=[_admin_course_dependent(d) for d in data["dependents"]],
-        staleAuditCount=data["staleAuditCount"],
         activeTopicBuilds=data["activeTopicBuilds"],
         warnings=data["warnings"],
     )

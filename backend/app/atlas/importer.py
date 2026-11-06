@@ -160,6 +160,8 @@ def write_campus_equivalents(
         })
     conn.execute(queries.get("resolve_mentions_by_campus_equivalence"),
                  {"collection_id": collection_id})
+    conn.execute(queries.get("resolve_program_mentions_by_suffix_variant"),
+                 {"collection_id": collection_id})
     conn.execute(queries.get("resolve_program_mentions_by_campus_equivalence"),
                  {"collection_id": collection_id})
     return len(pairs)
@@ -394,6 +396,9 @@ def import_atlas(
     # as current until rebuilt from the new data. A byte-identical re-import
     # leaves a matching build current.
     conn.execute(queries.get("retire_stale_topic_build"), {"collection_id": collection_id})
+    from app.atlas.offerings import refresh_term_card_search
+
+    refresh_term_card_search(conn, collection_id=collection_id)
     conn.commit()
 
     counts = Counter(

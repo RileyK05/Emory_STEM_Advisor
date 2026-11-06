@@ -5,8 +5,9 @@ import json
 import pytest
 
 from app.retrieval.config import KeywordSeamConfig
-from app.retrieval.seams.keyword import keyword_seam
+from app.retrieval.seams.keyword import expand_program_names, keyword_seam
 from tests.helpers import ingest_text
+from tests.test_atlas_import import _import as import_atlas_sample
 
 
 def _config(**overrides):
@@ -113,3 +114,40 @@ def test_bound_program_evidence_is_returned_for_a_program_question(db, collectio
     result = keyword_seam(db, collection, "Computer Science BS requirements",
                           _config(limit=40))
     assert any(candidate.program_evidence for candidate in result.candidates)
+
+
+def test_a_hidden_chunk_is_skipped_but_kept(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "a.txt", "alpha beta\n")
+    db.execute("UPDATE chunks SET search_hidden = true WHERE source_id = %s", (source,))
+    assert keyword_seam(db, collection, "alpha", _config()).candidates == []
+    assert db.execute("SELECT count(*) AS n FROM chunks WHERE source_id = %s",
+                      (source,)).fetchone()["n"] == 1
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("math major requirements", "mathematics major requirements"),
+    ("econ and math joint major", "economics and mathematics joint major"),
+    ("what is math 111 about", "what is math 111 about"),
+    ("can i double major", "can i double major two majors"),
+])
+def test_program_nicknames_expand_only_in_program_questions(query, expected):
+    assert expand_program_names(query) == expected
+
+
+def test_the_subject_outranks_program_vocabulary(db, collection, tmp_path):
+    wordy = ingest_text(db, collection, tmp_path, "wordy.txt",
+                        "major requirements and more major requirements of history\n")
+    subject = ingest_text(db, collection, tmp_path, "subject.txt",
+                          "A chemistry student reads the major.\n")
+    result = keyword_seam(db, collection, "chemistry major requirements", _config())
+    assert [c.source_id for c in result.candidates] == [subject, wordy]
+
+
+def test_a_course_named_by_its_title_comes_first(db, collection, tmp_path):
+    import_atlas_sample(db, collection, tmp_path)
+    ingest_text(db, collection, tmp_path, "notes.txt",
+                "principles macroeconomics principles macroeconomics notes\n")
+    result = keyword_seam(db, collection, "principles of macroeconomics class", _config())
+    first = db.execute("SELECT co.code FROM courses co JOIN chunks c ON c.locator_id = co.locator_id "
+                       "WHERE c.chunk_id = %s", (result.candidates[0].chunk_id,)).fetchone()
+    assert first["code"] == "ECON 101"

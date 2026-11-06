@@ -68,9 +68,6 @@ SELECT
     (SELECT count(*) FROM research_runs WHERE workspace_key = %(workspace_key)s) AS research_runs,
     (SELECT count(*) FROM retrieval_gaps WHERE workspace_key = %(workspace_key)s) AS retrieval_gaps,
     (SELECT count(*) FROM auth_sessions WHERE workspace_key = %(workspace_key)s) AS sessions,
-    (SELECT count(*) FROM student_academic_records WHERE workspace_key = %(workspace_key)s) AS academic_records,
-    (SELECT count(*) FROM academic_record_import_batches WHERE workspace_key = %(workspace_key)s) AS academic_imports,
-    (SELECT count(*) FROM degree_audits WHERE workspace_key = %(workspace_key)s) AS degree_audits,
     (SELECT count(*) FROM sources WHERE workspace_key = %(workspace_key)s) AS sources,
     (SELECT count(*) FROM response_feedback WHERE workspace_key = %(workspace_key)s) AS response_feedback,
     (SELECT count(*) FROM jobs WHERE scope_key = %(workspace_key)s) AS jobs;
@@ -78,12 +75,6 @@ SELECT
 -- name: list_workspace_feedback_for_export
 SELECT feedback_id, response_id, revision, vote, reason_code, comment, is_current, created_at
 FROM response_feedback
-WHERE workspace_key = %(workspace_key)s
-ORDER BY created_at;
-
--- name: list_workspace_audits_for_export
-SELECT audit_id, program_id, overall_status, is_stale, created_at
-FROM degree_audits
 WHERE workspace_key = %(workspace_key)s
 ORDER BY created_at;
 
@@ -108,15 +99,6 @@ RETURNING export_id;
 DELETE FROM privacy_exports
 WHERE expires_at IS NOT NULL AND expires_at < %(cutoff)s;
 
--- name: delete_workspace_comparison_members
-DELETE FROM program_comparison_members
-WHERE comparison_id IN (
-    SELECT comparison_id FROM program_comparisons WHERE workspace_key = %(workspace_key)s
-);
-
--- name: delete_workspace_comparisons
-DELETE FROM program_comparisons WHERE workspace_key = %(workspace_key)s;
-
 -- name: delete_workspace_feedback_events
 DELETE FROM feedback_triage_events
 WHERE feedback_id IN (
@@ -125,9 +107,6 @@ WHERE feedback_id IN (
 
 -- name: delete_workspace_feedback
 DELETE FROM response_feedback WHERE workspace_key = %(workspace_key)s;
-
--- name: delete_workspace_academic_records
-DELETE FROM student_academic_records WHERE workspace_key = %(workspace_key)s;
 
 -- name: delete_workspace_quota_settlements
 DELETE FROM quota_settlements WHERE workspace_key = %(workspace_key)s;

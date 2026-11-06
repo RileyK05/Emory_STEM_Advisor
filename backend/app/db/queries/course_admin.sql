@@ -74,25 +74,6 @@ WHERE m.target_code = %(code)s
   AND c.collection_id = %(collection_id)s
 ORDER BY c.code;
 
--- name: count_stale_audits_for_course
-SELECT count(*) AS total
-FROM degree_audits a
-WHERE a.is_stale = false
-  AND a.program_id IN (
-      SELECT pm.program_id FROM program_course_mentions pm
-      WHERE pm.target_code = %(code)s
-  );
-
--- name: mark_degree_audits_stale_for_course
-UPDATE degree_audits
-SET is_stale = true
-WHERE is_stale = false
-  AND program_id IN (
-      SELECT pm.program_id FROM program_course_mentions pm
-      WHERE pm.target_code = %(code)s
-  )
-RETURNING audit_id;
-
 -- name: count_current_topic_builds
 SELECT count(*) AS total
 FROM sim_builds

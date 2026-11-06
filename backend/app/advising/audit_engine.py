@@ -468,3 +468,39 @@ class DeterministicAuditEngine:
             any(a.is_in_progress_or_planned for a in allocated), evaluations,
             blockers, assumptions, self.rules_digest, summary,
         )
+
+
+def _credit_rules_unresolved(node: dict[str, Any]) -> dict[str, Any]:
+    """A course code alone carries no credit hours, so it cannot decide a credit rule."""
+    if node["nodeType"] == RuleNodeType.CREDIT_THRESHOLD.value:
+        return {**node, "nodeType": RuleNodeType.UNRESOLVED.value, "courseCodes": [],
+                "coverageDisposition": CoverageDisposition.UNRESOLVED.value,
+                "unresolvedReason": "Reported courses carry no credit hours."}
+    return {**node, "children": [_credit_rules_unresolved(c) for c in node.get("children", [])]}
+
+
+def _rule_codes(node: dict[str, Any]) -> set[str]:
+    return {*node.get("courseCodes", []),
+            *(code for child in node.get("children", []) for code in _rule_codes(child))}
+
+
+def audit_reported_courses(
+    rules_tree: dict[str, Any], completed_codes: list[str], *,
+    equivalents: dict[str, frozenset[str]], rules_digest: str = "",
+    max_search_states: int = 50_000,
+) -> AuditEngineResult:
+    """Evaluate reviewed rules against courses a student named, keeping nothing.
+
+    A student's word carries no grade or credit hours. Each course is an
+    unverified pass, so a grade floor or credit rule stays unresolved and nothing
+    is ever fully satisfied. A campus's course counts as the code the rules name.
+    """
+    tree = _credit_rules_unresolved(rules_tree)
+    named = _rule_codes(tree)
+    codes = dict.fromkeys(
+        code if code in named else next(iter(sorted(equivalents.get(code, frozenset()) & named)), code)
+        for code in completed_codes)
+    attempts = [{"attempt_id": code, "resolved_course_code": code, "status": "completed",
+                 "grade": "CR", "term": "reported"} for code in codes]
+    return DeterministicAuditEngine(tree, attempts, rules_digest,
+                                    max_search_states=max_search_states).run()

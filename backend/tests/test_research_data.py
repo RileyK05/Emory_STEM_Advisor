@@ -988,7 +988,7 @@ def _research_provider(monkeypatch, script):
     return provider
 
 
-@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry", "program_paging", "program_paging_budget", "factual_evidence_retention"])
+@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry", "program_paging", "program_paging_budget", "factual_evidence_retention", "program_audit", "course_suggestions", "which_majors"])
 def test_research_answers_progressively_and_persists_its_decision(
         db, collection, tmp_path, monkeypatch, scenario):
     from app.api.query_service import query_response
@@ -1000,6 +1000,15 @@ def test_research_answers_progressively_and_persists_its_decision(
     from tests.helpers import MODEL, collection_name, lenient_config
 
     _corpus(db, collection, tmp_path)
+    if scenario == "course_suggestions":
+        from app.simgraph.build import build_simgraph
+
+        build_simgraph(db, collection_id=collection, model=MODEL, config_version=1,
+                       simgraph=lenient_config().simgraph)
+        db.commit()
+    # FakeEmbedder's vectors are random, so no goal reaches the live similarity floor.
+    research_config = replace(lenient_config(), simgraph=replace(
+        lenient_config().simgraph, walk_min_similarity=-1.0))
     preparation_or_scenarios = {
         "preparation_or_selected", "preparation_or_completed",
         "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice"
@@ -1397,6 +1406,64 @@ def test_research_answers_progressively_and_persists_its_decision(
             return call("finish", {"decision": {"outcome": "recommendation", "completeness": "complete",
                 "candidate_ids": ["cs"], "blocks": [{"kind": "judgment", "text": "I would lean toward this CS path.",
                     "candidate_ids": ["cs"], "evidence_ids": context["state_model_assessments"]["active_evidence_ids"]}]}})
+        if scenario == "which_majors":
+            if index == 0:
+                return call("read_courses", {"course_codes": ["MATH 111"]})
+            assert {tool.name for tool in request.tools} == {"advisor_finish"}
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+                "blocks": [{"kind": "fact", "text": "Two programs name MATH 111.",
+                            "evidence_ids": ids}]}})
+        if scenario == "program_audit":
+            from app.llm.base import ToolResultMessage
+
+            def tool_result():
+                return json.loads(next(message for message in reversed(request.messages)
+                                       if isinstance(message, ToolResultMessage)).content)
+            handles = [h["handle"] for h in context["issued_handles"] if h["kind"] == "program"]
+            audit = {"handle": handles[0] if handles else "", "completed_codes": ["CS 170"]}
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            if index == 0:
+                return call("list_programs", {})
+            if index == 1:
+                return call("audit_program", audit)
+            if index == 2:
+                observed["unread"] = tool_result()
+                return call("read_program", {"handle": handles[0]})
+            if index == 3:
+                return call("update_research", {"expected_revision": 0, "state": {
+                    "revision": 0, "decision_question": "What is left?",
+                    "active_evidence_ids": ids}})
+            if index == 4:
+                return call("audit_program", audit)
+            if index == 5:
+                observed["audit"] = tool_result()
+                return call("finish", {"decision": {"outcome": "information", "completeness": "partial",
+                    "blocks": [{"kind": "fact", "text": "CS 170 satisfies that requirement.",
+                                "evidence_ids": ids}]}})
+            observed["overclaim"] = tool_result()
+            return call("finish", {"decision": {"outcome": "information", "completeness": "partial",
+                "blocks": [{"kind": "fact", "text": "The program names CS 170.",
+                            "evidence_ids": ids},
+                           {"kind": "limitation", "text": "This is not an official degree audit."}]}})
+        if scenario == "course_suggestions":
+            from app.llm.base import ToolResultMessage
+
+            if index == 0:
+                return call("suggest_courses", {"goal": "macroeconomics"})
+            if index == 1:
+                observed["suggested"] = json.loads(next(
+                    message for message in reversed(request.messages)
+                    if isinstance(message, ToolResultMessage)).content)
+                code = observed["suggested"]["data"]["suggestions"][0]["courses"][0]["code"]
+                return call("read_courses", {"course_codes": [code]})
+            ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
+            if index == 2:
+                return call("update_research", {"expected_revision": 0, "state": {
+                    "revision": 0, "decision_question": "What fits?",
+                    "active_evidence_ids": ids}})
+            return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
+                "blocks": [{"kind": "fact", "text": "This course is listed.", "evidence_ids": ids}]}})
         preparation_scenarios = {
             "preparation", "preparation_or_selected", "preparation_or_completed",
             "preparation_or_completed_long_unselected_branch",
@@ -1471,11 +1538,13 @@ def test_research_answers_progressively_and_persists_its_decision(
         last_context = json.loads(provider.requests[-1].messages[1].content)
         assert "e999" not in {e["evidence_id"] for e in last_context["exact_evidence_untrusted"]}
         return
+    if scenario == "which_majors":
+        question = "which majors need math 111"
     response = query_response(QueryRequest(query=question, collectionId=collection_name(db, collection),
-        sourceIds=sources), db, settings, lenient_config(), FakeEmbedder(8), provider, **conversation_args)
+        sourceIds=sources), db, settings, research_config, FakeEmbedder(8), provider, **conversation_args)
     assert response.type == "answer"
     assert response.research.completeness == (
-        "partial" if scenario in {"program_paging_budget", "finish_feedback_roundtrip",
+        "partial" if scenario in {"program_paging_budget", "finish_feedback_roundtrip", "program_audit",
                                   "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry"} else "complete")
     if scenario in {"program_paging", "program_paging_budget"}:
         read, total = observed["coverage"]
@@ -1551,6 +1620,7 @@ def test_research_answers_progressively_and_persists_its_decision(
         assert evidence["research"]["runId"] == response.research.runId
         assert evidence["research"]["outcome"] == "clarification"
     assert run.status == ("clarification" if scenario in {"clarification", "saved_clarification"}
+                          else "partial" if scenario == "program_audit"
                           else "insufficient_evidence" if scenario in {"finish_feedback_roundtrip",
                                                                        "truncated_research_repair",
                                                                        "truncated_research_exhausted",
@@ -1576,6 +1646,19 @@ def test_research_answers_progressively_and_persists_its_decision(
     else:
         assert response.citations and response.trace.contextBlock
         assert "[1]" in response.answer
+        if scenario == "program_audit":
+            assert observed["unread"]["status"] == "conflict"
+            result = observed["audit"]
+            assert result["status"] == "incomplete" and result["data"]["reviewed_rules"] is False
+            lines = {line["text"]: line for line in result["data"]["lines"]}
+            assert lines["CS 170"]["state"] == "all_named_reported"
+            assert lines["CS 170"]["evidence_ids"]
+            assert "not that a requirement is met" in result["limitations"][0]
+            assert "cannot be said to meet" in observed["overclaim"]["limitations"][0]
+        if scenario == "course_suggestions":
+            result = observed["suggested"]
+            assert result["data"]["discovery_only"] is True
+            assert "not requirements" in result["limitations"][0]
         if scenario == "program_comparison":
             assert response.claims == []  # Subjective suitability is not an entailment claim.
             from app.generation.claim_review import ClaimReviewService
@@ -1751,3 +1834,77 @@ def test_research_reserves_a_finish_and_withholds_stale_or_cancelled_results(
         run = db.execute(queries.get("diagnostic_recent_research_runs"), {
             "workspace_key": "development"}).fetchone()
         assert run["status"] == ("cancelled" if scenario == "cancelled" else "failed")
+
+
+@pytest.mark.parametrize("question,unknown", [
+    ("is econ 999 required", {"ECON 999": []}),
+    ("is econ 101 required", {}),
+    ("what is a major", {}),
+])
+def test_a_named_course_that_does_not_exist_is_flagged(db, collection, tmp_path, question, unknown):
+    from app.config import load_settings
+    from app.generation.research_tools import ResearchSession
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import lenient_config
+
+    _corpus_ids, scope, store, run = _run(db, collection, tmp_path)
+    session = ResearchSession(db, scope, store, run, settings=load_settings(),
+                              config=lenient_config(), embedder=FakeEmbedder(8))
+    session.question = question
+    assert session.unknown_question_codes() == unknown
+
+
+@pytest.mark.parametrize("question,ready", [
+    ("what can i take after econ 101", True),
+    ("what is econ 101", False),
+])
+def test_the_prerequisite_graph_can_hold_the_whole_answer(db, collection, tmp_path, question, ready):
+    from app.advising.research_types import FinalDecision
+    from app.config import load_settings
+    from app.generation.research_final import DecisionRejected
+    from app.generation.research_tools import CoursesInput, FinishInput, ResearchSession
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import lenient_config
+
+    _corpus_ids, scope, store, run = _run(db, collection, tmp_path)
+    session = ResearchSession(db, scope, store, run, settings=load_settings(),
+                              config=lenient_config(), embedder=FakeEmbedder(8))
+    session.question = question
+    session.courses(CoursesInput(course_codes=["ECON 101"]), None)
+    assert bool(session.answer_in_hand) is ready
+    session.must_name = {"ECON 201"}
+    decision = FinalDecision(outcome="information", completeness="complete", blocks=(
+        {"kind": "limitation", "text": "ECON 301 follows it."},))
+    with pytest.raises(DecisionRejected, match="ECON 201"):
+        session.finish(FinishInput.model_construct(decision=decision), None)
+
+
+@pytest.mark.parametrize("question,hits", [
+    ("how many credits do i need to graduate", True),
+    ("how many credit hours to graduate from emory college", True),
+    ("credits needed to graduate", True),
+    ("can a graduate course count for credit", False),
+    ("how many credits is cs 170", False),
+])
+def test_a_known_source_conflict_is_found_by_its_question(question, hits):
+    from app.generation.research_tools import source_conflicts
+
+    assert bool(source_conflicts(question)) is hits
+
+
+def test_a_program_question_gets_citable_requirement_lines(db, collection, tmp_path):
+    from app.config import load_settings
+    from app.generation.research_tools import CoursesInput, ResearchSession
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import lenient_config
+
+    _corpus_ids, scope, store, run = _run(db, collection, tmp_path)
+    session = ResearchSession(db, scope, store, run, settings=load_settings(),
+                              config=lenient_config(), embedder=FakeEmbedder(8))
+    session.question = "which majors need math 111"
+    read = session.courses(CoursesInput(course_codes=["MATH 111"]), None)
+    lines = read.data["courses"][0]["program_lines"]
+    assert {line["program"] for line in lines} == {"Computer Science (BS)",
+                                                   "Computer Science (Minor)"}
+    held = {record.evidence_id for record in store.evidence(run.run_id)}
+    assert all(line["evidence_ids"] and set(line["evidence_ids"]) <= held for line in lines)
