@@ -28,6 +28,7 @@ from app.ops.backup import (
     create_backup,
     restore_backup,
 )
+from tests.helpers import create_user
 
 
 def _create_database(dsn: str, name: str) -> None:
@@ -374,6 +375,68 @@ def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_orig
                 if hold["hold_id"] in {hold_id, released_hold_id}:
                     assert Path(hold["raw_path"]) == expected_capture
             assert {hold["hold_id"] for hold in holds} >= {hold_id, released_hold_id}
+    finally:
+        server.cleanup()
+
+
+def test_team_snapshot_shares_advising_data_without_private_rows(
+    db, collection, migrated_dsn, short_dir
+):
+    import pgserver
+
+    from scripts.restore_consolidated import restore_consolidated
+    from scripts.team_snapshot import SHARED_FILES, build_team_snapshot
+
+    data_dir = short_dir / "src"
+    raw = b"Public advising source."
+    digest = hashlib.sha256(raw).hexdigest()
+    raw_path = data_dir / "raw" / str(collection) / digest
+    raw_path.parent.mkdir(parents=True)
+    raw_path.write_bytes(raw)
+    public_source = uuid4()
+    db.execute(queries.get("upsert_source"), {
+        "source_id": public_source, "collection_id": collection, "workspace_key": None,
+        "filename": "public.md", "content_type": "text/markdown", "file_hash": digest,
+        "raw_path": str(raw_path), "origin_key": f"public:{public_source}",
+    })
+    user_id = create_user(db).user_id
+    for rel in SHARED_FILES:
+        shared = data_dir / rel
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        shared.write_text(rel, encoding="utf-8")
+    db.commit()
+
+    build = {"dsn": migrated_dsn, "data_dir": data_dir}
+    archive = short_dir / "team.zip"
+    upload = {
+        "source_id": uuid4(), "collection_id": collection, "workspace_key": "student-a",
+        "filename": "my-transcript.pdf", "content_type": "application/pdf", "file_hash": digest,
+        "raw_path": str(raw_path), "origin_key": None,
+    }
+    db.execute(queries.get("upsert_source"), upload)
+    db.commit()
+    with pytest.raises(BackupError, match="my-transcript.pdf"):
+        build_team_snapshot(db, destination=archive, **build)
+    assert not archive.exists()
+    db.execute("DELETE FROM sources WHERE source_id = %s", (upload["source_id"],))
+    db.commit()
+
+    build_team_snapshot(db, destination=archive, **build)
+    restored_dir = short_dir / "dst"
+    restore_consolidated(archive, restored_dir)
+
+    assert (restored_dir / "eval" / "retrieval.jsonl").read_text("utf-8") == "eval/retrieval.jsonl"
+    server = pgserver.get_server(restored_dir / "pgserver", cleanup_mode="stop")
+    try:
+        with connect(server.get_uri()) as restored:
+            source = restored.execute(
+                "SELECT raw_path FROM sources WHERE source_id = %s", (public_source,)
+            ).fetchone()
+            assert Path(source["raw_path"]).read_bytes() == raw
+            user = restored.execute(
+                "SELECT count(*) AS n FROM app_users WHERE user_id = %s", (user_id,)
+            ).fetchone()
+            assert user["n"] == 0
     finally:
         server.cleanup()
 

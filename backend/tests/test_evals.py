@@ -22,6 +22,8 @@ def test_exact_label_and_unresolved(db, collection, tmp_path):
         EvalCase("miss", name, "alpha", (("doc.txt", "page 12"),)),
         EvalCase("gone", "no-such-collection", "alpha", (("doc.txt", "lines 1-2"),)),
     ]
+    ingest_text(db, collection, tmp_path, "other.txt", "delta epsilon zeta\n")
+    cases.append(EvalCase("wrong", name, "delta", (("doc.txt", "lines 1-2"),)))
     summary = run_eval(
         db,
         cases,
@@ -29,8 +31,9 @@ def test_exact_label_and_unresolved(db, collection, tmp_path):
         embed_model=_MODEL,
         config=load_retrieval_config(),
     )
-    assert summary.total == 3
-    assert summary.resolved == 1
+    assert summary.total == 4
+    assert summary.resolved == 2
+    assert summary.missed == ["wrong"]
     assert "gone" in summary.unresolved
     # "page 12" does not exist, so it is unresolved, not a miss.
     assert "miss" in summary.unresolved

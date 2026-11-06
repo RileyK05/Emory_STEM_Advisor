@@ -36,6 +36,8 @@ class EvalSummary:
     total: int = 0
     resolved: int = 0
     unresolved: list[str] = field(default_factory=list)
+    # Positive cases fusion did not fully recall, so a regression names its question.
+    missed: list[str] = field(default_factory=list)
     positive_resolved: int = 0
     negative_resolved: int = 0
     seam_recall: dict[str, float] = field(default_factory=dict)
@@ -173,9 +175,10 @@ def run_eval(
             embed_model=embed_model,
             config=config,
         )
-        if hasattr(outcome, "chunks"):
-            found = {(c.source_name, c.locator_label) for c in outcome.chunks}
-            fused_recall_sum += _recall(found, expected)
+        found = {(c.source_name, c.locator_label) for c in getattr(outcome, "chunks", ())}
+        fused_recall_sum += _recall(found, expected)
+        if not expected <= found:
+            summary.missed.append(case.id)
 
     denominator = summary.positive_resolved or 1
     summary.seam_recall = {

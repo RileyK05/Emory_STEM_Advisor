@@ -130,6 +130,32 @@ leaves. It stores containment, with no lateral course similarity links.
 clustering runs separately inside each unit. Semantic chunk retrieval supplies
 LLM evidence, and the deterministic prerequisite graph supplies requirements.
 
+## Get the advising data as a teammate
+
+The data is not in git. Ask for the latest team snapshot from the private shared
+folder. Install with `pip install -e "backend[dev]"`, which includes the embedded
+database, then from `backend/` on a clone with no `data/` folder yet:
+
+```bash
+python -m scripts.restore_consolidated PATH/TO/advisor-YYYYMMDD.zip --data-dir ../data
+```
+
+Then `python dev.py` runs the app against it, and
+`python -m scripts.eval_retrieval` runs the retrieval questions. Your copy is yours:
+tests cannot affect anyone else. To take a newer snapshot, delete or rename `data/`
+and restore again. Real answers need your own model settings in `.env`; the snapshot
+holds no keys. The embedding model downloads on first use.
+
+To publish a snapshot, stop the API and worker, then from `backend/`:
+
+```bash
+python -m scripts.team_snapshot --backup ../data/team/advisor-YYYYMMDD.zip --maintenance-confirmed
+```
+
+It carries public advising data only, and keeps the file only if a full restore
+succeeds. Users, conversations, records and traces stay out, and any new table stays
+out until it is added to `SHARED_TABLES` in the script. Do not share a plain backup.
+
 ## Reproduce the corpus from an empty `data/`
 
 The repository does not commit catalog, program, or eval data. From `backend/`,

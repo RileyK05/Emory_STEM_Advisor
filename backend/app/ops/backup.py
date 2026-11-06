@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import zipfile
 import zlib
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from uuid import UUID
@@ -24,6 +25,8 @@ from app.db import queries
 
 FORMAT = "emory-stem-advisor-backup-v1"
 _MAX_MANIFEST = 16 * 1024 * 1024
+# Data-directory folders a shared snapshot may carry beside the database and originals.
+EXTRA_ROOTS = ("eval/", "programs/", "atlas/")
 
 
 class BackupError(RuntimeError):
@@ -129,7 +132,7 @@ def _resolved_file(root: Path, raw_path: str, allowed: Path) -> Path:
     return path
 
 
-def _referenced_files(conn, data_dir: Path) -> list[dict]:
+def _referenced_files(conn, data_dir: Path, *, artifacts: bool = True) -> list[dict]:
     items: dict[str, dict] = {}
     raw_root = data_dir / "raw"
     for row in conn.execute(queries.get("backup_source_files")).fetchall():
@@ -171,7 +174,8 @@ def _referenced_files(conn, data_dir: Path) -> list[dict]:
                 "hold_id": str(row["hold_id"]), "capture_hash": row["capture_hash"],
             })
     originals_root = data_dir / "artifacts" / "originals"
-    for row in conn.execute(queries.get("backup_artifact_files")).fetchall():
+    artifact_rows = conn.execute(queries.get("backup_artifact_files")).fetchall() if artifacts else []
+    for row in artifact_rows:
         path = _resolved_file(data_dir, row["original_path"], originals_root)
         expected = row["original_sha256"]
         rel = path.relative_to(data_dir.resolve()).as_posix()
@@ -198,10 +202,47 @@ def _hash_file(path: Path) -> tuple[str, int]:
     return digest.hexdigest(), size
 
 
+def _unshared_tables(conn, shared_tables: frozenset[str]) -> list[str]:
+    """Every table not named as shared, so a new table stays out until someone adds it."""
+    tables = {row["table_name"] for row in conn.execute(queries.get("backup_public_tables"))}
+    if missing := sorted(shared_tables - tables):
+        raise BackupError(f"shared tables do not exist: {', '.join(missing)}")
+    return sorted(tables - shared_tables)
+
+
+def _tables_in_dump(dump: Path, env: dict[str, str]) -> set[str]:
+    """The tables whose rows are really in a dump, read from its table of contents."""
+    found = set()
+    for line in _run([str(_pg_bin("pg_restore")), "--list", str(dump)], env).splitlines():
+        parts = line.split()
+        if line.startswith(";") or len(parts) < 7:
+            continue
+        if parts[3] in {"BLOB", "BLOBS", "MATERIALIZED"}:
+            raise BackupError(f"a shared snapshot cannot carry {parts[3]} data")
+        if parts[3:5] == ["TABLE", "DATA"]:
+            found.add(parts[6])
+    return found
+
+
+def _extra_files(data_dir: Path, extras: Sequence[str]) -> list[dict]:
+    items = []
+    for rel in extras:
+        path = data_dir.joinpath(*PurePosixPath(rel).parts)
+        if not rel.startswith(EXTRA_ROOTS) or not path.is_file():
+            raise BackupError(f"shared file is missing: {rel}")
+        items.append({"path": path, "relative_path": rel, "sha256": _hash_file(path)[0]})
+    return items
+
+
 def create_backup(
-    conn, *, dsn: str, data_dir: Path, destination: Path, maintenance_confirmed: bool = False
+    conn, *, dsn: str, data_dir: Path, destination: Path, maintenance_confirmed: bool = False,
+    shared_tables: frozenset[str] | None = None, extras: Sequence[str] = (),
 ) -> dict:
-    """Create a consistent logical DB dump and referenced immutable files."""
+    """Create a consistent logical DB dump and referenced immutable files.
+
+    With ``shared_tables``, every other table keeps its schema but loses its rows,
+    and the finished dump is checked to prove it.
+    """
     if maintenance_confirmed is not True:
         raise BackupError("source maintenance must be confirmed before creating a backup")
     destination = destination.resolve()
@@ -240,7 +281,11 @@ def create_backup(
         )
     snapshot = conn.execute(queries.get("backup_export_snapshot")).fetchone()["snapshot_id"]
     version = int(conn.execute(queries.get("backup_server_version")).fetchone()["server_version_num"])
-    files = _referenced_files(conn, data_dir.resolve())
+    files = _referenced_files(
+        conn, data_dir.resolve(), artifacts=shared_tables is None or "artifacts" in shared_tables,
+    )
+    extra_files = _extra_files(data_dir.resolve(), extras)
+    unshared = [] if shared_tables is None else _unshared_tables(conn, shared_tables)
 
     with tempfile.TemporaryDirectory(prefix="emory-backup-") as temp_name:
         temp = Path(temp_name)
@@ -255,7 +300,10 @@ def create_backup(
             str(dump_tool), "--format=custom", "--no-owner", "--no-acl",
             f"--snapshot={snapshot}",
             f"--file={dump}",
+            *(f"--exclude-table-data=public.{table}" for table in unshared),
         ], env)
+        if shared_tables is not None and (extra := _tables_in_dump(dump, env) - shared_tables):
+            raise BackupError(f"unshared tables reached the dump: {', '.join(sorted(extra))}")
         dump_sha, dump_size = _hash_file(dump)
         manifest = {
             "format": FORMAT,
@@ -275,6 +323,13 @@ def create_backup(
                 }
                 for item in files
             ],
+            "extras": [
+                {
+                    "path": item["relative_path"], "sha256": item["sha256"],
+                    "size": item["path"].stat().st_size,
+                }
+                for item in extra_files
+            ],
         }
         manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
         temp_archive_fd, temp_archive_name = tempfile.mkstemp(
@@ -285,7 +340,7 @@ def create_backup(
         try:
             with zipfile.ZipFile(temp_archive, "w", compression=zipfile.ZIP_STORED) as archive:
                 archive.write(dump, "database.dump")
-                for item in files:
+                for item in (*files, *extra_files):
                     digest = hashlib.sha256()
                     size = 0
                     with item["path"].open("rb") as source, archive.open(
@@ -317,7 +372,9 @@ def _validate_member(name: str) -> bool:
         return False
     if name == "database.dump":
         return True
-    return name.startswith(("files/raw/", "files/artifacts/originals/"))
+    return name.startswith((
+        "files/raw/", "files/artifacts/originals/", *(f"files/{root}" for root in EXTRA_ROOTS),
+    ))
 
 
 def _load_and_verify(archive_path: Path, stage: Path) -> tuple[dict, Path]:
@@ -361,6 +418,11 @@ def _load_archive(archive_path: Path, stage: Path) -> tuple[dict, Path]:
         for item in manifest.get("files", []):
             rel = item.get("path", "")
             if not rel.startswith(("raw/", "artifacts/originals/")):
+                raise BackupError("backup manifest contains an invalid file path")
+            expected[f"files/{rel}"] = item
+        for item in manifest.get("extras", []):
+            rel = item.get("path", "")
+            if not rel.startswith(EXTRA_ROOTS):
                 raise BackupError("backup manifest contains an invalid file path")
             expected[f"files/{rel}"] = item
         if set(names) != set(expected) | {"manifest.json"}:
@@ -443,7 +505,7 @@ def restore_backup(conn, *, dsn: str, archive_path: Path, data_dir: Path) -> dic
                             "capture_hash": ref["capture_hash"],
                             "raw_path": str(final_path),
                         })
-                for top in ("raw", "artifacts"):
+                for top in ("raw", "artifacts", *(root.rstrip("/") for root in EXTRA_ROOTS)):
                     staged = staged_data / top
                     if staged.exists():
                         shutil.move(str(staged), str(target_data / top))

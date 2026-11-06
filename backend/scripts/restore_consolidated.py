@@ -110,6 +110,10 @@ def restore_consolidated(archive_path: Path, target_data: Path) -> dict:
                             "hold_id": UUID(ref["hold_id"]), "capture_hash": ref["capture_hash"],
                             "raw_path": str(final),
                         })
+                for item in manifest.get("extras", []):
+                    final = target_data / item["path"]
+                    final.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(Path(temp_name) / "stage" / "files" / item["path"], final)
                 copied_files = _referenced_files(target, target_data)
                 if len(copied_files) != len(manifest["files"]):
                     raise ValueError("replacement file references differ from the verified archive")

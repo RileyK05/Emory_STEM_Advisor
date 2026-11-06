@@ -46,6 +46,22 @@ WHERE c.status = 'reserved' AND o.deadline_at > statement_timestamp();
 -- name: backup_export_snapshot
 SELECT pg_export_snapshot() AS snapshot_id;
 
+-- name: backup_public_tables
+SELECT c.relname AS table_name
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+ORDER BY c.relname;
+
+-- name: team_snapshot_private_sources
+-- A source without verified provenance may be someone's upload, not public advising data.
+SELECT s.filename
+FROM sources s
+LEFT JOIN source_provenance p ON p.source_id = s.source_id
+WHERE s.workspace_key IS NOT NULL OR (s.is_current AND p.source_id IS NULL)
+ORDER BY s.filename
+LIMIT 5;
+
 -- name: backup_source_files
 SELECT source_id, raw_path, file_hash FROM sources ORDER BY source_id;
 
