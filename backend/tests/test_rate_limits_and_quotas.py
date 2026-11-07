@@ -62,8 +62,9 @@ def test_daily_quota_limit(db):
     with pytest.raises(HTTPException) as exc:
         QuotaService.check_and_consume(db, workspace_key=ws)
     assert exc.value.status_code == 429
-    assert "Daily quota exceeded" in exc.value.detail
+    assert exc.value.detail == "You've reached today's limit. It resets at 00:00 UTC."
     assert "Retry-After" in exc.value.headers
+    assert "X-Quota-Reset-At" in exc.value.headers
 
 
 def test_token_and_cost_buckets_use_their_own_daily_limits(db):
@@ -112,7 +113,7 @@ def test_query_endpoint_enforces_the_query_quota(db, collection):
     client = api_client(db, collection)
     response = client.post("/api/query", json={"query": "What are my requirements?"})
     assert response.status_code == 429
-    assert "Daily quota exceeded" in response.json()["detail"]
+    assert response.json()["detail"] == "You've reached today's limit. It resets at 00:00 UTC."
 
 
 def test_concurrent_requests_cannot_both_consume_the_last_query(db, migrated_dsn):
@@ -302,4 +303,33 @@ def test_generation_retry_settles_quota_once(db, collection):
     )
     assert second.status_code == 202, second.text
     assert _daily_query_count(db, ws) == 2
+
+
+@pytest.mark.parametrize(("daily_limit", "expected_statuses"), [(0, (202, 202)), (1, (202, 429))])
+def test_settings_daily_query_limiter_defaults_off_and_enforces_when_set(
+    db, collection, monkeypatch, daily_limit, expected_statuses
+):
+    monkeypatch.setenv("QUOTA_QUERIES_PER_DAY", str(daily_limit))
+    monkeypatch.setenv("QUOTA_QUERIES_PER_MINUTE", "0")
+    client = api_client(db, collection, provider=FakeProvider("Alpha [1]."))
+    statuses = []
+    last_response = None
+    for index in range(len(expected_statuses)):
+        conversation = client.post("/api/conversations", json={"title": f"q-{index}"}).json()
+        response = client.post(
+            f"/api/conversations/{conversation['conversationId']}/turns/stream",
+            json={
+                "query": "alpha",
+                "collectionId": collection_name(db, collection),
+                "requestId": str(uuid4()),
+                "expectedSequence": 0,
+            },
+        )
+        statuses.append(response.status_code)
+        last_response = response
+    assert tuple(statuses) == expected_statuses
+    if expected_statuses[-1] == 429:
+        assert last_response.json()["detail"] == "You've reached today's limit. It resets at 00:00 UTC."
+        assert "Retry-After" in last_response.headers
+        assert "X-Quota-Reset-At" in last_response.headers
 

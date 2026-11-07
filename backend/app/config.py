@@ -244,6 +244,12 @@ class Settings:
     # an advisory lock, so the cap holds across replicas.
     admission_max_pending_workspace: int = 0
     admission_max_pending_global: int = 0
+    # Per-student quota limits; 0 means unlimited and is the default.
+    quota_queries_per_minute: int = 0
+    quota_queries_per_day: int = 0
+    quota_tokens_per_day: int = 0
+    quota_spend_usd_per_day: float = 0.0
+    quota_max_active_jobs: int = 0
 
     def __post_init__(self) -> None:
         stop_tokens = self.hf_stop_token_strings
@@ -279,6 +285,16 @@ class Settings:
         ):
             if type(value) is not int or not 0 <= value <= 100_000:
                 raise ValueError(f"{name} must be between 0 (disabled) and 100000")
+        for name, value in (
+            ("QUOTA_QUERIES_PER_MINUTE", self.quota_queries_per_minute),
+            ("QUOTA_QUERIES_PER_DAY", self.quota_queries_per_day),
+            ("QUOTA_TOKENS_PER_DAY", self.quota_tokens_per_day),
+            ("QUOTA_MAX_ACTIVE_JOBS", self.quota_max_active_jobs),
+        ):
+            if type(value) is not int or not 0 <= value <= 2_147_483_647:
+                raise ValueError(f"{name} must be between 0 (unlimited) and 2147483647")
+        if not math.isfinite(self.quota_spend_usd_per_day) or self.quota_spend_usd_per_day < 0:
+            raise ValueError("QUOTA_SPEND_USD_PER_DAY must be finite and nonnegative")
         if not 1024 <= self.conversation_context_max_bytes <= 1_000_000:
             raise ValueError("CONVERSATION_CONTEXT_MAX_BYTES must be between 1024 and 1000000")
         if not 1_000 <= self.llm_context_window_tokens <= 2_000_000:
@@ -543,7 +559,11 @@ def load_settings() -> Settings:
         http_threadpool_tokens=_int("HTTP_THREADPOOL_TOKENS", 40),
         admission_max_pending_workspace=_int("ADMISSION_MAX_PENDING_WORKSPACE", 0),
         admission_max_pending_global=_int("ADMISSION_MAX_PENDING_GLOBAL", 0),
-
+        quota_queries_per_minute=_int("QUOTA_QUERIES_PER_MINUTE", 0),
+        quota_queries_per_day=_int("QUOTA_QUERIES_PER_DAY", 0),
+        quota_tokens_per_day=_int("QUOTA_TOKENS_PER_DAY", 0),
+        quota_spend_usd_per_day=_float("QUOTA_SPEND_USD_PER_DAY", 0.0),
+        quota_max_active_jobs=_int("QUOTA_MAX_ACTIVE_JOBS", 0),
     )
 
 

@@ -304,7 +304,7 @@ class ConversationStore:
         return None
 
     def begin_stream(self, conversation_id, request_id, expected_sequence, snapshot,
-                     admission=None):
+                     admission=None, settings=None):
         """Atomically bind the immutable request, pending turn, one queued job, and its charge.
 
         The quota policy is read in the transaction. The settlement row and bucket
@@ -318,7 +318,9 @@ class ConversationStore:
                 self._check_same_inputs(prior, snapshot)
                 return prior
 
-            policy = QuotaService.resolve_policy(self.conn, workspace_key=self.workspace_key)
+            policy = QuotaService.resolve_policy(
+                self.conn, workspace_key=self.workspace_key, settings=settings
+            )
 
             if admission is not None:
                 admission.check(self.conn, self.workspace_key)

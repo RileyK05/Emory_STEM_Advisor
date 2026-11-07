@@ -116,9 +116,9 @@ def query(
     from app.api.query_service import query_response
     from app.quotas.service import QuotaService
 
-    QuotaService.check_and_consume(conn, workspace_key=workspace)
     effective_settings = deps.execution_settings(
         request, conn, workspace, debug.settings if debug is not None else settings)
+    QuotaService.check_and_consume(conn, workspace_key=workspace, settings=effective_settings)
     effective_config = debug.config if debug is not None else config
     response = query_response(body, conn, effective_settings, effective_config, embedder, provider,
                           workspace_key=workspace,

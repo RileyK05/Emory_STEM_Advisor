@@ -107,6 +107,7 @@ class JobStore:
         payload: Mapping[str, Any],
         max_attempts: int = 3,
         admission=None,
+        settings=None,
     ) -> Job:
         self._validate_create(
             kind=kind, scope_key=scope_key, idempotency_key=idempotency_key,
@@ -116,6 +117,7 @@ class JobStore:
             return self.create_uncommitted(
                 conn, kind=kind, scope_key=scope_key, idempotency_key=idempotency_key,
                 payload=payload, max_attempts=max_attempts, admission=admission,
+                settings=settings,
             )
 
     def create_uncommitted(
@@ -128,6 +130,7 @@ class JobStore:
         payload: Mapping[str, Any],
         max_attempts: int = 3,
         admission=None,
+        settings=None,
     ) -> Job:
         """Insert one job inside the caller's transaction, with the same admission.
 
@@ -159,7 +162,8 @@ class JobStore:
             from app.quotas.service import QuotaService
 
             QuotaService.check_and_consume(
-                conn, workspace_key=scope_key, check_concurrency=True, commit=False
+                conn, workspace_key=scope_key, delta_count=0,
+                check_concurrency=True, commit=False, settings=settings,
             )
         if admission is not None:
             # An idempotent replay is not new work and must not be rejected

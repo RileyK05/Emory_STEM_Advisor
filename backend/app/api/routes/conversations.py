@@ -377,7 +377,7 @@ def start_stream(conversation_id: UUID, body: ConversationQuery, request: Reques
     if debug is not None:
         snapshot["debug"] = debug.snapshot()
     result = store.begin_stream(conversation_id, body.requestId, body.expectedSequence,
-                                snapshot, admission=admission)
+                                snapshot, admission=admission, settings=settings)
     job_id = result.get("job_id")
     if job_id is None:
         return {"conversationId": str(conversation_id), "requestId": str(body.requestId),

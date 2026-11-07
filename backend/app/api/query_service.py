@@ -102,6 +102,7 @@ def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) ->
                 bucket_type="tokens",
                 delta_count=total,
                 enforce=False,
+                settings=settings,
             )
         _, cost, _ = PricingService.compute_call_cost(
             conn,
@@ -122,6 +123,7 @@ def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) ->
                 delta_count=0,
                 delta_amount=float(cost),
                 enforce=False,
+                settings=settings,
             )
     except Exception:
         logger.exception("post-call quota settlement failed for %s", workspace_key)

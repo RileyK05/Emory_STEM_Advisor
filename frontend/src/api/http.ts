@@ -48,10 +48,28 @@ export class ApiError extends Error {
     message: string,
     readonly status: number,
     readonly features: string[] = [],
+    readonly retryAfter: string | null = null,
+    readonly resetAt: string | null = null,
   ) {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+function formatUtcReset(date: Date): string {
+  return `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')} UTC`;
+}
+
+function formatQuotaResetTime(resetAt: string | null, retryAfter: string | null): string {
+  if (resetAt) {
+    const parsed = Date.parse(resetAt);
+    if (Number.isFinite(parsed)) return formatUtcReset(new Date(parsed));
+  }
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds > 0) return formatUtcReset(new Date(Date.now() + seconds * 1000));
+  }
+  return '00:00 UTC';
 }
 
 async function errorDetail(response: Response, prefix: string): Promise<ApiError> {
@@ -75,12 +93,17 @@ async function errorDetail(response: Response, prefix: string): Promise<ApiError
   } catch {
     /* FastAPI and proxies may return plain text. */
   }
+  const retryAfter = response.headers.get('Retry-After');
+  const resetAt = response.headers.get('X-Quota-Reset-At');
+  if (
+    response.status === 429 &&
+    !detail.startsWith("You've reached today's limit") &&
+    !detail.startsWith('Concurrent job')
+  ) {
+    detail = `You've reached today's limit. It resets at ${formatQuotaResetTime(resetAt, retryAfter)}.`;
+  }
   const suffix = features.length ? ' Unsupported: ' + features.join(', ') + '.' : '';
-  return new ApiError(
-    prefix + ' (' + response.status + '): ' + (detail || response.statusText) + suffix,
-    response.status,
-    features,
-  );
+  return new ApiError((detail || prefix) + suffix, response.status, features, retryAfter, resetAt);
 }
 
 async function fetchOrThrow(

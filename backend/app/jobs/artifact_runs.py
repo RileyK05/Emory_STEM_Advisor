@@ -27,7 +27,9 @@ def admit_artifact_run(
         getattr(settings, "admission_max_pending_workspace", 0),
         getattr(settings, "admission_max_pending_global", 0),
     )
-    options = {"admission": admission} if admission.enabled else {}
+    options: dict[str, Any] = {"settings": settings}
+    if admission.enabled:
+        options["admission"] = admission
     payload = {"kind": kind, "inputs": inputs}
     if conn is not None:
         return store.create_uncommitted(

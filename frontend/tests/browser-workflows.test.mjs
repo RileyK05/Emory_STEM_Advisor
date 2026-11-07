@@ -275,6 +275,7 @@ async function setupPage({
   sameNameCitation = false,
   conversationListDelayMs = 0,
   seedConnectionProfiles = [],
+  dailyQueryLimit = 0,
   /** 'METHOD /api/path' -> [status, detail]: that request fails once with the given status. */
   faults = {},
 } = {}) {
@@ -399,6 +400,7 @@ async function setupPage({
   );
   let conversationTurnFailures = 0;
   let conversationProviderCalls = 0;
+  let acceptedDailyQueries = 0;
   let demoRunPolls = 0;
   const gapRows = structuredClone(initialGaps);
   const capturedGapResolutions = [];
@@ -837,6 +839,14 @@ async function setupPage({
       capturedConversationStreams.push({ id, body });
       const record = conversationRecords.get(id);
       if (!record) return route.fulfill({ status: 404, json: { detail: 'conversation not found' } });
+      if (dailyQueryLimit > 0 && acceptedDailyQueries >= dailyQueryLimit) {
+        return route.fulfill({
+          status: 429,
+          headers: { 'Retry-After': '3600', 'X-Quota-Reset-At': '2026-10-09T00:00:00+00:00' },
+          json: { detail: "You've reached today's limit. It resets at 00:00 UTC." },
+        });
+      }
+      acceptedDailyQueries++;
       const priorUsers = record.turns.filter((turn) => turn.role === 'user');
       const inherited = priorUsers.length ? priorUsers.at(-1).evidence.effective.sourceIds : null;
       const sourceIds = Object.hasOwn(body, 'sourceIds') ? body.sourceIds : inherited;
@@ -3046,6 +3056,25 @@ test('human gap attestation is explicit, scope-limited, and retains draft across
     assert.equal(capturedGapResolutions[1].body.expectedRevision, 2);
     assert.equal((await page.getByText('Human source attestation', { exact: true }).count()) > 0, true);
     assert.equal(await page.getByText(/does not prove that a generated answer is factually correct/).count(), 1);
+  } finally {
+    await context.close();
+  }
+});
+
+test('reaching the daily query limit shows the reset time without a raw 429 and keeps the draft', async () => {
+  const { context, page } = await setupPage({ dailyQueryLimit: 1 });
+  try {
+    await send(page, 'What is a basis?');
+    await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
+    await page.waitForFunction(() => document.querySelector('.composer textarea')?.value === '');
+    await send(page, 'Can I take CS 253 next?');
+    await page
+      .locator('[role="alert"]', { hasText: "You've reached today's limit. It resets at 00:00 UTC." })
+      .waitFor();
+    assert.equal(await page.getByRole('alert').innerText(), "You've reached today's limit. It resets at 00:00 UTC.");
+    assert.equal(await message(page).inputValue(), 'Can I take CS 253 next?');
+    const visibleText = await page.locator('body').innerText();
+    assert.equal(visibleText.includes('429'), false, 'no raw 429 reaches the student');
   } finally {
     await context.close();
   }

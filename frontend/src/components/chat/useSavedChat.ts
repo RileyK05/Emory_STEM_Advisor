@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getClient } from '../../api/client';
-import { errorMessage } from '../../lib/errors';
+import { errorMessage, statusOf } from '../../lib/errors';
 import type { ConversationRecord, ConversationSummary, ConversationTurnRequest } from '../../api/types';
 import { useApp } from '../../state/AppContext';
 import type { SourceScope } from '../../state/AppContext';
@@ -231,10 +231,10 @@ export function useSavedChat(): ChatController {
     await loadConversation(id, epoch);
   };
 
-  const refreshList = async () => {
+  const refreshList = async (clearError = true) => {
     const epoch = ++listEpoch.current;
     setLoadingList(true);
-    setError(null);
+    if (clearError) setError(null);
     try {
       const items = await getClient().listConversations();
       if (alive.current && listEpoch.current === epoch) setConversations(items);
@@ -354,11 +354,13 @@ export function useSavedChat(): ChatController {
     } catch (cause) {
       if (!isCurrent(id, epoch)) return;
       setError(errorMessage(cause));
-      setNotice(
-        'Your message was not sent again. The chat was refreshed so you can see where it stands; your draft is kept.',
-      );
+      if (statusOf(cause) !== 429) {
+        setNotice(
+          'Your message was not sent again. The chat was refreshed so you can see where it stands; your draft is kept.',
+        );
+      }
       await loadConversation(id, epoch);
-      await refreshList();
+      await refreshList(false);
     } finally {
       releaseBusy(id, busyOwner);
     }
