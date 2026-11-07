@@ -244,7 +244,12 @@ var commonEnv = [
   }
 ]
 
-var workerEnv = commonEnv
+var workerEnv = concat(commonEnv, [
+  {
+    name: 'WORKER_HEALTH_PORT'
+    value: '8081'
+  }
+])
 
 var migrateEnv = [
   {
@@ -482,6 +487,32 @@ resource worker 'Microsoft.App/containerApps@2023-05-01' = {
             memory: '4Gi'
           }
           env: workerEnv
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/health'
+                port: 8081
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 15
+              periodSeconds: 10
+              timeoutSeconds: 3
+              failureThreshold: 3
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/ready'
+                port: 8081
+                scheme: 'HTTP'
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              timeoutSeconds: 3
+              failureThreshold: 3
+            }
+          ]
           volumeMounts: [
             {
               volumeName: dataVolumeName

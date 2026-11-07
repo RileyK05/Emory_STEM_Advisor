@@ -103,6 +103,8 @@ class Settings:
     upload_index_timeout_seconds: float = 60.0
     request_max_bytes: int = 21 * 1024 * 1024
     readiness_timeout_seconds: int = 3
+    # Optional HTTP liveness/readiness port for scripts.worker; 0 disables it.
+    worker_health_port: int = 0
     embedding_device: str = "cpu"
     # Opt-in: load the embedding model in a daemon thread after the app is
     # constructed, so the first real query does not pay the model-load cost.
@@ -257,6 +259,8 @@ class Settings:
             )
         if type(self.readiness_timeout_seconds) is not int or not 1 <= self.readiness_timeout_seconds <= 10:
             raise ValueError("READINESS_TIMEOUT_SECONDS must be between 1 and 10")
+        if type(self.worker_health_port) is not int or not 0 <= self.worker_health_port <= 65535:
+            raise ValueError("WORKER_HEALTH_PORT must be between 0 (disabled) and 65535")
         if type(self.db_pool_max_size) is not int or not 0 <= self.db_pool_max_size <= 200:
             raise ValueError("DB_POOL_MAX_SIZE must be between 0 (disabled) and 200")
         if not math.isfinite(self.db_pool_timeout_seconds) or not 0.1 <= self.db_pool_timeout_seconds <= 120:
@@ -458,6 +462,7 @@ def load_settings() -> Settings:
         embedder_warmup_on_startup=_bool("EMBEDDER_WARMUP_ON_STARTUP", False),
         request_max_bytes=_int("REQUEST_MAX_BYTES", 21 * 1024 * 1024),
         readiness_timeout_seconds=_int("READINESS_TIMEOUT_SECONDS", 3),
+        worker_health_port=_int("WORKER_HEALTH_PORT", 0),
         profile_encryption_key=_optional("PROFILE_ENCRYPTION_KEY"),
         llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 60),
         llm_max_concurrency=_int("LLM_MAX_CONCURRENCY", 8),

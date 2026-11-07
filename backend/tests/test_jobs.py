@@ -4,7 +4,16 @@ from datetime import UTC, datetime
 import pytest
 
 from app.db.connection import connect
-from app.jobs import JobCancelled, JobStatus, JobStore, LeaseLost, run_once
+from app.jobs import (
+    JobCancelled,
+    JobStatus,
+    JobStore,
+    LeaseLost,
+    WorkerHealthServer,
+    WorkerRunner,
+    install_stop_signals,
+    run_once,
+)
 from app.jobs.store import MAX_PAYLOAD_BYTES, retry_delay
 from tests.fakes import FakeClock
 
@@ -311,3 +320,116 @@ def test_run_once_invokes_cancellation_hook_when_a_late_success_is_fenced(migrat
     finished = run_once(store, "worker-cancel-hook", Late())
     assert finished.status is JobStatus.CANCELLED
     assert calls == [finished.job_id]
+
+
+@pytest.mark.parametrize("completes_within_lease", [True, False])
+def test_worker_stop_claims_no_new_jobs_drains_in_flight_work_and_updates_readiness(
+    migrated_dsn, db, completes_within_lease,
+):
+    import http.client
+    import json
+    import signal
+    import threading
+    from types import SimpleNamespace
+
+    from app.ops.readiness import ReadinessProbe
+
+    clock = FakeClock()
+    store = make_store(migrated_dsn, clock)
+    first = store.create(
+        kind="turn", scope_key="user:drain", idempotency_key=f"drain-1-{completes_within_lease}",
+        payload={"seq": 1}, max_attempts=2,
+    )
+    second = store.create(
+        kind="turn", scope_key="user:drain", idempotency_key=f"drain-2-{completes_within_lease}",
+        payload={"seq": 2}, max_attempts=2,
+    )
+    in_flight = threading.Event()
+    allow_finish = threading.Event()
+    claimed_ids: list = []
+
+    def executor(job, context):
+        claimed_ids.append(job.job_id)
+        in_flight.set()
+        assert allow_finish.wait(timeout=5.0)
+        return {"completed": str(job.job_id)}
+
+    runner = WorkerRunner(
+        store,
+        "worker-drain",
+        executor,
+        lease_seconds=30,
+        idle_seconds=5.0,
+        concurrency=1,
+        clock=clock,
+    )
+    probe = ReadinessProbe(monotonic=lambda: clock().timestamp())
+
+    def probe_http(server: WorkerHealthServer, path: str) -> tuple[int, dict]:
+        conn = http.client.HTTPConnection("127.0.0.1", server.port, timeout=2.0)
+        try:
+            conn.request("GET", path)
+            resp = conn.getresponse()
+            body = json.loads(resp.read().decode("utf-8"))
+            return resp.status, body
+        finally:
+            conn.close()
+
+    restore = install_stop_signals(runner.request_stop)
+    runner_thread = threading.Thread(target=runner.run, daemon=True)
+    try:
+        with WorkerHealthServer(
+            "127.0.0.1",
+            0,
+            accepting=lambda: runner.accepting,
+            stopping=lambda: runner.stopping,
+            readiness_check=lambda: probe.check(
+                dsn=migrated_dsn,
+                auth_service=SimpleNamespace(mode="development"),
+                auth_mode="development",
+            ),
+        ) as health:
+            runner_thread.start()
+            assert in_flight.wait(timeout=5.0)
+            assert probe_http(health, "/health") == (200, {"status": "ok"})
+            assert probe_http(health, "/ready") == (200, {"status": "ready"})
+
+            sigterm_handler = signal.getsignal(signal.SIGTERM)
+            assert callable(sigterm_handler)
+            assert signal.getsignal(signal.SIGINT) == sigterm_handler
+            if hasattr(signal, "SIGBREAK"):
+                assert signal.getsignal(signal.SIGBREAK) == sigterm_handler
+            sigterm_handler(signal.SIGTERM, None)
+
+            assert runner.stopping and not runner.accepting
+            assert probe_http(health, "/health") == (200, {"status": "ok"})
+            assert probe_http(health, "/ready") == (
+                503,
+                {"status": "unavailable", "reasons": ["draining"]},
+            )
+
+            if completes_within_lease:
+                clock.advance(5)
+                allow_finish.set()
+                runner_thread.join(timeout=5.0)
+                assert not runner_thread.is_alive()
+                assert store.get(first.job_id).status is JobStatus.SUCCEEDED
+            else:
+                clock.advance(31)
+                runner_thread.join(timeout=5.0)
+                assert not runner_thread.is_alive()
+                assert store.recover_expired() == 1
+                assert store.get(first.job_id).status is JobStatus.QUEUED
+                allow_finish.set()
+                runner.join_threads(timeout=5.0)
+
+            assert claimed_ids == [first.job_id]
+            untouched = store.get(second.job_id)
+            assert untouched.status is JobStatus.QUEUED
+            assert untouched.attempt_count == 0
+    finally:
+        allow_finish.set()
+        runner.request_stop()
+        runner_thread.join(timeout=2.0)
+        runner.join_threads(timeout=2.0)
+        restore()

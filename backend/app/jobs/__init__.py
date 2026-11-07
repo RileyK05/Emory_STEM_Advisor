@@ -10,7 +10,13 @@ from app.jobs.store import (
     retry_delay,
 )
 from app.jobs.types import Job, JobEvent, JobStatus
-from app.jobs.worker import JobContext, run_once
+from app.jobs.worker import (
+    JobContext,
+    WorkerHealthServer,
+    WorkerRunner,
+    install_stop_signals,
+    run_once,
+)
 
 __all__ = [
     "Job",
@@ -23,6 +29,9 @@ __all__ = [
     "JobStore",
     "LeaseLost",
     "SafeJobError",
+    "WorkerHealthServer",
+    "WorkerRunner",
+    "install_stop_signals",
     "retry_delay",
     "run_once",
 ]

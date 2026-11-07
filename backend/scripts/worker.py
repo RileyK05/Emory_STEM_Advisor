@@ -11,11 +11,13 @@ import argparse
 import os
 import socket
 import sys
-import threading
 import time
+from contextlib import nullcontext
 from dataclasses import replace
 
+from app.auth.factory import build_auth_service
 from app.auth.housekeeping import PURGE_INTERVAL_SECONDS, purge_expired_auth
+from app.auth.service import AuthConfigurationError
 from app.config import configure_runtime_database, load_settings
 from app.conversations.recovery import reconcile_pending_requests
 from app.db.bootstrap import prepare_database
@@ -23,8 +25,9 @@ from app.db.connection import connector, open_connection, resolved_database_url
 from app.generation.artifacts import build_worker_handlers
 from app.jobs.dispatch import KindDispatchingExecutor
 from app.jobs.runtime import RunExecutor
-from app.jobs.store import JobStore, LeaseLost
-from app.jobs.worker import run_once
+from app.jobs.store import JobStore
+from app.jobs.worker import WorkerHealthServer, WorkerRunner, install_stop_signals, run_once
+from app.ops.readiness import ReadinessProbe
 
 
 def _drain_source_invalidations(connect, worker_id: str) -> None:
@@ -94,6 +97,8 @@ def main() -> None:
     parser.add_argument("--idle-seconds", type=float, default=1.0)
     parser.add_argument("--concurrency", type=int, default=1,
                         help="claim/execute threads in this process (1-32)")
+    parser.add_argument("--health-port", type=int, default=None,
+                        help="HTTP health/readiness port (defaults to WORKER_HEALTH_PORT; 0 disables)")
     parser.add_argument("--once", action="store_true", help="claim at most one job, then exit")
     args = parser.parse_args()
     if not 1 <= args.lease_seconds <= 3600 or not 0.05 <= args.idle_seconds <= 60:
@@ -102,6 +107,10 @@ def main() -> None:
         parser.error("--concurrency must be between 1 and 32")
 
     settings = load_settings()
+    health_port = settings.worker_health_port if args.health_port is None else args.health_port
+    if not 0 <= health_port <= 65535:
+        parser.error("--health-port must be between 0 (disabled) and 65535")
+
     # Keep the connection context open for the whole worker lifetime: when
     # DATABASE_URL is unset this holds the embedded pgserver running. Exiting
     # the block would stop the server the loop still needs.
@@ -114,60 +123,70 @@ def main() -> None:
         artifact_executor = RunExecutor(handlers.artifacts, data_dir=settings.data_dir)
         executor = KindDispatchingExecutor(
             conversation=handlers.conversation, artifacts=artifact_executor)
-        store = JobStore(connector(settings))
+        connect_fn = connector(settings)
+        store = JobStore(connect_fn)
 
         if args.once:
-            _drain_source_invalidations(connector(settings), args.worker_id)
-            _reconcile_conversations(connector(settings))
+            _drain_source_invalidations(connect_fn, args.worker_id)
+            _reconcile_conversations(connect_fn)
             run_once(store, args.worker_id, executor, lease_seconds=args.lease_seconds)
-            _reconcile_conversations(connector(settings))
+            _reconcile_conversations(connect_fn)
             return
 
-        stop = threading.Event()
-
-        def work(index: int) -> None:
-            worker_id = (args.worker_id if args.concurrency == 1
-                         else f"{args.worker_id}-{index}")
-            while not stop.is_set():
-                try:
-                    job = run_once(
-                        store, worker_id, executor, lease_seconds=args.lease_seconds)
-                except LeaseLost:
-                    job = None
-                except Exception as exc:  # noqa: BLE001 - one thread must not stop the queue
-                    print(f"worker {worker_id} failed: {type(exc).__name__}",
-                          file=sys.stderr)
-                    stop.wait(max(0.5, args.idle_seconds))
-                    continue
-                if job is None:
-                    stop.wait(args.idle_seconds)
-
-        threads = [
-            threading.Thread(target=work, args=(index,), daemon=True,
-                             name=f"advisor-worker-{index}")
-            for index in range(args.concurrency)
-        ]
-        for thread in threads:
-            thread.start()
         next_purge = 0.0
         next_quota_prune = 0.0
+
+        def maintenance() -> None:
+            nonlocal next_purge, next_quota_prune
+            next_purge = _purge_auth_if_due(connect_fn, next_purge)
+            _drain_source_invalidations(connect_fn, args.worker_id)
+            next_quota_prune = _prune_quotas_if_due(connect_fn, next_quota_prune)
+            try:
+                store.recover_expired(limit=100)
+            except Exception as exc:  # noqa: BLE001 - maintenance must not stop claims
+                print(f"lease recovery failed: {type(exc).__name__}", file=sys.stderr)
+            _reconcile_conversations(connect_fn)
+
+        def on_error(thread_worker_id: str, exc: Exception) -> None:
+            print(f"worker {thread_worker_id} failed: {type(exc).__name__}", file=sys.stderr)
+
+        runner = WorkerRunner(
+            store,
+            args.worker_id,
+            executor,
+            lease_seconds=args.lease_seconds,
+            idle_seconds=args.idle_seconds,
+            concurrency=args.concurrency,
+            maintenance=maintenance,
+            maintenance_interval_seconds=5.0,
+            on_error=on_error,
+        )
         try:
-            while True:
-                next_purge = _purge_auth_if_due(connector(settings), next_purge)
-                _drain_source_invalidations(connector(settings), args.worker_id)
-                next_quota_prune = _prune_quotas_if_due(connector(settings), next_quota_prune)
-                try:
-                    store.recover_expired(limit=100)
-                except Exception as exc:  # noqa: BLE001 - maintenance must not stop claims
-                    print(f"lease recovery failed: {type(exc).__name__}", file=sys.stderr)
-                _reconcile_conversations(connector(settings))
-                stop.wait(5.0)
-        except KeyboardInterrupt:
-            stop.set()
+            auth_service = build_auth_service(settings, connect_fn)
+        except AuthConfigurationError:
+            auth_service = None
+        probe = ReadinessProbe(timeout_seconds=settings.readiness_timeout_seconds)
+        health_context = (
+            WorkerHealthServer(
+                "0.0.0.0",
+                health_port,
+                accepting=lambda: runner.accepting,
+                stopping=lambda: runner.stopping,
+                readiness_check=lambda: probe.check(
+                    dsn=settings.database_url,
+                    auth_service=auth_service,
+                    auth_mode=settings.auth_mode,
+                ),
+            )
+            if health_port > 0
+            else nullcontext()
+        )
+        restore_signals = install_stop_signals(runner.request_stop)
+        try:
+            with health_context:
+                runner.run()
         finally:
-            stop.set()
-            for thread in threads:
-                thread.join(timeout=min(30.0, float(args.lease_seconds)))
+            restore_signals()
 
 
 if __name__ == "__main__":
