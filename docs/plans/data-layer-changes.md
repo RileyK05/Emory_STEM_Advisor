@@ -239,14 +239,11 @@ you approved changing only the fictional-code check.
 
 ## Team snapshot
 
-Rebuilt after all of the above: `data/team/advisor-20261106.zip`, 704 MB, 414,992 rows and
-15,656 files verified by a full restore. It already holds the hidden cards and new
-sources, so a teammate restoring it does not need `scripts.refresh_term_cards`. It is not
-uploaded yet. The 2026-11-05 snapshot is
-superseded and can be deleted.
-
-That snapshot is at schema 082. It is now out of date: rebuild it after this work is
-committed, or a teammate gets a database without migrations 083 to 086.
+Rebuilt on 2026-11-07 from commit `e250fa6` at schema 086: `data/team/advisor-20261107.zip`,
+704 MB, 414,985 rows and 15,656 files verified by a full restore. It holds the hidden cards,
+the new sources and migrations 083 to 086, so a teammate restoring it does not need
+`scripts.refresh_term_cards`. It is not uploaded yet. The 2026-11-05 and 2026-11-06
+snapshots (schema 082) are superseded and can be deleted.
 
 ## Guards added after grading real answers
 

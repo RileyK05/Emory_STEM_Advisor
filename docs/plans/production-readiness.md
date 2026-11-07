@@ -1,5 +1,9 @@
 # Goal plan: a simple, dependable advisor
 
+> **2026-11-07:** Phases 2 to 6 are superseded by
+> [production-launch.md](production-launch.md), which keeps their item IDs and adds the
+> hosting and answer-quality work. Phases 0 and 1 below stay as the record.
+
 Status: ready for a goal-mode run, 2026-11-02. Nothing here is implemented yet.
 This is the only active plan for the run. Supersessions:
 
