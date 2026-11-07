@@ -1,15 +1,5 @@
 -- Quota buckets and policy management queries (Item 27).
 
--- name: seed_quota_policy
-INSERT INTO quota_policies (
-    policy_id, scope_type, scope_id, queries_per_minute, queries_per_day,
-    tokens_per_day, spend_usd_per_day, max_active_jobs
-) VALUES (
-    %(policy_id)s, %(scope_type)s, %(scope_id)s, %(queries_per_minute)s, %(queries_per_day)s,
-    %(tokens_per_day)s, %(spend_usd_per_day)s, %(max_active_jobs)s
-)
-ON CONFLICT (scope_type, scope_id) DO NOTHING;
-
 -- name: quota_workspace_user
 SELECT user_id FROM app_users WHERE workspace_key = %(workspace_key)s;
 
@@ -21,12 +11,6 @@ SELECT policy_id, scope_type, scope_id, queries_per_minute, queries_per_day,
        tokens_per_day, spend_usd_per_day, max_active_jobs, created_at, updated_at
 FROM quota_policies
 WHERE scope_type = %(scope_type)s AND scope_id = %(scope_id)s;
-
--- name: list_quota_policies
-SELECT policy_id, scope_type, scope_id, queries_per_minute, queries_per_day,
-       tokens_per_day, spend_usd_per_day, max_active_jobs, created_at, updated_at
-FROM quota_policies
-ORDER BY scope_type, scope_id;
 
 -- name: upsert_quota_policy
 INSERT INTO quota_policies (
@@ -88,3 +72,12 @@ INSERT INTO quota_settlements (
 ON CONFLICT (workspace_key, request_id, bucket_type) DO NOTHING
 RETURNING workspace_key, request_id, bucket_type;
 
+-- name: seed_quota_policy
+INSERT INTO quota_policies (
+    policy_id, scope_type, scope_id, queries_per_minute, queries_per_day,
+    tokens_per_day, spend_usd_per_day, max_active_jobs
+) VALUES (
+    %(policy_id)s, %(scope_type)s, %(scope_id)s, %(queries_per_minute)s, %(queries_per_day)s,
+    %(tokens_per_day)s, %(spend_usd_per_day)s, %(max_active_jobs)s
+)
+ON CONFLICT (scope_type, scope_id) DO NOTHING;

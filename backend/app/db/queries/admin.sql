@@ -102,31 +102,6 @@ WHERE (%(action)s = '' OR a.action = %(action)s)
 ORDER BY a.created_at DESC, a.audit_id DESC
 LIMIT %(limit)s;
 
--- name: admin_list_conversations
-SELECT c.conversation_id, c.workspace_key, c.title, c.last_sequence,
-       c.pending_request_id, c.created_at, c.updated_at,
-       (SELECT count(*) FROM conversation_turns t
-         WHERE t.conversation_id = c.conversation_id) AS turn_count,
-       (SELECT count(*) FROM conversation_summaries s
-         WHERE s.conversation_id = c.conversation_id) AS summary_count
-FROM conversations c
-WHERE (%(workspace)s = '' OR c.workspace_key = %(workspace)s)
-  AND (%(query_like)s = '' OR lower(c.title) LIKE %(query_like)s)
-ORDER BY c.updated_at DESC
-LIMIT %(limit)s OFFSET %(offset)s;
-
--- name: admin_get_conversation
-SELECT conversation_id, workspace_key, title, last_sequence, pending_request_id,
-       created_at, updated_at
-FROM conversations WHERE conversation_id = %(conversation_id)s;
-
--- name: admin_list_conversation_turns
-SELECT sequence, request_id, role, text, status, evidence, created_at
-FROM conversation_turns
-WHERE conversation_id = %(conversation_id)s
-ORDER BY sequence
-LIMIT 1000;
-
 -- name: admin_list_jobs
 SELECT job_id, kind, scope_key, status, attempt_count, max_attempts,
        cancel_requested, error, created_at, updated_at, finished_at
@@ -149,23 +124,3 @@ FROM auth_sessions
 WHERE workspace_key = %(workspace_key)s
 ORDER BY created_at DESC
 LIMIT 100;
-
--- name: admin_delete_conversation_turns
-DELETE FROM conversation_turns WHERE conversation_id = %(conversation_id)s;
-
--- name: admin_delete_conversation_summaries
-DELETE FROM conversation_summaries WHERE conversation_id = %(conversation_id)s;
-
--- name: admin_delete_conversation_requests
-DELETE FROM conversation_requests
-WHERE conversation_id = %(conversation_id)s
-RETURNING job_id;
-
--- name: admin_delete_jobs
-DELETE FROM jobs WHERE job_id = ANY(%(job_ids)s);
-
--- name: admin_delete_conversation
-DELETE FROM conversations
-WHERE conversation_id = %(conversation_id)s
-RETURNING conversation_id;
-

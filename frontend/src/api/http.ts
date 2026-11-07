@@ -1,6 +1,5 @@
 import type {
   AdvisorClient,
-  EffectiveFlagsResponse,
   QueryRequest,
   QueryResponse,
   SourceDoc,
@@ -277,10 +276,6 @@ export class HttpClient implements AdvisorClient {
     return this.binaryDownload(`/api/artifacts/${encodeURIComponent(id)}/download?${params}`, 'artifact.' + format);
   }
 
-  async downloadOriginalArtifact(id: string): Promise<{ blob: Blob; filename: string }> {
-    return this.binaryDownload(`/api/artifacts/${encodeURIComponent(id)}/original`, 'original');
-  }
-
   private async binaryDownload(path: string, fallbackName: string): Promise<{ blob: Blob; filename: string }> {
     const response = await fetchOrThrow(
       path,
@@ -350,9 +345,6 @@ export class HttpClient implements AdvisorClient {
   }
   async getSession(): Promise<AuthSession> {
     return request<AuthSession>('/api/session', { cache: 'no-store' });
-  }
-  async getEffectiveFlags(): Promise<EffectiveFlagsResponse> {
-    return request<EffectiveFlagsResponse>('/api/flags/effective', { cache: 'no-store' });
   }
   async logout(): Promise<void> {
     await request<void>('/api/auth/logout', { method: 'POST' });

@@ -53,31 +53,6 @@ class SourceReviewService:
         }
 
     @staticmethod
-    def get_impact_preview(conn, source_id: UUID) -> dict:
-        row = conn.execute(
-            queries.get("get_source_detail_for_review"), {"source_id": source_id}
-        ).fetchone()
-        if not row:
-            raise HTTPException(404, f"source {source_id} not found")
-
-        dep_counts = conn.execute(
-            queries.get("get_source_dependency_counts"), {"source_id": source_id}
-        ).fetchone()
-        dep_programs = conn.execute(
-            queries.get("list_source_dependent_programs"), {"source_id": source_id}
-        ).fetchall()
-
-        return {
-            "sourceId": str(source_id),
-            "filename": row["filename"],
-            "programCount": dep_counts["program_count"] if dep_counts else 0,
-            "courseCount": dep_counts["course_count"] if dep_counts else 0,
-            "gapCount": dep_counts["gap_count"] if dep_counts else 0,
-            "researchRunCount": dep_counts["research_run_count"] if dep_counts else 0,
-            "programs": [dict(dp) for dp in dep_programs],
-        }
-
-    @staticmethod
     def create_proposal(
         conn,
         source_id: UUID,

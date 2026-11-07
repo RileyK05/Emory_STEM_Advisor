@@ -13,7 +13,7 @@ from app.jobs.store import JobStore
 from app.jobs.worker import run_once
 from app.llm.base import GenerationResult, ToolCall, ToolResultMessage, Usage
 from tests.fakes import FakeEmbedder
-from tests.helpers import collection_name, ingest_text, lenient_config
+from tests.helpers import collection_name, ingest_text, lenient_config, start_run
 from tests.test_artifact_generation import SPEC, candidate
 
 
@@ -58,16 +58,15 @@ def test_calculator_then_terminal_stage_is_audited_and_published_once(db, collec
                 finish_reason="tool_calls", usage=Usage(120, 30, source="provider"), model="fake-native")
     provider = Provider()
     client, store, executor = runtime(db, collection, tmp_path, provider)
-    body = {"kind": "document", "inputs": {"prompt": "Alpha", "sourceIds": [str(source)]},
-            "idempotencyKey": "native-tools-once"}
-    queued = client.post("/api/runs", json=body).json()
+    inputs = {"prompt": "Alpha", "sourceIds": [str(source)]}
+    run_id = start_run(client, "document", inputs, "native-tools-once")
     finished = run_once(store, "native-tools", executor)
     assert finished.status.value == "succeeded"
     assert len(provider.calls) == 2
-    artifact_id = client.get("/api/runs/" + queued["runId"]).json()["artifactIds"][0]
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
     artifact = client.get("/api/artifacts/" + artifact_id).json()
     assert artifact["spec"]["evidence"]["p1"][0]["source_id"] == str(source)
-    assert client.post("/api/runs", json=body).json()["runId"] == queued["runId"]
+    assert start_run(client, "document", inputs, "native-tools-once") == run_id
     calls = db.execute("SELECT * FROM model_calls ORDER BY created_at").fetchall()
     assert len(calls) == 2
     assert all(c["sampling_policy"] == "greedy" and c["requested_temperature"] == 0 for c in calls)
@@ -76,7 +75,7 @@ def test_calculator_then_terminal_stage_is_audited_and_published_once(db, collec
     assert {t["tool_id"] for t in tools} == {"advisor_calculate", "advisor_stage_artifact"}
     assert all(t["status"] == "completed" for t in tools)
     operation = db.execute("SELECT * FROM operations").fetchone()
-    assert operation["operation_id"] == UUID(queued["runId"])
+    assert operation["operation_id"] == UUID(run_id)
     assert operation["accounted_tokens"] == 260 and operation["call_count"] == 2
     assert len(client.get("/api/artifacts").json()) == 1
 

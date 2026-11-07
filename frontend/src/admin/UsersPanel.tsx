@@ -185,9 +185,7 @@ function UserRow({
       <td onClick={(event) => event.stopPropagation()}>
         <select value={role} onChange={(event) => setRole(event.target.value as AdminUser['role'])}>
           <option value="student">student</option>
-          <option value="advisor">advisor</option>
           <option value="admin">admin</option>
-          <option value="auditor">auditor</option>
         </select>
       </td>
       <td onClick={(event) => event.stopPropagation()}>

@@ -146,7 +146,6 @@ class Settings:
     # Heuristic used for context accounting: UTF-8 bytes per token. It is an
     # estimate because provider tokenizers are model-specific.
     conversation_token_estimate_bytes: int = 4
-    batch_operation_timeout_seconds: float = 172800.0
     # Optional visual feedback for HTML artifacts: render the draft, send the
     # screenshot to a vision-capable profile, and allow one bounded correction.
     visual_artifact_review_enabled: bool = False
@@ -273,8 +272,6 @@ class Settings:
         ):
             if type(value) is not int or not 0 <= value <= 100_000:
                 raise ValueError(f"{name} must be between 0 (disabled) and 100000")
-        if not math.isfinite(self.batch_operation_timeout_seconds) or not 3600 <= self.batch_operation_timeout_seconds <= 604800:
-            raise ValueError("BATCH_OPERATION_TIMEOUT_SECONDS must be between 3600 and 604800")
         if not 1024 <= self.conversation_context_max_bytes <= 1_000_000:
             raise ValueError("CONVERSATION_CONTEXT_MAX_BYTES must be between 1024 and 1000000")
         if not 1_000 <= self.llm_context_window_tokens <= 2_000_000:
@@ -478,7 +475,6 @@ def load_settings() -> Settings:
         conversation_compaction_timeout_seconds=_float("CONVERSATION_COMPACTION_TIMEOUT_SECONDS", 180),
         conversation_compaction_token_budget=compaction_budget,
         conversation_token_estimate_bytes=bytes_per_token,
-        batch_operation_timeout_seconds=_float("BATCH_OPERATION_TIMEOUT_SECONDS", 172800),
         visual_artifact_review_enabled=_bool("VISUAL_ARTIFACT_REVIEW_ENABLED", False),
         screenshot_renderer=os.environ.get("SCREENSHOT_RENDERER", "disabled"),
         screenshot_timeout_seconds=_int("SCREENSHOT_TIMEOUT_SECONDS", 30),

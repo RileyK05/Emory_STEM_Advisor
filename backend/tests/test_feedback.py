@@ -14,7 +14,6 @@ from tests.helpers import api_client, create_user
 def test_vote_replacement_and_redacted_candidate(db, collection):
     student = create_user(db, role="student")
     other = create_user(db, role="student")
-    reviewer = create_user(db, role="admin")
     response_id = _response(db, collection, student.workspace_key)
 
     first = FeedbackService.submit(
@@ -46,45 +45,14 @@ def test_vote_replacement_and_redacted_candidate(db, collection):
         )
     assert denied.value.status_code == 403
 
-    advisor = create_user(db, role="advisor")
-    # Staff roles have no route into another user's workspace: ownership decides.
+    admin = create_user(db, role="admin")
+    # Staff have no route into another user's workspace: ownership decides.
     with pytest.raises(HTTPException) as read_only:
         FeedbackService.submit(
-            db, student.workspace_key, response_id, "up", "helpful", None, advisor,
+            db, student.workspace_key, response_id, "up", "helpful", None, admin,
         )
     assert read_only.value.status_code == 403
 
-    with pytest.raises(HTTPException) as student_denied:
-        FeedbackService.create_candidate(db, "What is CS 170?", "A catalog course.", None, student)
-    assert student_denied.value.status_code == 403
-
-    candidate = FeedbackService.create_candidate(
-        db, "What does the catalog require?", "The cited requirement line.", changed["feedback_id"], reviewer,
-    )
-    stored = db.execute(
-        "SELECT * FROM eval_candidates WHERE candidate_id = %s",
-        (candidate["candidate_id"],),
-    ).fetchone()
-    assert set(stored.keys()) == {
-        "candidate_id", "redacted_prompt", "redacted_expected", "source_feedback_id", "created_at",
-        "candidate_digest", "source_id", "source_index_revision", "promotion_state",
-        "review_state", "gap_id",
-    }
-    assert "workspace_key" not in stored
-    assert "comment" not in stored
-    assert student.workspace_key not in stored["redacted_prompt"]
-    assert "needs a source" not in stored["redacted_expected"]
-
-    client = api_client(db, collection)
-    rejected = client.post(
-        "/api/feedback/eval-candidates",
-        json={
-            "redactedPrompt": "What does the catalog require?",
-            "redactedExpected": "The cited requirement line.",
-            "studentHistory": [{"workspaceKey": student.workspace_key}],
-        },
-    )
-    assert rejected.status_code == 422
 
 
 def _source(db, collection, workspace_key):
@@ -130,7 +98,6 @@ def _response(db, collection, workspace_key):
 
 def test_triage_opens_a_gap_and_stale_source_blocks_silent_promotion(db, collection):
     student = create_user(db, role="student")
-    advisor = create_user(db, role="advisor")
     reviewer = create_user(db, role="admin")
     response_id = _response(db, collection, student.workspace_key)
     comment = "needs a source from the student"
@@ -154,13 +121,6 @@ def test_triage_opens_a_gap_and_stale_source_blocks_silent_promotion(db, collect
             note=None, trace_id=None, collection_id=None, investigation_query=None,
         )
     assert student_denied.value.status_code == 403
-    with pytest.raises(HTTPException) as advisor_denied:
-        FeedbackService.triage(
-            db, advisor, feedback_id=feedback["feedback_id"], issue_type="provider",
-            to_status="reviewed", expected_revision=1, expected_triage_revision=0,
-            note=None, trace_id=None, collection_id=None, investigation_query=None,
-        )
-    assert advisor_denied.value.status_code == 403
 
     provider = FeedbackService.triage(
         db, reviewer, feedback_id=feedback["feedback_id"], issue_type="provider",

@@ -175,10 +175,9 @@ class ConversationTurnExecutor:
                 config = validate_retrieval(self.config, debug.get("retrieval") or {})
             except OverrideError as exc:
                 raise SafeJobError("invalid_debug_overrides", str(exc)) from None
-            from app.flags.service import FeatureFlagService
+            from app.auth.capabilities import execution_settings
 
-            settings = FeatureFlagService.execution_settings(
-                conn, settings, job.scope_key, ceilings=self.settings)
+            settings = execution_settings(conn, settings, job.scope_key, ceilings=self.settings)
             system_prompt = debug.get("systemPrompt")
             collection_id = UUID(effective["collectionUuid"])
             source_snapshot = {str(key): int(value) for key, value in
@@ -273,15 +272,6 @@ class ConversationTurnExecutor:
         purpose = artifact.get("purpose") or "create"
         title = str(artifact.get("title") or "Advising artifact")
         if purpose == "summary":
-            from app.flags.service import FeatureFlagService
-
-            try:
-                FeatureFlagService.require_enabled(
-                    conn, "advising_summary_export", workspace_key=job.scope_key,
-                    settings=value.settings,
-                )
-            except HTTPException:
-                return  # A disabled summary export is an intentional no-op, not a failure.
             kind = "document"
             inputs: dict[str, Any] = {
                 "prompt": title,

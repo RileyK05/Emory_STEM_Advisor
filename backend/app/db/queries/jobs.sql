@@ -124,88 +124,10 @@ WITH unknown_calls AS (
       AND j.lease_expires_at > %(now)s
       AND c.status = 'reserved'
     RETURNING c.operation_id
-), unknown_units AS (
-    UPDATE artifact_run_units AS u
-    SET status = 'unknown', failure_code = 'unknown_outcome', updated_at = clock_timestamp()
-    FROM unknown_calls AS c
-    WHERE u.job_id = c.operation_id AND u.status = 'calling'
-    RETURNING u.job_id
-), unknown_plans AS (
-    UPDATE artifact_run_plans AS p
-    SET status = 'unknown', updated_at = clock_timestamp()
-    FROM unknown_calls AS u
-    WHERE p.job_id = u.operation_id AND p.status IN ('ready','running')
-    RETURNING p.job_id
-), safe_artifact_plans AS (
-    SELECT p.job_id
-    FROM artifact_run_plans AS p
-    WHERE p.status IN ('ready','running','validated')
-      AND NOT EXISTS (SELECT 1 FROM unknown_calls u WHERE u.operation_id = p.job_id)
-      AND NOT EXISTS (
-          SELECT 1
-          FROM operation_calls AS c
-          LEFT JOIN artifact_run_unit_calls AS uc
-            ON uc.job_id = c.operation_id AND uc.attempt_no = c.attempt_no
-          LEFT JOIN artifact_run_units AS u
-            ON u.job_id = uc.job_id AND u.unit_id = uc.unit_id
-          LEFT JOIN artifact_run_unit_attempts AS a
-            ON a.job_id = uc.job_id AND a.unit_id = uc.unit_id AND a.attempt_no = uc.attempt_no
-          WHERE c.operation_id = p.job_id
-            AND (uc.job_id IS NULL OR c.status NOT IN ('completed','unknown') OR NOT (
-                (a.outcome = 'invalid' AND u.status IN ('needs_repair','validated'))
-                OR (u.status = 'validated' AND u.checkpoint IS NOT NULL
-                    AND uc.attempt_no = (
-                        SELECT max(latest.attempt_no) FROM artifact_run_unit_calls AS latest
-                        WHERE latest.job_id = uc.job_id AND latest.unit_id = uc.unit_id
-                    ))
-            ))
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM artifact_run_plan_sources ps
-          LEFT JOIN sources s ON s.source_id = ps.source_id
-          WHERE ps.job_id = p.job_id AND (
-              s.source_id IS NULL OR s.collection_id <> ps.collection_id
-              OR s.file_hash <> ps.file_hash OR s.index_revision <> ps.index_revision
-              OR s.status <> 'indexed'
-              OR NOT s.is_current
-              OR (s.workspace_key IS NOT NULL AND s.workspace_key <> p.workspace_key)
-          )
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM artifact_run_plan_excerpts e
-          LEFT JOIN chunks c ON c.chunk_id = e.chunk_id AND c.source_id = e.source_id
-          LEFT JOIN locators l ON l.locator_id = c.locator_id AND l.source_id = c.source_id
-          LEFT JOIN sources s ON s.source_id = e.source_id
-          WHERE e.job_id = p.job_id AND (
-              c.chunk_id IS NULL OR c.text <> e.text_snapshot
-              OR c.locator_id <> e.locator_id OR l.locator_id IS NULL
-              OR l.label <> e.locator_label OR s.filename <> e.source_name
-              OR NOT s.is_current
-          )
-      )
-      AND (p.target_artifact_id IS NULL OR EXISTS (
-          SELECT 1 FROM artifacts a
-          WHERE a.artifact_id = p.target_artifact_id
-            AND a.workspace_key = p.workspace_key
-            AND a.head_revision_id = p.target_revision_id
-      ))
-      AND NOT EXISTS (
-          SELECT 1
-          FROM artifact_run_units u
-          LEFT JOIN connection_profiles cp ON cp.profile_id = u.profile_id
-          WHERE u.job_id = p.job_id AND u.profile_id IS NOT NULL
-            AND (cp.profile_id IS NULL OR NOT cp.enabled OR cp.revision <> u.profile_revision)
-      )
 )
 UPDATE jobs AS j
 SET status = CASE
         WHEN j.cancel_requested THEN 'cancelled'
-        WHEN j.kind = 'artifact.run' AND EXISTS (
-            SELECT 1 FROM operation_calls c WHERE c.operation_id = j.job_id
-        ) AND EXISTS (SELECT 1 FROM safe_artifact_plans p WHERE p.job_id = j.job_id)
-             AND %(retry)s THEN 'queued'
         WHEN j.kind = 'artifact.run' AND EXISTS (
             SELECT 1 FROM operation_calls c WHERE c.operation_id = j.job_id
         ) THEN 'failed'
@@ -216,7 +138,7 @@ SET status = CASE
         WHEN NOT j.cancel_requested AND %(retry)s AND (
              j.kind <> 'artifact.run' OR NOT EXISTS (
                  SELECT 1 FROM operation_calls c WHERE c.operation_id = j.job_id
-             ) OR EXISTS (SELECT 1 FROM safe_artifact_plans p WHERE p.job_id = j.job_id)
+             )
         ) THEN %(retry_at)s
         ELSE j.available_at END,
     result = NULL,
@@ -238,7 +160,7 @@ SET status = CASE
         WHEN NOT j.cancel_requested AND %(retry)s AND (
              j.kind <> 'artifact.run' OR NOT EXISTS (
                  SELECT 1 FROM operation_calls c WHERE c.operation_id = j.job_id
-             ) OR EXISTS (SELECT 1 FROM safe_artifact_plans p WHERE p.job_id = j.job_id)
+             )
         ) THEN NULL
         ELSE %(now)s END,
     updated_at = %(now)s
@@ -263,88 +185,10 @@ WITH expired AS (
       AND j.kind = 'artifact.run'
       AND c.status = 'reserved'
     RETURNING c.operation_id
-), unknown_units AS (
-    UPDATE artifact_run_units AS u
-    SET status = 'unknown', failure_code = 'unknown_outcome', updated_at = clock_timestamp()
-    FROM recovered AS c
-    WHERE u.job_id = c.operation_id AND u.status = 'calling'
-    RETURNING u.job_id
-), unknown_plans AS (
-    UPDATE artifact_run_plans AS p
-    SET status = 'unknown', updated_at = clock_timestamp()
-    FROM recovered AS u
-    WHERE p.job_id = u.operation_id AND p.status IN ('ready','running')
-    RETURNING p.job_id
-), safe_artifact_plans AS (
-    SELECT p.job_id
-    FROM artifact_run_plans AS p
-    WHERE p.status IN ('ready','running','validated')
-      AND NOT EXISTS (SELECT 1 FROM recovered r WHERE r.operation_id = p.job_id)
-      AND NOT EXISTS (
-          SELECT 1
-          FROM operation_calls AS c
-          LEFT JOIN artifact_run_unit_calls AS uc
-            ON uc.job_id = c.operation_id AND uc.attempt_no = c.attempt_no
-          LEFT JOIN artifact_run_units AS u
-            ON u.job_id = uc.job_id AND u.unit_id = uc.unit_id
-          LEFT JOIN artifact_run_unit_attempts AS a
-            ON a.job_id = uc.job_id AND a.unit_id = uc.unit_id AND a.attempt_no = uc.attempt_no
-          WHERE c.operation_id = p.job_id
-            AND (uc.job_id IS NULL OR c.status NOT IN ('completed','unknown') OR NOT (
-                (a.outcome = 'invalid' AND u.status IN ('needs_repair','validated'))
-                OR (u.status = 'validated' AND u.checkpoint IS NOT NULL
-                    AND uc.attempt_no = (
-                        SELECT max(latest.attempt_no) FROM artifact_run_unit_calls AS latest
-                        WHERE latest.job_id = uc.job_id AND latest.unit_id = uc.unit_id
-                    ))
-            ))
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM artifact_run_plan_sources ps
-          LEFT JOIN sources s ON s.source_id = ps.source_id
-          WHERE ps.job_id = p.job_id AND (
-              s.source_id IS NULL OR s.collection_id <> ps.collection_id
-              OR s.file_hash <> ps.file_hash OR s.index_revision <> ps.index_revision
-              OR s.status <> 'indexed'
-              OR NOT s.is_current
-              OR (s.workspace_key IS NOT NULL AND s.workspace_key <> p.workspace_key)
-          )
-      )
-      AND NOT EXISTS (
-          SELECT 1
-          FROM artifact_run_plan_excerpts e
-          LEFT JOIN chunks c ON c.chunk_id = e.chunk_id AND c.source_id = e.source_id
-          LEFT JOIN locators l ON l.locator_id = c.locator_id AND l.source_id = c.source_id
-          LEFT JOIN sources s ON s.source_id = e.source_id
-          WHERE e.job_id = p.job_id AND (
-              c.chunk_id IS NULL OR c.text <> e.text_snapshot
-              OR c.locator_id <> e.locator_id OR l.locator_id IS NULL
-              OR l.label <> e.locator_label OR s.filename <> e.source_name
-              OR NOT s.is_current
-          )
-      )
-      AND (p.target_artifact_id IS NULL OR EXISTS (
-          SELECT 1 FROM artifacts a
-          WHERE a.artifact_id = p.target_artifact_id
-            AND a.workspace_key = p.workspace_key
-            AND a.head_revision_id = p.target_revision_id
-      ))
-      AND NOT EXISTS (
-          SELECT 1
-          FROM artifact_run_units u
-          LEFT JOIN connection_profiles cp ON cp.profile_id = u.profile_id
-          WHERE u.job_id = p.job_id AND u.profile_id IS NOT NULL
-            AND (cp.profile_id IS NULL OR NOT cp.enabled OR cp.revision <> u.profile_revision)
-      )
 ), terminalized AS (
     UPDATE jobs AS j
     SET status = CASE
             WHEN j.cancel_requested THEN 'cancelled'
-            WHEN j.kind = 'artifact.run' AND EXISTS (
-                SELECT 1 FROM operation_calls c WHERE c.operation_id = j.job_id
-            ) AND EXISTS (SELECT 1 FROM safe_artifact_plans p WHERE p.job_id = j.job_id)
-                 AND j.attempt_count < j.max_attempts THEN 'queued'
             WHEN j.kind = 'artifact.run' AND EXISTS (
                 SELECT 1 FROM operation_calls c WHERE c.operation_id = j.job_id
             ) THEN 'failed'
@@ -355,7 +199,7 @@ WITH expired AS (
             WHEN NOT j.cancel_requested AND j.attempt_count < j.max_attempts
                  AND (j.kind <> 'artifact.run' OR NOT EXISTS (
                      SELECT 1 FROM operation_calls c WHERE c.operation_id = j.job_id
-                 ) OR EXISTS (SELECT 1 FROM safe_artifact_plans p WHERE p.job_id = j.job_id)) THEN %(now)s
+                 )) THEN %(now)s
             ELSE j.available_at
         END,
         error = CASE
@@ -378,7 +222,7 @@ WITH expired AS (
             WHEN j.cancel_requested OR j.attempt_count >= j.max_attempts
                  OR (j.kind = 'artifact.run' AND EXISTS (
                      SELECT 1 FROM operation_calls c WHERE c.operation_id = j.job_id
-                 ) AND NOT EXISTS (SELECT 1 FROM safe_artifact_plans p WHERE p.job_id = j.job_id)) THEN %(now)s
+                 )) THEN %(now)s
             ELSE NULL
         END,
         updated_at = %(now)s

@@ -74,17 +74,13 @@ def main() -> None:
         import uvicorn
         from app.api import create_app
         from app.config import load_settings
-        from app.connections.models import EvaluationEvidence, ProfileCreate
         from app.db import queries
         from app.db.bootstrap import prepare_database
         from app.db.connection import connect
-        from app.llm.base import GenerationResult, StreamEvent, Usage
-        from app.llm.batch import BatchItemResult, BatchProgress, BatchSubmission
+        from app.llm.base import StreamEvent, Usage
         from cryptography.fernet import Fernet
         from fakes import FakeEmbedder, ScriptedProvider
         from fastapi.staticfiles import StaticFiles
-
-        batch_suite_hash = "b" * 64
 
         class SwitchableFakeEmbedder(FakeEmbedder):
             fail_next_documents = False
@@ -128,7 +124,6 @@ def main() -> None:
             llm_api_key=None,
             llm_base_url=None,
             routing_enabled=False,
-            routing_eval_suite_hash=batch_suite_hash,
         )
         bootstrap_conn = connect(dsn)
         try:
@@ -187,73 +182,8 @@ def main() -> None:
 
         provider.stream = test_stream
 
-        class LocalFakeBatchAdapter:
-            provider = "openai"
-            model = "offline-batch-fixture"
-
-            def __init__(self):
-                self.submissions = 0
-                self.status_calls = 0
-                self.result_calls = 0
-                self.cancel_calls = 0
-                self.fail_next_submission = True
-                self.keys = ()
-                self.candidate = json.dumps({
-                    "spec_json": json.dumps({"kind": "document", "title": "Batch guide",
-                                             "blocks": [{"id": "p1", "type": "paragraph", "text": "A batch-generated draft."}]}),
-                    "bindings": [],
-                })
-
-            def submit(self, items):
-                self.submissions += 1
-                if self.fail_next_submission:
-                    self.fail_next_submission = False
-                    raise TimeoutError("test-only ambiguous submission")
-                self.keys = tuple(item.correlation_id for item in items)
-                return BatchSubmission(f"offline-remote-{self.submissions}", self.provider, "in_progress", len(self.keys))
-
-            def status(self, batch_id):
-                self.status_calls += 1
-                return BatchProgress(batch_id, self.provider, "completed", len(self.keys), len(self.keys), 0)
-
-            def results(self, batch_id, *, expected_ids=None):
-                self.result_calls += 1
-                usage = Usage(prompt_tokens=10, completion_tokens=6, source="provider")
-                return tuple(BatchItemResult(key, result=GenerationResult(
-                    text=self.candidate, model=self.model, finish_reason="stop", usage=usage,
-                )) for key in expected_ids)
-
-            def cancel(self, batch_id):
-                self.cancel_calls += 1
-                return BatchProgress(batch_id, self.provider, "cancelled", len(self.keys), 0, 0)
-
-        class LocalFakeConnectionRuntime:
-            def __init__(self, adapter): self.adapter = adapter
-            def generation_provider(self, *args, **kwargs): return object()
-            def batch_provider(self, *args, **kwargs): return self.adapter
-            def existing_batch_provider(self, profile, *, expected_provider):
-                if expected_provider != profile.provider: raise RuntimeError("provider mismatch")
-                return self.adapter
-
-        batch_adapter = LocalFakeBatchAdapter()
         app = create_app(settings=settings, embedder=embedder, provider=provider)
         app.state.database_ready = True
-        app.state.batch_connect_factory = lambda: connect(dsn)
-        app.state.connection_runtime = LocalFakeConnectionRuntime(batch_adapter)
-        with connect(dsn) as conn:
-            profile = app.state.connection_profiles.create(conn, ProfileCreate(
-                name="Offline browser batch profile", provider="openai", model_id=batch_adapter.model,
-                roles=frozenset({"fast_generation", "complex"}),
-                capabilities=frozenset({"batch", "structured_output"}),
-                data_scopes=frozenset({"institutional_corpus", "user_supplied_data", "private_workspace"}),
-                secret={"api_key": "offline-test-secret"},
-            ))
-            app.state.connection_profiles.record_evaluation(conn, EvaluationEvidence(
-                evaluation_id=uuid4(), profile_id=profile.profile_id, profile_revision=profile.revision,
-                provider=profile.provider, model_id=profile.model_id,
-                suite_hash=batch_suite_hash, status="passed", metrics={"offline_fixture": 1.0},
-            ))
-            conn.commit()
 
         from app.conversations.worker import ConversationTurnExecutor
         from app.jobs.store import JobStore
@@ -372,16 +302,16 @@ def main() -> None:
                         "attemptCount": job["attempt_count"] if job else None,
                         "maxAttempts": job["max_attempts"] if job else None}
 
-        @app.get("/__test/batch-stats")
-        async def batch_stats_for_test():
-            return {"submissions": batch_adapter.submissions,
-                    "polls": batch_adapter.status_calls, "results": batch_adapter.result_calls,
-                    "cancels": batch_adapter.cancel_calls}
-
-        @app.post("/__test/enable-batch-routing")
-        async def enable_batch_routing_for_test():
-            app.state.settings = replace(app.state.settings, routing_enabled=True)
-            return {"enabled": True}
+        @app.post("/__test/seed-artifact")
+        async def seed_artifact_for_test(body: dict):
+            # A chat turn is the only way to make an artifact; this stands in for one.
+            from app.artifacts.storage import ArtifactStore, public_record, validate_spec
+            with connect(dsn) as conn:
+                row = ArtifactStore(conn, workspace_key="development",
+                                    data_dir=runtime_data_for_app).create(
+                    validate_spec(body["kind"], body["spec"]))
+                conn.commit()
+            return public_record(row)
 
         app.mount("/", StaticFiles(directory=str(dist), html=True), name="frontend")
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

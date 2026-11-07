@@ -508,6 +508,9 @@ def test_prereq_seam_finds_course_codes_in_a_query(query, codes):
     "What can I take after completing CS 253?",
     "What courses can I take after CS 253?",
     "Which courses list CS 253 as a prerequisite?",
+    "what classes open up once i finish CS 253",
+    "what does CS 253 open",
+    "what does finishing CS 253 unlocks",
 ])
 def test_reverse_prereq_intent_is_recognized(query):
     from app.retrieval.seams.prereq import is_reverse_query
@@ -517,6 +520,8 @@ def test_reverse_prereq_intent_is_recognized(query):
 @pytest.mark.parametrize("query", [
     "What are the prerequisites for CS 253?",
     "What does CS 253 require?",
+    "Exactly how many seats are open in CS 170 right now?",
+    "is CS 170 open this spring",
 ])
 def test_forward_prereq_questions_are_not_reverse(query):
     from app.retrieval.seams.prereq import is_reverse_query

@@ -8,7 +8,6 @@ max_quality_escalations = 1
 [signals]
 complex_terms = ["compare", "evaluate", "synthesize", "multi-step", "why", "trade-off"]
 fast_job_kinds = ["batch_generation", "bulk_extract", "draft_many", "artifact_authoring"]
-decision_job_kinds = ["binary_decision", "predicate", "yes_no"]
 complex_token_threshold = 1200
 simple_lookup_max_words = 10
 course_lookup_patterns = [

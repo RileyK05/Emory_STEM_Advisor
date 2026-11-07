@@ -1,4 +1,5 @@
 import logging
+from dataclasses import replace
 from enum import StrEnum
 from uuid import uuid4
 
@@ -17,7 +18,6 @@ class Capability(StrEnum):
     READ_OWN_WORKSPACE = "workspace:read_own"
     WRITE_OWN_WORKSPACE = "workspace:write_own"
     READ_AUDIT = "audit:read"
-    EXPORT_AUDIT = "audit:export"
     VIEW_TELEMETRY = "telemetry:view"
     MANAGE_USERS = "users:manage"
     MANAGE_COLLECTIONS = "collections:manage"
@@ -27,7 +27,6 @@ class Capability(StrEnum):
     SOURCE_REVIEW = "sources:review"
     PROGRAM_RULE_REVIEW = "programs:review"
     COURSE_MAINTENANCE = "courses:maintain"
-    VERIFY_ACADEMIC_RECORD = "records:verify"
 
 
 ROLE_CAPABILITIES: dict[str, set[Capability]] = {
@@ -35,22 +34,10 @@ ROLE_CAPABILITIES: dict[str, set[Capability]] = {
         Capability.READ_OWN_WORKSPACE,
         Capability.WRITE_OWN_WORKSPACE,
     },
-    "advisor": {
-        Capability.READ_OWN_WORKSPACE,
-        Capability.WRITE_OWN_WORKSPACE,
-        Capability.VERIFY_ACADEMIC_RECORD,
-    },
-    "auditor": {
-        Capability.READ_OWN_WORKSPACE,
-        Capability.READ_AUDIT,
-        Capability.EXPORT_AUDIT,
-        Capability.VIEW_TELEMETRY,
-    },
     "admin": {
         Capability.READ_OWN_WORKSPACE,
         Capability.WRITE_OWN_WORKSPACE,
         Capability.READ_AUDIT,
-        Capability.EXPORT_AUDIT,
         Capability.VIEW_TELEMETRY,
         Capability.MANAGE_USERS,
         Capability.MANAGE_COLLECTIONS,
@@ -60,7 +47,6 @@ ROLE_CAPABILITIES: dict[str, set[Capability]] = {
         Capability.SOURCE_REVIEW,
         Capability.PROGRAM_RULE_REVIEW,
         Capability.COURSE_MAINTENANCE,
-        Capability.VERIFY_ACADEMIC_RECORD,
     },
 }
 
@@ -71,7 +57,6 @@ OPERATION_CAPABILITIES: dict[str, Capability] = {
     "workspace.read": Capability.READ_OWN_WORKSPACE,
     "workspace.write": Capability.WRITE_OWN_WORKSPACE,
     "audit.read": Capability.READ_AUDIT,
-    "audit.export": Capability.EXPORT_AUDIT,
     "telemetry.view": Capability.VIEW_TELEMETRY,
     "users.manage": Capability.MANAGE_USERS,
     "collections.manage": Capability.MANAGE_COLLECTIONS,
@@ -82,7 +67,6 @@ OPERATION_CAPABILITIES: dict[str, Capability] = {
     "programs.review": Capability.PROGRAM_RULE_REVIEW,
     "courses.read": Capability.READ_AUDIT,
     "courses.manage": Capability.COURSE_MAINTENANCE,
-    "records.verify": Capability.VERIFY_ACADEMIC_RECORD,
 }
 
 
@@ -176,3 +160,20 @@ def check_workspace_access(
 
     return False
 
+
+EXECUTION_SETTINGS = ("query_planning_enabled", "advising_research_enabled", "tools_enabled",
+                      "answer_citation_repair_enabled", "conversation_compaction_enabled")
+
+
+def execution_settings(conn, settings, workspace_key: str, *, ceilings=None):
+    """The settings one workspace's work runs under, or a refusal if it may not run.
+
+    Process settings are ceilings. Debug and profile settings may narrow them,
+    but cannot enable a feature the process has disabled.
+    """
+    require_workspace_execution(conn, workspace_key)
+    ceiling = ceilings or settings
+    values = {attr: bool(getattr(settings, attr) and getattr(ceiling, attr))
+              for attr in EXECUTION_SETTINGS}
+    values["advising_research_enabled"] &= values["tools_enabled"]
+    return replace(settings, **values)

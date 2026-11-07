@@ -281,18 +281,6 @@ def test_rule_release_lifecycle_and_diff(db, collection, bound_program):
     assert releases[rel_1_id] == "archived"
     assert releases[rel_2_id] == "published"
 
-    # Diff v1 and v2
-    diff_resp = client.get(
-        f"/api/admin/programs/{prog_id}/rules/diff?release_id_a={rel_1_id}&release_id_b={rel_2_id}"
-    )
-    assert diff_resp.status_code == 200, diff_resp.text
-    diff = diff_resp.json()
-    assert diff["versionA"] == 1
-    assert diff["versionB"] == 2
-    assert len(diff["modifiedNodes"]) == 1
-    assert diff["modifiedNodes"][0]["nodeId"] == "pos-1"
-    assert diff["digestMatch"] is False
-
     # Reject a draft
     v3 = client.post(
         f"/api/admin/programs/{prog_id}/rules/draft",

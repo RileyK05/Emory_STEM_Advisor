@@ -3,14 +3,8 @@ SELECT NOT EXISTS (
     SELECT 1 FROM jobs
     WHERE status = 'queued'
        OR (status = 'running' AND lease_expires_at > statement_timestamp())
-    UNION ALL SELECT 1 FROM provider_batches WHERE state IN (
-        'prepared', 'submitting', 'pending', 'validating', 'in_progress',
-        'finalizing', 'cancel_requested', 'cancelling'
-    )
     UNION ALL SELECT 1 FROM conversation_requests WHERE state = 'pending'
-    UNION ALL SELECT 1 FROM decisions WHERE state = 'pending'
     UNION ALL SELECT 1 FROM conversation_summaries WHERE state = 'pending'
-    UNION ALL SELECT 1 FROM claim_reviews WHERE state = 'pending'
     UNION ALL SELECT 1 FROM operation_calls c JOIN operations o USING (operation_id)
         WHERE c.status = 'reserved' AND o.deadline_at > statement_timestamp()
 ) AS ready;
@@ -22,22 +16,11 @@ FROM jobs
 WHERE status = 'queued'
    OR (status = 'running' AND lease_expires_at > statement_timestamp())
 UNION ALL
-SELECT 'provider_batches', count(*), min(batch_id::text)
-FROM provider_batches
-WHERE state IN ('prepared', 'submitting', 'pending', 'validating', 'in_progress',
-                'finalizing', 'cancel_requested', 'cancelling')
-UNION ALL
 SELECT 'pending_conversation_requests', count(*), min(request_id::text)
 FROM conversation_requests WHERE state = 'pending'
 UNION ALL
-SELECT 'pending_decisions', count(*), min(decision_id::text)
-FROM decisions WHERE state = 'pending'
-UNION ALL
 SELECT 'pending_conversation_summaries', count(*), min(summary_id::text)
 FROM conversation_summaries WHERE state = 'pending'
-UNION ALL
-SELECT 'pending_claim_reviews', count(*), min(review_id::text)
-FROM claim_reviews WHERE state = 'pending'
 UNION ALL
 SELECT 'reserved_operation_calls', count(*), min(c.operation_id::text)
 FROM operation_calls c JOIN operations o USING (operation_id)
@@ -105,9 +88,6 @@ SELECT original_path FROM artifacts WHERE artifact_id = %(artifact_id)s;
 SELECT c.status, o.reserved_tokens, o.accounted_tokens
 FROM operation_calls c JOIN operations o USING (operation_id)
 WHERE c.operation_id = %(operation_id)s AND c.attempt_no = %(attempt_no)s;
-
--- name: backup_provider_batch_state
-SELECT state, failure_code FROM provider_batches WHERE batch_id = %(batch_id)s;
 
 -- name: backup_set_repeatable_read_snapshot
 SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;

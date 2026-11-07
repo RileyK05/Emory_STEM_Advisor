@@ -8,12 +8,11 @@ from psycopg.types.json import Jsonb
 
 from app.artifacts.advising_summary import (
     build_advising_summary_spec,
-    create_advising_summary_artifact,
 )
 from app.artifacts.storage import ArtifactStore
 from app.conversations.store import ConversationStore
 from tests.fakes import FakeProvider
-from tests.helpers import api_client, collection_name, ingest_text
+from tests.helpers import api_client, collection_name, ingest_text, start_run
 
 
 def _append_turn_pair(
@@ -216,12 +215,12 @@ def test_advising_summary_immutable_across_subsequent_turns(db, tmp_path):
     _append_turn_pair(store, conv_id, 0, question="Physics 151?", answer="Physics 151 is offered in Fall.")
 
     # Create immutable artifact revision
-    record = create_advising_summary_artifact(db, tmp_path, workspace, conv_id)
+    art_store = ArtifactStore(db, workspace_key=workspace, data_dir=tmp_path)
+    record = art_store.create(build_advising_summary_spec(db, conv_id, workspace))
     artifact_id = record["artifact_id"]
     revision_id = record["revision_id"]
 
     # Read back initial document spec
-    art_store = ArtifactStore(db, workspace_key=workspace, data_dir=tmp_path)
     initial_doc = art_store.get(artifact_id, revision_id)
     initial_blocks = initial_doc["spec"]["blocks"]
     assert len([b for b in initial_blocks if b.get("id") == "b_turn_2_text"]) == 1
@@ -248,7 +247,7 @@ def test_advising_summary_immutable_across_subsequent_turns(db, tmp_path):
     assert denied.value.status_code == 404
 
 
-@pytest.mark.parametrize("export_mode", ["direct", "queued", "queued_killed", "queued_cancelled"])
+@pytest.mark.parametrize("export_mode", ["queued", "queued_cancelled"])
 def test_advising_summary_api_endpoint(db, collection, tmp_path, migrated_dsn, monkeypatch, export_mode):
     ingest_text(db, collection, tmp_path, "guide.txt", "Physics requires Calculus I.")
     provider = FakeProvider("Physics requires Calculus I [1].")
@@ -269,56 +268,44 @@ def test_advising_summary_api_endpoint(db, collection, tmp_path, migrated_dsn, m
     assert turn_res.status_code == 200
 
     # Call export-summary endpoint
-    if export_mode == "direct":
-        export_res = client.post(
-            f"/api/conversations/{conv_id}/export-summary", json={"title": "Official Plan"})
-        assert export_res.status_code == 200, export_res.text
-        record = export_res.json()
-    else:
-        from dataclasses import replace
+    from dataclasses import replace
 
-        import app.artifacts.advising_summary as summary_module
-        from app.db.connection import connect
-        from app.flags.service import FeatureFlagService
-        from app.generation.artifacts import build_artifact_handlers
-        from app.jobs.runtime import RunExecutor
-        from app.jobs.store import JobStore
-        from app.jobs.worker import run_once
+    import app.artifacts.advising_summary as summary_module
+    from app.db.connection import connect
+    from app.generation.artifacts import build_artifact_handlers
+    from app.jobs.runtime import RunExecutor
+    from app.jobs.store import JobStore
+    from app.jobs.worker import run_once
 
-        settings = replace(client.app.state.settings, database_url=migrated_dsn, data_dir=tmp_path)
-        client.app.state.settings = settings
-        jobs = JobStore(lambda: connect(migrated_dsn))
-        client.app.state.job_store = jobs
-        queued = client.post("/api/runs", json={"kind": "document", "inputs": {
-            "prompt": "Official Plan", "conversationId": conv_id}, "idempotencyKey": export_mode})
-        assert queued.status_code == 200, queued.text
-        job_id = UUID(queued.json()["runId"])
-        assert jobs.get(job_id).payload["inputs"]["throughSequence"] == 2
-        _append_turn_pair(ConversationStore(db, "development"), UUID(conv_id), 2,
-                          question="Later question", answer="Later answer")
-        build = summary_module.build_advising_summary_spec
+    settings = replace(client.app.state.settings, database_url=migrated_dsn, data_dir=tmp_path)
+    client.app.state.settings = settings
+    jobs = JobStore(lambda: connect(migrated_dsn))
+    client.app.state.job_store = jobs
+    job_id = UUID(start_run(client, "document", {
+        "prompt": "Official Plan", "conversationId": conv_id, "throughSequence": 2}, export_mode))
+    _append_turn_pair(ConversationStore(db, "development"), UUID(conv_id), 2,
+                      question="Later question", answer="Later answer")
+    build = summary_module.build_advising_summary_spec
 
-        def build_then_fence(*args, **kwargs):
-            spec = build(*args, **kwargs)
-            if export_mode == "queued_cancelled":
-                jobs.cancel(job_id)
-            elif export_mode == "queued_killed":
-                FeatureFlagService.set_kill_switch(db, "advising_summary_export", True, "test stop")
-            return spec
+    def build_then_fence(*args, **kwargs):
+        spec = build(*args, **kwargs)
+        if export_mode == "queued_cancelled":
+            jobs.cancel(job_id)
+        return spec
 
-        monkeypatch.setattr(summary_module, "build_advising_summary_spec", build_then_fence)
-        handlers = build_artifact_handlers(
-            settings, client.app.state.config, client.app.state.embedder, provider,
-            lambda: connect(migrated_dsn))
-        finished = run_once(jobs, "summary-test", RunExecutor(handlers, data_dir=tmp_path))
-        if export_mode in {"queued_killed", "queued_cancelled"}:
-            assert finished.status.value == ("failed" if export_mode == "queued_killed" else "cancelled")
-            assert db.execute("SELECT count(*) AS n FROM artifacts").fetchone()["n"] == 0
-            assert provider.calls == 1
-            return
-        assert finished.status.value == "succeeded", finished.error
-        record = client.get(f"/api/artifacts/{finished.result['artifactIds'][0]}").json()
-        assert "Later answer" not in str(record["spec"])
+    monkeypatch.setattr(summary_module, "build_advising_summary_spec", build_then_fence)
+    handlers = build_artifact_handlers(
+        settings, client.app.state.config, client.app.state.embedder, provider,
+        lambda: connect(migrated_dsn))
+    finished = run_once(jobs, "summary-test", RunExecutor(handlers, data_dir=tmp_path))
+    if export_mode == "queued_cancelled":
+        assert finished.status.value == "cancelled"
+        assert db.execute("SELECT count(*) AS n FROM artifacts").fetchone()["n"] == 0
+        assert provider.calls == 1
+        return
+    assert finished.status.value == "succeeded", finished.error
+    record = client.get(f"/api/artifacts/{finished.result['artifactIds'][0]}").json()
+    assert "Later answer" not in str(record["spec"])
     assert record["kind"] == "document"
     assert record["title"] == "Official Plan"
     assert record["spec"]["title"] == "Official Plan"

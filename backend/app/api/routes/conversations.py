@@ -17,8 +17,6 @@ from app.api.schemas import (
     ConversationStreamStartResponse,
     ConversationSummary,
     ConversationTurnResponse,
-    ExportSummaryRequest,
-    NativeArtifactRecord,
     QueryRequest,
 )
 from app.api.serialize import public_payload
@@ -108,40 +106,6 @@ def get(conversation_id: UUID, conn: Conn, workspace: Workspace, principal: Prin
         after: int = Query(default=0, ge=0), limit: int = Query(default=200, ge=1, le=200)):
     return public_payload(
         ConversationStore(conn, workspace).turns(conversation_id, after=after, limit=limit), principal)
-
-
-@router.post(
-    "/{conversation_id}/export-summary",
-    response_model=NativeArtifactRecord,
-    response_model_exclude_unset=True,
-)
-def export_summary(
-    conversation_id: UUID,
-    body: ExportSummaryRequest,
-    conn: Conn,
-    workspace: Workspace,
-    request: Request,
-    debug: Debug = None,
-) -> dict:
-    from app.artifacts.advising_summary import create_advising_summary_artifact
-    from app.artifacts.storage import public_record
-
-    settings = debug.settings if debug is not None else request.app.state.settings
-    from app.flags.service import FeatureFlagService
-
-    FeatureFlagService.require_enabled(
-        conn, "advising_summary_export", workspace_key=workspace, settings=request.app.state.settings)
-    refs = [r.model_dump() for r in body.artifactReferences] if body.artifactReferences else None
-    record = create_advising_summary_artifact(
-        conn,
-        settings,
-        workspace,
-        conversation_id,
-        through_sequence=body.throughSequence,
-        title=body.title,
-        referenced_artifacts=refs,
-    )
-    return public_record(record)
 
 
 def _job_store(request: Request) -> JobStore:

@@ -22,12 +22,10 @@ function DownloadMenu({
   record,
   disabled,
   onDownload,
-  onOriginal,
 }: {
   record: NativeArtifactRecord;
   disabled: boolean;
   onDownload: (format: Format) => void;
-  onOriginal: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -61,18 +59,6 @@ function DownloadMenu({
               {label} <span className="muted">.{format}</span>
             </button>
           ))}
-          {record.original?.preserved && (
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                setOpen(false);
-                onOriginal();
-              }}
-            >
-              Original file <span className="muted">{record.original.filename}</span>
-            </button>
-          )}
         </div>
       )}
     </div>
@@ -104,8 +90,6 @@ export function ArtifactEditor({ record, onOpenVersion, onClose }: Props) {
 
   const download = (format: Format) =>
     run(async () => saveBlob(await getClient().downloadArtifact(record.artifactId, record.revisionId, format)));
-  const downloadOriginal = () =>
-    run(async () => saveBlob(await getClient().downloadOriginalArtifact(record.artifactId)));
 
   return (
     <section className="canvas" aria-label="Artifact preview">
@@ -139,7 +123,7 @@ export function ArtifactEditor({ record, onOpenVersion, onClose }: Props) {
           </select>
         </label>
         <span className="toolbar-spacer" />
-        <DownloadMenu record={record} disabled={busy} onDownload={download} onOriginal={downloadOriginal} />
+        <DownloadMenu record={record} disabled={busy} onDownload={download} />
       </div>
       {(error || notice || record.status === 'needs_recalculation') && (
         <div className="canvas-messages">
@@ -164,7 +148,6 @@ export function ArtifactEditor({ record, onOpenVersion, onClose }: Props) {
       <footer className="canvas-footer">
         <span className="muted" title={`Artifact ${record.artifactId} · revision ${record.revisionId}`}>
           {KIND_LABEL[record.kind]} · version {record.revisionId.slice(0, 8)}
-          {record.original?.preserved ? ` · imported from ${record.original.filename}` : ''}
         </span>
       </footer>
     </section>

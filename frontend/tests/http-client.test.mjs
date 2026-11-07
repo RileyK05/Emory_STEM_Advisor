@@ -270,25 +270,17 @@ test('source listings can be pinned to the exact collection displayed in gap rev
   });
 });
 
-test('artifact originals stay separately downloadable and run events read through the run route', async () => {
+test('run events read through the run route', async () => {
   const calls = [];
   const handler = async (input, init) => {
     calls.push({ url: String(input), init });
-    if (String(input).endsWith('/original'))
-      return new Response('original bytes', {
-        headers: { 'Content-Disposition': 'attachment; filename="source.docx"' },
-      });
     if (String(input).includes('/events?')) return Response.json([]);
     return Response.json({});
   };
   await withStubbedFetch(handler, async () => {
     const client = new HttpClient();
     await client.listArtifactRunEvents('job/1');
-    const original = await client.downloadOriginalArtifact('a1');
     assert.equal(calls[0].url, '/api/runs/job%2F1/events?afterEventId=0');
-    assert.equal(calls[1].url, '/api/artifacts/a1/original');
-    assert.equal(original.filename, 'source.docx');
-    assert.equal(await original.blob.text(), 'original bytes');
   });
 });
 

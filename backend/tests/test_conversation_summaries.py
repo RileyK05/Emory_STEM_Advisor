@@ -158,21 +158,8 @@ def _append_referenced_pair(store, conversation_id, sequence, *, answer):
     return sequence + 1
 
 
-@pytest.mark.parametrize("stop_compaction", [False, True])
-def test_auto_compaction_replaces_old_turns_with_exact_pointer_memory(db, collection, monkeypatch,
-                                                                    stop_compaction):
+def test_auto_compaction_replaces_old_turns_with_exact_pointer_memory(db, collection):
     provider = FakeProvider("Compacted memory narrative.")
-    generate = provider.generate
-
-    def maybe_stop(*args, **kwargs):
-        result = generate(*args, **kwargs)
-        if stop_compaction:
-            from app.flags.service import FeatureFlagService
-
-            FeatureFlagService.set_kill_switch(db, "conversation_compaction", True, "test stop")
-        return result
-
-    monkeypatch.setattr(provider, "generate", maybe_stop)
     client = api_client(db, collection, provider=provider)
     client.app.state.settings = replace(
         client.app.state.settings,
@@ -204,22 +191,14 @@ def test_auto_compaction_replaces_old_turns_with_exact_pointer_memory(db, collec
 
     # One provider call: the checkpoint. The queued turn has not run.
     assert provider.calls == 1
-    checkpoints = client.get(
-        f"/api/conversations/{conversation_id}/summaries").json()
-    if stop_compaction:
-        assert [item["state"] for item in checkpoints] == ["failed"]
-        from app.pricing import PricingService
-
-        assert PricingService.telemetry_summary(db)["totalCalls"] == 1
-        assert ConversationStore(db, "development").latest_summary(conversation_id) is None
-        return
-    assert [item["state"] for item in checkpoints] == ["completed"]
-    text = checkpoints[0]["text"]
+    checkpoint = ConversationStore(db, "development").latest_summary(conversation_id)
+    assert checkpoint["state"] == "completed"
+    text = checkpoint["summary_text"]
     assert "Compacted conversation memory" in text
     assert "guide.pdf" in text and "page 2" in text and "chunk-1" in text
     assert "source-1" in text
     assert "artifact-id" in text and "revision-id" in text and "Degree plan" in text
-    assert checkpoints[0]["coveredThrough"] == 6
+    assert checkpoint["covered_through"] == 6
     # The checkpoint consumes generation budget and appears in cost/cache telemetry.
     from app.pricing import PricingService
 
@@ -235,7 +214,7 @@ def test_auto_compaction_replaces_old_turns_with_exact_pointer_memory(db, collec
     assert context["kind"] == "compacted_conversation_memory"
     assert context["coveredThrough"] == 6
     assert [turn["sequence"] for turn in context["recentTurns"]] == [7, 8]
-    assert context["summaryId"] == checkpoints[0]["summaryId"]
+    assert context["summaryId"] == str(checkpoint["summary_id"])
 
 
 def test_sync_turn_compacts_before_answering(db, collection, tmp_path):
@@ -270,9 +249,8 @@ def test_sync_turn_compacts_before_answering(db, collection, tmp_path):
     assert response.status_code == 200, response.text
     # One checkpoint call plus the actual answer call.
     assert provider.calls == 2
-    checkpoints = client.get(
-        f"/api/conversations/{conversation_id}/summaries").json()
-    assert [item["state"] for item in checkpoints] == ["completed"]
+    assert ConversationStore(db, "development").latest_summary(
+        conversation_id)["state"] == "completed"
 
 
 def test_stale_pending_summary_is_recovered_before_a_new_turn(db):

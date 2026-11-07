@@ -28,15 +28,15 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | P1.4 | done | P1.4 | Support grants and admin chat access are gone end to end: `auth/grants.py`, the admin `/grants*`, `/grant-requests*`, `/conversations*` (list, transcript, download, delete) and granted-result routes, their store methods, the grant/transcript schemas, `GRANT_SUPPORT_ACCESS`/`REVOKE_GRANTS`, the worker and runtime publication fences, and `db/queries/grants.sql` (its two workspace-execution queries moved to `auth.sql`). `check_workspace_access` is ownership-only; migration 080 drops `resource_grants`, `support_grant_requests` and `granted_result_staging`. No route under `/api/admin` reads another user's conversation. Grant/transcript tests deleted; `test_feedback` now proves a staff role has no route onto another workspace, and the records lifecycle drops its grant-driven verification case (records go in P1.6). Gate: 1746 passed, 2 skipped (Windows-only), 0 xfailed in 431.97s; ruff clean; 32 browser tests, typecheck, format:check and check:callers green. |
 | P1.5 | done | P1.5 | Removed the admin `/artifacts` read and the `/collections` GET/POST/PATCH/DELETE routes, `AdminStore.artifacts/collections/create_collection/rename_collection/delete_collection`, their eight named queries in `db/queries/admin.sql`, the `AdminArtifact`/`AdminCollection`/`AdminCollectionWrite` schemas, and `test_admin_collection_crud`. The gap queue reads sources through `listSources`, so no collection read was needed. `docs/architecture.md` no longer lists the routes. Gate: `test_admin_debug`, `test_api`, `test_contract_drift`, `test_openapi_complete` pass (57 tests); ruff clean. |
 | P1.6 | done | P1.6, P1.14 and data layer | Added `advisor_audit_program` and `advisor_suggest_courses`, `RESEARCH_TOOLS_VERSION` 15, one research-scenario row each. Removed `routes/audits.py`, `routes/comparisons.py`, `routes/records.py`, `advising/audit_service.py`, `advising/comparison_service.py`, `records/` and their queries; migration 081 drops the 9 tables and the `degree_audit_current_state` view. Published rules: 0, so every audit today takes the `reviewed_rules: false` line-match path, which the plan did not name. Reported courses carry no credit hours (`courses` has no credits column), so credit rules stay unresolved on the reviewed path. Gate: 1769 passed, 2 skipped; ruff clean; typecheck and format clean; `npm test` 32 passed. Live, `minimax-m3.1-flash`, 9 cases: audit called on all 4 that reported courses, the Oxford codes matched their lines, and the no-history case asked. In one Oxford answer the model still wrote that courses satisfy lines, so that wording has no enforcement. |
-| P1.7 | todo | | |
-| P1.8 | todo | | |
-| P1.9 | todo | | |
-| P1.10 | todo | | |
-| P1.11 | todo | | |
+| P1.7 | done | uncommitted | Roles are student and admin. Migration 086 maps `advisor` and `auditor` to `student` (0 users remapped on the dev database, which holds no users) and narrows the check. `EXPORT_AUDIT` and `VERIFY_ACADEMIC_RECORD` are gone; `/audit/export` went earlier. |
+| P1.8 | done | uncommitted | `flags/` and `routes/flags.py` are gone; `auth.capabilities.execution_settings` keeps the workspace check and the setting ceilings. Migration 085. See [data-layer-changes.md](data-layer-changes.md). |
+| P1.9 | in progress | uncommitted | Catalog refresh is gone (migration 085). Debug sessions, experiments and `DEBUG_*` in `apps.bicep` stay until the user decides: the cut message can be read either way, and nothing reaches them since P1.2. |
+| P1.10 | done | uncommitted | Bulk drafts are gone. Migration 083. |
+| P1.11 | done | uncommitted | Routes are gone (migrations 083, 084). `import_docx`, `import_xlsx`, `parse_markdown`, `artifacts/revisions.py`, `/api/artifacts/{id}/original` and the PDF render dispatch are gone too. Stored-original columns stay: old backups restore through them. `claims` stays. |
 | P1.12 | done | P1.12 | Deleted the `/v1/execute` endpoint, `ExecuteBody`/`InputFile`, `_decode_inputs`/`_program_response`, and the program-execution `run`/`_payload`/`_parse_result` from `sandbox/remote.py`; the worker health now reports the Office image and, when configured, the browser image. `DockerCliRuntime.probe` reads only Office (+browser) image IDs; `host_app` no longer reads the removed image env vars. Deleted `sandbox/Dockerfile.python`, `sandbox/Dockerfile.javascript`, their lines in `WORKER.md` and `compose.worker.yaml`, and `docs/architecture.md`'s code-execution claims. Program-execution tests removed; the shared runtime/transport tests stay. **Follow-up:** deleted `SandboxConfig.python_image`/`javascript_image`, `SandboxRunner.run`, `build_create_argv` and `_check_run_limits` (all program-execution paths), with the seven tests that only drove them; `test_sandbox.py` keeps the screenshot argv, isolation, cleanup, cancellation, path-escape and output-symlink tests. Full-suite gate: 1753 passed, 2 skipped (Windows-only), 0 xfailed in 900.48s; ruff clean. |
-| P1.13 | todo | | |
+| P1.13 | done | uncommitted | 18 test files merged into their area file; 1655 collected before and after, none lost. 93 backend test files (target 95). `test_chunker_consistency.py` stays: its helper collides with `test_chunker.py`. `test_program_rule_drafts.py`, `test_campus_equivalence.py`, `test_passage_identity_reading.py`, `test_citation_integrity.py`, `test_course_identity_guard.py`, `test_enrollment_restrictions.py` and `test_provider_bounds.py` stay as area files. No test reads the repository `data/` folder. |
 | P1.14 | done | P1.6, P1.14 and data layer | Republished the Atlas-primary master with `scripts.reconcile_atlas --publish` and reran the sweep; `db-data-review.md` holds the 2026-11-06 counts. A 340, B 0, C 0, D two kinds, E 229 (all campus equivalence), F 56, cycles 0. No hand edits to `prereq_nodes` or `prereq_mentions`. |
-| P1.15 | todo | | |
+| P1.15 | done | uncommitted | `types.ts` 1,406 to about 1,160 lines, `styles.css` 2,550 to 2,487. A script finds no orphan type or schema model; the one absent class, `gap-state-resolved`, is built at runtime in `GapItem.tsx`. |
 
 ## Phase 2: one answering path
 
@@ -107,6 +107,10 @@ Measured with the same method as the plan (`wc -l` equivalent).
 | `frontend/src/styles.css` lines | 2,887 | 2,887 | record only |
 | Admin tabs | 18 | 7 | 7 |
 | Roles | 4 | 4 | 2 |
+
+Current working tree, uncommitted (2026-11-06): `backend/app` 40,860 lines, 93 backend test
+files, admin 3,132 lines, `types.ts` 1,155 lines, `styles.css` 2,487 lines, 2 roles. Every
+target is met.
 
 ## Run status: stopped before the final gate
 

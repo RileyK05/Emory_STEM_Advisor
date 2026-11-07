@@ -30,7 +30,6 @@ from app.artifacts.models import (
     ParagraphBlock,
     TableBlock,
 )
-from app.artifacts.storage import ArtifactStore
 from app.db import queries
 from app.util.digest import json_digest
 
@@ -260,32 +259,3 @@ def build_advising_summary_spec(
         evidence=evidence_map,
         provenance=provenance,
     )
-
-
-def create_advising_summary_artifact(
-    conn,
-    settings,
-    workspace_key: str,
-    conversation_id: UUID,
-    *,
-    through_sequence: int | None = None,
-    title: str | None = None,
-    referenced_artifacts: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """Build and persist the advising summary document as an immutable artifact revision."""
-    spec = build_advising_summary_spec(
-        conn,
-        conversation_id,
-        workspace_key,
-        through_sequence=through_sequence,
-        title=title,
-        referenced_artifacts=referenced_artifacts,
-    )
-    data_dir = getattr(settings, "data_dir", None)
-    if data_dir is None:
-        from pathlib import Path
-        data_dir = Path(settings) if isinstance(settings, (str, Path)) else Path("data")
-    store = ArtifactStore(conn, workspace_key=workspace_key, data_dir=data_dir)
-    record = store.create(spec)
-    conn.commit()
-    return record

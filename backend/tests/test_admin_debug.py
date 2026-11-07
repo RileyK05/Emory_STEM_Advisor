@@ -145,9 +145,9 @@ def test_admin_lists_and_updates_users_with_an_audit_trail(db, collection):
     assert revoked.json() == {"revoked": 0}
 
 
-@pytest.mark.parametrize("role", ["student", "advisor", "auditor"])
-def test_non_admin_is_rejected_from_admin_and_debug_surfaces(db, collection, role, monkeypatch):
+def test_non_admin_is_rejected_from_admin_and_debug_surfaces(db, collection, monkeypatch):
     client = api_client(db, collection)
+    role = "student"
     principal = Principal("development", None, role, role=role)
     client.app.dependency_overrides[get_principal] = lambda: principal
     monkeypatch.setattr(client.app.state.auth_service, "resolve", lambda *a, **kw: principal)
@@ -155,13 +155,6 @@ def test_non_admin_is_rejected_from_admin_and_debug_surfaces(db, collection, rol
         assert client.get("/api/session").json()["role"] == role
         assert client.get("/api/admin/overview").status_code == 403
         assert client.get("/api/debug/settings").status_code == 403
-        if role == "auditor":
-            assert client.get("/api/admin/audit").status_code == 200
-            assert client.get("/api/admin/telemetry/usage").status_code == 200
-            assert client.get("/api/admin/pricing/schedules").status_code == 200
-            assert client.get("/api/conversations").status_code == 200
-            assert client.post("/api/conversations", json={"title": "Denied"}).status_code == 403
-            assert client.post("/api/query", json={"query": "Denied"}).status_code == 403
     finally:
         client.app.dependency_overrides.pop(get_principal, None)
 
@@ -337,57 +330,6 @@ def test_admin_audit_filtering_and_keyset_cursor_pagination(db, collection):
     p1_ids = {row["auditId"] for row in p1.json()}
     p2_ids = {row["auditId"] for row in p2.json()}
     assert p1_ids.isdisjoint(p2_ids), "Keyset pagination must not duplicate items across pages"
-
-
-def test_admin_audit_export_csv_and_json_with_formula_neutralization(db, collection):
-    client = api_client(db, collection)
-    actor_id = _app_user(db, email="admin2@emory.edu", role="admin")
-
-    # Insert entries with spreadsheet formula attack payloads
-    test_audit_id = uuid4()
-    db.execute(queries.get("admin_insert_audit"), {
-        "audit_id": test_audit_id,
-        "actor_user_id": actor_id,
-        "actor_workspace": "development",
-        "action": "=CMD|' /C calc'!A0",
-        "target_type": "exploit_test",
-        "target_id": "+123456789",
-        "detail": Jsonb({"note": "test-1"}),
-    })
-    db.execute(queries.get("admin_insert_audit"), {
-        "audit_id": uuid4(),
-        "actor_user_id": actor_id,
-        "actor_workspace": "development",
-        "action": "calc.eval",
-        "target_type": "-PAYLOAD",
-        "target_id": "@SUM(A1:A10)",
-        "detail": Jsonb({"note": "test-2"}),
-    })
-    db.commit()
-
-    # CSV Export
-    csv_resp = client.get("/api/admin/audit/export?format=csv&actor=admin2@emory.edu")
-    assert csv_resp.status_code == 200
-    assert "text/csv" in csv_resp.headers["content-type"]
-    assert "attachment; filename=" in csv_resp.headers["content-disposition"]
-    assert "X-Snapshot-Until" in csv_resp.headers
-
-    csv_text = csv_resp.text
-    # Verify formula prefixes were neutralized with a leading single quote
-    assert "'=CMD|' /C calc'!A0" in csv_text
-    assert "'+123456789" in csv_text
-    assert "'@SUM(A1:A10)" in csv_text
-    assert "'-PAYLOAD" in csv_text
-
-    # JSON Export
-    json_resp = client.get(f"/api/admin/audit/export?format=json&target_id={test_audit_id}")
-    assert json_resp.status_code == 200
-    assert json_resp.headers["content-type"] == "application/json"
-
-    # Verify that export logged an audit event without recursive churn
-    all_audits = client.get("/api/admin/audit?action=audit.export").json()
-    assert len(all_audits) >= 1
-    assert all_audits[0]["action"] == "audit.export"
 
 
 def test_admin_audit_cursor_invalid_fails_safely(db, collection):

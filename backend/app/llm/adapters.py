@@ -44,15 +44,6 @@ def _chat_usage(raw: Any) -> Usage:
     return usage
 
 
-def _usage_from_tokens(raw: Any) -> Usage:
-    """Usage from an SDK usage object or mapping with input/output/total token counts."""
-    prompt, completion = _get(raw, "input_tokens"), _get(raw, "output_tokens")
-    if prompt is None or completion is None:
-        return Usage(source="unknown")
-    total = _get(raw, "total_tokens")
-    return Usage(int(prompt), int(completion), int(total) if total is not None else None, "provider")
-
-
 def _error(provider: str, exc: Exception) -> ProviderError:
     error: ProviderError
     if "timeout" in type(exc).__name__.lower() or isinstance(exc, TimeoutError):

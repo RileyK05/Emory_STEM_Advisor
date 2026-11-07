@@ -581,41 +581,6 @@ class ConversationStore:
         return public_summary(row)
 
 
-    def reset_memory(self, conversation_id: UUID) -> dict:
-        self.conn.commit()
-        with self.conn.transaction():
-            conv = self.get(conversation_id, lock=True)
-            if conv["pending_request_id"] is not None:
-                raise HTTPException(409, "Cannot reset memory while a turn request is pending.")
-            self._expire_stale_pending_summary(conversation_id)
-            pending_summary = self.conn.execute(queries.get("pending_conversation_summary"), {
-                "conversation_id": conversation_id, "workspace_key": self.workspace_key,
-            }).fetchone()
-            if pending_summary is not None:
-                raise HTTPException(409, "Cannot reset memory while a conversation summary is pending.")
-            row = self.conn.execute(queries.get("reset_conversation_memory"), {
-                "conversation_id": conversation_id, "workspace_key": self.workspace_key,
-            }).fetchone()
-            if row is None:
-                raise HTTPException(404, "Conversation not found.")
-        return public_conversation(row)
-
-    def latest_research_notebook(self, conversation_id: UUID) -> dict | None:
-        self.get(conversation_id)
-        row = self.conn.execute(queries.get("latest_conversation_research_notebook"), {
-            "conversation_id": conversation_id, "workspace_key": self.workspace_key,
-        }).fetchone()
-        self.conn.commit()
-        if row is None or not row["state"]:
-            return None
-        return {
-            "runId": str(row["run_id"]),
-            "status": row["status"],
-            "state": row["state"],
-            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
-        }
-
-
 def fingerprint(snapshot):
     return json_digest(snapshot.get("request", snapshot))
 

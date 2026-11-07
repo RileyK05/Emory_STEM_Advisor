@@ -73,10 +73,3 @@ def get_admin_principal(
         raise HTTPException(status_code=403, detail="institutional administrator access required")
     return principal
 
-
-def get_auditor_or_admin_principal(
-    principal: Annotated[Principal, Depends(get_principal)],
-) -> Principal:
-    if principal.role not in {"admin", "auditor"} or principal.status != "active":
-        raise HTTPException(status_code=403, detail="institutional auditor or administrator access required")
-    return principal

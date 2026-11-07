@@ -43,7 +43,6 @@ const workbookRecord = {
   parentRevisionId: null,
   kind: 'workbook',
   title: 'Metrics',
-  original: { filename: 'metrics.xlsx', sha256: 'abc123', preserved: true },
   status: 'ready',
   message: null,
   spec: {
@@ -262,7 +261,7 @@ async function setupPage({
   initialBatches = [],
   initialBatchRecords = [],
   failBatchSubmitOnce = false,
-  unauthenticatedOnSources = false,
+  unauthenticatedOnConversations = false,
   initialGaps = [],
   gapConflictOnce = false,
   pinnedRunRevision = false,
@@ -754,10 +753,6 @@ async function setupPage({
       return route.fulfill({ json: [{ id: 'collection-1', name: 'default' }] });
     if (apiUrl.pathname === '/api/sources' && req.method() === 'GET') {
       sourcesRequested++;
-      if (unauthenticatedOnSources) {
-        currentSession = { mode: 'oidc', authenticated: false };
-        return route.fulfill({ status: 401, json: { detail: 'authentication required' } });
-      }
       return route.fulfill({ json: sourceRows });
     }
     if (apiUrl.pathname === '/api/sources/source-1/reindex' && req.method() === 'POST') {
@@ -810,6 +805,10 @@ async function setupPage({
       return route.fulfill({ json: gap });
     }
     if (apiUrl.pathname === '/api/conversations' && req.method() === 'GET') {
+      if (unauthenticatedOnConversations) {
+        currentSession = { mode: 'oidc', authenticated: false };
+        return route.fulfill({ status: 401, json: { detail: 'authentication required' } });
+      }
       if (conversationListDelayMs) await new Promise((resolve) => setTimeout(resolve, conversationListDelayMs));
       return route.fulfill({ json: conversationSummaries });
     }
@@ -1240,27 +1239,6 @@ async function setupPage({
       capturedUserRevokes.push(decodeURIComponent(revokeSessionsMatch[1]));
       return route.fulfill({ json: { revoked: 1 } });
     }
-    if (apiUrl.pathname === '/api/admin/collections' && req.method() === 'GET') {
-      return route.fulfill({ json: adminCollectionsList });
-    }
-    if (apiUrl.pathname === '/api/admin/collections' && req.method() === 'POST') {
-      const body = req.postDataJSON();
-      const created = {
-        collectionId: 'col-' + (adminCollectionsList.length + 1),
-        name: body.name,
-        sourceCount: 0,
-        createdAt: '2026-10-08T00:00:00Z',
-      };
-      adminCollectionsList.push(created);
-      return route.fulfill({ status: 201, json: created });
-    }
-    const adminCollectionDeleteMatch = /^\/api\/admin\/collections\/([^/]+)$/.exec(apiUrl.pathname);
-    if (adminCollectionDeleteMatch && req.method() === 'DELETE') {
-      const colId = decodeURIComponent(adminCollectionDeleteMatch[1]);
-      const idx = adminCollectionsList.findIndex((c) => c.collectionId === colId);
-      if (idx !== -1) adminCollectionsList.splice(idx, 1);
-      return route.fulfill({ status: 204 });
-    }
     if (apiUrl.pathname === '/api/admin/audit' && req.method() === 'GET') {
       const actionFilter = apiUrl.searchParams.get('action') || '';
       const cursor = apiUrl.searchParams.get('cursor') || '';
@@ -1298,17 +1276,6 @@ async function setupPage({
             detail: { after: { role: 'admin' } },
           },
         ],
-      });
-    }
-    if (apiUrl.pathname === '/api/admin/audit/export' && req.method() === 'GET') {
-      const format = apiUrl.searchParams.get('format') || 'csv';
-      return route.fulfill({
-        headers: {
-          'Content-Type': format === 'csv' ? 'text/csv; charset=utf-8' : 'application/json',
-          'Content-Disposition': `attachment; filename="admin-audit-export.${format}"`,
-          'X-Snapshot-Until': '2026-10-19T00:00:00Z',
-        },
-        body: format === 'csv' ? 'audit_id,action\naud-1,user.role_status\n' : JSON.stringify([{ auditId: 'aud-1' }]),
       });
     }
     if (apiUrl.pathname === '/api/admin/jobs' && req.method() === 'GET')
@@ -1815,11 +1782,6 @@ async function setupPage({
     }
     if (apiUrl.pathname === '/api/artifacts/import' && req.method() === 'POST')
       return route.fulfill({ json: importedRecord ?? workbookRecord });
-    if (apiUrl.pathname === '/api/artifacts/artifact-wb/original')
-      return route.fulfill({
-        body: 'original xlsx bytes',
-        headers: { 'Content-Disposition': "attachment; filename*=UTF-8''metrics.xlsx" },
-      });
     if (apiUrl.pathname === '/api/artifacts/artifact-wb/revisions') {
       const body = req.postDataJSON();
       capturedRevisions.push(body);
@@ -1884,7 +1846,7 @@ async function setupPage({
     }
   } else if (entry === '/admin.html' || entry === '/admin') {
     try {
-      if (['admin', 'auditor'].includes(currentSession?.role)) {
+      if (currentSession?.role === 'admin') {
         await page.getByRole('tablist').waitFor({ timeout: 5000 });
       } else {
         await page.getByRole('heading', { name: 'Administrator access required' }).waitFor({ timeout: 5000 });
@@ -2437,7 +2399,7 @@ test('saved artifacts reload from the server list and preview in an isolated fra
 test('a protected API 401 clears the active workspace and returns to sign in', async () => {
   const { context, page } = await setupPage({
     initialSession: { mode: 'oidc', authenticated: true, workspaceKey: 'private-1', displayName: 'Ada' },
-    unauthenticatedOnSources: true,
+    unauthenticatedOnConversations: true,
   });
   try {
     await page.getByRole('heading', { name: 'Sign in required' }).waitFor();
@@ -2993,15 +2955,14 @@ test('local connection panel sends exact DTOs and keeps credentials transient an
   }
 });
 
-test('provider change drops hidden account state and a credential draft cannot move profiles', async () => {
-  const clef = {
+test('provider change drops hidden endpoint state and a credential draft cannot move profiles', async () => {
+  const campus = {
     ...profileFixture,
-    profile_id: 'profile-cf',
-    name: 'Campus Clef',
-    provider: 'cloudflare-clef',
-    model_id: 'clef-test',
-    account_id: 'acct-hidden',
-    roles: ['decision'],
+    profile_id: 'profile-campus',
+    name: 'Campus Gateway',
+    provider: 'openai-compatible',
+    model_id: 'campus-test',
+    base_url: 'https://gateway.test/v1',
   };
   const other = {
     ...profileFixture,
@@ -3013,26 +2974,25 @@ test('provider change drops hidden account state and a credential draft cannot m
     entry: '/admin.html',
     initialSession: adminSession,
     connectionAdmin: true,
-    seedConnectionProfiles: [clef, other],
+    seedConnectionProfiles: [campus, other],
   });
   try {
     await openAdminTab(page, 'Model connections');
     const cards = page.locator('article.connection-profile');
-    await cards.filter({ hasText: 'Campus Clef' }).getByRole('button', { name: 'Edit profile' }).click();
-    await page.getByLabel('Account ID').waitFor();
+    await cards.filter({ hasText: 'Campus Gateway' }).getByRole('button', { name: 'Edit profile' }).click();
+    await page.getByLabel('Base URL').waitFor();
     await page.getByLabel('Provider').selectOption('openai');
-    assert.equal(await page.getByLabel('Account ID').count(), 0);
+    assert.equal(await page.getByLabel('Base URL').count(), 0);
     await page.getByRole('button', { name: 'Save profile' }).click();
     await page.getByText('Profile saved. Routing remains evaluation-gated.').waitFor();
     const saved = capturedConnectionWrites.at(-1);
     assert.equal(saved.provider, 'openai');
-    assert.equal(saved.account_id, null);
-    assert.deepEqual(saved.roles, ['standard']);
+    assert.equal(saved.base_url, null);
 
     await cards.filter({ hasText: 'Other OpenAI' }).getByRole('button', { name: 'Replace credential' }).click();
     await page.getByLabel(/Replace API key for/).fill('secret-for-other');
     assert.equal(
-      await cards.filter({ hasText: 'Campus Clef' }).getByRole('button', { name: 'Replace credential' }).isDisabled(),
+      await cards.filter({ hasText: 'Campus Gateway' }).getByRole('button', { name: 'Replace credential' }).isDisabled(),
       true,
     );
     assert.equal(capturedConnectionWrites.some((body) => body.secret?.api_key === 'secret-for-other'), false);

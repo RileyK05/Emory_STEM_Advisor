@@ -12,12 +12,6 @@ SELECT pg_advisory_xact_lock(hashtextextended('privacy:' || %(workspace_key)s, 0
 SELECT * FROM privacy_exports
 WHERE export_id = %(export_id)s;
 
--- name: list_privacy_exports
-SELECT * FROM privacy_exports
-WHERE workspace_key = %(workspace_key)s
-ORDER BY created_at DESC
-LIMIT %(limit)s;
-
 -- name: insert_privacy_deletion
 INSERT INTO privacy_deletions (
     deletion_id, workspace_key, user_id, status, fenced_at, stage
@@ -35,12 +29,6 @@ RETURNING *;
 -- name: get_privacy_deletion
 SELECT * FROM privacy_deletions
 WHERE deletion_id = %(deletion_id)s;
-
--- name: list_privacy_deletions
-SELECT * FROM privacy_deletions
-WHERE workspace_key = %(workspace_key)s
-ORDER BY created_at DESC
-LIMIT %(limit)s;
 
 -- name: insert_deletion_tombstone
 INSERT INTO deletion_tombstones (
@@ -89,12 +77,6 @@ SELECT raw_path AS original_path
 FROM sources
 WHERE workspace_key = %(workspace_key)s;
 
--- name: set_privacy_export_expiry
-UPDATE privacy_exports
-SET expires_at = %(expires_at)s
-WHERE export_id = %(export_id)s
-RETURNING export_id;
-
 -- name: delete_expired_privacy_exports
 DELETE FROM privacy_exports
 WHERE expires_at IS NOT NULL AND expires_at < %(cutoff)s;
@@ -139,19 +121,6 @@ DELETE FROM retrieval_gaps WHERE workspace_key = %(workspace_key)s;
 -- name: delete_workspace_gap_observations
 DELETE FROM gap_observations WHERE workspace_key = %(workspace_key)s;
 
--- name: delete_workspace_claim_reviews
-DELETE FROM claim_reviews WHERE workspace_key = %(workspace_key)s;
-
--- name: delete_workspace_decisions
-DELETE FROM decisions WHERE workspace_key = %(workspace_key)s;
-
--- name: delete_workspace_provider_batch_items
-DELETE FROM provider_batch_items
-WHERE workspace_key = %(workspace_key)s;
-
--- name: delete_workspace_provider_batches
-DELETE FROM provider_batches WHERE workspace_key = %(workspace_key)s;
-
 -- name: delete_workspace_debug_experiments
 DELETE FROM debug_experiments WHERE workspace_key = %(workspace_key)s;
 
@@ -183,3 +152,15 @@ WHERE scope_type = 'workspace' AND scope_id = %(workspace_key)s;
 
 -- name: delete_workspace_operations
 DELETE FROM operations WHERE workspace_key = %(workspace_key)s;
+
+-- name: list_privacy_deletions
+SELECT * FROM privacy_deletions
+WHERE workspace_key = %(workspace_key)s
+ORDER BY created_at DESC
+LIMIT %(limit)s;
+
+-- name: set_privacy_export_expiry
+UPDATE privacy_exports
+SET expires_at = %(expires_at)s
+WHERE export_id = %(export_id)s
+RETURNING export_id;

@@ -99,9 +99,9 @@ def history_context_for_turn(store: ConversationStore, provider, settings: Setti
     effective scope and warm citations, so summarized turns still contribute
     exact cited passages to the next prompt.
     """
-    from app.flags.service import FeatureFlagService
+    from app.auth.capabilities import execution_settings
 
-    settings = FeatureFlagService.execution_settings(store.conn, settings, store.workspace_key)
+    settings = execution_settings(store.conn, settings, store.workspace_key)
     all_rows = store.context(conversation_id, max_bytes=max_bytes, enforce=False)
     summary = store.latest_summary(conversation_id)
     covered = summary["covered_through"] if summary else 0
@@ -200,9 +200,9 @@ def compact_conversation(store: ConversationStore, provider, settings: Settings,
         _fail_summary(store, conversation_id, summary_id, "provider_failed")
         return None
 
-    from app.flags.service import FeatureFlagService
+    from app.auth.capabilities import execution_settings
 
-    if not FeatureFlagService.execution_settings(
+    if not execution_settings(
             store.conn, settings, store.workspace_key).conversation_compaction_enabled:
         _fail_summary(store, conversation_id, summary_id, "feature_disabled")
         return None

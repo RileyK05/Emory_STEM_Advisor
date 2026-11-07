@@ -1,5 +1,6 @@
 import pytest
 
+from app.ingest.normalize import decode_text, normalize_text
 from app.tools import (
     ToolCapability,
     ToolPermissionDenied,
@@ -7,7 +8,8 @@ from app.tools import (
     UnknownTool,
     build_default_registry,
 )
-from app.tools.builtins import ArtifactResult, CalculatorOutput, SourceReadOutput
+from app.tools.builtins import CalculatorOutput, SourceReadOutput
+from app.tools.calculator import CalculationError, calculate
 
 
 def test_default_registry_contains_only_calculator_without_injected_handlers():
@@ -68,25 +70,11 @@ def test_injected_source_tool_requires_resource_scope_and_validates_output():
 
 
 def test_provider_definitions_are_schema_backed_and_tool_id_is_preserved():
-    def create_artifact(value, scope):
-        return {
-            "artifact_id": "artifact-1",
-            "revision_id": "revision-1",
-            "artifact_kind": "document",
-            "title": value.artifact.title,
-        }
-
-    registry = build_default_registry({"advisor_create_artifact": create_artifact})
-    definition = registry.definition("advisor_create_artifact")
-    assert definition.name == "advisor_create_artifact"
+    registry = build_default_registry({"advisor_read_source": lambda value, scope: {
+        "source_name": "syllabus.txt", "locator": "page 1", "text": "x"}})
+    definition = registry.definition("advisor_read_source")
+    assert definition.name == "advisor_read_source"
     assert definition.input_schema["type"] == "object"
-    result = registry.invoke(
-        definition.name,
-        {"artifact": {"kind": "document", "title": "Notes", "blocks": []}},
-        ToolScope("user:1", frozenset({ToolCapability.ARTIFACT_WRITE})),
-    )
-    assert isinstance(result, ArtifactResult)
-    assert result.title == "Notes"
 
 
 def test_tool_output_byte_limit_is_enforced():
@@ -120,3 +108,57 @@ def test_tool_output_byte_limit_is_enforced():
             {"value": "x"},
             ToolScope("user:1", frozenset({ToolCapability.CALCULATE})),
         )
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        ("2 + 3 * 4", "14"),
+        ("(100.5 - 0.5) / 4", "25"),
+        ("-2 ** 3", "-8"),
+        ("2 ** 8", "256"),
+        ("3 ** -2", "0.1111111111111111111111111111"),
+    ],
+)
+def test_calculator_returns_deterministic_decimal_results(expression, expected):
+    assert calculate(expression) == expected
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "__import__('os').system('whoami')",
+        "open('/etc/passwd').read()",
+        "x + 1",
+        "True + 1",
+        "2 ** 9",
+        "1 / 0",
+        "9" * 300,
+    ],
+)
+def test_calculator_rejects_code_names_and_unbounded_operations(expression):
+    with pytest.raises(CalculationError):
+        calculate(expression)
+
+
+@pytest.mark.parametrize(("raw", "expected"), [
+    (b"\xef\xbb\xbfhello", "hello"),  # UTF-8 BOM
+    (b"caf\xe9", "caf\u00e9"),  # cp1252 fallback
+    ("hello".encode("utf-16"), "hello"),
+    ("hello".encode("utf-32"), "hello"),
+])
+def test_decode_text(raw, expected):
+    assert decode_text(raw) == expected
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("a\r\nb\rc", "a\nb\nc"),  # CRLF and CR become LF
+    ("a\x00b\x07c\td\ne", "abc\td\ne"),  # C0 controls go; tab and newline stay
+    ("a\x85b\x9fc", "abc"),  # C1 controls
+    ("co\u00adoperate", "cooperate"),  # soft hyphen
+    ("a\u200bb\u200dc\u2060d\ufeffe", "abcde"),  # zero-width characters
+    ("x\u202ey", "xy"),  # bidi control
+])
+def test_normalize_text(text, expected):
+    assert normalize_text(text) == expected
+    assert normalize_text(expected) == expected  # idempotent

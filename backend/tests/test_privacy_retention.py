@@ -79,14 +79,6 @@ def test_privacy_export_manifest_and_inventory(db, tmp_path):
     assert len(manifest["data"]["artifacts"]) == 1
     assert manifest["data"]["artifacts"][0]["artifact_id"] == str(art_id)
 
-    # Get export
-    fetched = PrivacyService.get_export(db, UUID(export_res["exportId"]), ws)
-    assert fetched["exportId"] == export_res["exportId"]
-
-    # List exports
-    listed = PrivacyService.list_exports(db, ws)
-    assert len(listed) >= 1
-    assert any(e["exportId"] == export_res["exportId"] for e in listed)
 
 
 def test_export_interrupted_by_deletion_cannot_publish_a_private_bundle(db, tmp_path, monkeypatch):
@@ -103,7 +95,8 @@ def test_export_interrupted_by_deletion_cannot_publish_a_private_bundle(db, tmp_
     with pytest.raises(HTTPException) as gone:
         PrivacyService.start_export(db, workspace, user_id=user_id)
     assert gone.value.status_code == 410
-    assert PrivacyService.list_exports(db, workspace) == []
+    assert db.execute("SELECT count(*) AS n FROM privacy_exports WHERE workspace_key = %s",
+                      (workspace,)).fetchone()["n"] == 0
 
 
 def test_privacy_deletion_fences_and_deletes_dependency_order(db, tmp_path):
@@ -306,13 +299,6 @@ def test_owner_download_hides_token_and_inventory_covers_student_domains(db, col
     assert inventory["response_feedback"] == 1
     assert inventory["jobs"] == 1
     assert body["manifest"]["data"]["feedback"][0]["comment"] == "student note stays in the owner bundle"
-    listed = client.get("/api/privacy/exports")
-    assert listed.status_code == 200
-    assert listed.json()
-    assert all("downloadToken" not in item for item in listed.json())
-    fetched = client.get(f"/api/privacy/exports/{body['exportId']}")
-    assert fetched.status_code == 200
-    assert "downloadToken" not in fetched.json()
 
     downloaded = client.get(
         f"/api/privacy/exports/{body['exportId']}/download",

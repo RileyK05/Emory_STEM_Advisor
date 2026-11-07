@@ -9,12 +9,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from app.artifacts.models import DocumentSpec
+from app.artifacts.storage import ArtifactStore, public_record
 from app.auth.factory import build_auth_service, membership_policy
 from app.auth.service import AuthConfigurationError, AuthService, Membership, OIDCConfig
 from app.config import load_settings
 from app.db.connection import connect
 from tests.fakes import FakeEmbedder, FakeProvider
-from tests.helpers import lenient_config
+from tests.helpers import lenient_config, start_run
 
 ORIGIN = "https://advisor.example.test"
 KEY = b"offline-integration-secret-at-least-32-bytes"
@@ -88,22 +90,21 @@ def test_two_verified_users_cannot_read_or_mutate_private_resources(db, collecti
     headers = {"Origin": ORIGIN}
     spec = {"kind": "document", "title": "Private", "blocks": [
         {"id": "p1", "type": "paragraph", "text": "Alice material"}]}
-    made = alice.post("/api/artifacts", json={"kind": "document", "spec": spec}, headers=headers)
+    alice_workspace = alice.get("/api/session").json()["workspaceKey"]
+    record = ArtifactStore(db, workspace_key=alice_workspace, data_dir=alice.app.state.settings.data_dir).create(
+        DocumentSpec.model_validate(spec))
+    artifact = public_record(record)
+    made = alice.get("/api/artifacts/" + artifact["artifactId"])
     assert made.status_code == 200
-    artifact = made.json()
     assert len(alice.get("/api/artifacts").json()) == 1
     assert bob.get("/api/artifacts").json() == []
     endpoint = "/api/artifacts/" + artifact["artifactId"]
     for path in (endpoint, endpoint + "/revisions", endpoint + "/preview",
                  endpoint + "/download?format=md", endpoint + "/original"):
         assert bob.get(path).status_code == 404
-    assert bob.post(endpoint + "/revisions", headers=headers, json={
-        "expectedParentRevisionId": artifact["revisionId"], "spec": spec}).status_code == 404
 
-    run = alice.post("/api/runs", headers=headers, json={
-        "kind": "document", "inputs": {"prompt": "Create a private draft"},
-        "idempotencyKey": "alice-run"}).json()
-    run_path = "/api/runs/" + run["runId"]
+    run_path = "/api/runs/" + start_run(alice, "document", {"prompt": "Create a private draft"},
+                                        "alice-run", workspace=alice_workspace)
     assert bob.get(run_path).status_code == 404
     assert bob.get(run_path + "/events").status_code == 404
     assert bob.post(run_path + "/cancel", headers=headers).status_code == 404
@@ -133,9 +134,9 @@ def test_two_verified_users_cannot_read_or_mutate_private_resources(db, collecti
     forbidden = bob.post("/api/query", headers=headers, json={
         "query": "quantum mechanics", "collectionId": collection_name, "sourceIds": [source_id]})
     assert forbidden.status_code == 404
-    assert alice.post("/api/artifacts", json={"kind": "document", "spec": spec}).status_code == 403
-    assert alice.post("/api/artifacts", headers={"Origin": "https://attacker.test"},
-                      json={"kind": "document", "spec": spec}).status_code == 403
+    assert alice.post("/api/conversations", json={"title": "x"}).status_code == 403
+    assert alice.post("/api/conversations", headers={"Origin": "https://attacker.test"},
+                      json={"title": "x"}).status_code == 403
     assert alice.get(endpoint, headers={"Host": "attacker.test"}).status_code == 403
     assert alice.post("/api/auth/logout", headers=headers).status_code == 204
     assert alice.get(endpoint).status_code == 401
@@ -148,8 +149,8 @@ def test_development_boundary_rejects_external_hosts_and_forwarded_requests(db, 
     assert client.get("/api/artifacts").status_code == 200
     assert client.get("/api/artifacts", headers={"Host": "attacker.test"}).status_code == 403
     assert client.get("/api/artifacts", headers={"X-Forwarded-For": "203.0.113.1"}).status_code == 403
-    assert client.post("/api/artifacts", headers={"Origin": "https://attacker.test"},
-                       json={"kind": "document", "spec": {}}).status_code == 403
+    assert client.post("/api/conversations", headers={"Origin": "https://attacker.test"},
+                       json={"title": "x"}).status_code == 403
 
 
 @pytest.mark.parametrize("invalid", [True, float("nan"), float("inf"), -1])

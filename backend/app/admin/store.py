@@ -1,9 +1,5 @@
 import base64
-import csv
-import io
-import json
 from datetime import UTC, datetime
-from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException
@@ -32,58 +28,6 @@ def decode_audit_cursor(cursor: str) -> tuple[datetime, UUID]:
     except (ValueError, TypeError, UnicodeDecodeError):
         raise HTTPException(422, "invalid audit cursor") from None
 
-
-
-def sanitize_csv_cell(value: Any) -> str:
-    """Neutralize spreadsheet-formula prefixes in CSV cells (CWE-1236)."""
-    if value is None:
-        return ""
-    text = str(value)
-    if text and text[0] in ("=", "+", "-", "@", "\t", "\r"):
-        return f"'{text}"
-    return text
-
-
-def export_audit_csv(rows: list[dict]) -> str:
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-        "audit_id", "created_at", "actor_user_id", "actor_email",
-        "actor_display_name", "actor_workspace", "action", "target_type",
-        "target_id", "detail",
-    ])
-    for row in rows:
-        writer.writerow([
-            sanitize_csv_cell(row["audit_id"]),
-            sanitize_csv_cell(row["created_at"].isoformat() if row.get("created_at") else ""),
-            sanitize_csv_cell(row.get("actor_user_id")),
-            sanitize_csv_cell(row.get("actor_email")),
-            sanitize_csv_cell(row.get("actor_display_name")),
-            sanitize_csv_cell(row.get("actor_workspace")),
-            sanitize_csv_cell(row.get("action")),
-            sanitize_csv_cell(row.get("target_type")),
-            sanitize_csv_cell(row.get("target_id")),
-            sanitize_csv_cell(json.dumps(row.get("detail", {}), sort_keys=True)),
-        ])
-    return output.getvalue()
-
-
-def export_audit_json(rows: list[dict]) -> str:
-    entries = []
-    for row in rows:
-        entries.append({
-            "auditId": str(row["audit_id"]),
-            "actorUserId": str(row["actor_user_id"]) if row.get("actor_user_id") else None,
-            "actorWorkspace": row["actor_workspace"],
-            "action": row["action"],
-            "targetType": row["target_type"],
-            "targetId": row.get("target_id"),
-            "detail": row.get("detail", {}),
-            "createdAt": row["created_at"].isoformat() if row.get("created_at") else None,
-            "actorEmail": row.get("actor_email"),
-            "actorDisplayName": row.get("actor_display_name"),
-        })
-    return json.dumps(entries, indent=2)
 
 
 class AdminStore:
@@ -135,8 +79,8 @@ class AdminStore:
         return [dict(row) for row in rows]
 
     def update_user(self, user_id: UUID, *, role: str, status: str) -> dict:
-        if role not in {"student", "advisor", "admin", "auditor"}:
-            raise HTTPException(422, "role must be student, advisor, admin, or auditor")
+        if role not in {"student", "admin"}:
+            raise HTTPException(422, "role must be student or admin")
         if status not in {"active", "disabled"}:
             raise HTTPException(422, "status must be active or disabled")
         with self.conn.transaction():
@@ -222,73 +166,6 @@ class AdminStore:
             last = entries[-1]
             next_cursor = encode_audit_cursor(last["created_at"], last["audit_id"])
         return entries, next_cursor
-
-    def export_audit(
-        self,
-        *,
-        format: str = "csv",
-        action: str = "",
-        target_type: str = "",
-        target_id: str = "",
-        actor: str = "",
-        since: datetime | None = None,
-        until: datetime | None = None,
-        limit: int = 5000,
-    ) -> tuple[str, str, datetime]:
-        if format not in {"csv", "json"}:
-            raise HTTPException(422, "format must be csv or json")
-        limit = _limit(limit, maximum=10000)
-        snapshot_until = until or datetime.now(UTC)
-
-        actor_str = actor.strip()
-        actor_user_id: UUID | None = None
-        if actor_str:
-            try:
-                actor_user_id = UUID(actor_str)
-            except ValueError:
-                pass
-
-        params = {
-            "action": action.strip(),
-            "target_type": target_type.strip(),
-            "target_id": target_id.strip(),
-            "actor": actor_str,
-            "actor_user_id": actor_user_id,
-            "actor_like": f"%{actor_str.lower()}%" if actor_str else "",
-            "since": since,
-            "until": snapshot_until,
-            "cursor_created_at": None,
-            "cursor_audit_id": None,
-            "limit": limit,
-        }
-        rows = self.conn.execute(queries.get("admin_list_audit_filtered"), params).fetchall()
-        entries = [dict(row) for row in rows]
-
-        # Audit export action without creating recursive export churn:
-        # snapshot_until bounds the export before this row was created.
-        self.record_audit(
-            "audit.export",
-            "audit",
-            None,
-            {
-                "format": format,
-                "count": len(entries),
-                "action": action,
-                "target_type": target_type,
-                "since": since.isoformat() if since else None,
-                "until": snapshot_until.isoformat(),
-            },
-        )
-        self.conn.commit()
-
-        if format == "csv":
-            content = export_audit_csv(entries)
-            media_type = "text/csv; charset=utf-8"
-        else:
-            content = export_audit_json(entries)
-            media_type = "application/json"
-        return content, media_type, snapshot_until
-
 
     def jobs(self, *, status: str = "", limit: int = 100,
              offset: int = 0) -> list[dict]:

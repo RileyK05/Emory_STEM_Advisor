@@ -392,17 +392,17 @@ def query_response(
     conversation_request_id: UUID | None = None,
     system_prompt: str | None = None,
 ) -> AnswerResponse | RefusalResponse:
-    from app.flags.service import EXECUTION_FLAGS, FeatureFlagService
+    from app.auth.capabilities import EXECUTION_SETTINGS, execution_settings
 
-    settings = FeatureFlagService.execution_settings(conn, settings, workspace_key)
+    settings = execution_settings(conn, settings, workspace_key)
     admitted_settings = settings
     original_guard = check_cancelled
 
     def check_cancelled():
         original_guard()
-        current = FeatureFlagService.execution_settings(conn, admitted_settings, workspace_key)
+        current = execution_settings(conn, admitted_settings, workspace_key)
         if any(getattr(admitted_settings, attr) and not getattr(current, attr)
-               for attr in EXECUTION_FLAGS.values()):
+               for attr in EXECUTION_SETTINGS):
             raise HTTPException(409, "feature access changed; refresh before starting new work")
         conn.commit()
         release_borrow(conn)

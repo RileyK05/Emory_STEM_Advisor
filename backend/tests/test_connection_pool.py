@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from fastapi import HTTPException
 from psycopg_pool import PoolTimeout
 
 from app.config import load_settings
@@ -16,7 +17,7 @@ from app.db.connection import (
     pooled_connect,
 )
 from app.llm.base import GenerationResult, ToolCall, Usage
-from tests.helpers import collection_name, ingest_text, lenient_config
+from tests.helpers import collection_name, ingest_text, lenient_config, start_run
 
 
 @pytest.fixture
@@ -201,11 +202,8 @@ def test_run_routes_do_not_hold_bootstrap_connection_while_job_store_borrows(dsn
     app = create_app(settings=settings, allow_test_client=True,
                      embedder=FakeEmbedder(dim=8), provider=FakeProvider())
     client = TestClient(app)
-    made = client.post("/api/runs", json={
-        "kind": "document", "inputs": {}, "idempotencyKey": "single-pool-run",
-    })
-    assert made.status_code == 200, made.text
-    run_id = made.json()["runId"]
+    client.app.state.settings = settings
+    run_id = start_run(client, "document", {}, "single-pool-run")
     assert client.get(f"/api/runs/{run_id}").json()["state"] == "queued"
     assert client.get(f"/api/runs/{run_id}/events").status_code == 200
     assert client.post(f"/api/runs/{run_id}/cancel").json()["state"] == "cancelled"
@@ -220,19 +218,12 @@ def test_run_creation_honors_workspace_admission_cap(dsn, db, collection):
 
     client = _pooled_client(dsn, provider=FakeProvider(),
                             admission_max_pending_workspace=1)
-    first = client.post("/api/runs", json={
-        "kind": "document", "inputs": {}, "idempotencyKey": "admission-run-1",
-    })
-    assert first.status_code == 200, first.text
-    replay = client.post("/api/runs", json={
-        "kind": "document", "inputs": {}, "idempotencyKey": "admission-run-1",
-    })
-    assert replay.status_code == 200  # a replay is not new work
-    second = client.post("/api/runs", json={
-        "kind": "document", "inputs": {}, "idempotencyKey": "admission-run-2",
-    })
-    assert second.status_code == 429
-    assert second.headers["retry-after"] == "5"
+    first = start_run(client, "document", {}, "admission-run-1")
+    assert start_run(client, "document", {}, "admission-run-1") == first  # not new work
+    with pytest.raises(HTTPException) as refused:
+        start_run(client, "document", {}, "admission-run-2")
+    assert refused.value.status_code == 429
+    assert refused.value.headers["Retry-After"] == "5"
 
 
 def test_conversation_execution_lease_does_not_block_job_control_pool(dsn):

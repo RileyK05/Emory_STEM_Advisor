@@ -26,16 +26,6 @@ def create_export(conn: Conn, principal: AuthPrincipal):
     return PrivacyService.start_export(conn, principal.workspace_key, principal.user_id)
 
 
-@router.get("/exports", response_model=list[PrivacyExportResponse], response_model_exclude_unset=True)
-def list_exports(conn: Conn, principal: AuthPrincipal):
-    return PrivacyService.list_exports(conn, principal.workspace_key)
-
-
-@router.get("/exports/{export_id}", response_model=PrivacyExportResponse, response_model_exclude_unset=True)
-def get_export(export_id: UUID, conn: Conn, principal: AuthPrincipal):
-    return PrivacyService.get_export(conn, export_id, principal.workspace_key)
-
-
 @router.get(
     "/exports/{export_id}/download",
     response_model=PrivacyExportDownloadResponse,

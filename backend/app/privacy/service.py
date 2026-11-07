@@ -30,16 +30,10 @@ _DELETE_STEPS = (
     "delete_workspace_gaps",
     "delete_workspace_gap_observations",
     "delete_workspace_debug_experiments",
-    "delete_workspace_claim_reviews",
-    "delete_workspace_decisions",
-    "delete_workspace_provider_batch_items",
-    "delete_workspace_provider_batches",
     "delete_workspace_tool_executions",
     "delete_workspace_tool_execution_operations",
-    # Jobs own artifact-run plans/units; remove them before operations because
-    # artifact_run_unit_calls restricts operation_calls.
     "delete_workspace_jobs",
-    # Private uploads, after the jobs whose run plans pinned them.
+    # Private uploads.
     "delete_workspace_sources",
     "delete_workspace_operations",
     "delete_workspace_quota_settlements",
@@ -184,21 +178,6 @@ class PrivacyService:
         ).fetchone()
         conn.commit()
         return PrivacyService._export_view(row, include_token=True)
-
-    @staticmethod
-    def get_export(conn, export_id: UUID, workspace_key: str) -> dict[str, Any]:
-        row = PrivacyService._owned_export(conn, export_id, workspace_key)
-        conn.commit()
-        return PrivacyService._export_view(row, include_token=False)
-
-    @staticmethod
-    def list_exports(conn, workspace_key: str, *, limit: int = 50) -> list[dict[str, Any]]:
-        rows = conn.execute(
-            queries.get("list_privacy_exports"),
-            {"workspace_key": workspace_key, "limit": limit},
-        ).fetchall()
-        conn.commit()
-        return [PrivacyService._export_view(row, include_token=False) for row in rows]
 
     @staticmethod
     def prune_expired_exports(conn, *, now: datetime | None = None) -> int:

@@ -8,10 +8,8 @@ from fastapi import APIRouter, Depends
 
 from app.api import deps
 from app.api.schemas import (
-    EvalCandidateCreateRequest,
     EvalCandidatePromotionRequest,
     EvalCandidatePromotionResponse,
-    EvalCandidateResponse,
     FeedbackTriageListItem,
     FeedbackTriageRequest,
     FeedbackTriageResponse,
@@ -140,16 +138,3 @@ def promote_eval_candidate(
     )
 
 
-@router.post("/eval-candidates", response_model=EvalCandidateResponse, response_model_exclude_unset=True)
-def create_eval_candidate(body: EvalCandidateCreateRequest, conn: Conn, principal: CurrentPrincipal):
-    row = FeedbackService.create_candidate(
-        conn, body.redactedPrompt, body.redactedExpected, body.sourceFeedbackId, principal,
-    )
-    conn.commit()
-    return EvalCandidateResponse(
-        candidateId=row["candidate_id"],
-        redactedPrompt=row["redacted_prompt"],
-        redactedExpected=row["redacted_expected"],
-        sourceFeedbackId=row["source_feedback_id"],
-        createdAt=iso(row["created_at"]),
-    )

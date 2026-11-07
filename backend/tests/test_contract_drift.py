@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel, create_model
 
-from app.api import schemas
+from app.api import create_app, schemas
+from app.config import load_settings
+from tests.fakes import FakeEmbedder, FakeProvider
 
 TYPES_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "api" / "types.ts"
 _INTERFACE = re.compile(r"export interface (\w+)(?:\s+extends([^{]+))?\s*\{", re.MULTILINE)
@@ -101,3 +103,36 @@ def test_contract_guard_distinguishes_omission_from_nullable_values(default, fro
     model = create_model("Example", value=(str | None, default))
     problems = _contract_problems({"Example": {"value": frontend_optional}}, {"Example": model})
     assert bool(problems) is drift
+
+
+_SUCCESS = ("200", "201", "202", "204", "303")
+
+
+@pytest.fixture(scope="module")
+def operations():
+    app = create_app(settings=load_settings(), allow_test_client=True,
+                     embedder=FakeEmbedder(dim=8), provider=FakeProvider())
+    paths = app.openapi()["paths"]
+    return {(method.upper(), path): operation
+            for path, methods in paths.items() for method, operation in methods.items()}
+
+
+def _success(operation):
+    for status in _SUCCESS:
+        if status in operation["responses"]:
+            return status, operation["responses"][status]
+    raise AssertionError("no success response declared")
+
+
+def test_every_route_declares_a_typed_body_or_a_documented_non_json_result(operations):
+    undocumented = []
+    for (method, path), operation in sorted(operations.items()):
+        status, response = _success(operation)
+        content = response.get("content", {})
+        json_schema = content.get("application/json", {}).get("schema")
+        typed_json = bool(json_schema)  # a response model produces a non-empty schema
+        non_json = any(media != "application/json" for media in content)
+        no_body = status in {"204", "303"} and response.get("description") != "Successful Response"
+        if not (typed_json or non_json or no_body):
+            undocumented.append(f"{method} {path}")
+    assert not undocumented, "routes with no typed body or documented result: " + ", ".join(undocumented)

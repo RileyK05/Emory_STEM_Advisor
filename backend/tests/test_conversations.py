@@ -341,10 +341,15 @@ def test_artifact_context_binds_exact_revision_not_current_title_only(db, collec
     client = api_client(db, collection)
     spec = {"kind": "document", "title": "Exact artifact", "blocks": [
         {"id": "p1", "type": "paragraph", "text": "Immutable original paragraph"}]}
-    original = client.post("/api/artifacts", json={"kind": "document", "spec": spec}).json()
+    from app.artifacts.models import DocumentSpec
+    from app.artifacts.storage import ArtifactStore, public_record
+
+    store = ArtifactStore(db, workspace_key="development",
+                          data_dir=client.app.state.settings.data_dir)
+    saved = store.create(DocumentSpec.model_validate(spec))
+    original = public_record(saved)
     revised = {**spec, "blocks": [{"id": "p1", "type": "paragraph", "text": "New paragraph"}]}
-    client.post("/api/artifacts/" + original["artifactId"] + "/revisions", json={
-        "expectedParentRevisionId": original["revisionId"], "spec": revised})
+    store.revise(saved["artifact_id"], saved["revision_id"], DocumentSpec.model_validate(revised))
     made = client.post("/api/conversations", json={"title": "Artifact reference"}).json()
     path = "/api/conversations/" + made["conversationId"]
     response = client.post(path + "/turns", json={"query": "show history", "mode": "history",

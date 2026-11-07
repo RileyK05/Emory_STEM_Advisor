@@ -1,6 +1,6 @@
 -- name: schema_catalog
 SELECT 'column' AS kind, c.relname || '.' || a.attname AS name,
-       jsonb_build_object('position', a.attnum, 'type', format_type(a.atttypid, a.atttypmod),
+       jsonb_build_object('position', row_number() OVER (PARTITION BY c.oid ORDER BY a.attnum), 'type', format_type(a.atttypid, a.atttypmod),
            'not_null', a.attnotnull, 'generated', a.attgenerated,
            'default', pg_get_expr(d.adbin, d.adrelid))::text AS definition
 FROM pg_class c
@@ -44,9 +44,6 @@ CREATE DATABASE baseline_check;
 -- name: schema_drop_baseline_check_database
 DROP DATABASE baseline_check;
 
--- name: schema_clear_fresh_feature_flags
-DELETE FROM feature_flags;
-
 -- name: schema_clear_fresh_quota_policies
 DELETE FROM quota_policies;
 
@@ -59,12 +56,6 @@ UPDATE sources SET is_current = false;
 -- name: schema_restore_source_lifecycle
 UPDATE sources SET origin_key = %(origin_key)s, is_current = %(is_current)s
 WHERE source_id = %(source_id)s;
-
--- name: schema_legacy_program_sources
-SELECT source_id, collection_id, file_hash, raw_path, created_at
-FROM sources WHERE workspace_key IS NULL AND status = 'indexed'
-  AND content_type = 'text/markdown' AND origin_key IS NULL
-ORDER BY created_at, source_id;
 
 -- name: schema_prepare_fingerprints
 CREATE OR REPLACE FUNCTION pg_temp.table_fingerprints()
@@ -89,44 +80,6 @@ END $$;
 
 -- name: schema_table_fingerprints
 SELECT * FROM pg_temp.table_fingerprints() ORDER BY table_name;
-
--- name: schema_prepare_non_graph_fingerprints
-CREATE OR REPLACE FUNCTION pg_temp.non_graph_fingerprints()
-RETURNS TABLE(table_name text, row_count bigint, fingerprint text)
-LANGUAGE plpgsql AS $$
-DECLARE r record; ignored_columns text[];
-BEGIN
-    FOR r IN SELECT c.relname FROM pg_class c
-             JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE n.nspname = 'public' AND c.relkind = 'r'
-               AND c.relname <> 'schema_migrations' AND left(c.relname, 4) <> 'sim_'
-             ORDER BY c.relname
-    LOOP
-        ignored_columns := CASE WHEN r.relname = 'sources'
-                           THEN ARRAY['is_current', 'origin_key'] ELSE ARRAY[]::text[] END;
-        RETURN QUERY EXECUTE format(
-            'SELECT %%L::text, count(*)::bigint, md5(coalesce(string_agg('
-            'md5((to_jsonb(t) - %%L::text[])::text), '''' '
-            'ORDER BY md5((to_jsonb(t) - %%L::text[])::text)), '''')) '
-            'FROM public.%%I t', r.relname, ignored_columns, ignored_columns, r.relname);
-    END LOOP;
-END $$;
-
--- name: schema_non_graph_fingerprints
-SELECT * FROM pg_temp.non_graph_fingerprints() ORDER BY table_name;
-
--- name: schema_source_content_fingerprint
-SELECT count(*) AS row_count,
-       md5(coalesce(string_agg(md5((to_jsonb(s) - ARRAY['is_current','origin_key','updated_at'])::text),
-                  '' ORDER BY md5((to_jsonb(s) - ARRAY['is_current','origin_key','updated_at'])::text)), ''))
-           AS fingerprint
-FROM sources s;
-
--- name: schema_sim_build_fingerprint
-SELECT count(*) AS row_count,
-       md5(coalesce(string_agg(md5(to_jsonb(s)::text), '' ORDER BY md5(to_jsonb(s)::text)), ''))
-           AS fingerprint
-FROM sim_builds s;
 
 -- name: schema_foreign_key_violations
 DO $$

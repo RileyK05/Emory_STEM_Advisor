@@ -86,28 +86,6 @@ class FeedbackService:
         return stored
 
     @classmethod
-    def create_candidate(
-        cls,
-        conn,
-        redacted_prompt: str,
-        redacted_expected: str,
-        source_feedback_id: UUID | None,
-        actor: Principal,
-    ) -> dict[str, Any]:
-        if actor.role not in {"admin", "advisor"}:
-            raise HTTPException(403, "eval candidate review is denied")
-        row = conn.execute(
-            queries.get("insert_eval_candidate"),
-            {
-                "candidate_id": uuid4(),
-                "redacted_prompt": redacted_prompt.strip(),
-                "redacted_expected": redacted_expected.strip(),
-                "source_feedback_id": source_feedback_id,
-            },
-        ).fetchone()
-        return dict(row)
-
-    @classmethod
     def list_triage(cls, conn, actor: Principal) -> list[dict[str, Any]]:
         require_operation(actor, "sources.review")
         rows = conn.execute(queries.get("list_feedback_triage_events"), {}).fetchall()

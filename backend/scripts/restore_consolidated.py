@@ -60,7 +60,6 @@ def restore_consolidated(archive_path: Path, target_data: Path) -> dict:
                 raise ValueError("backup upgrade and consolidated schema differ")
             # Migrations seed these tables on a fresh install. The upgraded backup
             # supplies their complete contents, including any operator changes.
-            target.execute(queries.get("schema_clear_fresh_feature_flags"))
             target.execute(queries.get("schema_clear_fresh_quota_policies"))
             target.commit()
             # Copy the upgraded reference, not the original pre-upgrade dump:

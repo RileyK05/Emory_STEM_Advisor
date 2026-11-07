@@ -90,18 +90,6 @@ class RemoteSandboxClient:
         if health is None or not _IMAGE_DIGEST.fullmatch(str(health["image_ids"].get(image, ""))):
             raise IsolationUnavailable(not_ready)
 
-    def _verify_worker(self) -> None:
-        health = self._health("Authenticated production sandbox worker is unavailable.")
-        if (
-            health is None
-            or len(health["image_ids"]) < 2
-            or any(not isinstance(value, str) or not _IMAGE_DIGEST.fullmatch(value)
-                   for value in health["image_ids"].values())
-        ):
-            raise IsolationUnavailable(
-                "Sandbox worker does not report required production isolation."
-            )
-
     def post_cancellable(self, path: str, request_id: str, payload: bytes, *, timeout: float,
                          cancel_event: threading.Event | None,
                          cancelled: str = "Sandbox execution was cancelled.") -> bytes:

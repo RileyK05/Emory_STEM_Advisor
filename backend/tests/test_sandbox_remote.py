@@ -164,4 +164,4 @@ def test_remote_client_refuses_worker_without_image_probe():
         RemoteSandboxConfig("https://sandbox.example", "x" * 40), opener=Opener(unhealthy)
     )
     with pytest.raises(IsolationUnavailable):
-        client._verify_worker()
+        client.require_image("office", unavailable="down", not_ready="not ready")

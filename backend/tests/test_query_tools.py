@@ -1,8 +1,8 @@
 """Grounded query tools use the durable ledger and remain citation scoped."""
 import json
 from dataclasses import replace
+from uuid import uuid4
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app.api import create_app
@@ -10,8 +10,9 @@ from app.api.query_service import query_response
 from app.api.schemas import QueryRequest
 from app.config import load_settings
 from app.db.connection import connection_dsn
-from app.flags.service import FeatureFlagService
+from app.generation.answer_tools import answer_tool_context
 from app.llm.base import GenerationResult, StreamEvent, ToolCall, Usage
+from app.retrieval.types import CitedChunk
 from tests.fakes import FakeEmbedder
 from tests.helpers import collection_name, ingest_text, lenient_config
 
@@ -35,9 +36,7 @@ class _QueryProvider:
         return next(self.responses)
 
 
-@pytest.mark.parametrize("stop_tools", [False, True])
-def test_query_calculator_then_final_answer_accounts_and_persists_each_call(db, collection, tmp_path,
-                                                                          monkeypatch, stop_tools):
+def test_query_calculator_then_final_answer_accounts_and_persists_each_call(db, collection, tmp_path):
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha has value 0.3.\n")
     provider = _QueryProvider([
         GenerationResult(tool_calls=(ToolCall("query-calc", "advisor_calculate",
@@ -46,24 +45,9 @@ def test_query_calculator_then_final_answer_accounts_and_persists_each_call(db, 
         GenerationResult(text="The value is 0.3 [1].", finish_reason="stop",
             usage=Usage(120, 15, source="provider")),
     ])
-    generate = provider.generate
-
-    def maybe_stop(request):
-        result = generate(request)
-        if stop_tools:
-            FeatureFlagService.set_kill_switch(db, "tools", True, "test stop during call")
-        return result
-
-    monkeypatch.setattr(provider, "generate", maybe_stop)
     response = api_client(db, provider).post("/api/query", json={
         "query": "alpha", "collectionId": collection_name(db, collection),
     })
-    if stop_tools:
-        assert response.status_code == 409, response.text
-        row = db.execute("SELECT sum(prompt_tokens) AS tokens, count(*) AS calls FROM model_calls").fetchone()
-        assert (row["tokens"], row["calls"]) == (100, 1)
-        assert db.execute("SELECT count(*) AS calls FROM tool_executions").fetchone()["calls"] == 0
-        return
     assert response.status_code == 200
     assert response.json()["answer"] == "The value is 0.3 [1]."
     assert len(provider.calls) == 2
@@ -188,3 +172,33 @@ def test_tool_query_stream_callbacks_reset_tool_attempt_output(db, collection, t
     assert len(calls) == 2
     assert [(item["status"], item["prompt_tokens"], item["completion_tokens"])
             for item in calls] == [("completed", 22, 6), ("completed", 28, 10)]
+
+
+def _chunk():
+    return CitedChunk(
+        chunk_id=uuid4(), source_id=uuid4(), chunk_index=0,
+        source_name="atlas.jsonl", locator_label="MATH 111",
+        text="Evidence for MATH 111", seams=("keyword",),
+        normalized_score=1.0, source_slot=1, rank=1,
+    )
+
+
+def test_answer_tool_fingerprint_includes_campus_equivalents():
+    chunks = [_chunk()]
+    courses = [{
+        "code": "MATH 111", "title": "MATH 111", "citation_numbers": (1,),
+        "parse_status": "none", "prerequisites": None, "corequisites": None,
+        "requisites_raw": None, "requirements_evidence_complete": True,
+        "blocker_reason": None,
+    }]
+    ctx = {"courses": courses, "topic_groups": []}
+    settings = load_settings()
+    common = {
+        "query": "q", "chunks": chunks, "workspace_key": "w", "settings": settings,
+        "advising_context": ctx,
+    }
+    without = answer_tool_context(**common, campus_equivalents=None)[2]
+    with_eq = answer_tool_context(
+        **common, campus_equivalents={"MATH 111": frozenset({"MATH_OX 111"})},
+    )[2]
+    assert without != with_eq

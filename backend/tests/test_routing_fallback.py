@@ -116,7 +116,6 @@ def test_explicit_course_lookup_patterns_route_simple_and_leave_uncertainty_comp
     assert classify_role(config, query="What are prerequisites for a math major?")[0] == "complex"
     assert classify_role(config, query="What is MATH 111 and how does it compare to MATH 112?")[0] == "complex"
     assert classify_role(config, query="x", job_kind="batch_generation")[0] == "fast_generation"
-    assert classify_role(config, query="x", job_kind="binary_decision")[0] == "decision"
 
 
 @pytest.mark.parametrize(("first_text", "finish"), [

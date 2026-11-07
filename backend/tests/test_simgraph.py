@@ -13,7 +13,6 @@ from app.retrieval.config import ConfigError, load_retrieval_config
 from app.simgraph.build import build_simgraph, cluster_tree, department_tree
 from app.simgraph.departments import Departments, parse_departments
 from app.simgraph.nudges import LabelNudge, NudgeError, Nudges, load_nudges, parse_nudges
-from app.simgraph.view import subgraph_view
 from app.simgraph.walk import recommend
 from tests.fakes import whitespace_tokens
 
@@ -371,33 +370,6 @@ def test_nudges_apply_and_report(db, collection, tmp_path):
     assert build["nudges_hash"] == "abc"
 
 
-def test_subgraph_view_is_a_containment_tree_with_one_leaf_per_course(db, collection, tmp_path):
-    _import(db, collection, tmp_path)
-    _build(db, collection)
-    recs = _recommend(db, collection)
-    nodes, edges = subgraph_view(db, cluster_id=recs[0].cluster_id)
-    course_nodes = [n for n in nodes if n["kind"] == "course"]
-    assert {n["code"] for n in course_nodes} == {code for _, code, _ in recs[0].courses}
-    ids = {n["id"] for n in nodes}
-    assert len(ids) == len(nodes)
-    assert len(edges) == len(nodes) - 1
-    assert all(e["parentId"] in ids and e["childId"] in ids for e in edges)
-    assert all(e["kind"] == "contains" and "weight" not in e for e in edges)
-    assert all(sum(e["childId"] == n["id"] for e in edges) == 1 for n in course_nodes)
-
-
-def test_root_view_contains_departments_topics_and_course_leaves(db, collection, tmp_path):
-    _import(db, collection, tmp_path)
-    result = _build(db, collection)
-    root = next(r for r in db.execute(queries.get("list_current_clusters"), {
-        "collection_id": collection,
-    }).fetchall() if r["kind"] == "root")
-    nodes, edges = subgraph_view(db, cluster_id=root["cluster_id"])
-    assert {n["kind"] for n in nodes} == {"root", "department", "topic", "course"}
-    assert len([n for n in nodes if n["kind"] == "course"]) == len(_CODES)
-    assert len(edges) == result.edges == len(nodes) - 1
-
-
 def test_small_topic_can_be_selected_without_scoring_course_pairs(db, collection, tmp_path):
     _import(db, collection, tmp_path)
     _build(db, collection)
@@ -413,44 +385,6 @@ def test_single_course_department_remains_visible(db, collection, tmp_path):
     assert result.courses == 1 and result.clusters == 2 and result.edges == 2
     assert recs[0].courses[0][1] == "CS 170"
     assert recs[0].path == ("Computer Science",)
-
-
-def test_http_graph_returns_typed_containment_and_whole_topic_groups(db, collection, tmp_path):
-    from tests.helpers import api_client, collection_name
-
-    _import(db, collection, tmp_path)
-    _build(db, collection)
-
-    class GoalEmbedder:
-        def embed_query(self, text):
-            return _MACRO
-
-    client = api_client(db, collection, embedder=GoalEmbedder())
-    response = client.get("/api/recommendations", params={
-        "query": "a career in macroeconomics", "collection": collection_name(db, collection),
-    })
-    assert response.status_code == 200
-    group = response.json()[0]
-    assert group["path"][0] == "Economics" and len(group["courses"]) == 7
-    view = client.get(f"/api/subgraph/{group['clusterId']}")
-    assert view.status_code == 200
-    tree = view.json()
-    assert {n["code"] for n in tree["nodes"] if n["kind"] == "course"} == {
-        c["code"] for c in group["courses"]
-    }
-    assert all(e["kind"] == "contains" and "weight" not in e for e in tree["edges"])
-    assert len(tree["edges"]) == len(tree["nodes"]) - 1
-
-
-def test_retired_build_does_not_serve_its_tree(db, collection, tmp_path):
-    _import(db, collection, tmp_path)
-    first = _build(db, collection)
-    root = next(r for r in db.execute(queries.get("list_current_clusters"), {
-        "collection_id": collection,
-    }).fetchall() if r["kind"] == "root")
-    second = _build(db, collection)
-    assert first.build_id != second.build_id
-    assert subgraph_view(db, cluster_id=root["cluster_id"]) == ([], [])
 
 
 def test_relevant_deep_topic_is_not_hidden_by_a_mixed_parent_centroid(db, collection, tmp_path):

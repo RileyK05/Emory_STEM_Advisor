@@ -34,13 +34,6 @@ SET current_rule_release_id = CASE
 WHERE program_id = %(program_id)s
 RETURNING program_id, binding_status;
 
--- name: get_program_binding
-SELECT program_id, collection_id, title, kind,
-       source_id, source_index_revision, source_sha256, origin_key,
-       parsed_content_digest, binding_status, bound_at
-FROM programs
-WHERE program_id = %(program_id)s;
-
 -- Ordered supporting chunks for one parsed requirement item. chunk_id and
 -- locator_id deliberately carry no foreign key: the evidence must survive
 -- reindexing and source removal, like citation and excerpt snapshots.
@@ -61,18 +54,6 @@ SELECT program_id, "position", ordinal, chunk_id, locator_id, source_id,
 FROM program_item_evidence
 WHERE program_id = %(program_id)s
 ORDER BY "position", ordinal;
-
--- A requirement item with no rows here is a discovery lead only; it must never be
--- presented as a cited requirement.
--- name: list_program_items_without_evidence
-SELECT i.program_id, i."position", i.section, i.text, i.choose
-FROM program_items i
-WHERE i.program_id = %(program_id)s
-  AND NOT EXISTS (
-      SELECT 1 FROM program_item_evidence e
-      WHERE e.program_id = i.program_id AND e."position" = i."position"
-  )
-ORDER BY i."position";
 
 -- The one current, indexed, shared source with exactly this ingest identity
 -- (scraper manifest origin key plus content SHA-256). No title or filename match.
@@ -129,3 +110,22 @@ FROM programs
 WHERE program_id = %(program_id)s
   AND is_active
 FOR SHARE;
+
+-- name: get_program_binding
+SELECT program_id, collection_id, title, kind,
+       source_id, source_index_revision, source_sha256, origin_key,
+       parsed_content_digest, binding_status, bound_at
+FROM programs
+WHERE program_id = %(program_id)s;
+
+-- A requirement item with no rows here is a discovery lead only; it must never be
+-- presented as a cited requirement.
+-- name: list_program_items_without_evidence
+SELECT i.program_id, i."position", i.section, i.text, i.choose
+FROM program_items i
+WHERE i.program_id = %(program_id)s
+  AND NOT EXISTS (
+      SELECT 1 FROM program_item_evidence e
+      WHERE e.program_id = i.program_id AND e."position" = i."position"
+  )
+ORDER BY i."position";

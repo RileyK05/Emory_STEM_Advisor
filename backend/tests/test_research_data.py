@@ -625,7 +625,7 @@ def test_state_is_optimistic_and_cites_only_issued_evidence(db, collection, tmp_
 
 @pytest.mark.parametrize("scope_kind, publication", [
     ("all", "answer"), ("crowded", "answer"), ("legacy_null", "answer"), ("narrow", "answer"), ("empty", "answer"),
-    ("other_workspace", "answer"), ("other_conversation", "answer"), ("reset", "answer"),
+    ("other_workspace", "answer"), ("other_conversation", "answer"),
     ("changed", "answer"), ("all", "failed"), ("all", "abandoned"),
 ])
 def test_conversation_workspace_reuses_only_published_scoped_work(
@@ -676,8 +676,6 @@ def test_conversation_workspace_reuses_only_published_scoped_work(
         result.update(citations=None, trace={"contextBlock": None})
     conversations.finish(conversation, request, result,
                          state={"answer": "completed", "failed": "failed", "abandoned": "abandoned"}[publication])
-    if scope_kind == "reset":
-        conversations.reset_memory(conversation)
     if scope_kind == "changed":
         import_atlas_sample(db, collection, tmp_path, allow_course_removal=True, text=(
             '{"code":"ECON 201","title":"New edition","description":"Different material."}'))
@@ -692,12 +690,8 @@ def test_conversation_workspace_reuses_only_published_scoped_work(
         scope_kind == "other_conversation") else conversation
     session.open_workspace(selected)
     checkpoint = session.prior_workspace
-    if publication != "answer" or scope_kind in {"other_workspace", "other_conversation", "reset"}:
+    if publication != "answer" or scope_kind in {"other_workspace", "other_conversation"}:
         assert checkpoint is None and not session.recall_page["data"]["references"]
-        if scope_kind == "reset":
-            assert session.workspace.turns("", sequence=1, offset=0)[0] == []
-            assert conversations.context(conversation, archive=True, max_bytes=10_000) == []
-            assert conversations.last_advising_context(conversation) == {}
     else:
         notebook = checkpoint["notebook"]
         assert notebook["student_context"][0]["statement"] == "I prefer flexibility"
@@ -1051,6 +1045,9 @@ def test_research_answers_progressively_and_persists_its_decision(
         embedding_model_id=MODEL, db_pool_max_size=0,
         research_max_tool_calls=8 if scenario in {"program_read_before_preparation", "preparation_after_state_rejection"} else 24,
         research_max_calls=8 if scenario == "preparation_after_state_rejection" else load_settings().research_max_calls)
+    if scenario == "preparation_or_completed_long_unselected_branch":
+        # This chain sits at the default budget; the point is its length, not the limit.
+        settings = replace(settings, research_max_prompt_bytes=56_000)
     if scenario == "program_paging_budget":
         settings = replace(settings, research_max_calls=5)
     observed = {}
@@ -1661,15 +1658,6 @@ def test_research_answers_progressively_and_persists_its_decision(
             assert "not requirements" in result["limitations"][0]
         if scenario == "program_comparison":
             assert response.claims == []  # Subjective suitability is not an entailment claim.
-            from app.generation.claim_review import ClaimReviewService
-
-            saved = db.execute(queries.get("get_response_for_trace"), {
-                "trace_id": UUID(response.trace.traceId)}).fetchone()
-            review_input = db.execute(queries.get("load_claim_review_input"), {
-                "response_id": saved["response_id"], "operation_id": run.operation_id,
-                "workspace_key": "development"}).fetchone()
-            _answer, _context, snapshot = ClaimReviewService._review_input(review_input)
-            assert snapshot["research_blocks"][0]["kind"] == "judgment"
     status = OperationBudgetController().get(db, run.operation_id)
     # The rate-limited attempt never reached the fake but is still a billed call.
     assert status.call_count == len(provider.requests) + (scenario == "rate_limited_research_retry")
@@ -1775,6 +1763,17 @@ def test_program_discovery_prefers_title_matches_to_incidental_requirement_menti
     # every program matched by a common requirement mention.
     broad = session.search(SearchInput(query="computer science major"), None).data["leads"]
     assert {lead["kind"] for lead in broad[:3]} == {"program", "document", "course"}
+    # A course's exact title outranks code order among course leads, and a title
+    # inside a longer one is the weaker match.
+    db.execute("UPDATE courses SET title = 'Macroeconomics' "
+               "WHERE collection_id = %s AND code = 'ECON 101'", (scope.collection_id,))
+    exact = session.search(SearchInput(query="intermediate macroeconomics", kind="course"),
+                           None).data["leads"]
+    assert [lead["code"] for lead in exact][:2] == ["ECON 201", "ECON 101"]
+    # So does a program named in the student's words, the longest name first.
+    session.question = "requirements for the computer science minor in anthropology"
+    named = session.search(SearchInput(query="requirements", kind="program"), None).data["leads"]
+    assert named[0]["title"].startswith("Computer Science")
 
 
 @pytest.mark.parametrize("scenario", ["overflow", "changed_call_id", "stale_source", "cancelled"])
@@ -1877,6 +1876,14 @@ def test_the_prerequisite_graph_can_hold_the_whole_answer(db, collection, tmp_pa
         {"kind": "limitation", "text": "ECON 301 follows it."},))
     with pytest.raises(DecisionRejected, match="ECON 201"):
         session.finish(FinishInput.model_construct(decision=decision), None)
+    session.must_name = set()
+    session.question = "is PHYS 413 a good class"
+    with pytest.raises(DecisionRejected, match="PHYS 413"):
+        session.finish(FinishInput.model_construct(decision=decision), None)
+    session.question = "what classes do i need for the economics major"
+    session.must_name_degrees = {"BA"}
+    with pytest.raises(DecisionRejected, match="also exists as a BA"):
+        session.finish(FinishInput.model_construct(decision=decision), None)
 
 
 @pytest.mark.parametrize("question,hits", [
@@ -1890,6 +1897,23 @@ def test_a_known_source_conflict_is_found_by_its_question(question, hits):
     from app.generation.research_tools import source_conflicts
 
     assert bool(source_conflicts(question)) is hits
+
+
+@pytest.mark.parametrize(("title", "kind", "degree", "others"), [
+    ("Computer Science (BS)", "major", "BS", {"COMPUTER SCIENCE (BA)"}),
+    ("Computer Science (Minor)", "minor", None, set()),
+    ("Mathematics and Computer Science (BS)", "major", "BS", set()),
+])
+def test_a_degree_finds_the_same_subject_under_its_other_degree(title, kind, degree, others):
+    from app.generation.research_tools import other_degrees
+
+    def pin(title, kind, degree):
+        return SimpleNamespace(program_id=title, title=title, kind=kind, degree=degree)
+
+    catalog = [pin("COMPUTER SCIENCE (BA)", "major", "BA"), pin("Computer Science (BS)", "major", "BS"),
+               pin("Computer Science (Minor)", "minor", None),
+               pin("Mathematics and Computer Science (BS)", "major", "BS")]
+    assert {p.title for p in other_degrees(pin(title, kind, degree), catalog)} == others
 
 
 def test_a_program_question_gets_citable_requirement_lines(db, collection, tmp_path):

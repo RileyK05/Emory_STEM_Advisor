@@ -130,9 +130,6 @@ WHERE source_id = %(source_id)s AND collection_id = %(collection_id)s
   AND file_hash = %(file_hash)s AND status = 'indexed'
   AND (origin_key IS NULL OR origin_key = %(origin_key)s);
 
--- name: delete_source
-DELETE FROM sources WHERE source_id = %(source_id)s;
-
 -- name: delete_chunks_for_source
 DELETE FROM chunks WHERE source_id = %(source_id)s;
 
@@ -282,3 +279,6 @@ FOR SHARE;
 -- name: set_source_warnings
 UPDATE sources SET warnings = %(warnings)s, updated_at = now()
 WHERE source_id = %(source_id)s AND index_revision = %(index_revision)s;
+
+-- name: delete_source
+DELETE FROM sources WHERE source_id = %(source_id)s;

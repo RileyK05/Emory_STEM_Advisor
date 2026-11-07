@@ -62,7 +62,7 @@ export function ProfileCard(props: Props) {
       {replacingSecret && (
         <div>
           <label>
-            Replace {profile.provider === 'cloudflare-clef' ? 'API token' : 'API key'} for “{profile.name}”
+            Replace API key for “{profile.name}”
             <input
               type="password"
               autoComplete="new-password"

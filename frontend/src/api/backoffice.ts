@@ -1,7 +1,6 @@
 import { request as apiRequest, requestWithHeaders } from './http';
 import type {
   AdminAuditEntry,
-  AdminCollection,
   AdminJob,
   AdminOverview,
   AdminSource,
@@ -216,11 +215,6 @@ export function listAdminSources(workspace = '', limit = 100, offset = 0): Promi
     offset: String(offset),
   });
   return request<AdminSource[]>(`/api/admin/sources?${search}`);
-}
-
-export function listAdminCollections(limit = 100, offset = 0): Promise<AdminCollection[]> {
-  const search = new URLSearchParams({ limit: String(limit), offset: String(offset) });
-  return request<AdminCollection[]>(`/api/admin/collections?${search}`);
 }
 
 export function getAdminTelemetryUsage(

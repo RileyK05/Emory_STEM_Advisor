@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import math
-import re
-from contextlib import contextmanager
 from typing import Any
 
 from app.config import Settings, with_hf_model
@@ -83,91 +81,6 @@ def get_provider(settings: Settings, *, provider: str | None = None,
             client = _sdk_client("google", api_key, timeout_seconds, "to use this provider")
         return GoogleProvider(client, model_id)
     raise ValueError(f"unknown LLM_PROVIDER: {name!r}")
-
-
-def get_decision_provider(provider: str, *, model: str, api_key: str | None = None,
-                          account_id: str | None = None, endpoint: str | None = None,
-                          client: Any = None,
-                          timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS):
-    """Build a typed decision adapter; API keys are provided by server profiles."""
-    _validate_timeout(timeout_seconds)
-    from app.llm.decision_adapters import CloudflareClefProvider, OpenAIDecisionProvider
-
-    if provider == "openai":
-        if client is None:
-            client = _sdk_client("openai", api_key, timeout_seconds, "for Decisions")
-        return OpenAIDecisionProvider(client, model)
-    if provider == "cloudflare":
-        if client is None:
-            if not account_id or not api_key:
-                raise ValueError("Cloudflare decisions require account_id and api_key")
-            try:
-                import httpx
-            except ImportError as exc:
-                raise RuntimeError("install httpx to use Cloudflare Clef") from exc
-            client = httpx.Client(timeout=timeout_seconds, follow_redirects=False)
-        if not account_id or not api_key:
-            raise ValueError("Cloudflare decisions require account_id and api_key")
-        return CloudflareClefProvider(client, account_id=account_id, api_token=api_key,
-                                      model=model, endpoint=endpoint or "https://api.cloudflare.com/client/v4")
-    raise ValueError(f"unknown decision provider: {provider!r}")
-
-
-def get_batch_provider(provider: str, *, model: str, api_key: str | None = None,
-                      client: Any = None,
-                      timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS):
-    """Build a native async batch adapter from the configured provider factory."""
-    _validate_timeout(timeout_seconds)
-    if provider not in {"openai", "anthropic", "google", "gemini"}:
-        raise ValueError(f"unknown batch provider: {provider!r}")
-    if client is None:
-        client = _sdk_client("google" if provider == "gemini" else provider, api_key,
-                             timeout_seconds, "to use batches")
-    from app.llm.batches import AnthropicBatchProvider, GoogleBatchProvider, OpenAIBatchProvider
-
-    if provider == "openai":
-        return OpenAIBatchProvider(client, model)
-    if provider == "anthropic":
-        return AnthropicBatchProvider(client, model)
-    if not api_key:
-        raise ValueError("Google batch results require a configured API key")
-    downloader = _GoogleBatchFileDownloader(api_key, timeout_seconds=timeout_seconds)
-    return GoogleBatchProvider(client, model, file_downloader=downloader)
-
-
-class _GoogleBatchFileDownloader:
-    """Stream a Google file resource from its fixed authenticated API origin."""
-
-    _resource = re.compile(r"^files/([a-z0-9-]{1,40})$")
-    _origin = "https://generativelanguage.googleapis.com"
-
-    def __init__(self, api_key: str, *, timeout_seconds: float = DEFAULT_PROVIDER_TIMEOUT_SECONDS,
-                 client: Any = None):
-        import httpx
-        self._client = client or httpx.Client(timeout=timeout_seconds, follow_redirects=False)
-        self._key = api_key
-
-    @contextmanager
-    def __call__(self, file_name: str, *, max_bytes: int):
-        match = self._resource.fullmatch(file_name or "")
-        if not match:
-            raise ValueError("Google returned an invalid file resource name")
-        url = f"{self._origin}/v1beta/files/{match.group(1)}:download"
-        with self._client.stream("GET", url, params={"alt": "media"},
-                                 headers={"x-goog-api-key": self._key,
-                                          "accept-encoding": "identity"}) as response:
-            if response.status_code in (301, 302, 303, 307, 308):
-                raise ValueError("Google file download redirects are not allowed")
-            response.raise_for_status()
-            length = response.headers.get("content-length")
-            if length is not None:
-                try:
-                    announced = int(length)
-                except ValueError:
-                    raise ValueError("Google file download has invalid Content-Length") from None
-                if announced < 0 or announced > max_bytes:
-                    raise ValueError(f"Google file result exceeds the {max_bytes} byte limit")
-            yield response.iter_raw(chunk_size=64 * 1024)
 
 
 def _validate_timeout(timeout_seconds: float) -> None:

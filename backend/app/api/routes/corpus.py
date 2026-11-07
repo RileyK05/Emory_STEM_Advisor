@@ -14,12 +14,9 @@ from app.api import deps
 from app.api.schemas import (
     AnswerResponse,
     CollectionDoc,
-    CourseDoc,
     QueryRequest,
-    RecommendationDoc,
     RefusalResponse,
     SourceDoc,
-    SubgraphView,
 )
 from app.api.serialize import public_payload
 from app.auth.dependencies import get_principal, get_workspace_key
@@ -32,8 +29,6 @@ from app.embeddings.base import Embedder
 from app.ingest.pipeline import ingest_file
 from app.llm.base import Provider
 from app.retrieval.config import RetrievalConfig
-from app.simgraph.view import subgraph_view
-from app.simgraph.walk import recommend
 from app.util.localpath import io_path
 
 router = APIRouter()
@@ -244,63 +239,3 @@ def reindex_source(
     return _source_doc(match, can_reindex=True)
 
 
-@router.get("/api/recommendations", response_model=list[RecommendationDoc])
-def recommendations(
-    conn: Conn,
-    settings: SettingsDep,
-    config: ConfigDep,
-    embedder: EmbedderDep,
-    query: str,
-    collection: str | None = None,
-) -> list[RecommendationDoc]:
-    collection_id, _ = deps.resolve_collection(conn, settings, collection)
-    query_vec = embedder.embed_query(query)
-    results = recommend(
-        conn,
-        collection_id=collection_id,
-        query_vec=query_vec,
-        simgraph=config.simgraph,
-    )
-    return [
-        RecommendationDoc(
-            clusterId=str(item.cluster_id),
-            path=list(item.path),
-            courses=[
-                CourseDoc(courseId=str(cid), code=code, title=title)
-                for cid, code, title in item.courses
-            ],
-        )
-        for item in results
-    ]
-
-
-@router.get("/api/retired-courses", response_model=list[CourseDoc])
-def retired_courses(
-    conn: Conn,
-    settings: SettingsDep,
-    query: str = "",
-    collection: str | None = None,
-) -> list[CourseDoc]:
-    collection_id, _ = deps.resolve_collection(conn, settings, collection)
-    pattern = f"%{query.strip()}%" if query.strip() else None
-    rows = conn.execute(queries.get("list_retired_courses"), {
-        "collection_id": collection_id, "pattern": pattern,
-    }).fetchall()
-    return [
-        CourseDoc(courseId=str(row["course_id"]), code=row["code"],
-                  title=row["title"], lifecycle="retired")
-        for row in rows
-    ]
-
-
-@router.get("/api/subgraph/{cluster_id}", response_model=SubgraphView)
-def subgraph(cluster_id: str, conn: Conn) -> SubgraphView:
-    try:
-        parsed = UUID(cluster_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="invalid cluster id") from exc
-    nodes, edges = subgraph_view(conn, cluster_id=parsed)
-    return SubgraphView(
-        nodes=nodes,
-        edges=edges,
-    )

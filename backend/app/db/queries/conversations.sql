@@ -98,35 +98,10 @@ WHERE c.conversation_id = %(conversation_id)s AND c.workspace_key = %(workspace_
   AND t.role = 'user' AND coalesce(t.evidence->'request'->>'mode', 'advising') = 'advising'
 ORDER BY t.sequence DESC LIMIT 1;
 
--- name: reset_conversation_memory
-UPDATE conversations
-SET context_epoch = context_epoch + 1,
-    context_boundary_sequence = last_sequence,
-    context_reset_at = now(),
-    updated_at = now()
-WHERE conversation_id = %(conversation_id)s AND workspace_key = %(workspace_key)s
-RETURNING conversation_id, title, last_sequence, pending_request_id,
-          context_epoch, context_boundary_sequence, context_reset_at,
-          created_at, updated_at;
-
 -- name: insert_claim
 INSERT INTO claims (claim_id, response_id, ordinal, text, citation_numbers)
 VALUES (%(claim_id)s, %(response_id)s, %(ordinal)s, %(text)s, %(citation_numbers)s);
 
-
--- name: latest_conversation_research_notebook
-SELECT r.run_id, r.state, r.status, r.created_at
-FROM research_runs r
-JOIN conversations c ON c.conversation_id = r.conversation_id
-JOIN conversation_turns t ON t.conversation_id = r.conversation_id
-    AND t.request_id = r.conversation_request_id AND t.role = 'assistant'
-WHERE c.conversation_id = %(conversation_id)s
-  AND c.workspace_key = %(workspace_key)s
-  AND r.workspace_key = %(workspace_key)s
-  AND t.sequence > c.context_boundary_sequence
-  AND t.status = 'answer'
-  AND r.state IS NOT NULL
-ORDER BY t.sequence DESC LIMIT 1;
 
 -- name: get_published_conversation_turns
 SELECT t.sequence, t.request_id, t.role, t.text, t.status, t.evidence, t.created_at

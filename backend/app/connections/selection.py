@@ -14,7 +14,7 @@ from app.connections.repository import ConnectionProfiles
 from app.llm.routing import RoutingConfig, choose_route, quality_fallback
 
 _ROUTING_PATH = Path(__file__).resolve().parents[2] / "configs" / "routing.toml"
-_ROLES = frozenset({"standard", "complex", "fast_generation", "decision"})
+_ROLES = frozenset({"standard", "complex", "fast_generation"})
 
 
 class StaleProfileSelection(RuntimeError):
@@ -60,7 +60,7 @@ def _load_routing_config(path: Path, _mtime_ns: int) -> RoutingConfig:
     if config.complex_token_threshold <= 0:
         raise ValueError("routing complex_token_threshold must be positive")
     if any(not isinstance(value, str) or not value for value in (
-        *config.complex_terms, *config.fast_job_kinds, *config.decision_job_kinds
+        *config.complex_terms, *config.fast_job_kinds
     )):
         raise ValueError("routing signals must be non-empty strings")
     return config
@@ -108,15 +108,9 @@ def resolve(settings, conn, query: str, *, job_kind: str | None = None,
     if selected is None:
         raise ConnectionUnavailable("selected connection profile is no longer available")
     selected_runtime = runtime or ConnectionRuntime(settings, repository)
-    if decision.role == "decision":
-        provider = selected_runtime.decision_provider(
-            selected, data_scope=data_scope, required_capabilities=required)
-        settings_provider = selected.provider
-    else:
-        provider = selected_runtime.generation_provider(
-            selected, role=decision.role, data_scope=data_scope,
-            required_capabilities=required)
-        settings_provider = selected.provider
+    provider = selected_runtime.generation_provider(
+        selected, role=decision.role, data_scope=data_scope, required_capabilities=required)
+    settings_provider = selected.provider
     try:
         selected_settings = replace(settings, llm_provider=settings_provider,
                                     llm_model_id=selected.model_id,

@@ -28,7 +28,6 @@ FRESHNESS_THRESHOLDS: dict[str, tuple[int, int]] = {
 }
 
 _YEAR_RE = re.compile(r"\b(20\d\d)\b")
-_RANGE_RE = re.compile(r"\b(20\d\d)[-/](20\d\d|\d\d)\b")
 _COHORT_PATTERNS = [
     re.compile(r"\b(?:cohort|catalog year|matriculation year)\s*(?:of\s*)?([0-9]{4}(?:[-/][0-9]{2,4})?)\b", re.IGNORECASE),
     re.compile(r"\b(?:class of|entering in|entering fall|entering spring)\s*([0-9]{4})\b", re.IGNORECASE),

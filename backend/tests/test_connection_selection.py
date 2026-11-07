@@ -43,9 +43,6 @@ class Runtime:
     def generation_provider(self, profile, **kwargs):
         assert self.conn.commits == 1
         return SimpleNamespace(selected=profile.profile_id)
-    def decision_provider(self, profile, **kwargs):
-        assert self.conn.commits == 1
-        return SimpleNamespace(selected=profile.profile_id)
 
 
 class Conn:
@@ -60,7 +57,7 @@ def _routing_file(tmp_path: Path):
     path.write_text(
         'version = 1\ndefault_role = "standard"\nuncertain_role = "complex"\n'
         'max_quality_escalations = 1\n[signals]\ncomplex_terms = ["compare"]\n'
-        'fast_job_kinds = ["batch_generation"]\ndecision_job_kinds = ["binary_decision"]\n'
+        'fast_job_kinds = ["batch_generation"]\n'
         'complex_token_threshold = 100\n', encoding="utf-8")
     return path
 

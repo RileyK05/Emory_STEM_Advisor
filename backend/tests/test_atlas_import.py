@@ -26,7 +26,7 @@ from app.atlas.offerings import (
     select_latest_offering_captures,
     validate_offering_captures,
 )
-from app.atlas.records import AtlasCourse, canonical_code_map, load_atlas
+from app.atlas.records import AtlasCourse, canonical_code_map, load_atlas, render_courses
 from app.db import queries
 from app.retrieval.config import PrereqSeamConfig, load_retrieval_config
 from app.retrieval.retrieve import retrieve
@@ -906,25 +906,6 @@ def test_reimport_replaces_old_atlas(db, collection, tmp_path):
     assert {(row["lifecycle"], row["n"]) for row in restored} == {("current", first_count)}
 
 
-def test_retired_courses_are_listed_separately_from_the_current_catalog(db, collection, tmp_path):
-    from tests.helpers import api_client, collection_name
-
-    _import(db, collection, tmp_path)
-    smaller = '{"code": "ECON 101", "title": "Macro", "description": "x", ' \
-        '"requisites": null}'
-    _import(db, collection, tmp_path, text=smaller, allow_course_removal=True)
-    client = api_client(db, collection)
-    response = client.get("/api/retired-courses", params={
-        "query": "econ", "collection": collection_name(db, collection),
-    })
-    assert response.status_code == 200
-    rows = response.json()
-    assert {row["code"] for row in rows} == {
-        "ECON 201", "ECON 301", "ECON 350", "ECON 401",
-    }
-    assert {row["lifecycle"] for row in rows} == {"retired"}
-
-
 @pytest.mark.parametrize("failure", ["embedding", "input_changed"])
 def test_failed_atlas_replacement_preserves_active_graph(
     db, collection, tmp_path, monkeypatch, failure,
@@ -1160,3 +1141,36 @@ def test_only_repeated_term_cards_leave_search(cards, master, repeated):
     from app.atlas.offerings import repeated_term_cards
 
     assert repeated_term_cards(cards, [master]) == repeated
+
+
+def test_render_courses_includes_credits_and_crosslisted():
+    text, locators = render_courses([
+        AtlasCourse(
+            code="CS 329",
+            title="Computational Linguistics",
+            description="Syntax and semantics.",
+            credits="3",
+            crosslisted=["LING 329"],
+            requisites="CS 171",
+        )
+    ])
+    assert "Credits: 3" in text
+    assert "Cross-listed as: LING 329" in text
+    assert "Requisites: CS 171" in text
+    assert locators == [("course", "CS 329", 0, len(text))]
+
+
+def test_render_courses_omits_empty_credits_and_crosslist():
+    text, _ = render_courses([
+        AtlasCourse(code="CS 170", title="Intro", description="Java.", credits=None)
+    ])
+    assert "Credits:" not in text
+    assert "Cross-listed" not in text
+
+
+def test_render_courses_includes_campus_equivalents():
+    text, _ = render_courses(
+        [AtlasCourse(code="MATH_OX 111", title="Calculus I", description="Calc.")],
+        campus_equivalents={"MATH_OX 111": ["MATH 111"]},
+    )
+    assert "Campus equivalents: MATH 111" in text

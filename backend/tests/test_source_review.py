@@ -163,12 +163,6 @@ def test_get_source_review_detail_and_impact(db, collection, test_source):
     assert data["dependencies"]["programCount"] == 1
     assert data["dependencies"]["programs"][0]["title"] == "Computer Science BS"
 
-    impact_resp = client.get(f"/api/admin/sources/{test_source}/impact")
-    assert impact_resp.status_code == 200, impact_resp.text
-    impact_data = impact_resp.json()
-    assert impact_data["programCount"] == 1
-    assert impact_data["programs"][0]["title"] == "Computer Science BS"
-
 
 def test_proposal_lifecycle_and_validation(db, collection, test_source):
     client = api_client(db, collection)

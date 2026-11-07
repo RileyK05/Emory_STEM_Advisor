@@ -31,22 +31,6 @@ DEFAULT_POLICY = ResolvedPolicy(
 
 
 class QuotaService:
-    @staticmethod
-    def ensure_default_policy(conn) -> None:
-        conn.execute(
-            queries.get("seed_quota_policy"),
-            {
-                "policy_id": UUID("00000000-0000-0000-0000-000000000027"),
-                "scope_type": "global",
-                "scope_id": "default",
-                "queries_per_minute": DEFAULT_POLICY.queries_per_minute,
-                "queries_per_day": DEFAULT_POLICY.queries_per_day,
-                "tokens_per_day": DEFAULT_POLICY.tokens_per_day,
-                "spend_usd_per_day": DEFAULT_POLICY.spend_usd_per_day,
-                "max_active_jobs": DEFAULT_POLICY.max_active_jobs,
-            },
-        )
-        conn.commit()
 
     @staticmethod
     def resolve_policy(
@@ -55,7 +39,7 @@ class QuotaService:
         workspace_key: str,
         user_id: UUID | None = None,
     ) -> ResolvedPolicy:
-        """Resolve policy limits with precedence: User > Workspace > Cohort > Global."""
+        """Resolve policy limits with precedence: User > Workspace > Global."""
         if user_id is None:
             user = conn.execute(queries.get("quota_workspace_user"),
                                 {"workspace_key": workspace_key}).fetchone()
@@ -77,21 +61,7 @@ class QuotaService:
         if ws_row:
             return QuotaService._row_to_policy(ws_row)
 
-        # 3. Cohort policy
-        if user_id:
-            cohort_rows = conn.execute(
-                queries.get("get_user_cohorts"),
-                {"user_id": user_id},
-            ).fetchall()
-            for c in cohort_rows:
-                c_row = conn.execute(
-                    queries.get("get_quota_policy"),
-                    {"scope_type": "cohort", "scope_id": c["cohort_name"]},
-                ).fetchone()
-                if c_row:
-                    return QuotaService._row_to_policy(c_row)
-
-        # 4. Global policy
+        # 3. Global policy
         global_row = conn.execute(
             queries.get("get_quota_policy"),
             {"scope_type": "global", "scope_id": "default"},
@@ -341,76 +311,6 @@ class QuotaService:
         cutoff = datetime.now(UTC) - timedelta(days=max(1, days))
         conn.execute(queries.get("prune_expired_quota_buckets"), {"cutoff": cutoff})
         conn.commit()
-
-    @staticmethod
-    def get_effective_quota(
-        conn,
-        *,
-        workspace_key: str,
-        user_id: UUID | None = None,
-    ) -> dict[str, Any]:
-        """Return the effective limits and remaining capacities for the context."""
-        now = datetime.now(UTC)
-        minute_start = now.replace(second=0, microsecond=0)
-        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        policy = QuotaService.resolve_policy(conn, workspace_key=workspace_key, user_id=user_id)
-
-        minute_row = conn.execute(
-            queries.get("get_quota_bucket"),
-            {
-                "scope_type": "workspace",
-                "scope_id": workspace_key,
-                "bucket_type": "queries",
-                "window_unit": "minute",
-                "window_start": minute_start,
-            },
-        ).fetchone()
-        minute_count = minute_row["count"] if minute_row else 0
-
-        day_row = conn.execute(
-            queries.get("get_quota_bucket"),
-            {
-                "scope_type": "workspace",
-                "scope_id": workspace_key,
-                "bucket_type": "queries",
-                "window_unit": "day",
-                "window_start": day_start,
-            },
-        ).fetchone()
-        day_count = day_row["count"] if day_row else 0
-
-        seconds_in_day = now.hour * 3600 + now.minute * 60 + now.second
-        reset_day_seconds = max(0, 86400 - seconds_in_day)
-
-        return {
-            "remainingQueriesMinute": max(0, policy.queries_per_minute - minute_count),
-            "remainingQueriesDay": max(0, policy.queries_per_day - day_count),
-            "minuteQueryLimit": policy.queries_per_minute,
-            "dailyQueryLimit": policy.queries_per_day,
-            "activeJobsLimit": policy.max_active_jobs,
-            "resetDaySeconds": reset_day_seconds,
-        }
-
-    @staticmethod
-    def list_policies(conn) -> list[dict[str, Any]]:
-        QuotaService.ensure_default_policy(conn)
-        rows = conn.execute(queries.get("list_quota_policies")).fetchall()
-        out = []
-        for r in rows:
-            d = dict(r)
-            d["policyId"] = str(d["policy_id"])
-            d["scopeType"] = d["scope_type"]
-            d["scopeId"] = d["scope_id"]
-            d["queriesPerMinute"] = d["queries_per_minute"]
-            d["queriesPerDay"] = d["queries_per_day"]
-            d["tokensPerDay"] = d["tokens_per_day"]
-            d["spendUsdPerDay"] = d["spend_usd_per_day"]
-            d["maxActiveJobs"] = d["max_active_jobs"]
-            d["createdAt"] = iso(d["created_at"])
-            d["updatedAt"] = iso(d["updated_at"])
-            out.append(d)
-        return out
 
     @staticmethod
     def upsert_policy(

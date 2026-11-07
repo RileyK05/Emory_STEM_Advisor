@@ -168,6 +168,15 @@ WHERE collection_id = %(collection_id)s AND source_id = ANY(%(source_ids)s::uuid
   AND locator_id = ANY(%(locator_ids)s::uuid[])
 ORDER BY code;
 
+-- Two words at least: a one-word title such as "Honors" names no course by itself.
+-- name: research_courses_titled_in
+SELECT code, title, canonical_code, source_id
+FROM courses
+WHERE collection_id = %(collection_id)s AND source_id = ANY(%(source_ids)s::uuid[])
+  AND lifecycle = 'current' AND title LIKE '%% %%'
+  AND strpos(%(text)s, lower(title)) > 0
+ORDER BY length(title) DESC, code;
+
 -- name: research_search_programs
 SELECT p.program_id,
        ts_rank_cd(setweight(to_tsvector('english', p.title || ' ' || coalesce(p.department, '')), 'A')

@@ -60,16 +60,6 @@ export function ProfileForm({ form, onChange, editing, busy, onSubmit, onClear }
           />
         </label>
       )}
-      {form.provider === 'cloudflare-clef' && (
-        <label>
-          Account ID
-          <input
-            required
-            value={form.account_id ?? ''}
-            onChange={(event) => set({ account_id: event.target.value || null })}
-          />
-        </label>
-      )}
       {!editing && form.provider !== 'hf-local' && (
         <label>
           Provider credential

@@ -26,7 +26,6 @@ GRADE_POINTS = {
 }
 _PASS = {"S", "P", "PASS", "CR"}
 _FAIL = {"F", "U", "NC", "W", "WD"}
-_PROVISIONAL = {"in_progress_satisfied", "conditional_satisfied"}
 _RANK = {"not_selected": 0, "outstanding": 1, "unresolved": 2,
          "conditional_satisfied": 3, "in_progress_satisfied": 4, "satisfied": 5}
 

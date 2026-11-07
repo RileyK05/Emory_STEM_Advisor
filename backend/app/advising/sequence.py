@@ -107,10 +107,6 @@ def _required_raw_segments(raw: str | None) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _course_refs(req: Req) -> tuple[str, ...]:
-    return tuple(node.code for node in _walk(req) if isinstance(node, CourseRef))
-
-
 def _choice_groups(req: Req) -> tuple[tuple[tuple[str, ...], ...], bool]:
     """Describe OR branches as AND groups, retaining unresolved conditions."""
     def expand(node: Req):

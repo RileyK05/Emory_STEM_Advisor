@@ -171,47 +171,6 @@ class CollectionDoc(BaseModel):
     name: str
 
 
-class CourseDoc(BaseModel):
-    courseId: str
-    code: str
-    title: str
-    lifecycle: Literal["current", "retired"] = "current"
-
-
-class RecommendationDoc(BaseModel):
-    clusterId: str
-    path: list[str]
-    courses: list[CourseDoc]
-
-
-class TopicGraphNode(BaseModel):
-    id: str
-    kind: Literal["root", "department", "topic", "course"]
-    label: str
-    departmentKey: str | None
-    courseId: str | None = None
-    code: str | None = None
-    title: str | None = None
-
-
-class TopicGraphEdge(BaseModel):
-    parentId: str
-    childId: str
-    kind: Literal["contains"]
-
-
-class SubgraphView(BaseModel):
-    nodes: list[TopicGraphNode]
-    edges: list[TopicGraphEdge]
-
-
-# --- Response models for dict-returning routes -------------------------------
-# These document and validate the wire shape. Handlers omit keys that do not
-# apply, so routes using them set `response_model_exclude_unset=True` (absent
-# stays absent, an explicit null stays null), and `extra="allow"` keeps any
-# field a handler adds without silently dropping it from the response.
-
-
 class _WireModel(BaseModel):
     model_config = ConfigDict(extra="allow")
 
@@ -223,13 +182,6 @@ class HealthStatus(_WireModel):
 class ArtifactRevisionReference(_WireModel):
     artifactId: str
     revisionId: str
-
-
-class ExportSummaryRequest(_WireModel):
-    title: str | None = Field(default=None, max_length=500)
-    throughSequence: int | None = Field(default=None, ge=0, le=2_147_483_647)
-    artifactReferences: list[ArtifactRevisionReference] = Field(
-        default_factory=list, max_length=100)
 
 
 _RunState = Literal["queued", "running", "succeeded", "failed", "cancelled"]
@@ -256,12 +208,6 @@ class ArtifactRunEvent(_WireModel):
     error: str | None = None
 
 
-class ArtifactRunLimits(_WireModel):
-    maxCalls: int
-    totalTokenBudget: int
-    perCallOutputCap: int
-
-
 _ArtifactKind = Literal["document", "workbook", "html"]
 _ArtifactStatus = Literal["ready", "needs_recalculation"]
 
@@ -274,16 +220,9 @@ class NativeArtifactSummary(_WireModel):
     status: _ArtifactStatus | None = None
 
 
-class ArtifactOriginal(_WireModel):
-    filename: str
-    sha256: str
-    preserved: bool
-
-
 class NativeArtifactRecord(NativeArtifactSummary):
     parentRevisionId: str | None
     spec: dict[str, Any]
-    original: ArtifactOriginal | None = None
     message: str | None = None
 
 
@@ -302,46 +241,6 @@ class ArtifactPreview(_WireModel):
     sheets: list[dict[str, Any]] | None = None
     formulas: list[Any] | None = None
     sandboxRequired: bool | None = None
-
-
-_BatchState = Literal[
-    "prepared", "submitting", "pending", "validating", "in_progress", "finalizing", "completed",
-    "failed", "expired", "cancel_requested", "cancelling", "cancelled", "unknown",
-]
-
-
-class ArtifactBatchItem(_WireModel):
-    itemId: str
-    state: str
-    publicationState: str
-    artifactId: str | None
-    revisionId: str | None
-    errorCode: str | None
-
-
-class ArtifactBatchSummary(_WireModel):
-    batchId: str
-    state: _BatchState
-    cancelRequested: bool
-    itemCount: int
-    totalCount: int | None
-    completedCount: int | None
-    failedCount: int | None
-    createdAt: str
-    updatedAt: str
-
-
-class ArtifactBatchRecord(_WireModel):
-    batchId: str
-    state: _BatchState
-    cancelRequested: bool
-    itemCount: int
-    totalCount: int | None
-    completedCount: int | None
-    failedCount: int | None
-    items: list[ArtifactBatchItem]
-    createdAt: str | None = None
-    updatedAt: str | None = None
 
 
 _TurnStatus = Literal["input", "answer", "refusal", "history", "failed", "abandoned"]
@@ -384,41 +283,6 @@ class ConversationRecord(ConversationSummary):
     turns: list[ConversationTurn]
 
 
-class ConversationSummaryCheckpoint(_WireModel):
-    summaryId: str
-    conversationId: str
-    state: Literal["pending", "completed", "refused", "failed", "stale"]
-    expectedSequence: int
-    candidateCoveredThrough: int
-    coveredThrough: int | None
-    fingerprint: str
-    text: str | None
-    referenceMetadata: list[dict[str, Any]]
-    failureCode: str | None
-    profileId: str | None
-    profileRevision: int | None
-    contextEpoch: int = 0
-    createdAt: str
-    updatedAt: str
-
-
-class ConversationMemoryInspection(_WireModel):
-    conversationId: str
-    contextEpoch: int
-    contextBoundarySequence: int
-    contextResetAt: str | None = None
-    checkpoints: list[ConversationSummaryCheckpoint]
-    researchNotebook: dict[str, Any] | None = None
-
-
-class ConversationResetResponse(_WireModel):
-    conversationId: str
-    contextEpoch: int
-    contextBoundarySequence: int
-    contextResetAt: str
-    message: str = "Conversation context memory has been reset. Prior turns remain in transcript history but are excluded from future model context."
-
-
 class ConversationStreamStartResponse(_WireModel):
     conversationId: str
     requestId: str
@@ -432,46 +296,6 @@ class ConversationStreamEventsResponse(_WireModel):
     requestState: Literal["pending", "completed", "failed", "abandoned"]
     jobState: _JobState
     done: bool
-
-
-class NativeDecisionUsage(_WireModel):
-    source: Literal["provider", "estimated", "unknown"]
-    promptTokens: int | None
-    completionTokens: int | None
-
-
-class NativeDecision(_WireModel):
-    decisionId: str
-    state: Literal["pending", "completed", "refused", "invalid", "failed", "unknown", "abandoned"]
-    prediction: bool | None
-    probability: float | None
-    confidence: float | None
-    refused: bool
-    usage: NativeDecisionUsage
-
-
-class ClaimAssessmentUnit(_WireModel):
-    ordinal: int
-    answerStart: int
-    answerEnd: int
-    text: str
-    coverage: str
-    modelAssessment: str
-    modelConfidence: float | None
-    evidence: list[dict]
-    humanVerified: bool
-
-
-class ClaimReview(_WireModel):
-    reviewId: str
-    responseId: str
-    state: Literal["pending", "completed", "refused", "invalid", "failed", "unknown", "abandoned"]
-    reviewVersion: int
-    profileRevision: int | None
-    provider: str | None
-    model: str | None
-    usage: NativeDecisionUsage
-    units: list[ClaimAssessmentUnit]
 
 
 class ConversationTurnResponse(_WireModel):
@@ -491,7 +315,7 @@ class AuthSession(_WireModel):
     workspaceKey: str | None = Field(default=None, max_length=200)
     displayName: str | None = None
     email: str | None = None
-    role: Literal["student", "advisor", "admin", "auditor"] | None = None
+    role: Literal["student", "admin"] | None = None
 
 
 class AdminOverview(_WireModel):
@@ -517,7 +341,7 @@ class AdminUser(_WireModel):
     workspaceKey: str
     displayName: str | None = None
     email: str | None = None
-    role: Literal["student", "advisor", "admin", "auditor"]
+    role: Literal["student", "admin"]
     status: Literal["active", "disabled"]
     conversationCount: int
     activeSessions: int
@@ -527,7 +351,7 @@ class AdminUser(_WireModel):
 
 
 class AdminUserUpdate(BaseModel):
-    role: Literal["student", "advisor", "admin", "auditor"]
+    role: Literal["student", "admin"]
     status: Literal["active", "disabled"]
 
 
@@ -742,103 +566,6 @@ class ModelPriceSchedule(_WireModel):
     createdAt: str
 
 
-class FeatureFlagSummary(_WireModel):
-    flagName: str
-    description: str
-    envCeilingKey: str | None = None
-    defaultEnabled: bool
-    killSwitchActive: bool
-    killReason: str | None = None
-    overridesCount: int
-    createdAt: str | None = None
-    updatedAt: str | None = None
-
-
-class FeatureFlagOverride(_WireModel):
-    overrideId: UUID
-    flagName: str
-    scopeType: Literal["global", "cohort", "workspace"]
-    scopeId: str
-    enabled: bool
-    reason: str | None = None
-    actorUserId: UUID | None = None
-    updatedAt: str | None = None
-
-
-class FeatureFlagOverrideRequest(BaseModel):
-    expectedUpdatedAt: str | None = None
-    requireAbsent: bool = False
-    scopeType: Literal["global", "cohort", "workspace"]
-    scopeId: str = Field(min_length=1, max_length=100)
-    enabled: bool
-    reason: str | None = Field(default=None, max_length=500)
-
-
-class FeatureFlagKillSwitchRequest(BaseModel):
-    expectedUpdatedAt: str | None = None
-    killSwitchActive: bool
-    reason: str | None = Field(default=None, max_length=500)
-
-
-class CohortSummary(_WireModel):
-    cohortName: str
-    memberCount: int
-
-
-class CohortAssignmentRequest(BaseModel):
-    userId: UUID
-
-
-class CohortMember(_WireModel):
-    userId: UUID
-    displayName: str | None = None
-    email: str | None = None
-    role: Literal["student", "advisor", "admin", "auditor"]
-    assignedAt: str
-
-
-class CohortAssignmentResponse(_WireModel):
-    status: Literal["assigned"]
-    cohortName: str
-    userId: UUID
-
-
-class EffectiveFlagsResponse(_WireModel):
-    flags: dict[str, bool]
-
-
-class EffectiveQuotaResponse(_WireModel):
-    remainingQueriesMinute: int
-    remainingQueriesDay: int
-    minuteQueryLimit: int
-    dailyQueryLimit: int
-    activeJobsLimit: int
-    resetDaySeconds: int
-
-
-class QuotaPolicySummary(_WireModel):
-    policyId: UUID
-    scopeType: Literal["global", "cohort", "workspace", "user"]
-    scopeId: str
-    queriesPerMinute: int | None = None
-    queriesPerDay: int | None = None
-    tokensPerDay: int | None = None
-    spendUsdPerDay: float | None = None
-    maxActiveJobs: int | None = None
-    createdAt: str | None = None
-    updatedAt: str | None = None
-
-
-class QuotaPolicyUpsertRequest(BaseModel):
-    scopeType: Literal["global", "cohort", "workspace", "user"]
-    scopeId: str = Field(min_length=1, max_length=100)
-    queriesPerMinute: int | None = Field(default=None, ge=0, le=2_147_483_647)
-    queriesPerDay: int | None = Field(default=None, ge=0, le=2_147_483_647)
-    tokensPerDay: int | None = Field(default=None, ge=0, le=2_147_483_647)
-    spendUsdPerDay: float | None = Field(default=None, ge=0.0, allow_inf_nan=False)
-    maxActiveJobs: int | None = Field(default=None, ge=0, le=2_147_483_647)
-
-
 class AlertStatusResponse(_WireModel):
     alertName: str
     status: Literal["firing", "resolved", "unknown"]
@@ -914,16 +641,6 @@ class SourceReviewDetailResponse(_WireModel):
     proposals: list[SourceReviewProposal] = Field(default_factory=list)
     lifecycleEvents: list[SourceLifecycleEvent] = Field(default_factory=list)
     dependencies: SourceDependencies
-
-
-class SourceImpactPreviewResponse(_WireModel):
-    sourceId: str
-    filename: str
-    programCount: int
-    courseCount: int
-    gapCount: int
-    researchRunCount: int
-    programs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SourceReviewProposalCreate(BaseModel):
@@ -1040,54 +757,6 @@ class ProgramRuleRejectAction(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
-class ProgramRuleDiffResponse(_WireModel):
-    programId: str
-    releaseIdA: str
-    versionA: int
-    releaseIdB: str
-    versionB: int
-    addedNodeIds: list[str] = Field(default_factory=list)
-    removedNodeIds: list[str] = Field(default_factory=list)
-    modifiedNodes: list[dict[str, Any]] = Field(default_factory=list)
-    digestMatch: bool
-
-
-class CatalogEditionItem(_WireModel):
-    editionId: UUID
-    revision: int
-    editionKey: str
-    isCurrent: bool
-    topicBuildId: UUID | None = None
-    sourceIds: list[UUID] = Field(default_factory=list)
-
-
-class CatalogRefreshBatchResponse(_WireModel):
-    batchId: UUID
-    collectionId: UUID
-    editionKey: str
-    status: Literal["staging", "cancelled", "published"]
-    baseRevision: int
-    stagedRevision: int
-    compatible: bool
-    currentEdition: CatalogEditionItem | None = None
-    stagedEdition: CatalogEditionItem
-
-
-class CatalogRefreshStatusResponse(_WireModel):
-    currentEdition: CatalogEditionItem | None = None
-    staging: CatalogRefreshBatchResponse | None = None
-
-
-class CatalogRefreshStartRequest(BaseModel):
-    collectionId: UUID
-    editionKey: str
-    compatible: bool = True
-
-
-class CatalogRefreshPublishRequest(BaseModel):
-    expectedRevision: int
-
-
 class ResponseFeedbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     responseId: UUID
@@ -1106,21 +775,6 @@ class ResponseFeedbackResponse(_WireModel):
     reasonCode: str
     comment: str | None = None
     currentVotes: int
-    createdAt: str
-
-
-class EvalCandidateCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    redactedPrompt: str = Field(min_length=1, max_length=4000)
-    redactedExpected: str = Field(min_length=1, max_length=4000)
-    sourceFeedbackId: UUID | None = None
-
-
-class EvalCandidateResponse(_WireModel):
-    candidateId: UUID
-    redactedPrompt: str
-    redactedExpected: str
-    sourceFeedbackId: UUID | None = None
     createdAt: str
 
 

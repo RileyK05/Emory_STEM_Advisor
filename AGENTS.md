@@ -35,14 +35,13 @@ plans and `docs/audit/` the review status.
     course links). None of these call a model.
   - Generation: `retrieval/` (seams, fusion, traces, eval runner, catalog
     directory), `generation/` (grounded answers and citation mapping, the
-    research loop, query planning, claim review), `tools/`, `operations/`
-    (shared token/call/time budgets), `jobs/` (job store, worker runtime,
-    dependent runs, provider batches), `conversations/`, `artifacts/`,
+    research loop, query planning), `tools/`, `operations/`
+    (shared token/call/time budgets), `jobs/` (job store, worker runtime), `conversations/`, `artifacts/`,
     `sandbox/` (isolated Office/HTML execution on a separate worker).
   - Accounts and governance: `auth/` (`get_principal` is the one authentication
     dependency; capabilities), `connections/` (encrypted
     provider profiles, evaluated routing), `admin/`, `debug/` (allowlisted,
-    expiring overrides), `privacy/`, `quotas/`, `flags/`,
+    expiring overrides), `privacy/`, `quotas/`,
     `pricing/` (price schedules; `record_model_call` writes every model_calls
     row), `gaps/`, `observability/`, `ops/` (readiness, backup).
   - `storage/` — local/blob/dual-read storage seam and `storage_objects`
@@ -150,6 +149,7 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.schema_baseline       # baseline == legacy final schema, disposable DBs
 ../.venv/Scripts/python -m scripts.restore_consolidated BACKUP --data-dir NEW_DIRECTORY
 ../.venv/Scripts/python -m scripts.team_snapshot --backup FILE --maintenance-confirmed  # public data only, for teammates; never share a plain backup
+../.venv/Scripts/python -m scripts.manual.advising_sweep --per-family 12 --out FILE  # live answers about random courses and programs, graded from the database
 ../.venv/Scripts/python -m scripts.smoke.local_model    # slow, downloads weights
 ../.venv/Scripts/python -m scripts.smoke.embeddings     # ~250 MB download
 ```

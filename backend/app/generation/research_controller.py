@@ -104,7 +104,8 @@ PROGRAMS AND COURSES
 - renamed_subjects gives subjects Emory has renamed. Use the new code; the catalog's old one is only its wording.
 - course_facts keeps what you read about each course across rounds, with its evidence_ids. Never reread a course it lists.
 - Do not expand an acronym unless the source spells it out.
-- offered_terms lists the Course Atlas terms that show a course. offering_note, when present, is the checked Atlas result and outranks any catalog record, description or term pattern. A course it calls no longer offered is not a current option: never recommend it or plan around it, say so plainly even when the student names it, and give the newer course the program list or requisites show in its place. A requisite can still accept an old course as an alternative; that does not make it current. Organic chemistry at Emory is CHEM 202 and 203 with labs.
+- other_degrees lists the same major under another degree. When the student named no degree, read it too, say in the first block that both exist with their hours, then give what they share and what differs.
+- offered_terms lists the Course Atlas terms that show a course, and terms_checked lists every term on file. A course missing from a checked term is not offered that term: say no in the first block, then name the terms it does run. offering_note, when present, is the checked Atlas result and outranks any catalog record, description or term pattern. A course it calls no longer offered is not a current option: never recommend it or plan around it, say so plainly even when the student names it, and give the newer course the program list or requisites show in its place. A requisite can still accept an old course as an alternative; that does not make it current. Organic chemistry at Emory is CHEM 202 and 203 with labs.
 - ARCHE is cross-registration at other Atlanta schools, not a subject: read the Cross Registration policy. ARCH course listings are only how those seats appear.
 - Credit for a course means the student starts past it, never in it. For AP Calculus BC read the Math Placement guide.
 - Final course advice uses recommended_course_codes; read descriptions or disclose gaps. Unread program requirements mean partial coverage; follow every program next_cursor before finishing while the operation can afford reads. Never call a partial elective list complete.
@@ -676,8 +677,9 @@ class ResearchController:
                 **({"source_conflicts": [entry["note"] for entry in conflicts]}
                    if (conflicts := source_conflicts(question)) else {}),
                 **({"no_current_course": unknown, "no_current_course_note": (
-                    "The Course Atlas has no current course with these exact codes. Open with "
-                    "\"There is no\" and the code, then offer only the real codes listed.")}
+                    "The Course Atlas has no current course with these exact codes. Open with a "
+                    "limitation block, which takes no citations: \"There is no\" and the code. "
+                    "Then offer only the real codes listed.")}
                    if (unknown := session.unknown_question_codes()
                        if hasattr(session, "unknown_question_codes") else None) else {}),
                 "finish_required": finishing, "instruction": hint,

@@ -9,13 +9,13 @@ import type {
 import {
   createCourseChange,
   getAdminCourse,
-  listAdminCollections,
   listAdminCourses,
   listCourseConflicts,
   previewCourseChange,
   publishCourseChange,
   rejectCourseChange,
 } from '../api/backoffice';
+import { getClient } from '../api/client';
 import { errorMessage } from '../lib/errors';
 import { useAsyncAction } from '../lib/useAsyncAction';
 import { useLoad } from '../lib/useLoad';
@@ -52,10 +52,10 @@ export function CourseMaintenancePanel() {
     let active = true;
     void (async () => {
       try {
-        const rows = await listAdminCollections(100, 0);
+        const rows = await getClient().listCollections();
         if (!active) return;
         const preferred = rows.find((row) => row.name === 'default') ?? rows[0];
-        setCollectionId(preferred?.collectionId ?? null);
+        setCollectionId(preferred?.id ?? null);
       } catch (cause) {
         if (active) setCollectionError(errorMessage(cause));
       }

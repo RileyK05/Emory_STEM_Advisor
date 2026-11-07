@@ -45,7 +45,7 @@ this file and say why.
 | prerequisite graph | dependency graph (LLM-tagged) | Atlas-derived, deterministic, authoritative; never model-written. |
 | similarity graph | chunk↔chunk course graph | Department → learned topics → courses; whole-subtree recommendations and visuals. |
 | fusion | fusion + cross-encoder reranker | Relevance allocation across sources; no reranker. |
-| artifact | artifact | Validated specs with immutable revisions, imports, and conversational editing; no desktop Office/Companion mechanics. |
+| artifact | artifact | Validated specs with immutable revisions and conversational editing; no desktop Office/Companion mechanics. |
 | (none) | TOC; memory (`MemoryObject`) | Dropped. Conversation "memory" views here inspect saved conversation context only. |
 
 **Keep.** Free-string `locator_type` (and other `kind`/`target_type` fields).
@@ -245,9 +245,8 @@ erDiagram
 
 `backend/app/db/baseline/032_schema.sql` defines the fresh-install schema
 through checkpoint 032 (source quality/versioning, generation evidence, jobs,
-profiles, artifacts, ownership, provider batches, conversations, decisions,
-summaries, gaps, claim review, artifact plans/excerpts/attempts, and program
-requirements), omitting obsolete create/drop and constraint-replacement steps.
+profiles, artifacts, ownership, conversations, summaries, gaps, and program
+requirements; later migrations drop what was cut), omitting obsolete create/drop and constraint-replacement steps.
 The exact historical files `001`–`032` remain in `db/legacy_migrations/` for
 existing databases and backups; their bytes and recorded names are preserved.
 Fresh databases record checkpoint 032 under `032_schema.sql`; upgraded legacy
@@ -355,9 +354,7 @@ Two orthogonal fields carry a course's provenance and availability:
   satisfies another course's prerequisite; the dependent edge becomes an
   explicit unresolved dependency.
 
-Current reads filter `lifecycle = 'current'`. Historical lookup is explicit:
-`GET /api/retired-courses` returns only retired identities, separate from
-current recommendations. Program requirements, admissions documents and career
+Current reads filter `lifecycle = 'current'`. Program requirements, admissions documents and career
 references never rewrite a course requirement.
 
 ### sim_builds / sim_courses / sim_clusters / sim_cluster_members
@@ -1281,13 +1278,6 @@ to retrieve evidence never truncates a topic group. The API shape
 (`clusterId`, `path`, `courses`) is fixed, and paths start with the fixed
 department label.
 
-**Visuals** (`app/simgraph/view.py`): `/api/subgraph/{cluster_id}` returns typed
-hierarchy and course nodes, connected only by parent-to-child containment. Node
-fields: `id`, `kind` (`root|department|topic|course`), `label`, `departmentKey`,
-plus optional `courseId`, `code`, `title` on course leaves. Edge fields:
-`parentId`, `childId`, `kind="contains"`. No weights or prerequisite edges are
-mixed into this view.
-
 The cut distances are versioned config, not a topic-quality guarantee; real goal
 queries, cluster coherence, abstention, and human review are the acceptance work.
 
@@ -1296,10 +1286,9 @@ queries, cluster coherence, abstention, and human review are the acceptance work
 ### Provider seam
 
 The model seams provide typed generation requests/results, usage provenance,
-finish reasons, tool calls, streaming, native batch adapters, and a separate
-decision interface. HF local, OpenAI, Anthropic, Gemini, and explicitly configured
-OpenAI-compatible adapters exist, plus native decision adapters; installed-SDK
-tests use fake transports. Provider, model name, and settings are env config.
+finish reasons, tool calls and streaming. HF local, OpenAI, Anthropic, Gemini, and
+explicitly configured OpenAI-compatible adapters exist; installed-SDK tests use
+fake transports. Provider, model name, and settings are env config.
 Concrete providers are imported only in their `factory.py`; no SDK objects leak
 past the module. The atlas parser and the prerequisite seam import no provider.
 
@@ -1361,7 +1350,7 @@ erDiagram
   context numbers and `review_status=unreviewed`. A unit may contain several
   assertions; it is not an atomic, verified claim.
 
-The API persists answer evidence before returning it. An auditor replays a
+The API persists answer evidence before returning it. An admin replays a
 trace to see which seam surfaced each cited chunk and how it scored. Every
 `retrieve()` call writes exactly one trace, refusals included. Citation syntax
 and stored snapshots are structural evidence; they do not prove that a passage
@@ -1775,9 +1764,7 @@ renders numbers in first-use order, with `trace.contextBlock` and citations in
 exactly that order. JSON/citation acceptance is structural validation. Typed
 factual blocks become entailment-review units; subjective suitability judgments
 remain separately labelled, and program/course evidence cited by judgments is
-preserved. Explicit claim review receives the saved typed blocks so it can
-review factual assertions inside judgments while keeping preference spans
-unreviewed. Partial investigations remain partial in the API and chat. Current
+preserved. Partial investigations remain partial in the API and chat. Current
 sources/program projections, provider selection, cancellation and operation
 budgets fence publication.
 
@@ -2010,9 +1997,6 @@ A named collection that does not exist is a 404, never an empty result.
 | POST | `/api/sources` | ingest an uploaded file -> source |
 | POST | `/api/sources/{id}/reindex` | owner-only reindex with `{expectedIndexRevision}` |
 | POST | `/api/query` | grounded answer or refusal (with trace) |
-| GET | `/api/recommendations?query=&collection=` | similarity-graph recommendations (current courses only) |
-| GET | `/api/retired-courses?query=&collection=` | separately listed retired course identities for historical lookup |
-| GET | `/api/subgraph/{cluster_id}` | department/topic/course containment tree |
 
 `/ready` checks the configured authentication service mode and a read-only
 database connection against the exact release migration versions and checksums.
@@ -2050,15 +2034,11 @@ Native artifact endpoints (verified workspace scope):
 
 | Method | Path | Contract |
 | --- | --- | --- |
-| GET/POST | `/api/artifacts` | List or create validated `{kind, spec}` |
-| POST | `/api/artifacts/import` | Multipart Markdown/DOCX/XLSX; preserve original bytes |
+| GET | `/api/artifacts` | List the workspace's artifacts |
 | GET | `/api/artifacts/{id}?revisionId=` | Exact revision, or current head when omitted |
 | GET | `/api/artifacts/{id}/revisions` | Immutable revision history |
-| POST | `/api/artifacts/{id}/revisions` | Expected parent + exactly one spec/operations + optional draft ID |
 | GET | `/api/artifacts/{id}/preview?revisionId=` | Document/HTML preview data or workbook cells/formulas |
-| GET | `/api/artifacts/{id}/preview.pdf?revisionId=` | Isolated document/workbook PDF; require verified formula caches |
 | GET | `/api/artifacts/{id}/download?revisionId=&format=` | Revision-specific MD/DOCX/XLSX/HTML attachment bytes |
-| GET | `/api/artifacts/{id}/original` | Checksum-verified imported original attachment |
 
 Native records use `artifactId`, `revisionId`, `parentRevisionId`, `kind`
 (`document|workbook|html`), `title`, `spec`, `original`, `status`, and
@@ -2121,7 +2101,7 @@ for algorithm, issuer, audience/authorized party, nonce, and finite time claims.
 Discovery, token, and JWKS responses are bounded before parsing and cannot
 redirect. Opaque server-side sessions expire and are revoked on logout.
 `app_users` is the durable identity record keyed by `(issuer, subject)`: it
-carries the institutional role (`student|advisor|admin|auditor`) and
+carries the institutional role (`student|admin`) and
 `active|disabled` status. A first verified login may be promoted by
 `ADMIN_BOOTSTRAP_EMAILS` or `ADMIN_BOOTSTRAP_SUBJECTS`; that list is
 first-insert only, so later role changes made in the Admin surface are not
@@ -2132,9 +2112,7 @@ identity.
 
 The Admin surface is a separate bundle and API boundary (`/api/admin/*`). It
 requires the operation's admin capability; `ADMIN_PANEL_ENABLED=false` disables
-it. Auditors may read audit and telemetry views without mutation. A transcript
-read is a separate, audited content action, not part of the metadata list;
-deleting a conversation also deletes its turns, checkpoints, requests, and turn
+it. Deleting a conversation also deletes its turns, checkpoints, requests, and turn
 jobs and is audited. A queued job can be cancelled and a running job can receive
 a cancel request, both audited. Only empty collections (no sources or artifact
 runs) may be deleted; the configured default collection is protected from
@@ -2166,7 +2144,7 @@ does not send the header.
 | GET | `/api/admin/users/{id}/sessions` | Admin-only session metadata (no token hashes) |
 | POST | `/api/admin/users/{id}/revoke-sessions` | Admin-only session revocation with audit |
 | GET/POST | `/api/admin/jobs`, `/api/admin/jobs/{id}/cancel` | Admin-only job inspection and audited cancellation |
-| GET | `/api/admin/sources`, `/api/admin/audit` | Authorized operational inspection; audit reads allow auditor |
+| GET | `/api/admin/sources`, `/api/admin/audit` | Authorized operational inspection |
 | GET/POST | `/api/admin/telemetry/usage`, `/api/admin/pricing/schedules` | Authorized read-only usage, cost, cache, and price views; schedule mutation is admin-only |
 | GET/POST/PUT/DELETE | `/api/admin/connections`, `.../{profile_id}`, `.../{profile_id}/secret`, `.../{profile_id}/diagnose` | Encrypted connection profiles: masked list, create/update, secret replace/remove, diagnostics |
 | GET | `/api/debug/settings` | Admin-only allowlisted registry and defaults |
@@ -2320,8 +2298,6 @@ answer without it.
 
 | Method | Path | Contract |
 | --- | --- | --- |
-| POST | `/api/runs` | `kind`, bounded `inputs`, `idempotencyKey`; scoped durable job |
-| GET | `/api/runs/limits` | Authenticated call/token limits; no generation or run-store lookup |
 | GET | `/api/runs/{id}` | Run state and exact published artifact revisions |
 | GET | `/api/runs/{id}/events?afterEventId=` | Bounded persistent progress cursor |
 | POST | `/api/runs/{id}/cancel` | Cooperative cancellation with publication fencing |
@@ -2348,100 +2324,6 @@ job cannot repeat that call, including when a measured result was not durably
 checkpointed. Late provider-reported usage can settle an unknown reservation
 once, while the terminal job still rejects publication.
 
-The optional `inputs.outputPlan` for `/api/runs` is a strict discriminated
-document/workbook plan whose `kind` must match the run; HTML keeps its
-single-candidate path. Both plans require `title`,
-`max_output_tokens_per_unit`, and a whole-output quota; they accept
-`max_repairs_per_unit` (default 1, range 0–2) and `max_checkpoint_bytes`
-(default 4,000,000). A document supplies ordered `sections` with unique `key`,
-`title`, `target_words`, `target_blocks`, `min_words`, `max_words`, `min_blocks`,
-and `max_blocks`, plus `max_total_blocks`. Targets lie within the explicit bounds;
-generated section headings count toward the whole-document block quota.
-A workbook supplies ordered `sheets` with unique `key` and case-insensitive
-unique `name`, typed `columns` (`key`, `label`,
-`value_type=text|integer|number|date|formula`), `min_rows`, `target_rows`, and
-`max_rows`, plus `max_total_cells`. Each worksheet must produce exactly its
-target number of data rows; headers count toward the whole-workbook cell quota.
-Dates use ISO date strings. Formula columns require a formula for every row;
-unit formulas are local to their worksheet, so cross-sheet and external
-references are rejected (workbook exports support cross-sheet formulas
-separately). Impossible declared quotas, repair call counts, and output
-allowances return 422 before enqueue/provider calls, with no silent reduction
-of the requested targets.
-
-A planned run freezes the resolved collection, original/effective source scope,
-source hashes/index revisions, exact excerpts, target expected head, and
-selected profile revision before planning. Planning, units, repairs, and
-assembly share one persisted operation budget and enforce per-unit and
-whole-artifact quotas. Validated section/worksheet checkpoints are immutable and
-stored separately from event payloads. Per-unit candidates contain typed blocks
-or rows/formula cells and exact excerpt IDs for their evidence. Authoring mode
-cannot invent corpus references; grounded mode requires evidence for every
-generated block or nonempty/formula cell. Known-invalid candidates have bounded
-issue records and a hash, retaining text only within its quota. Repairs target
-that unit while validated checkpoints remain immutable. Recovery may proceed
-only from durable validated checkpoints or recorded known-invalid outcomes; a
-persisted `calling` unit with unknown outcome, or unlinked/reserved attempts,
-remain terminal without provider idempotency. Final publication requires exactly
-one assembled artifact that validates all IDs, formulas, dependencies, quotas,
-and evidence, and rechecks every source/excerpt/locator, profile revision, and
-expected artifact head under the all-or-nothing publication transaction.
-Partial checkpoints are never published as a completed artifact. Generated
-document revisions append the new sections after existing blocks; workbook
-revisions append new sheets. Existing content, evidence, and layout are
-preserved, and whole-output quotas include prior content. The browser exposes
-optional ordered section and worksheet plans, typed columns, explicit revision
-targets, and budget guidance alongside the simple prompt flow; invalid plans and
-stale-head responses preserve the form, and retry requires user review.
-
-### Native artifact batch contract
-
-Provider-native batches contain independent document, workbook, or HTML drafts;
-dependent tool turns remain interactive jobs. The server builds prompts and
-source snapshots, and selects one homogeneous evaluated profile with batch and
-structured-output support. Requests cannot select raw credentials or model IDs.
-
-| Method | Path | Behavior |
-| --- | --- | --- |
-| POST | `/api/artifact-batches` | Submit `{batchId, kind, items:[{itemId, inputs}]}`; UUID identities, 1–50 unique items |
-| GET | `/api/artifact-batches` | Latest 100 workspace-owned summary records; storage-only |
-| GET | `/api/artifact-batches/{id}` | Read persisted status without provider calls |
-| POST | `/api/artifact-batches/{id}/poll` | Collect provider status/results, account usage, validate and publish eligible items |
-| POST | `/api/artifact-batches/{id}/cancel` | Persist publication cancellation before attempting remote cancellation |
-
-Each item's `inputs` follows `ArtifactGenerationInput`: `prompt`, optional
-`collectionId` and `sourceIds`, `mode=grounded|authoring`, and paired optional
-`artifactId`/`expectedRevisionId`. Non-null dependent `outputPlan` values are
-rejected before batch replay, context retrieval, or provider setup; those plans
-execute through `/api/runs`. The response includes `batchId`, provider
-`state`, `cancelRequested`, item/total/completed/failed counts, and `items` with
-`itemId`, `state`, `publicationState=pending|published|withheld`, optional
-`artifactId`, `revisionId`, and safe `errorCode`. Published IDs remain stable
-under repeated collection. Other-workspace IDs return 404.
-List summaries omit `items` and add ISO `createdAt`/`updatedAt`; ownership filtering
-precedes the latest-100 limit. Detail, submit, poll, and cancel retain the item
-status shape above. List and detail reads never instantiate providers.
-
-The original typed request fingerprint binds replay before retrieval or SDK
-setup. Changed inputs return 409. Submission intent, exact credential-free
-requests, per-item operation reservations, source contexts, and profile revision
-persist before external submission. An ambiguous submission without a durable
-provider handle is never automatically repeated. Unknown usage remains reserved.
-Measured partial and cancelled outcomes are still accounted; cancellation is
-not a billing refund. Per-item native batch latency is unavailable and the legacy
-integer audit field uses zero as an unknown sentinel, not a zero-duration claim.
-
-Collection validates expected result IDs and stores results before accounting.
-Publication locks batch/item/operation/profile state, validates complete native
-specs and server-stamped provenance, and checks cancellation, profile revision,
-budget/deadline, and expected artifact head in the same transaction. Cancellation
-withholds new publication even if the provider already completed; existing
-published revisions remain saved. Rotated profiles may collect/account remote
-results using available credentials, but cannot publish against stale policy.
-`BATCH_OPERATION_TIMEOUT_SECONDS` defaults to 172800, independently of the
-interactive deadline. Native batch calls are verified only with offline
-transports and fake providers; paid live behavior is unverified.
-
 ### Saved conversation contract
 
 `/api/query` remains stateless and compatible. Private conversations add:
@@ -2457,10 +2339,6 @@ transports and fake providers; paid live behavior is unverified.
 | POST | `/api/conversations/{id}/turns/stream` | Atomically queue one advising turn; durable request replay |
 | GET | `/api/conversations/{id}/turns/{requestId}/events?afterEventId=&limit=` | Owner-scoped stored progress and provisional text; reconnect without generation |
 | POST | `/api/conversations/{id}/turns/{requestId}/abandon` | Settle an unknown/pending request and fence late completion |
-| GET | `/api/conversations/{id}/summaries` | Owner-scoped persisted checkpoint inspection; storage-only |
-| GET | `/api/conversations/{id}/memory` | Memory inspection: current context, reset-excluded checkpoints, exact pointers |
-| POST | `/api/conversations/{id}/memory/reset` | Reset future context without deleting transcript history |
-| POST | `/api/conversations/{id}/export-summary` | Queue a summary export as a native document revision |
 
 Metadata fields are `conversationId`, `title`, `lastSequence`,
 `pendingRequestId`, `contextEpoch`, `contextBoundarySequence`, `contextResetAt`,
@@ -2569,107 +2447,27 @@ not proven facts or atomic claims. Review-unit extraction retains every nonempty
 paragraph, including uncited units with an empty citation list; malformed
 references cannot silently remove text from review coverage.
 
-Explicit claim review (`generation/claim_review.py`, `POST /api/claim-reviews`)
-is opt-in: query handling never runs it. The route takes an answer's `traceId`
-and resolves the saved response and its operation server-side; without an
-evaluated structured-output profile it answers 503 and records nothing. It extends paragraph units with versioned exact
-answer spans and exact evidence spans from immutable response snapshots. The
-server validates offsets and verbatim text against the saved answer and
-authorized chunks; unknown sources, invented quotations, or incomplete
-decomposition leave explicit unreviewed regions. Model assessments distinguish
-supported, contradicted, insufficient evidence, conflicting evidence,
-uncertainty, abstention, and invalid review, with origin/profile/prompt/usage
-recorded separately from human verification. Decomposition and review share the
-answer operation's persisted call/time/token limits; lack of remaining budget
-leaves review unavailable rather than silently creating a fresh budget. An
-assessment cannot be presented as quality-validated until held-out,
-human-adjudicated cases measure false support, partial compound claims,
-contradictions, insufficient evidence, abstention, exact span fidelity, and
-adversarial inputs. No review changes graph data.
-
-Summary checkpoint storage freezes an input fingerprint, contiguous coverage
-through a complete assistant turn, prior successful summary, and exact source,
-citation, and artifact revision references while retaining the latest four turns
-raw. Successful completion alone records `coveredThrough`; failed, refused,
-stale, or explicitly abandoned checkpoints cannot advance coverage. Raw turns
-remain immutable. Records expose `summaryId`, `conversationId`, `state`,
-`expectedSequence`, `candidateCoveredThrough`, nullable `coveredThrough`,
-`fingerprint`, nullable `text`, `referenceMetadata`, `failureCode`, optional
-profile ID/revision, and timestamps. Pending checkpoints fence new writes and
-can be explicitly settled in storage; no public summary submit endpoint exists.
-
-Summary exports preserve per-turn citation numbers, exact saved excerpts and
-owned artifact revisions; a missing saved passage becomes an open question. The
-native document records a deterministic input digest and turn boundary; Markdown
-and DOCX downloads name that same immutable artifact revision. Queued summary
-jobs pin the boundary at admission and stage their document for atomic job
-publication, including cancellation and feature-access fences.
-
-Memory inspection distinguishes checkpoints excluded by a reset from current
-context, shows exact passage/source/revision pointers and selected scope, and
-recovers explicit reset conflicts. Reset changes future context, notebook,
-recall and inherited-scope behavior without deleting transcript history. Memory
-and summary endpoints enforce their feature flags directly.
-
-### Native binary decision contract
-
-| Method | Path | Behavior |
-| --- | --- | --- |
-| POST | `/api/decisions` | One evaluated native predicate call with durable UUID intent |
-| GET | `/api/decisions/{id}` | Persisted observation, including pending/unknown; storage-only |
-| POST | `/api/decisions/{id}/abandon` | Fence late publication; already-started usage remains accounted |
-
-Requests contain `{decisionId, task, predicate, input}` with UUID identity,
-task/predicate limited to 1000 characters each and input text/JSON object limited
-to 12000 UTF-8 bytes. Responses contain `decisionId`, `state`
-(`pending|completed|refused|invalid|failed|unknown|abandoned`), nullable boolean
-`prediction`, nullable finite 0–1 `probability`/`confidence`, `refused`, and
-`usage:{source,promptTokens,completionTokens}`. These are model observations,
-not verified facts, authorization decisions, or prerequisite authority.
-
-Routing must be enabled with an evaluated decision profile, native decision
-capability, user-supplied-data permission, and private-workspace permission for
-OIDC users. No environment-key fallback or automatic retry occurs. Exact settled
-replay reads storage before provider selection; changed input and pending/unknown
-replay return 409, other-workspace IDs return 404. The persisted operation allows
-one call. Measured usage survives invalid/refused/stale/late/abandoned outcomes;
-unknown usage keeps its reservation. Profile revision, workspace, state, deadline,
-and token ceiling are fenced before publication. Generic structured classifier
-fallbacks exist at the seam but are not selected by this native-only endpoint.
-The adapter follows the [OpenAI Decisions guide](https://developers.openai.com/api/docs/guides/decisions)
-and [Python reference](https://developers.openai.com/api/reference/python/resources/decisions/methods/create);
-account availability and live quality are unverified, and model IDs stay
-configurable.
-
 ### Governance and policy routes
 
 | Method | Path | Contract |
 | --- | --- | --- |
 | POST | `/api/feedback` | Owner's current vote on a response |
 | GET/POST | `/api/feedback/triage` | Reviewer triage with expected revision |
-| POST | `/api/feedback/promotions`, `/api/feedback/eval-candidates` | Redacted eval-candidate promotion |
-| POST/GET | `/api/privacy/exports`, `.../exports/{id}`, `.../exports/{id}/download` | Workspace export inventory; token-gated download |
+| POST | `/api/feedback/promotions` | Redacted eval-candidate promotion |
+| POST/GET | `/api/privacy/exports`, `.../exports/{id}/download` | Workspace export; token-gated download |
 | POST | `/api/privacy/deletions`, `.../deletions/{id}/resume` | Fenced, resumable owner deletion |
-| GET | `/api/flags/effective`, `/api/quotas/effective` | Caller's effective feature policy and quota |
-| GET/POST/DELETE | `/api/admin/flags`, `.../{flag}/overrides`, `.../{flag}/overrides/{scopeType}/{scopeId}`, `.../{flag}/kill` | Feature overrides and kill switches with audit |
-| GET/POST/DELETE | `/api/admin/cohorts`, `.../{cohort}/users`, `.../{cohort}/users/{userId}` | Cohort membership |
-| GET/POST | `/api/admin/quotas` | Quota policies (expected-update conflicts) |
 | POST | `/api/admin/prompts`, `.../{versionId}/approve`, `.../fixtures`, `.../{versionId}/promote` | Immutable prompt versions; human approval before promotion |
 | GET | `/api/admin/alerts` | Alert probe readings |
-| GET/POST | `/api/admin/sources/{id}/review`, `.../impact`, `.../proposals`, `.../proposals/{pid}/approve`, `.../proposals/{pid}/reject`, `.../lifecycle`, `.../evidence` | Source review lifecycle and revision evidence |
-| GET/POST | `/api/admin/programs/{id}/inspection`, `.../rules/draft`, `.../rules/{releaseId}/approve`, `.../publish`, `.../reject`, `.../rules/diff` | Program rule release review |
-| GET/POST | `/api/admin/catalog-refresh?collectionId=`, `/api/admin/catalog-refresh`, `.../{batchId}/cancel`, `.../{batchId}/publish` | Published edition and staging batch; stage, cancel, publish |
-| POST/GET | `/api/claim-reviews`, `.../{reviewId}`, `.../{reviewId}/abandon` | Opt-in model assessment of a saved answer's claims |
+| GET/POST | `/api/admin/sources/{id}/review`, `.../proposals`, `.../proposals/{pid}/approve`, `.../proposals/{pid}/reject`, `.../lifecycle`, `.../evidence` | Source review lifecycle and revision evidence |
+| GET/POST | `/api/admin/programs/{id}/inspection`, `.../rules/draft`, `.../rules/{releaseId}/approve`, `.../publish`, `.../reject` | Program rule release review |
 | GET/POST | `/api/admin/courses`, `.../courses/{code}`, `/api/admin/course-changes`, `.../conflicts`, `.../{id}/preview`, `.../{id}/publish`, `.../{id}/reject` | Course maintenance changes |
 
 ## Governance and operations
 
 ### Roles and feature policy
 
-The four session roles are student, advisor, admin and auditor. Authenticated
-workspace routes require the corresponding read/write capability; auditor Main
-navigation leads to the read-only Audit and Usage & Cost surfaces. Worker entry
-and publication recheck persisted role/status; short shared publication locks
+The two session roles are student and admin. Authenticated workspace routes
+require the corresponding read/write capability. Worker entry and publication recheck persisted role/status; short shared publication locks
 serialize that decision against role changes.
 
 A workspace belongs to its student. No staff role reads another user's chat,
@@ -2677,20 +2475,13 @@ artifact or record: workspace routes require ownership, and a caller-supplied
 workspace key is not authorization. Feedback triage shows the answer a student
 chose to flag, and nothing else crosses workspaces.
 
-Feature policy is evaluated from current database overrides and cohort
-membership at execution boundaries. Process settings remain ceilings over
-debug/profile settings. Workspace overrides precede cohorts (a cohort denial wins
-a cohort conflict), then global override and shipped default. Kill switches take
-precedence; research also requires tools. Planning, tools, citation repair,
-research and compaction use this policy in HTTP and worker execution. Changes
-during calls withhold affected output while preserving usage accounting. Main
-refreshes availability on focus. The Admin rollout surface manages overrides,
-kills and cohort membership, retains drafts on errors and uses expected update
-timestamps for conflicting edits. Policy mutations and their administrative audit
-events commit together. Policy and ownership denials are terminal job failures,
-not automatic retries.
+Each feature is one setting in `config.py`. Process settings are ceilings over
+debug and profile settings, and research also requires tools. HTTP and worker
+execution read them through `auth.capabilities.execution_settings`, which also
+rechecks that the workspace may still run. Policy and ownership denials are
+terminal job failures.
 
-### Source review and catalog refresh
+### Source review
 
 A reviewer proposes, rejects, approves, deprecates, or replaces a source through
 the admin review surface. Approval is pinned to the expected metadata revision;
@@ -2698,15 +2489,6 @@ a stale revision keeps the typed draft. The worker consumes source-invalidation
 events once under a lease. A resolved gap whose source appears in that outbox is
 ineligible as soon as the event exists, before consumption finishes. An
 identical program reimport keeps saved releases and reviews.
-
-A catalog refresh batch stages the next edition without becoming current. The
-staged edition pins the collection's current indexed institutional sources and
-current topic build; the first refresh publishes revision 1 against no prior
-edition. Edition revisions only increase (a cancelled edition keeps its number),
-and at most one batch stages per collection. Publication requires the published
-revision the batch was staged against. Cancelling leaves the published edition,
-its source, and the current topic build usable. An incompatible manifest is not published and does not rebuild or
-retire the topic graph. Corpus regeneration stays a separate verified import.
 
 ### Feedback, experiments and prompt versions
 
@@ -2745,17 +2527,13 @@ row records the prompt that produced it as `registry-<digest>`,
 ### Usage, cost and quotas
 
 Model-call telemetry includes compaction, planning, answer/repair/retry,
-research, artifact and native-batch attempts. Dated tariffs distinguish standard
-and batch billing; missing batch tariffs remain unknown, with no inferred
-discount. Batch pricing is pinned at submission admission rather than the later
-result poll. Provider-reported token counts with unreported cache use are
+research and artifact attempts. Provider-reported token counts with unreported cache use are
 conservative tariff estimates when cached and ordinary input prices differ.
 Cache-share denominators include only calls reporting cache counts, and
 reporting coverage stays visible. API summaries and breakdowns expose
 `costCurrency`/`costCurrencies`; mixed currencies have no combined monetary
 total. Costs are tariff calculations, not reconciled provider invoices. Model and
-operation breakdowns obey the same filters as totals. Migration 056 invalidates
-earlier batch costs priced as ordinary calls.
+operation breakdowns obey the same filters as totals.
 
 Usage totals keep a known portion when some calls are priced and others are
 not. The dashboard headline stays Unknown while any call is unpriced or the
@@ -2795,7 +2573,7 @@ avoid reversing job-publication locks.
 The logical backup includes the complete application database plus checksummed
 raw uploads, immutable Office originals and Atlas capture envelopes referenced by
 that database snapshot. It preserves conversations, citation snapshots, artifact
-revisions, jobs, tool and provider batch state, encrypted profile ciphertext, and
+revisions, jobs, tool state, encrypted profile ciphertext, and
 unknown usage reservations. Unreferenced files and model caches are excluded.
 Authentication, profile-encryption, and sandbox transport keys remain external
 secrets and must be restored separately using the same configuration.
@@ -2806,7 +2584,7 @@ repeatable-read Postgres snapshot for both the named reference queries and
 requests whose bound job is already terminal/missing or whose synchronous
 request has outlived its deadline; it never settles live queued/running work.
 The readiness check then refuses remaining live work, naming the blocking kinds
-and sample IDs, including pending decisions, summary checkpoints, claim reviews,
+and sample IDs, including summary checkpoints,
 and intents persisted before a provider reservation.
 Settled unknown usage remains durable backup data; it does not justify retrying
 an ambiguous call after restore. From `backend/`:
@@ -2896,8 +2674,6 @@ layers. Where code does not yet meet one, the requirement still applies.
   graph.
 - Worker leases, heartbeats, retries, cancellation, and terminal errors persist.
   No database transaction is held during extraction, model calls, or rendering.
-  Background jobs are separate from provider Batch APIs for eligible independent
-  steps; interactive tool loops use ordinary runs.
 - Streaming output is provisional until validated; refusals, failures, and
   cancellations are distinct terminal states.
 - Conversation context covers every retained turn exactly once through raw

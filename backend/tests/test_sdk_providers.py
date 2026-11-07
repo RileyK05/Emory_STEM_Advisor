@@ -25,8 +25,6 @@ from app.llm.base import (
     ToolDefinition,
     Usage,
 )
-from app.llm.decision import DecisionRequest
-from app.llm.decision_adapters import OpenAIDecisionProvider
 from app.llm.factory import get_provider
 
 
@@ -275,50 +273,6 @@ def test_google_actual_sdk_serializes_generation_config_and_usage():
     assert result.tool_calls[0].arguments == {"q":"x"}
     assert result.usage == Usage(6, 2, 8, "provider")
     http.close()
-
-
-def test_openai_actual_sdk_native_decisions_serializes_choice_question():
-    requests = []
-
-    def handler(request):
-        requests.append(request)
-        return _openai_response({
-            "id":"decision_1", "object":"decision", "model":"gpt-6-luna",
-            "answers":[{"type":"choice","name":"answer","choice":"yes","confidence":0.9,
-                        "probabilities":[{"value":"yes","probability":0.9},
-                                          {"value":"no","probability":0.1}]}],
-            "usage":{"input_tokens":3,"output_tokens":0,"total_tokens":3},
-        })
-
-    sdk = OpenAI(api_key="sk-test", base_url="https://mock/v1",
-                 http_client=httpx2.Client(transport=httpx2.MockTransport(handler)))
-    result = OpenAIDecisionProvider(sdk, "gpt-6-luna").decide(DecisionRequest(
-        task="approve?", input="evidence", choices=("yes","no")))
-    payload=json.loads(requests[0].content)
-    assert payload["questions"][0]["type"] == "choice"
-    assert result.choice == "yes" and result.usage.total_tokens == 3
-    sdk.close()
-
-
-def test_openai_actual_sdk_serializes_json_decision_input_as_text():
-    requests = []
-
-    def handler(request):
-        requests.append(request)
-        return _openai_response({
-            "id":"decision_json", "object":"decision", "model":"gpt-6-luna",
-            "answers":[{"type":"predicate","name":"answer","probability":0.75}],
-            "usage":{"input_tokens":5,"output_tokens":0,"total_tokens":5},
-        })
-
-    sdk = OpenAI(api_key="sk-test", base_url="https://mock/v1",
-                 http_client=httpx2.Client(transport=httpx2.MockTransport(handler)))
-    OpenAIDecisionProvider(sdk, "gpt-6-luna").decide(DecisionRequest(
-        task="classify", predicate="is eligible?", input={"student": "sample", "credits": 12}))
-    payload = json.loads(requests[0].content)
-    assert payload["input"] == '{"student":"sample","credits":12}'
-    assert isinstance(payload["input"], str)
-    sdk.close()
 
 
 def test_anthropic_actual_sdk_stream_maps_usage_and_stop_reason():

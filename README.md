@@ -6,8 +6,7 @@ The frontend ships three entries from one codebase: **Main** for students and
 advisors, **Admin** at `/admin` (`/admin.html` under Vite) for institutional
 management and review, and **Debug** at `/debug` (`/debug.html`) for an expiring,
 scoped prompt/retrieval session. Main, Admin, and Debug share authentication but
-load separate bundles. The four session roles are student, advisor, admin, and
-auditor.
+load separate bundles. The two session roles are student and admin.
 
 ## Repository layout
 

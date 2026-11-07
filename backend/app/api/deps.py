@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, Request
 from psycopg_pool import PoolTimeout
 
-from app.auth.dependencies import get_admin_principal, get_auditor_or_admin_principal
+from app.auth.dependencies import get_admin_principal
 from app.auth.models import Principal
 from app.config import Settings
 from app.db.bootstrap import prepare_database
@@ -25,11 +25,10 @@ def get_settings(request: Request) -> Settings:
 
 
 def execution_settings(request: Request, conn, workspace: str, settings=None) -> Settings:
-    from app.flags.service import FeatureFlagService
+    from app.auth.capabilities import execution_settings as workspace_settings
 
-    return FeatureFlagService.execution_settings(
-        conn, settings or request.app.state.settings, workspace,
-        ceilings=request.app.state.settings)
+    return workspace_settings(conn, settings or request.app.state.settings, workspace,
+                              ceilings=request.app.state.settings)
 
 
 def get_config(request: Request) -> RetrievalConfig:
@@ -135,13 +134,4 @@ def panel_admin(request: Request,
     return _admin_panel_enabled(request, principal)
 
 
-def panel_auditor_or_admin(
-    request: Request,
-    principal: Annotated[Principal, Depends(get_auditor_or_admin_principal)],
-) -> Principal:
-    """An active auditor or admin, while the institutional admin surface is enabled."""
-    return _admin_panel_enabled(request, principal)
-
-
 PanelAdmin = Annotated[Principal, Depends(panel_admin)]
-PanelAuditorOrAdmin = Annotated[Principal, Depends(panel_auditor_or_admin)]

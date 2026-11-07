@@ -1,14 +1,13 @@
 -- name: insert_model_call
--- One row per provider call. decision_id / claim_review_id tag calls made by
--- those features; trace_id is NULL for decisions.
+-- One row per provider call.
 INSERT INTO model_calls (
-    model_call_id, trace_id, decision_id, claim_review_id, provider, model_id, status,
+    model_call_id, trace_id, provider, model_id, status,
     finish_reason, request_id, prompt_tokens, completion_tokens, usage_source, latency_ms,
     error_type, operation_id, sampling_policy, reasoning_effort, requested_output_tokens,
     requested_timeout_seconds, requested_temperature, profile_id, profile_revision,
     cached_prompt_tokens, schedule_id, estimated_cost, cost_status
 ) VALUES (
-    %(model_call_id)s, %(trace_id)s, %(decision_id)s, %(claim_review_id)s, %(provider)s,
+    %(model_call_id)s, %(trace_id)s, %(provider)s,
     %(model_id)s, %(status)s, %(finish_reason)s, %(request_id)s, %(prompt_tokens)s,
     %(completion_tokens)s, %(usage_source)s, %(latency_ms)s, %(error_type)s, %(operation_id)s,
     %(sampling_policy)s, %(reasoning_effort)s, %(requested_output_tokens)s,

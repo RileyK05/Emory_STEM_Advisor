@@ -80,10 +80,6 @@ def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_orig
 
     data_dir = short_dir / "src"
     target_data = short_dir / "dst"
-    db.execute(queries.get("seed_feature_flags"), {
-        "flag_name": "backup_test_flag", "description": "Restored flag",
-        "env_ceiling_key": None, "default_enabled": True,
-    })
     db.execute(queries.get("seed_quota_policy"), {
         "policy_id": uuid4(), "scope_type": "workspace", "scope_id": "backup-test",
         "queries_per_minute": 17, "queries_per_day": 123, "tokens_per_day": None,
@@ -196,15 +192,6 @@ def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_orig
     })
     db.execute(queries.get("keep_operation_call_reservation"), {
         "operation_id": operation_id, "attempt_no": 1, "status": "unknown",
-    })
-    batch_id = uuid4()
-    db.execute(queries.get("insert_provider_batch"), {
-        "batch_id": batch_id, "workspace_key": "workspace-a", "provider": "test-provider",
-        "model_id": "test-model", "profile_id": None, "profile_revision": None,
-        "request_fingerprint": "b" * 64, "operation_limits": Jsonb({"maxItems": 1}),
-    })
-    db.execute(queries.get("mark_provider_batch_unknown"), {
-        "batch_id": batch_id, "workspace_key": "workspace-a", "failure_code": "unknown_outcome",
     })
     db.commit()
 
@@ -333,10 +320,6 @@ def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_orig
             "operation_id": operation_id, "attempt_no": 1,
         }).fetchone()
         assert usage == {"status": "unknown", "reserved_tokens": 50, "accounted_tokens": 0}
-        batch = target.execute(queries.get("backup_provider_batch_state"), {
-            "batch_id": batch_id,
-        }).fetchone()
-        assert batch == {"state": "unknown", "failure_code": "unknown_outcome"}
         turns = target.execute(queries.get("conversation_turns"), {
             "conversation_id": conversation_id, "after": 0, "limit": 10,
         }).fetchall()
@@ -356,10 +339,6 @@ def test_backup_restores_citations_artifact_revisions_jobs_conversation_and_orig
     server = pgserver.get_server(consolidated / "pgserver", cleanup_mode="stop")
     try:
         with connect(server.get_uri()) as restored:
-            flag = restored.execute(queries.get("get_feature_flag"), {
-                "flag_name": "backup_test_flag",
-            }).fetchone()
-            assert flag["default_enabled"] is True
             policy = restored.execute(queries.get("get_quota_policy"), {
                 "scope_type": "workspace", "scope_id": "backup-test",
             }).fetchone()
@@ -439,40 +418,6 @@ def test_team_snapshot_shares_advising_data_without_private_rows(
             assert user["n"] == 0
     finally:
         server.cleanup()
-
-
-def test_backup_refuses_pending_decision_before_call_reservation(db, migrated_dsn, tmp_path):
-    from app.operations.budget import OperationBudgetController, OperationLimits
-
-    operation_id, profile_id, decision_id = uuid4(), uuid4(), uuid4()
-    OperationBudgetController().ensure(db, operation_id, "backup-decision", OperationLimits())
-    db.execute(queries.get("insert_connection_profile"), {
-        "profile_id": profile_id, "name": f"backup-{profile_id}", "provider": "openai",
-        "model_id": "test-model", "base_url": None, "account_id": None,
-        "secret_ciphertext": None, "provider_options": Jsonb({}), "roles": ["decision"],
-        "capabilities": ["decision"], "data_scopes": ["user_supplied_data"],
-        "enabled": True, "priority": 1,
-    })
-    db.execute(queries.get("insert_decision_intent"), {
-        "decision_id": decision_id, "workspace_key": "backup-decision",
-        "operation_id": operation_id, "profile_id": profile_id, "profile_revision": 1,
-        "provider": "openai", "model_id": "test-model", "request_fingerprint": "a" * 64,
-        "request_json": Jsonb({"task": "test"}),
-    })
-    db.commit()
-    assert not db.execute(queries.get("backup_ready")).fetchone()["ready"]
-    with pytest.raises(BackupError, match="model requests remain pending"):
-        create_backup(
-            db, dsn=migrated_dsn, data_dir=tmp_path / "data",
-            destination=tmp_path / "pending.zip", maintenance_confirmed=True,
-        )
-    db.rollback()
-    db.execute(queries.get("abandon_decision"), {
-        "decision_id": decision_id, "workspace_key": "backup-decision",
-    })
-    db.commit()
-    assert db.execute(queries.get("backup_ready")).fetchone()["ready"]
-    assert not (tmp_path / "pending.zip").exists()
 
 
 def test_backup_refuses_live_jobs_and_existing_restore_targets(db, migrated_dsn, tmp_path):

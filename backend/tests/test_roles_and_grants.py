@@ -21,17 +21,8 @@ def test_role_capability_matrix():
     assert not has_capability("student", Capability.READ_AUDIT)
     assert not has_capability("student", Capability.MANAGE_USERS)
 
-    # Advisor
-    assert has_capability("advisor", Capability.READ_OWN_WORKSPACE)
-    assert has_capability("advisor", Capability.WRITE_OWN_WORKSPACE)
-    assert not has_capability("advisor", Capability.MANAGE_USERS)
-
-    # Auditor
-    assert has_capability("auditor", Capability.READ_AUDIT)
-    assert has_capability("auditor", Capability.EXPORT_AUDIT)
-    assert has_capability("auditor", Capability.VIEW_TELEMETRY)
-    assert not has_capability("auditor", Capability.WRITE_OWN_WORKSPACE)
-    assert not has_capability("auditor", Capability.MANAGE_USERS)
+    # A role that no longer exists holds nothing.
+    assert not has_capability("auditor", Capability.READ_AUDIT)
 
     # Admin
     for cap in Capability:
@@ -45,9 +36,6 @@ def test_require_capability_enforces_status_and_role():
     disabled_student = Principal(
         workspace_key="s2", issuer=None, subject="s2", role="student", status="disabled"
     )
-    active_auditor = Principal(
-        workspace_key="a1", issuer=None, subject="a1", role="auditor", status="active"
-    )
 
     require_capability(active_student, Capability.READ_OWN_WORKSPACE)
 
@@ -60,7 +48,6 @@ def test_require_capability_enforces_status_and_role():
         require_capability(active_student, Capability.MANAGE_USERS)
     assert exc_unauth.value.status_code == 403
 
-    require_capability(active_auditor, Capability.READ_AUDIT)
 
 
 def test_last_admin_protection(db):

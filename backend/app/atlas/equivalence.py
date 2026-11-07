@@ -302,16 +302,3 @@ def derive_campus_equivalents(
         for (oxford, atlanta), basis in sorted(pairs.items())
     )
 
-
-def equivalent_map(pairs: list[CampusEquivalent]) -> dict[str, set[str]]:
-    """The equivalence as a lookup, in both directions.
-
-    A course satisfies a requirement for its campus equivalent, and the
-    other way round: a student who took `MATH 111` has taken what
-    `MATH_OX 111` asks for.
-    """
-    mapping: dict[str, set[str]] = defaultdict(set)
-    for pair in pairs:
-        mapping[pair.oxford_code].add(pair.atlanta_code)
-        mapping[pair.atlanta_code].add(pair.oxford_code)
-    return dict(mapping)

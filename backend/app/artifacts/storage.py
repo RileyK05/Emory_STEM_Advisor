@@ -291,37 +291,11 @@ class ArtifactStore:
         self.conn.commit()
         return self.get(artifact_id, revision_id)
 
-    def original(self, artifact_id: UUID) -> tuple[str, bytes]:
-        row = self.get(artifact_id)
-        if not row["original_path"]:
-            raise ArtifactNotFound("artifact has no imported original")
-        expected_dir = (
-            self.data_dir
-            / "artifacts"
-            / "originals"
-            / hashlib.sha256(self.workspace_key.encode()).hexdigest()
-        ).resolve()
-        path = Path(row["original_path"]).resolve()
-        if path.parent != expected_dir or path.name != row["original_sha256"]:
-            raise ValueError("original storage path failed validation")
-        content = io_path(path).read_bytes()
-        if hashlib.sha256(content).hexdigest() != row["original_sha256"]:
-            raise ValueError("original file failed integrity check")
-        return row["original_filename"], content
-
-
 def public_record(row: dict) -> dict:
     spec = validate_spec(row["kind"], row["spec"])
     formulas = isinstance(spec, WorkbookSpec) and any(
         cell.formula for sheet in spec.sheets for cell in sheet.cells
     )
-    original = None
-    if row["original_sha256"]:
-        original = {
-            "filename": row["original_filename"],
-            "sha256": row["original_sha256"],
-            "preserved": True,
-        }
     return {
         "artifactId": str(row["artifact_id"]),
         "revisionId": str(row["revision_id"]),
@@ -329,7 +303,6 @@ def public_record(row: dict) -> dict:
         "kind": row["kind"],
         "title": spec.title,
         "spec": spec.model_dump(mode="json"),
-        "original": original,
         "status": "needs_recalculation" if formulas else "ready",
         "message": "Formula values require isolated recalculation." if formulas else None,
     }

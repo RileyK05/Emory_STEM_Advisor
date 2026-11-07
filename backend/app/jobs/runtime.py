@@ -124,26 +124,10 @@ class RunExecutor:
 
         try:
             require_workspace_execution(conn, workspace_key, lock=True)
-            if job.payload.get("inputs", {}).get("conversationId"):
-                from app.flags.service import FeatureFlagService
-
-                FeatureFlagService.require_enabled(
-                    conn, "advising_summary_export", workspace_key=workspace_key, settings=None, lock=True)
         except HTTPException as exc:
             raise SafeJobError("access_changed", "Workspace or feature access changed; output was withheld.",
                                retryable=False) from exc
         store = ArtifactStore(conn, workspace_key=workspace_key, data_dir=self._data_dir)
-        from app.db import queries
-        from app.jobs.artifact_plans import ArtifactPlanError, ArtifactRunPlanStore
-
-        plan_store = ArtifactRunPlanStore(lambda: conn)
-        planned = conn.execute(queries.get("get_artifact_run_plan"), {
-            "job_id": job.job_id, "workspace_key": workspace_key,
-        }).fetchone() is not None
-        if planned and len(value.artifacts) != 1:
-            raise SafeJobError(
-                "invalid_run_result", "A dependent output plan can publish exactly one artifact."
-            )
         artifact_ids = []
         artifact_revisions = []
         for staged in value.artifacts:
@@ -171,18 +155,6 @@ class RunExecutor:
                         "stale_connection",
                         "The selected model connection changed during generation.",
                     )
-            if planned:
-                if staged.operation_id != job.job_id:
-                    raise SafeJobError(
-                        "operation_mismatch", "The planned artifact operation identity changed."
-                    )
-                try:
-                    plan_store.assert_publishable(
-                        conn, job.job_id, workspace_key, job.lease_token,
-                        staged.kind, staged.spec,
-                    )
-                except ArtifactPlanError as exc:
-                    raise SafeJobError("stale_plan", "Frozen artifact evidence changed before publication.") from exc
             spec = validate_spec(staged.kind, dict(staged.spec))
             if staged.operation == "create":
                 record = store.create_uncommitted(spec)
@@ -194,14 +166,6 @@ class RunExecutor:
                     spec,
                     draft_id=staged.draft_id,
                 )
-            if planned:
-                try:
-                    plan_store.assert_publishable(
-                        conn, job.job_id, workspace_key, job.lease_token,
-                        staged.kind, staged.spec, check_target=False,
-                    )
-                except ArtifactPlanError as exc:
-                    raise SafeJobError("stale_plan", "Frozen artifact evidence changed during publication.") from exc
             artifact_ids.append(str(record["artifact_id"]))
             artifact_revisions.append({
                 "artifactId": str(record["artifact_id"]),

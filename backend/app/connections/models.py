@@ -10,21 +10,18 @@ from uuid import UUID
 
 ProviderName = Literal[
     "openai", "anthropic", "google", "openai-compatible", "hf-local",
-    "openai-decisions", "cloudflare-clef",
 ]
-RouteRole = Literal["standard", "complex", "fast_generation", "decision"]
-Capability = Literal["structured_output", "tools", "streaming", "vision", "batch", "decision"]
+RouteRole = Literal["standard", "complex", "fast_generation"]
+Capability = Literal["structured_output", "tools", "streaming", "vision"]
 DataScope = Literal["institutional_corpus", "user_supplied_data", "private_workspace"]
 
 PROVIDERS = frozenset({
     "openai", "anthropic", "google", "openai-compatible", "hf-local",
-    "openai-decisions", "cloudflare-clef",
 })
-ROLES = frozenset({"standard", "complex", "fast_generation", "decision"})
-CAPABILITIES = frozenset({"structured_output", "tools", "streaming", "vision", "batch", "decision"})
+ROLES = frozenset({"standard", "complex", "fast_generation"})
+CAPABILITIES = frozenset({"structured_output", "tools", "streaming", "vision"})
 DATA_SCOPES = frozenset({"institutional_corpus", "user_supplied_data", "private_workspace"})
 DEVELOPMENT_WORKSPACE = "development"
-DECISION_PROVIDERS = frozenset({"openai-decisions", "cloudflare-clef"})
 
 
 def required_data_scopes(workspace_key: str, *, authoring: bool = False) -> frozenset[str]:
@@ -161,10 +158,6 @@ def validate_profile(data: ProfileCreate | ProfileUpdate) -> None:
         raise ProfileValidationError("profile contains unsupported capabilities")
     if not data.data_scopes <= DATA_SCOPES:
         raise ProfileValidationError("profile contains unsupported data scopes")
-    if provider in DECISION_PROVIDERS and data.roles != frozenset({"decision"}):
-        raise ProfileValidationError("decision-only providers may only serve the decision role")
-    if provider not in DECISION_PROVIDERS and "decision" in data.roles:
-        raise ProfileValidationError("decision roles require a decision-only provider profile")
     if provider == "openai-compatible" and not data.base_url:
         raise ProfileValidationError("OpenAI-compatible profiles require a base URL")
     if data.base_url:
@@ -174,10 +167,8 @@ def validate_profile(data: ProfileCreate | ProfileUpdate) -> None:
             raise ProfileValidationError("base_url must be an HTTP(S) URL without embedded credentials")
         if parsed.query or parsed.fragment:
             raise ProfileValidationError("base_url cannot contain a query or fragment")
-    if provider == "cloudflare-clef" and not data.account_id:
-        raise ProfileValidationError("Cloudflare Clef profiles require an account id")
-    if provider != "cloudflare-clef" and data.account_id is not None:
-        raise ProfileValidationError("account_id is only valid for Cloudflare Clef profiles")
+    if data.account_id is not None:
+        raise ProfileValidationError("account_id is not used by any supported provider")
     if provider == "hf-local" and getattr(data, "secret", None):
         raise ProfileValidationError("hf-local profiles do not use API credentials")
     if data.priority < 0 or data.priority > 1_000_000:

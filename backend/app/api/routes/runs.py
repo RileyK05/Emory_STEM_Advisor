@@ -2,58 +2,25 @@
 
 from __future__ import annotations
 
-import json
 import re
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from app.api import deps
 from app.api.deps import request_job_store
-from app.api.schemas import ArtifactRun, ArtifactRunEvent, ArtifactRunLimits
+from app.api.schemas import ArtifactRun, ArtifactRunEvent
 from app.auth.dependencies import get_workspace_key
 from app.jobs.store import JobNotFound, JobStore
 from app.jobs.types import Job, JobEvent, JobStatus
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
 WorkspaceDep = Annotated[str, Depends(get_workspace_key)]
-_MAX_INPUT_BYTES = 64 * 1024
 _PROGRESS_STAGES = frozenset({
     "planning", "retrieving", "routing", "generating", "repairing", "assembling",
     "validating", "validated", "visual_review", "rendering",
     "recalculating", "publishing", "tool_started", "tool_completed", "tool_reused", "tool_replayed",
 })
-
-
-class CreateRunRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-    kind: Literal["document", "workbook", "html"]
-    inputs: dict[str, Any]
-    idempotencyKey: str = Field(min_length=1, max_length=200)
-
-    @field_validator("idempotencyKey")
-    @classmethod
-    def valid_idempotency_key(cls, value: str) -> str:
-        if not value.strip() or any(ord(char) < 32 for char in value):
-            raise ValueError("idempotencyKey is invalid")
-        return value
-
-    @field_validator("inputs")
-    @classmethod
-    def bounded_inputs(cls, value: dict[str, Any]) -> dict[str, Any]:
-        try:
-            size = len(
-                json.dumps(
-                    value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-                ).encode("utf-8")
-            )
-        except (TypeError, ValueError) as exc:
-            raise ValueError("inputs must be bounded JSON data") from exc
-        if size > _MAX_INPUT_BYTES:
-            raise ValueError("inputs exceed the run request limit")
-        return value
 
 
 def _store(request: Request) -> JobStore:
@@ -159,78 +126,6 @@ def _event_state(event: JobEvent, current: Job) -> JobStatus:
         return JobStatus(raw)
     except (ValueError, TypeError):
         return current.status
-
-
-@router.post("", response_model=ArtifactRun, response_model_exclude_unset=True)
-def create_run(body: CreateRunRequest, request: Request, workspace: WorkspaceDep) -> dict[str, Any]:
-    from contextlib import contextmanager
-
-    from app.generation.artifacts import ArtifactGenerationInput
-
-    inputs_payload = body.inputs
-    if "conversationId" in body.inputs:
-        from app.conversations.store import ConversationStore
-        from app.flags.service import FeatureFlagService
-
-        try:
-            summary_input = ArtifactGenerationInput.model_validate(body.inputs)
-        except ValidationError as exc:
-            raise HTTPException(422, "Summary run inputs are invalid.") from exc
-        if body.kind != "document" or summary_input.conversationId is None:
-            raise HTTPException(422, "A summary run must create a document from a saved conversation.")
-        # Return this short borrow before JobStore admission acquires its own.
-        with contextmanager(deps.get_conn)(request) as conn:
-            FeatureFlagService.require_enabled(
-                conn, "advising_summary_export", workspace_key=workspace,
-                settings=request.app.state.settings)
-            conversation = ConversationStore(conn, workspace).get(summary_input.conversationId)
-            boundary = summary_input.throughSequence
-            if boundary is None:
-                boundary = conversation["last_sequence"]
-            if boundary > conversation["last_sequence"]:
-                raise HTTPException(422, "summary boundary exceeds the saved conversation")
-            inputs_payload = summary_input.model_copy(update={"throughSequence": boundary}).model_dump(
-                mode="json", exclude_none=True)
-            conn.commit()
-    if "outputPlan" in body.inputs:
-        try:
-            inputs = ArtifactGenerationInput.model_validate(body.inputs)
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail="Artifact run inputs are invalid.") from exc
-        if inputs.outputPlan is None:
-            raise HTTPException(status_code=422, detail="The output plan is invalid.")
-        if inputs.outputPlan.kind != body.kind:
-            raise HTTPException(status_code=422, detail="The output plan kind must match the run kind.")
-        from app.generation.planned_artifacts import validate_operation_limits
-
-        settings = request.app.state.settings
-        try:
-            validate_operation_limits(
-                inputs.outputPlan, max_calls=settings.operation_max_calls,
-                total_token_budget=settings.operation_token_budget,
-                per_call_output_cap=settings.llm_max_output_tokens,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        inputs_payload = inputs.model_dump(mode="json", by_alias=True, exclude_none=True)
-    from app.jobs.artifact_runs import admit_artifact_run
-
-    job = admit_artifact_run(
-        _store(request), kind=body.kind, inputs=inputs_payload,
-        scope_key=workspace, idempotency_key=body.idempotencyKey,
-        settings=getattr(request.app.state, "settings", None),
-    )
-    return _public_run(job)
-
-
-@router.get("/limits", response_model=ArtifactRunLimits)
-def get_run_limits(request: Request, _workspace: WorkspaceDep) -> dict[str, int]:
-    settings = request.app.state.settings
-    return {
-        "maxCalls": settings.operation_max_calls,
-        "totalTokenBudget": settings.operation_token_budget,
-        "perCallOutputCap": settings.llm_max_output_tokens,
-    }
 
 
 @router.get("/{run_id}", response_model=ArtifactRun, response_model_exclude_unset=True)

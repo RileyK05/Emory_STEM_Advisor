@@ -30,7 +30,12 @@ from app.advising.research_store import (
     InvalidResearchRecord,
     StateConflict,
 )
-from app.advising.research_types import MAX_DECISION_TEXT_BYTES, FinalDecision, ResearchState
+from app.advising.research_types import (
+    MAX_DECISION_TEXT_BYTES,
+    DecisionBlock,
+    FinalDecision,
+    ResearchState,
+)
 from app.advising.research_workspace import ConversationWorkspace
 from app.advising.sequence import CourseRequirement, plan_sequence
 from app.atlas.authority import MIN_OFFERING_TERMS, term_order
@@ -59,7 +64,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "20"
+RESEARCH_TOOLS_VERSION = "24"
 
 
 _CONFLICTS_PATH = Path(__file__).resolve().parents[2] / "configs" / "source_conflicts.toml"
@@ -345,6 +350,21 @@ def offering_note(code: str, checked: list[str], variants: list[str]) -> str:
             "though a catalog record or a requisite may still name it.")
 
 
+_DEGREE_NAMED = re.compile(r"\b(?:b\.?a\.?|b\.?s\.?|bachelor)\b", re.IGNORECASE)
+
+
+def other_degrees(pin, programs) -> list:
+    """The same subject and kind under another degree: Computer Science (BA) for its BS."""
+    subject = _program_subject(pin.title)
+    return [other for other in programs if other.program_id != pin.program_id
+            and other.kind == pin.kind and other.degree != pin.degree
+            and _program_subject(other.title) == subject]
+
+
+def _program_subject(title: str) -> str:
+    return re.sub(r"\s*\(.*$", "", title).casefold()
+
+
 def _term_offerings(pin) -> bool:
     return "course_offerings" in pin.document_roles
 
@@ -401,6 +421,7 @@ class ResearchSession:
         # Set when the server already holds the whole answer, so the next step is writing it.
         self.answer_in_hand = ""
         self.must_name: set[str] = set()
+        self.must_name_degrees: set[str] = set()
         self.line_facts: dict[str, list] = {}
         self.audit_matched_lines_only = False
         self.read_keys: set[tuple] = set()
@@ -624,6 +645,13 @@ class ResearchSession:
             scores = {c.chunk_id: c.normalized_score for c in chunks}
             for row in supported:
                 ranks.setdefault(row["program_id"], scores[row["chunk_id"]] * 0.05)
+            # A program named in the student's own words outranks every partial match, and
+            # the longest name wins: "religion and anthropology" is not "anthropology".
+            asked = f"{value.query} {self.question or ''}".casefold()
+            for pin in self.scope.programs.values():
+                subject = _program_subject(pin.title)
+                if subject in asked:
+                    ranks[pin.program_id] = 1_000.0 + len(subject)
             for pin in sorted(self.scope.programs.values(), key=lambda p: (-ranks.get(p.program_id, -1), p.title)):
                 if pin.program_id in ranks and (not value.department or
                         value.department.casefold() in (pin.department or "").casefold()):
@@ -635,8 +663,12 @@ class ResearchSession:
             courses = self.conn.execute(queries.get("research_lead_courses"), {
                 "collection_id": self.scope.collection_id, "source_ids": sources,
                 "locator_ids": locators}).fetchall()
+            # A title in the student's own words is the course, whatever the passages found.
+            titled = self.conn.execute(queries.get("research_courses_titled_in"), {
+                "collection_id": self.scope.collection_id, "source_ids": sources,
+                "text": f"{value.query} {self.question or ''}".casefold()}).fetchall()
             seen = set()
-            for row in courses:
+            for row in [*titled, *courses]:
                 if row["canonical_code"] not in seen:
                     seen.add(row["canonical_code"])
                     leads.append({"kind": "course", "_identity": row["code"],
@@ -764,9 +796,15 @@ class ResearchSession:
                                + ", ".join(sorted(unsupported_fields)) + ".")
         renamed = {old: new for old, new in SUBJECT_RENAMES.items()
                    if any(re.search(rf"\b{old}\b", i.line.text) for i in items)}
+        others = other_degrees(read.pin, self.scope.programs.values())
+        degrees = [{"title": other.title, "handle": self.handle("program", other.program_id)}
+                   for other in others]
+        if not _DEGREE_NAMED.search(self.question or ""):
+            self.must_name_degrees |= {other.degree for other in others if other.degree}
         return ResearchResult(data={"title": read.pin.title, "handle": value.handle,
             "binding_status": read.pin.binding_status,
             **({"renamed_subjects": renamed} if renamed else {}),
+            **({"other_degrees": degrees} if degrees else {}),
             **_source_metadata(self.scope.sources[read.pin.source_id]),
             "fields": {k: {"text": v.text, "evidence_ids": evidence(v),
                            "discovery_only": not v.cited} for k, v in read.fields.items()},
@@ -886,7 +924,7 @@ class ResearchSession:
             return data
 
         return ResearchResult(data={"courses": [record(r) for r in reads],
-            "follow_on_courses": [record(r) for r in follow_ons],
+            "follow_on_courses": [record(r) for r in follow_ons], "terms_checked": checked,
             "evidence_ids": ids, "missing_codes": sorted(set(codes) - {r.code for r in reads})},
             status="ok" if reads else "not_found")
 
@@ -1185,6 +1223,17 @@ class ResearchSession:
                 raise DecisionRejected(
                     "the prerequisite graph lists these too; name each one and what else it "
                     f"needs: {', '.join(sorted(self.must_name - named))}")
+            unsaid = {degree for degree in self.must_name_degrees
+                      if not re.search(rf"\b{re.escape(degree)}\b", written)}
+            if unsaid:
+                raise DecisionRejected(
+                    "the student named no degree and this major also exists as a "
+                    f"{', '.join(sorted(unsaid))}; say in the first block that both exist")
+            unnamed = set(self.unknown_question_codes()) - named
+            if unnamed:
+                raise DecisionRejected(
+                    "the student asked about a course that does not exist; say so plainly, "
+                    f"naming it: {', '.join(sorted(unnamed))}")
             validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
                            self.supplied, finishable_checks, self.entity_evidence,
                            self.artifact_references, self._known_course_codes(),
@@ -1241,8 +1290,13 @@ class ResearchSession:
                 continue
             kept.append(block)
             used += size
-        if not any(block.kind == "fact" for block in kept):
+        # What the master already settles is not lost with the block that said it.
+        named = {code for block in kept for code in canonical_codes_in(block.text)}
+        absent = [DecisionBlock(kind="limitation", text=f"There is no {code} in the Course Atlas.")
+                  for code in sorted(set(self.unknown_question_codes()) - named)]
+        if not absent and not any(block.kind == "fact" for block in kept):
             return None
+        kept = [*absent, *kept]
         self.supplied = known
         return proposal.model_copy(update={
             "outcome": "information", "completeness": "partial", "blocks": tuple(kept),

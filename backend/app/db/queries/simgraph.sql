@@ -18,10 +18,6 @@ INSERT INTO sim_builds (build_id, collection_id, model, config_version, nudges_h
 VALUES (%(build_id)s, %(collection_id)s, %(model)s, %(config_version)s, %(nudges_hash)s, false,
         %(content_hash)s);
 
--- name: get_sim_build_before_upgrade
-SELECT build_id, model FROM sim_builds
-WHERE collection_id = %(collection_id)s AND is_current;
-
 -- name: clear_current_build
 UPDATE sim_builds SET is_current = false
 WHERE collection_id = %(collection_id)s AND is_current;
@@ -98,29 +94,4 @@ FROM sim_cluster_members m
 JOIN sim_clusters c ON c.cluster_id = m.cluster_id
 JOIN sim_courses sc ON sc.build_id = c.build_id AND sc.course_id = m.course_id
 WHERE m.cluster_id = %(cluster_id)s
-ORDER BY m.code;
-
--- name: list_cluster_descendants
-WITH RECURSIVE subtree AS (
-    SELECT c.* FROM sim_clusters c
-    JOIN sim_builds b ON b.build_id = c.build_id AND b.is_current AND b.graph_version = 2
-    WHERE c.cluster_id = %(cluster_id)s
-    UNION ALL
-    SELECT c.* FROM sim_clusters c JOIN subtree p ON c.parent_cluster_id = p.cluster_id
-)
-SELECT cluster_id, parent_cluster_id, kind, label, department_key, level FROM subtree
-ORDER BY level, cluster_id;
-
--- name: list_subtree_leaf_courses
-WITH RECURSIVE subtree AS (
-    SELECT c.* FROM sim_clusters c
-    JOIN sim_builds b ON b.build_id = c.build_id AND b.is_current AND b.graph_version = 2
-    WHERE c.cluster_id = %(cluster_id)s
-    UNION ALL
-    SELECT c.* FROM sim_clusters c JOIN subtree p ON c.parent_cluster_id = p.cluster_id
-)
-SELECT c.cluster_id, c.department_key, m.course_id, m.code, m.title
-FROM subtree c
-JOIN sim_cluster_members m ON m.cluster_id = c.cluster_id
-WHERE NOT EXISTS (SELECT 1 FROM sim_clusters child WHERE child.parent_cluster_id = c.cluster_id)
 ORDER BY m.code;

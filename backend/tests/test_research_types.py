@@ -13,6 +13,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.advising.comparison import MENTION_OVERLAP_ONLY, MentionComparison, MentionRef
 from app.advising.research_types import (
     ArtifactRequest,
     ArtifactRevisionReference,
@@ -23,6 +24,7 @@ from app.advising.research_types import (
     validate_evidence_references,
     validate_fact_support,
 )
+from app.generation.research_tools import CompareInput, ResearchSession
 
 
 def _decision(**kwargs) -> FinalDecision:
@@ -297,7 +299,7 @@ def test_entry_point_claims_need_a_read_course_without_prerequisites():
                    None, records, {"e3"}, {})
 
 
-@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(14500, False), (15500, False), (48000, True)])
+@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(15000, False), (16000, False), (48000, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
     ("unknown", None, "edition_not_recorded"),
@@ -596,7 +598,7 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
                               program_handles=("h_a",)),))
     session = SimpleNamespace(
         settings=replace(load_settings(), research_max_prompt_bytes=(
-            19500 if support == "preparation" else 12500 if support == "oversized_preparation" else 15500)),
+            20000 if support == "preparation" else 13000 if support == "oversized_preparation" else 16000)),
         store=SimpleNamespace(evidence=lambda _run: records), run=SimpleNamespace(run_id=uuid4()),
         active=[r.evidence_id for r in records], state=state, entity_evidence={"h_a": {"e20"}},
         scope=SimpleNamespace(sources={}, programs={}),
@@ -663,6 +665,14 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone():
 
     session.rejected_decision = _decision(blocks=(unsupported,))
     assert session.salvage() is None  # No supported fact means no reply to keep.
+
+    # The master settles a course that does not exist, so that sentence always survives.
+    session.question = "what are the prereqs for PSYC 219"
+    session.rejected_decision = _decision(blocks=(good, unsupported))
+    assert [(b.kind, b.text) for b in session.salvage().blocks] == [
+        ("limitation", "There is no PSYC 219 in the Course Atlas."), ("fact", good.text)]
+    session.rejected_decision = _decision(blocks=(unsupported,))
+    assert session.salvage().blocks[0].text == "There is no PSYC 219 in the Course Atlas."
 
 
 @pytest.mark.parametrize("failure", ["TransientProviderError", "RateLimitError"])
@@ -736,3 +746,53 @@ def test_research_asks_only_a_supporting_provider_for_reasoning(
     assert bool(fields) == (own_effort is None and expected is not None)
     if fields:  # The temperature rule: reasoning effort never travels with greedy.
         assert fields["llm_sampling_policy"] == "model_default"
+
+
+def test_compare_rejects_duplicate_program_handles():
+    session = ResearchSession.__new__(ResearchSession)
+    session.program_reads = {"h1": object()}
+    result = ResearchSession.compare(
+        session, CompareInput(handles=["h1", "h1"]), _scope=None
+    )
+    assert result.status == "conflict"
+    assert "distinct" in result.limitations[0].lower()
+
+
+def test_compare_keeps_all_mention_refs_for_retained_codes():
+    pid_a, pid_b = uuid4(), uuid4()
+    refs = tuple(
+        MentionRef(program_id=pid_a, position=i, text=f"line {i}", choose=None, cited=True)
+        for i in range(6)
+    )
+    comparison = MentionComparison(
+        kind=MENTION_OVERLAP_ONLY,
+        programs=(pid_a, pid_b),
+        shared={"CS 170": refs},
+        unique={pid_a: {}, pid_b: {"MATH 111": refs[:3]}},
+        unresolved_positions={},
+    )
+
+    session = ResearchSession.__new__(ResearchSession)
+    session.program_reads = {"h1": object(), "h2": object()}
+    session.program_positions = {"h1": [0, 1], "h2": [0, 1]}
+    session.scope = object()
+    session.conn = SimpleNamespace(commit=lambda: None)
+    session.resolve = lambda handle, kind: object()
+
+    import app.generation.research_tools as mod
+
+    original = mod.compare_mentions
+    original_read = mod.read_program
+    mod.compare_mentions = lambda programs: comparison
+    mod.read_program = lambda *args, **kwargs: SimpleNamespace(items=[0, 1])
+    try:
+        result = ResearchSession.compare(
+            session, CompareInput(handles=["h1", "h2"]), _scope=None
+        )
+    finally:
+        mod.compare_mentions = original
+        mod.read_program = original_read
+
+    assert result.status == "ok"
+    shared_refs = result.data["comparison"]["shared"]["CS 170"]
+    assert len(shared_refs) == 6

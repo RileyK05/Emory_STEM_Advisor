@@ -37,11 +37,11 @@ SHARED_TABLES = frozenset({
     "program_course_mentions", "program_rule_releases",
     # Atlas term offerings and curator holds.
     "atlas_offering_snapshots", "atlas_offering_rows", "atlas_offering_capture_files",
-    "atlas_requirement_holds", "catalog_editions", "catalog_refresh_batches",
+    "atlas_requirement_holds",
     # The similarity graph.
     "sim_builds", "sim_clusters", "sim_cluster_members", "sim_courses",
     # Settings a working install needs.
-    "feature_flags", "quota_policies", "model_price_schedules", "schema_migrations",
+    "quota_policies", "model_price_schedules", "schema_migrations",
 })
 SHARED_FILES = ("eval/retrieval.jsonl", "programs/programs.jsonl", "atlas/atlas-primary.jsonl")
 

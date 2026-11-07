@@ -21,17 +21,16 @@ from app.artifacts.visual_review import (
     parse_visual_review,
     render_screenshot,
 )
+from app.auth.capabilities import execution_settings
 from app.connections.models import required_data_scopes
 from app.connections.selection import resolve
 from app.db import queries
 from app.db.collections import resolve_collection
-from app.flags.service import FeatureFlagService
 from app.generation.artifact_candidate import validate_candidate
 from app.generation.controller import ToolConversationController, ToolConversationError
 from app.generation.evidence import record_attempt
 from app.generation.native_tools import STAGE_TOOL, artifact_tool_context, validate_generation_size
 from app.generation.operation import GenerationOperation
-from app.generation.planned_artifacts import DependentOutputPlan
 from app.jobs.runtime import StagedArtifact, StagedRunResult
 from app.jobs.store import SafeJobError
 from app.llm.base import GenerationRequest, ProviderError
@@ -49,7 +48,6 @@ class ArtifactGenerationInput(BaseModel):
     mode: Literal["grounded", "authoring"] = "grounded"
     artifactId: UUID | None = None
     expectedRevisionId: UUID | None = None
-    outputPlan: DependentOutputPlan | None = None
     conversationId: UUID | None = None
     throughSequence: int | None = Field(
         default=None, ge=0, le=2_147_483_647, strict=True)
@@ -60,8 +58,6 @@ class ArtifactGenerationInput(BaseModel):
             raise ValueError("artifact and expected revision must be provided together")
         if self.throughSequence is not None and self.conversationId is None:
             raise ValueError("a summary boundary requires a conversation")
-        if self.conversationId is not None and self.outputPlan is not None:
-            raise ValueError("a conversation summary cannot include a generated output plan")
         return self
 
 
@@ -180,20 +176,13 @@ class ArtifactHandler:
         context.check_cancelled()
         conn = self.connect()
         try:
-            FeatureFlagService.execution_settings(conn, self.settings, job.scope_key)
+            execution_settings(conn, self.settings, job.scope_key)
             conn.commit()
         except HTTPException as exc:
             raise SafeJobError("access_changed", "Workspace access changed; work was stopped.",
                                retryable=False) from exc
         finally:
             conn.close()
-        if inputs.outputPlan is not None:
-            from app.generation.planned_artifacts import execute_dependent_artifact
-
-            return execute_dependent_artifact(
-                job, context, inputs, kind=kind, settings=self.settings, config=self.config,
-                embedder=self.embedder, provider=self.provider, connect=self.connect,
-            )
         if inputs.conversationId is not None:
             if kind != "document" or inputs.throughSequence is None:
                 raise SafeJobError("invalid_summary", "A summary requires a document and saved turn boundary.")
@@ -201,13 +190,6 @@ class ArtifactHandler:
             try:
                 from app.artifacts.advising_summary import build_advising_summary_spec
 
-                try:
-                    FeatureFlagService.require_enabled(
-                        conn, "advising_summary_export", workspace_key=job.scope_key,
-                        settings=self.settings)
-                except HTTPException as exc:
-                    raise SafeJobError("feature_disabled", "Summary export is unavailable.",
-                                       retryable=False) from exc
                 spec = build_advising_summary_spec(
                     conn,
                     inputs.conversationId,
@@ -290,7 +272,7 @@ class ArtifactHandler:
 
     def _select_connection(self, conn, job, inputs):
         """(provider, settings, selection): the routed connection, or the configured default."""
-        settings = FeatureFlagService.execution_settings(conn, self.settings, job.scope_key)
+        settings = execution_settings(conn, self.settings, job.scope_key)
         if job.scope_key != "development" and not settings.routing_enabled:
             raise SafeJobError("private_routing_required",
                                "Private generation requires an evaluated, authorized connection.")
@@ -313,8 +295,7 @@ class ArtifactHandler:
 
     def _policy_guard(self, conn, job, context, active):
         context.check_cancelled()
-        current = FeatureFlagService.execution_settings(conn, active, job.scope_key,
-                                                        ceilings=self.settings)
+        current = execution_settings(conn, active, job.scope_key, ceilings=self.settings)
         if active.tools_enabled and not current.tools_enabled:
             raise SafeJobError("feature_disabled", "Tool access changed; output was withheld.",
                                retryable=False)

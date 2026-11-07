@@ -202,72 +202,7 @@ def test_active_jobs_concurrency_limit(db):
     assert exc.value.headers.get("Retry-After") == "5"
 
 
-def test_effective_quota_endpoint(db, collection):
-    client = api_client(db, collection)
-    res = client.get("/api/quotas/effective")
-    assert res.status_code == 200
-    data = res.json()
-    assert "remainingQueriesMinute" in data
-    assert "remainingQueriesDay" in data
-    assert "minuteQueryLimit" in data
-    assert "dailyQueryLimit" in data
-    assert "activeJobsLimit" in data
-    assert "resetDaySeconds" in data
-    assert data["dailyQueryLimit"] >= 100
-
-
-def test_admin_quota_policy_crud_and_audit(db, collection):
-    client = api_client(db, collection)
-
-    # 1. List policies
-    res = client.get("/api/admin/quotas")
-    assert res.status_code == 200
-    policies = res.json()
-    assert len(policies) >= 1
-    assert any(p["scopeType"] == "global" and p["scopeId"] == "default" for p in policies)
-
-    # 2. Upsert policy for student cohort
-    post_res = client.post(
-        "/api/admin/quotas",
-        json={
-            "scopeType": "cohort",
-            "scopeId": "power_students",
-            "queriesPerMinute": 50,
-            "queriesPerDay": 500,
-            "tokensPerDay": 2000000,
-            "spendUsdPerDay": 25.0,
-            "maxActiveJobs": 5,
-        },
-    )
-    assert post_res.status_code == 200
-    p = post_res.json()
-    assert p["scopeType"] == "cohort"
-    assert p["scopeId"] == "power_students"
-    assert p["queriesPerDay"] == 500
-
-    # 3. Verify audit log
-    audits = db.execute(
-        queries.get("admin_list_audit"),
-        {"limit": 10},
-    ).fetchall()
-    actions = {a["action"] for a in audits}
-    assert "admin.quota_policy_upserted" in actions
-
-    # Merely opening the list must preserve the administrator's global limits.
-    changed = client.post("/api/admin/quotas", json={
-        "scopeType": "global", "scopeId": "default",
-        "queriesPerMinute": 7, "queriesPerDay": 17,
-    })
-    assert changed.status_code == 200, changed.text
-    listed = client.get("/api/admin/quotas")
-    assert listed.status_code == 200, listed.text
-    global_policy = next(p for p in listed.json() if p["scopeType"] == "global")
-    assert global_policy["queriesPerDay"] == 17
-    assert client.get("/api/quotas/effective").json()["dailyQueryLimit"] == 17
-
-
-@pytest.mark.parametrize("scope", ["user", "cohort"])
-def test_stream_admission_honors_the_displayed_user_policy(db, collection, scope):
+def test_stream_admission_honors_a_user_policy(db, collection):
     from app.auth.dependencies import get_principal
     from app.auth.models import Principal
 
@@ -278,18 +213,12 @@ def test_stream_admission_honors_the_displayed_user_policy(db, collection, scope
         "workspace_key": workspace, "display_name": "Quota Student",
         "email": f"{user_id}@emory.edu", "bootstrap": False,
     })
-    if scope == "cohort":
-        db.execute(queries.get("add_user_cohort"), {
-            "user_id": user_id, "cohort_name": "limited", "assigned_by": None,
-        })
-    QuotaService.upsert_policy(db, scope, str(user_id) if scope == "user" else "limited",
-                               queries_per_minute=1, queries_per_day=1)
+    QuotaService.upsert_policy(db, "user", str(user_id), queries_per_minute=1, queries_per_day=1)
     client = api_client(db, collection)
     client.app.dependency_overrides[get_principal] = lambda: Principal(
         workspace_key=workspace, user_id=user_id, role="student", status="active",
         issuer="https://auth.emory.edu", subject=str(user_id),
     )
-    assert client.get("/api/quotas/effective").json()["dailyQueryLimit"] == 1
     for expected_status in (202, 429):
         conversation = client.post("/api/conversations", json={"title": "quota"}).json()
         response = client.post(
@@ -311,12 +240,6 @@ def test_zero_quota_is_not_replaced_by_the_default(db, collection):
         queries_per_day=0,
         spend_usd_per_day=0,
     )
-    response = api_client(db, collection).post("/api/admin/quotas", json={
-        "scopeType": "workspace", "scopeId": ws,
-        "queriesPerMinute": 0, "queriesPerDay": 0,
-        "tokensPerDay": 0, "spendUsdPerDay": 0, "maxActiveJobs": 0,
-    })
-    assert response.status_code == 200, response.text
     policy = QuotaService.resolve_policy(db, workspace_key=ws)
     assert policy.queries_per_minute == 0
     assert policy.queries_per_day == 0

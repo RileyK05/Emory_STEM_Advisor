@@ -109,3 +109,15 @@ def create_user(db, *, role="student", status="active", workspace=None, email=No
         user_id=user_id,
         status=status,
     )
+
+
+def start_run(client, kind, inputs, key, workspace="development"):
+    """Queue an artifact run the way a chat turn does and return its id."""
+    from app.db.connection import connector
+    from app.jobs.artifact_runs import admit_artifact_run
+    from app.jobs.store import JobStore
+
+    settings = client.app.state.settings
+    store = getattr(client.app.state, "job_store", None) or JobStore(connector(settings))
+    return str(admit_artifact_run(store, kind=kind, inputs=inputs, scope_key=workspace,
+                                  idempotency_key=key, settings=settings).job_id)

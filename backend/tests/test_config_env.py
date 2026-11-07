@@ -3,15 +3,21 @@
 import json
 import os
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
+import app.runtime as runtime_module
 from app.config import (
     _load_dotenv,
     default_hf_stop_token_strings,
     load_settings,
     with_hf_model,
 )
+from app.retrieval import config as config_mod
+from app.retrieval.config import ConfigError, load_retrieval_config
+from app.runtime import build_provider
+from tests.fakes import FakeProvider
 
 MINICPM = "openbmb/MiniCPM-2B-128k"
 
@@ -115,3 +121,63 @@ def test_hf_model_override_preserves_same_model_and_resets_for_new_model(monkeyp
     assert other.hf_stop_token_strings == ()
     back = with_hf_model(other, MINICPM)
     assert back.hf_stop_token_strings == default_hf_stop_token_strings(back.hf_model_id)
+
+
+@pytest.fixture
+def settings():
+    return load_settings()
+
+
+def test_provider_construction_failure_is_reported_by_type_only(monkeypatch, settings):
+    def explode(_settings):
+        raise RuntimeError("Authorization: Bearer sk-live-secret")
+
+    monkeypatch.setattr(runtime_module, "get_provider", explode)
+    provider, error = build_provider(settings)
+    assert provider is None
+    assert error == "RuntimeError"  # never the message, which could carry credentials
+
+
+def test_worker_skips_the_static_provider_when_routing_serves_requests(monkeypatch, settings):
+    calls = []
+    monkeypatch.setattr(runtime_module, "get_provider", lambda s: calls.append(s) or FakeProvider())
+    routed = replace(settings, routing_enabled=True)
+
+    assert build_provider(routed, skip_when_routing=True) == (None, None)
+    assert calls == []
+    # The API still builds it (as a fallback) even with routing enabled.
+    provider, error = build_provider(routed)
+    assert isinstance(provider, FakeProvider) and error is None and calls == [routed]
+
+
+_BASE = config_mod._CONFIG_PATH.read_text(encoding="utf-8")
+
+
+def _write(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "retrieval.toml"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_unknown_embed_key_is_an_error(tmp_path):
+    text = _BASE.replace("only_quota = 4", "only_quota = 4\nbogus = 1")
+    with pytest.raises(ConfigError, match="unknown keys"):
+        load_retrieval_config(_write(tmp_path, text))
+
+
+def test_missing_fusion_key_is_an_error(tmp_path):
+    text = _BASE.replace("min_score = 0.15", "")
+    with pytest.raises(ConfigError, match="min_score"):
+        load_retrieval_config(_write(tmp_path, text))
+
+
+def test_min_similarity_out_of_range_rejected(tmp_path):
+    text = _BASE.replace("min_similarity = 0.25", "min_similarity = 1.5")
+    with pytest.raises(ConfigError, match="min_similarity"):
+        load_retrieval_config(_write(tmp_path, text))
+
+
+def test_min_score_out_of_range_rejected(tmp_path):
+    text = _BASE.replace("min_score = 0.15", "min_score = 2.0")
+    with pytest.raises(ConfigError, match="min_score"):
+        load_retrieval_config(_write(tmp_path, text))

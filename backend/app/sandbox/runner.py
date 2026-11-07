@@ -22,7 +22,6 @@ from app.sandbox.types import (
 )
 
 _RESOURCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$")
-_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$")
 _IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$")
 _CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{12,64}$")
 _BACKSLASH = "\\"
@@ -55,21 +54,6 @@ class ContainerRuntime(Protocol):
         output_limit_bytes: int,
         cancel_event: threading.Event | None,
     ) -> RuntimeResult: ...
-
-
-def _safe_filename(value: str) -> str:
-    if (
-        not value
-        or value in {".", ".."}
-        or not _FILENAME_RE.fullmatch(value)
-        or "/" in value
-        or _BACKSLASH in value
-        or ":" in value
-        or value.endswith((".", " "))
-        or _reserved_device(value)
-    ):
-        raise ValueError("input filename must be a safe basename")
-    return value
 
 
 def _safe_output_component(value: str) -> bool:

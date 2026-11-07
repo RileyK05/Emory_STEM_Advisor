@@ -171,25 +171,6 @@ class Usage:
             object.__setattr__(self, "total_tokens", self.prompt_tokens + self.completion_tokens)
 
 
-def observed_usage(value) -> Usage:
-    """Coerce an untrusted model-call outcome to a safely accountable Usage.
-
-    Anything malformed becomes `Usage(source="unknown")`, which reserves rather
-    than releases budget capacity.
-    """
-    if not isinstance(value, Usage):
-        return Usage(source="unknown")
-    if value.source not in {"provider", "estimated", "unknown"}:
-        return Usage(source="unknown")
-    counts = (value.prompt_tokens, value.completion_tokens)
-    if (any(item is not None and (isinstance(item, bool) or not isinstance(item, int) or item < 0)
-            for item in counts) or (counts[0] is None) != (counts[1] is None)):
-        return Usage(source="unknown")
-    if value.source == "provider" and counts[0] is None:
-        return Usage(source="unknown")
-    return value
-
-
 @dataclass(frozen=True)
 class GenerationResult:
     text: str = ""

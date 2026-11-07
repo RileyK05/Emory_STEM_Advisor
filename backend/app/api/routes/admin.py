@@ -1,12 +1,11 @@
 """Institutional Admin API: users, roles, audit, and audited content inspection."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from app.admin.catalog_refresh import CatalogRefreshService
 from app.admin.course_maintenance import CourseMaintenanceService
 from app.admin.source_review import SourceReviewService
 from app.admin.store import AdminStore
@@ -36,23 +35,16 @@ from app.api.schemas import (
     AdminUserSession,
     AdminUserUpdate,
     AlertStatusResponse,
-    CatalogEditionItem,
-    CatalogRefreshBatchResponse,
-    CatalogRefreshPublishRequest,
-    CatalogRefreshStartRequest,
-    CatalogRefreshStatusResponse,
     ModelPriceSchedule,
     ModelPriceScheduleCreate,
     ProgramInspectionResponse,
     ProgramRawItem,
-    ProgramRuleDiffResponse,
     ProgramRuleDraftCreate,
     ProgramRuleRejectAction,
     ProgramRuleReleaseDetail,
     ProgramRuleReleaseSummary,
     ProgramRuleReviewAction,
     SourceDependencies,
-    SourceImpactPreviewResponse,
     SourceLifecycleChangeRequest,
     SourceLifecycleChangeResponse,
     SourceLifecycleEvent,
@@ -78,24 +70,12 @@ Conn = Annotated[object, Depends(deps.get_conn)]
 
 
 Admin = deps.PanelAdmin
-AuditorOrAdmin = deps.PanelAuditorOrAdmin
 
 
 def _operation(principal: Principal, operation: str) -> None:
     from app.auth.capabilities import require_operation
 
     require_operation(principal, operation)
-
-
-def _aware(value: datetime) -> datetime:
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
-def _parse_timestamp(value: str, field: str) -> datetime:
-    try:
-        return _aware(datetime.fromisoformat(value))
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(422, f"{field} must be an ISO timestamp") from exc
 
 
 def _user(row) -> AdminUser:
@@ -130,11 +110,6 @@ def users(conn: Conn, principal: Admin, query: str = "", role: str = "",
     return [_user(row) for row in rows]
 
 
-@router.get("/users/{user_id}", response_model=AdminUser)
-def user(user_id: UUID, conn: Conn, principal: Admin):
-    return _user(AdminStore(conn, principal).user(user_id))
-
-
 @router.get("/users/{user_id}/sessions", response_model=list[AdminUserSession])
 def user_sessions(user_id: UUID, conn: Conn, principal: Admin):
     rows = AdminStore(conn, principal).user_sessions(user_id)
@@ -163,7 +138,7 @@ def revoke_user_sessions(user_id: UUID, conn: Conn, principal: Admin):
 def audit(
     response: Response,
     conn: Conn,
-    principal: AuditorOrAdmin,
+    principal: Admin,
     action: str = "",
     target_type: str = "",
     target_id: str = "",
@@ -187,51 +162,6 @@ def audit(
         detail=row["detail"], createdAt=iso(row["created_at"]),
         actorEmail=row["actor_email"], actorDisplayName=row["actor_display_name"],
     ) for row in rows]
-
-
-@router.get(
-    "/audit/export",
-    response_class=Response,
-    responses={
-        200: {
-            "description": "Exported audit records in CSV or JSON format.",
-            "content": {
-                "text/csv": {},
-                "application/json": {},
-            },
-        }
-    },
-)
-def export_audit(
-    conn: Conn,
-    principal: AuditorOrAdmin,
-    format: str = Query("csv", pattern="^(csv|json)$"),
-    action: str = "",
-    target_type: str = "",
-    target_id: str = "",
-    actor: str = "",
-    since: datetime | None = None,
-    until: datetime | None = None,
-    limit: int = Query(5000, ge=1, le=10000),
-):
-    _operation(principal, "audit.export")
-    store = AdminStore(conn, principal)
-    content, media_type, snapshot_until = store.export_audit(
-        format=format, action=action, target_type=target_type, target_id=target_id,
-        actor=actor, since=since, until=until, limit=limit,
-    )
-    timestamp = snapshot_until.strftime("%Y%m%d-%H%M%S")
-    extension = "csv" if format == "csv" else "json"
-    filename = f"admin-audit-{timestamp}.{extension}"
-    return Response(
-        content=content,
-        media_type=media_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "X-Snapshot-Until": snapshot_until.isoformat(),
-        },
-    )
-
 
 
 def _job(row) -> AdminJob:
@@ -273,7 +203,7 @@ def sources(conn: Conn, principal: Admin, workspace: str = "",
 @router.get("/telemetry/usage", response_model=TelemetryUsageResponse)
 def telemetry_usage(
     conn: Conn,
-    principal: AuditorOrAdmin,
+    principal: Admin,
     since: datetime | None = None,
     until: datetime | None = None,
     provider: str = "",
@@ -298,7 +228,7 @@ def telemetry_usage(
 
 
 @router.get("/pricing/schedules", response_model=list[ModelPriceSchedule])
-def list_price_schedules(conn: Conn, principal: AuditorOrAdmin):
+def list_price_schedules(conn: Conn, principal: Admin):
     return PricingService.list_schedules(conn)
 
 
@@ -336,7 +266,7 @@ def create_price_schedule(body: ModelPriceScheduleCreate, conn: Conn, principal:
 @router.get("/alerts", response_model=list[AlertStatusResponse], response_model_exclude_unset=True)
 def list_alerts(
     conn: Conn,
-    _principal: AuditorOrAdmin,
+    _principal: Admin,
     request: Request,
 ) -> list[dict]:
     from app.observability.alerts import AlertManager
@@ -443,20 +373,6 @@ def get_source_review_detail(source_id: UUID, conn: Conn, _principal: Admin) -> 
         proposals=proposals,
         lifecycleEvents=events,
         dependencies=deps,
-    )
-
-
-@router.get("/sources/{source_id}/impact", response_model=SourceImpactPreviewResponse)
-def get_source_impact_preview(source_id: UUID, conn: Conn, _principal: Admin) -> SourceImpactPreviewResponse:
-    preview = SourceReviewService.get_impact_preview(conn, source_id)
-    return SourceImpactPreviewResponse(
-        sourceId=preview["sourceId"],
-        filename=preview["filename"],
-        programCount=preview["programCount"],
-        courseCount=preview["courseCount"],
-        gapCount=preview["gapCount"],
-        researchRunCount=preview["researchRunCount"],
-        programs=preview.get("programs", []),
     )
 
 
@@ -741,99 +657,6 @@ def reject_program_rule_release(
     return _rule_release_detail(rel)
 
 
-@router.get("/programs/{program_id}/rules/diff", response_model=ProgramRuleDiffResponse)
-def diff_program_rule_releases(
-    program_id: UUID,
-    release_id_a: UUID,
-    release_id_b: UUID,
-    conn: Conn,
-    _principal: Admin,
-) -> ProgramRuleDiffResponse:
-    diff = ProgramReviewService.diff_rule_releases(
-        conn,
-        program_id=program_id,
-        release_id_a=release_id_a,
-        release_id_b=release_id_b,
-    )
-    return ProgramRuleDiffResponse(
-        programId=diff["programId"],
-        releaseIdA=diff["releaseIdA"],
-        versionA=diff["versionA"],
-        releaseIdB=diff["releaseIdB"],
-        versionB=diff["versionB"],
-        addedNodeIds=diff["addedNodeIds"],
-        removedNodeIds=diff["removedNodeIds"],
-        modifiedNodes=diff["modifiedNodes"],
-        digestMatch=diff["digestMatch"],
-    )
-
-
-def _edition_item(row: dict | None) -> CatalogEditionItem | None:
-    if row is None:
-        return None
-    return CatalogEditionItem(
-        editionId=row["edition_id"],
-        revision=row["revision"],
-        editionKey=row["edition_key"],
-        isCurrent=row["is_current"],
-        topicBuildId=row["topic_build_id"],
-        sourceIds=row["source_ids"],
-    )
-
-
-def _refresh_batch(data: dict) -> CatalogRefreshBatchResponse:
-    return CatalogRefreshBatchResponse(
-        batchId=data["batch_id"],
-        collectionId=data["collection_id"],
-        editionKey=data["edition_key"],
-        status=data["status"],
-        baseRevision=data["base_revision"],
-        stagedRevision=data["staged_revision"],
-        compatible=data["compatible"],
-        currentEdition=_edition_item(data["current_edition"]),
-        stagedEdition=_edition_item(data["staged_edition"]),
-    )
-
-
-@router.get("/catalog-refresh", response_model=CatalogRefreshStatusResponse)
-def catalog_refresh_status(collectionId: UUID, conn: Conn, principal: Admin):
-    _operation(principal, "sources.review")
-    data = CatalogRefreshService.current(conn, collectionId, principal)
-    conn.commit()
-    return CatalogRefreshStatusResponse(
-        currentEdition=_edition_item(data["current_edition"]),
-        staging=_refresh_batch(data["staging"]) if data["staging"] else None,
-    )
-
-
-@router.post("/catalog-refresh", response_model=CatalogRefreshBatchResponse, status_code=201)
-def start_catalog_refresh(body: CatalogRefreshStartRequest, conn: Conn, principal: Admin):
-    _operation(principal, "sources.review")
-    data = CatalogRefreshService.start(
-        conn, body.collectionId, body.editionKey, body.compatible, principal,
-    )
-    conn.commit()
-    return _refresh_batch(data)
-
-
-@router.post("/catalog-refresh/{batch_id}/cancel", response_model=CatalogRefreshBatchResponse)
-def cancel_catalog_refresh(batch_id: UUID, conn: Conn, principal: Admin):
-    _operation(principal, "sources.review")
-    data = CatalogRefreshService.cancel(conn, batch_id, principal)
-    conn.commit()
-    return _refresh_batch(data)
-
-
-@router.post("/catalog-refresh/{batch_id}/publish", response_model=CatalogRefreshBatchResponse)
-def publish_catalog_refresh(
-    batch_id: UUID, body: CatalogRefreshPublishRequest, conn: Conn, principal: Admin,
-):
-    _operation(principal, "sources.review")
-    data = CatalogRefreshService.publish(conn, batch_id, body.expectedRevision, principal)
-    conn.commit()
-    return _refresh_batch(data)
-
-
 # ---- Reviewed course maintenance (phase B) ---------------------------------
 
 
@@ -935,7 +758,7 @@ def _course_collection(request: Request, conn, collection_id: UUID | None) -> UU
 def list_admin_courses(
     request: Request,
     conn: Conn,
-    principal: AuditorOrAdmin,
+    principal: Admin,
     collection_id: UUID | None = None,
     query: str = "",
     subject: str = "",
@@ -966,7 +789,7 @@ def list_admin_courses(
 
 @router.get("/courses/{code}", response_model=AdminCourseDetail, response_model_exclude_unset=True)
 def get_admin_course(
-    code: str, request: Request, conn: Conn, principal: AuditorOrAdmin,
+    code: str, request: Request, conn: Conn, principal: Admin,
     collection_id: UUID | None = None,
 ) -> AdminCourseDetail:
     _operation(principal, "courses.read")
@@ -1001,7 +824,7 @@ def get_admin_course(
     response_model_exclude_unset=True,
 )
 def list_course_conflicts(
-    request: Request, conn: Conn, principal: AuditorOrAdmin,
+    request: Request, conn: Conn, principal: Admin,
     collection_id: UUID | None = None,
     limit: int = Query(50, ge=1, le=200),
 ) -> list[AdminCourseConflict]:
@@ -1050,7 +873,7 @@ def create_course_change(
     response_model_exclude_unset=True,
 )
 def preview_course_change(
-    change_id: UUID, conn: Conn, principal: AuditorOrAdmin,
+    change_id: UUID, conn: Conn, principal: Admin,
 ) -> AdminCoursePreviewResponse:
     _operation(principal, "courses.read")
     data = CourseMaintenanceService.preview_change(conn, change_id=change_id)

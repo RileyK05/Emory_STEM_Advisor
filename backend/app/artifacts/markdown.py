@@ -7,7 +7,6 @@ import re
 
 from .models import (
     CodeBlock,
-    DocumentBlock,
     DocumentSpec,
     HeadingBlock,
     ListBlock,
@@ -15,119 +14,6 @@ from .models import (
     QuoteBlock,
     TableBlock,
 )
-
-_HEADING = re.compile(r"^(#{1,6})\s+(.*)$")
-_UNORDERED = re.compile(r"^\s*[-+*]\s+(.*)$")
-_ORDERED = re.compile(r"^\s*\d+[.)]\s+(.*)$")
-_SEPARATOR = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$")
-
-
-def parse_markdown(source: str, *, title: str = "Untitled") -> DocumentSpec:
-    if len(source.encode("utf-8")) > 2_000_000:
-        raise ValueError("Markdown input exceeds 2 MiB")
-    lines = source.lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    blocks: list[DocumentBlock] = []
-    paragraph: list[str] = []
-    serial = 0
-
-    def add(block_type, **values):
-        nonlocal serial
-        serial += 1
-        blocks.append(block_type(id=f"block-{serial:05d}", **values))
-
-    def flush_paragraph():
-        if paragraph:
-            add(ParagraphBlock, text="\n".join(paragraph))
-            paragraph.clear()
-
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        if not line.strip():
-            flush_paragraph()
-            index += 1
-            continue
-        if line.startswith((chr(96) * 3, "~~~")):
-            flush_paragraph()
-            fence = line[:3]
-            language = line[3:].strip() or None
-            code_lines: list[str] = []
-            index += 1
-            while index < len(lines) and not lines[index].startswith(fence):
-                code_lines.append(lines[index])
-                index += 1
-            if index >= len(lines):
-                raise ValueError("Markdown code fence is not closed")
-            add(CodeBlock, text="\n".join(code_lines), language=language)
-            index += 1
-            continue
-        heading = _HEADING.match(line)
-        if heading and heading.group(2).strip():
-            flush_paragraph()
-            add(HeadingBlock, level=len(heading.group(1)), text=heading.group(2))
-            index += 1
-            continue
-        if index + 1 < len(lines) and "|" in line and _SEPARATOR.match(lines[index + 1]):
-            flush_paragraph()
-            headers = _table_row(line)
-            index += 2
-            rows = []
-            while index < len(lines) and "|" in lines[index] and lines[index].strip():
-                row = _table_row(lines[index])
-                if len(row) != len(headers):
-                    raise ValueError("Markdown table row width does not match its header")
-                rows.append(row)
-                index += 1
-            add(TableBlock, headers=headers, rows=rows)
-            continue
-        unordered = _UNORDERED.match(line)
-        ordered = _ORDERED.match(line)
-        if unordered or ordered:
-            flush_paragraph()
-            is_ordered = ordered is not None
-            items = []
-            while index < len(lines):
-                match = (_ORDERED if is_ordered else _UNORDERED).match(lines[index])
-                if not match:
-                    break
-                items.append(match.group(1))
-                index += 1
-            add(ListBlock, ordered=is_ordered, items=items)
-            continue
-        if line.startswith(">"):
-            flush_paragraph()
-            quote_lines = []
-            while index < len(lines) and lines[index].startswith(">"):
-                quote_lines.append(lines[index][1:].removeprefix(" "))
-                index += 1
-            add(QuoteBlock, text="\n".join(quote_lines))
-            continue
-        paragraph.append(line)
-        index += 1
-    flush_paragraph()
-    return DocumentSpec(title=title, blocks=blocks)
-
-
-def _table_row(line: str) -> list[str]:
-    """Split on unescaped pipes and undo the renderer's cell escaping."""
-    value = line.strip()
-    value = value.removeprefix("|").removesuffix("|")
-    cells: list[str] = []
-    current: list[str] = []
-    escaped = False
-    for char in value:
-        if escaped:
-            current.append(char)
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char == "|":
-            cells.append("".join(current))
-            current = []
-        else:
-            current.append(char)
-    cells.append("".join(current))
-    return [cell.strip().replace("<br>", "\n") for cell in cells]
 
 
 def render_markdown(spec: DocumentSpec) -> str:

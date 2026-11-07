@@ -155,8 +155,6 @@ function unavailable(message: string, status?: number): () => Promise<never> {
   };
 }
 
-const ARTIFACTS =
-  'Native artifact storage and export require the backend API. Switch VITE_API_MODE=http after the artifact routes are available.';
 const CONVERSATIONS = 'Saved conversations require the HTTP backend; the mock client does not persist transcripts.';
 const GAPS =
   'Human retrieval-gap review requires the private HTTP backend; the mock client does not store gap observations.';
@@ -248,9 +246,6 @@ export class MockClient implements AdvisorClient {
   async getSession(): Promise<AuthSession> {
     return { mode: 'development', authenticated: true, workspaceKey: 'mock-local', displayName: 'Local development' };
   }
-  async getEffectiveFlags() {
-    return { flags: { memory_inspector: false, advising_summary_export: false } };
-  }
   async logout(): Promise<void> {
     /* The mock has no authenticated identity or cookie. */
   }
@@ -282,9 +277,6 @@ export class MockClient implements AdvisorClient {
   startConversationTurnStream = unavailable(CONVERSATIONS);
   getConversationTurnEvents = unavailable(CONVERSATIONS);
   abandonConversationTurn = unavailable(CONVERSATIONS);
-  inspectConversationMemory = unavailable(CONVERSATIONS);
-  resetConversationMemory = unavailable(CONVERSATIONS);
-  exportSummary = unavailable(CONVERSATIONS);
 
   listGaps = unavailable(GAPS);
   resolveGap = unavailable(GAPS);
@@ -312,9 +304,6 @@ export class MockClient implements AdvisorClient {
   async downloadArtifact(): Promise<{ blob: Blob; filename: string }> {
     return { blob: new Blob(['# Demo study plan'], { type: 'text/markdown' }), filename: 'demo-study-plan.md' };
   }
-  async downloadOriginalArtifact(): Promise<{ blob: Blob; filename: string }> {
-    throw new Error(ARTIFACTS);
-  }
   async getArtifactRun(): Promise<ArtifactRun> {
     return DEMO_RUN;
   }
@@ -324,11 +313,6 @@ export class MockClient implements AdvisorClient {
   async cancelArtifactRun(): Promise<ArtifactRun> {
     return { ...DEMO_RUN, state: 'cancelled' };
   }
-  listArtifactBatches = unavailable(ARTIFACTS);
-  createArtifactBatch = unavailable(ARTIFACTS);
-  getArtifactBatch = unavailable(ARTIFACTS);
-  pollArtifactBatch = unavailable(ARTIFACTS);
-  cancelArtifactBatch = unavailable(ARTIFACTS);
 
   listConnectionProfiles = unavailable(CONNECTIONS, 404);
   createConnectionProfile = unavailable(CONNECTIONS, 404);
@@ -367,7 +351,6 @@ export class MockClient implements AdvisorClient {
     };
   }
 
-  listPrivacyExports = unavailable(PRIVACY);
   createPrivacyExport = unavailable(PRIVACY);
   downloadPrivacyExport = unavailable(PRIVACY);
   deleteMyData = unavailable(PRIVACY);

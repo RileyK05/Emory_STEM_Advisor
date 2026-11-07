@@ -78,45 +78,6 @@ export interface QueryRequest {
   studentCohort?: string | null;
 }
 
-export interface Recommendation {
-  clusterId: string;
-  path: string[];
-  courses: {
-    courseId: string;
-    code: string;
-    title: string;
-    lifecycle: 'current' | 'retired';
-  }[];
-}
-
-export interface RetiredCourse {
-  courseId: string;
-  code: string;
-  title: string;
-  lifecycle: 'retired';
-}
-
-export interface TopicGraphNode {
-  id: string;
-  kind: 'root' | 'department' | 'topic' | 'course';
-  label: string;
-  departmentKey: string | null;
-  courseId?: string | null;
-  code?: string | null;
-  title?: string | null;
-}
-
-export interface TopicGraphEdge {
-  parentId: string;
-  childId: string;
-  kind: 'contains';
-}
-
-export interface SubgraphView {
-  nodes: TopicGraphNode[];
-  edges: TopicGraphEdge[];
-}
-
 // Native authoring artifacts are immutable revisions.
 export type NativeArtifactKind = 'document' | 'workbook' | 'html';
 export type WorkbookCellStyle = {
@@ -198,7 +159,6 @@ export interface NativeArtifactRecord {
   kind: NativeArtifactKind;
   title: string;
   spec: NativeArtifactSpec;
-  original?: { filename: string; sha256: string; preserved: boolean } | null;
   status?: 'ready' | 'needs_recalculation';
   message?: string | null;
 }
@@ -228,78 +188,12 @@ export interface ArtifactPreview {
   formulas?: unknown[];
   sandboxRequired?: boolean;
 }
-export interface ArtifactRevisionRequest {
-  expectedParentRevisionId: string;
-  operations?: unknown[];
-  spec?: NativeArtifactSpec;
-  draftId?: string;
-}
 export interface ArtifactRun {
   runId: string;
   state: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   artifactIds?: string[];
   artifactRevisions?: { artifactId: string; revisionId: string }[];
   error?: string | null;
-}
-export interface ArtifactRunLimits {
-  maxCalls: number;
-  totalTokenBudget: number;
-  perCallOutputCap: number;
-}
-export interface ArtifactRunRequest {
-  kind: NativeArtifactKind;
-  inputs: ArtifactGenerationInput;
-  idempotencyKey: string;
-}
-export interface DocumentOutputSection {
-  key: string;
-  title: string;
-  target_words: number;
-  target_blocks: number;
-  min_words: number;
-  max_words: number;
-  min_blocks: number;
-  max_blocks: number;
-}
-export interface DocumentOutputPlan {
-  kind: 'document';
-  title: string;
-  sections: DocumentOutputSection[];
-  max_total_blocks: number;
-  max_output_tokens_per_unit: number;
-  max_repairs_per_unit: number;
-  max_checkpoint_bytes: number;
-}
-export interface WorkbookOutputColumn {
-  key: string;
-  label: string;
-  value_type: 'text' | 'integer' | 'number' | 'date' | 'formula';
-}
-export interface WorkbookOutputSheet {
-  key: string;
-  name: string;
-  columns: WorkbookOutputColumn[];
-  min_rows: number;
-  target_rows: number;
-  max_rows: number;
-}
-export interface WorkbookOutputPlan {
-  kind: 'workbook';
-  title: string;
-  sheets: WorkbookOutputSheet[];
-  max_total_cells: number;
-  max_output_tokens_per_unit: number;
-  max_repairs_per_unit: number;
-  max_checkpoint_bytes: number;
-}
-export interface ArtifactGenerationInput {
-  prompt: string;
-  sourceIds: string[] | null;
-  collectionId?: string;
-  mode: 'grounded' | 'authoring';
-  artifactId?: string;
-  expectedRevisionId?: string;
-  outputPlan?: DocumentOutputPlan | WorkbookOutputPlan;
 }
 export interface ArtifactRunEvent extends Pick<ArtifactRun, 'artifactIds' | 'artifactRevisions' | 'error'> {
   eventId: number;
@@ -330,65 +224,10 @@ export interface ArtifactRunEvent extends Pick<ArtifactRun, 'artifactIds' | 'art
   outputTokenLimit?: number;
 }
 
-export type ArtifactBatchState =
-  | 'prepared'
-  | 'submitting'
-  | 'pending'
-  | 'validating'
-  | 'in_progress'
-  | 'finalizing'
-  | 'completed'
-  | 'failed'
-  | 'expired'
-  | 'cancel_requested'
-  | 'cancelling'
-  | 'cancelled'
-  | 'unknown';
-export interface ArtifactBatchItemInput {
-  itemId: string;
-  inputs: Omit<ArtifactGenerationInput, 'outputPlan'>;
-}
-export interface ArtifactBatchRequest {
-  batchId: string;
-  kind: NativeArtifactKind;
-  items: ArtifactBatchItemInput[];
-}
-export interface ArtifactBatchItem {
-  itemId: string;
-  state: string;
-  publicationState: string;
-  artifactId: string | null;
-  revisionId: string | null;
-  errorCode: string | null;
-}
-export interface ArtifactBatchSummary {
-  batchId: string;
-  state: ArtifactBatchState;
-  cancelRequested: boolean;
-  itemCount: number;
-  totalCount: number | null;
-  completedCount: number | null;
-  failedCount: number | null;
-  createdAt: string;
-  updatedAt: string;
-}
-export interface ArtifactBatchRecord extends Omit<ArtifactBatchSummary, 'createdAt' | 'updatedAt'> {
-  items: ArtifactBatchItem[];
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export type ConnectionRole = 'standard' | 'complex' | 'fast_generation' | 'decision';
-export type ConnectionCapability = 'structured_output' | 'tools' | 'streaming' | 'vision' | 'batch' | 'decision';
+export type ConnectionRole = 'standard' | 'complex' | 'fast_generation';
+export type ConnectionCapability = 'structured_output' | 'tools' | 'streaming' | 'vision';
 export type ConnectionDataScope = 'institutional_corpus' | 'user_supplied_data' | 'private_workspace';
-export type ConnectionProvider =
-  | 'openai'
-  | 'anthropic'
-  | 'google'
-  | 'openai-compatible'
-  | 'hf-local'
-  | 'openai-decisions'
-  | 'cloudflare-clef';
+export type ConnectionProvider = 'openai' | 'anthropic' | 'google' | 'openai-compatible' | 'hf-local';
 export interface ConnectionProfile {
   profile_id: string;
   name: string;
@@ -431,7 +270,7 @@ export interface AuthSession {
   workspaceKey?: string;
   displayName?: string | null;
   email?: string | null;
-  role?: 'student' | 'advisor' | 'admin' | 'auditor' | null;
+  role?: 'student' | 'admin' | null;
 }
 export interface NativeArtifactSummary {
   artifactId: string;
@@ -514,12 +353,6 @@ export interface ArtifactRevisionReference {
   revisionId: string;
 }
 
-export interface ExportSummaryRequest {
-  title?: string | null;
-  throughSequence?: number | null;
-  artifactReferences?: ArtifactRevisionReference[];
-}
-
 export interface EffectiveArtifactReference extends ArtifactRevisionReference {
   spec: { title?: string | null; name?: string | null; kind?: string | null };
 }
@@ -580,64 +413,6 @@ export interface ConversationSummary {
 }
 export interface ConversationRecord extends ConversationSummary {
   turns: ConversationTurn[];
-}
-
-export interface ConversationSummaryReference {
-  sequence: number;
-  role: 'user' | 'assistant';
-  status: ConversationTurn['status'];
-  effective?: EffectiveConversationInputs | null;
-  citations?: Citation[];
-  contextBlock?: ContextItem[];
-}
-export interface ConversationSummaryCheckpoint {
-  summaryId: string;
-  conversationId: string;
-  state: 'pending' | 'completed' | 'refused' | 'failed' | 'stale';
-  expectedSequence: number;
-  candidateCoveredThrough: number;
-  coveredThrough: number | null;
-  fingerprint: string;
-  text: string | null;
-  referenceMetadata: ConversationSummaryReference[];
-  failureCode: string | null;
-  profileId: string | null;
-  profileRevision: number | null;
-  contextEpoch?: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ConversationMemoryInspection {
-  conversationId: string;
-  contextEpoch: number;
-  contextBoundarySequence: number;
-  contextResetAt?: string | null;
-  checkpoints: ConversationSummaryCheckpoint[];
-  researchNotebook?: Record<string, unknown> | null;
-}
-
-export interface ConversationResetResponse {
-  conversationId: string;
-  contextEpoch: number;
-  contextBoundarySequence: number;
-  contextResetAt: string;
-  message?: string;
-}
-
-export type NativeDecisionState = 'pending' | 'completed' | 'refused' | 'invalid' | 'failed' | 'unknown' | 'abandoned';
-export interface NativeDecision {
-  decisionId: string;
-  state: NativeDecisionState;
-  prediction: boolean | null;
-  probability: number | null;
-  confidence: number | null;
-  refused: boolean;
-  usage: {
-    source: 'provider' | 'estimated' | 'unknown';
-    promptTokens: number | null;
-    completionTokens: number | null;
-  };
 }
 
 export interface GapResolution {
@@ -748,7 +523,6 @@ export interface CollectionDoc {
 }
 
 export interface AdvisorClient {
-  getEffectiveFlags(): Promise<EffectiveFlagsResponse>;
   listCollections(): Promise<CollectionDoc[]>;
   query(req: QueryRequest): Promise<QueryResponse>;
   listConversations(archived?: boolean, limit?: number, offset?: number): Promise<ConversationSummary[]>;
@@ -778,7 +552,6 @@ export interface AdvisorClient {
     revisionId: string,
     format: 'md' | 'docx' | 'xlsx' | 'html',
   ): Promise<{ blob: Blob; filename: string }>;
-  downloadOriginalArtifact(id: string): Promise<{ blob: Blob; filename: string }>;
   getArtifactRun(id: string): Promise<ArtifactRun>;
   listArtifactRunEvents(id: string, afterEventId?: number): Promise<ArtifactRunEvent[]>;
   cancelArtifactRun(id: string): Promise<ArtifactRun>;
@@ -823,7 +596,7 @@ export interface AdminOverview {
   traces: number;
 }
 
-export type UserRole = 'student' | 'advisor' | 'admin' | 'auditor';
+export type UserRole = 'student' | 'admin';
 
 export interface AdminUser {
   userId: string;
@@ -925,52 +698,10 @@ export interface AdminSource {
   updatedAt: string;
 }
 
-export interface DebugSetting {
-  name: string;
-  label: string;
-  group: string;
-  type: 'int' | 'float' | 'bool' | 'str';
-  value: unknown;
-  description: string;
-  minimum?: number | null;
-  maximum?: number | null;
-  choices?: string[] | null;
-}
-
-export interface DebugSettingsResponse {
-  settings: DebugSetting[];
-  retrieval: DebugSetting[];
-  systemPrompt: string;
-  defaultSystemPrompt: string;
-}
-
-export interface DebugSession {
-  debugSessionId: string;
-  expiresAt: string;
-  overrides: {
-    settings?: Record<string, unknown>;
-    retrieval?: Record<string, unknown>;
-  };
-  systemPrompt?: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DebugSessionCreated extends DebugSession {
-  token: string;
-}
-
 export interface AdminUserSession {
   createdAt: string;
   expiresAt: string;
   revokedAt?: string | null;
-}
-
-export interface AdminCollection {
-  collectionId: string;
-  name: string;
-  sourceCount: number;
-  createdAt: string;
 }
 
 export interface TelemetryUsageSummary {
@@ -1023,19 +754,6 @@ export interface TelemetryUsageResponse {
   breakdown: TelemetryUsageBreakdownRow[];
 }
 
-export interface ModelPriceScheduleCreate {
-  billingMode?: 'standard' | 'batch';
-  provider: string;
-  modelId: string;
-  currency?: string;
-  inputRatePerMillion: number;
-  cachedReadRatePerMillion?: number;
-  outputRatePerMillion: number;
-  effectiveFrom: string;
-  effectiveTo?: string | null;
-  provenance: string;
-}
-
 export interface ModelPriceSchedule {
   billingMode: 'standard' | 'batch';
   scheduleId: string;
@@ -1049,115 +767,6 @@ export interface ModelPriceSchedule {
   effectiveTo?: string | null;
   provenance: string;
   createdAt: string;
-}
-
-export interface FeatureFlagSummary {
-  flagName: string;
-  description: string;
-  envCeilingKey?: string | null;
-  defaultEnabled: boolean;
-  killSwitchActive: boolean;
-  killReason?: string | null;
-  overridesCount: number;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-}
-
-export interface FeatureFlagOverride {
-  overrideId: string;
-  flagName: string;
-  scopeType: 'global' | 'cohort' | 'workspace';
-  scopeId: string;
-  enabled: boolean;
-  reason?: string | null;
-  actorUserId?: string | null;
-  updatedAt?: string | null;
-}
-
-export interface FeatureFlagOverrideRequest {
-  expectedUpdatedAt?: string | null;
-  requireAbsent?: boolean;
-  scopeType: 'global' | 'cohort' | 'workspace';
-  scopeId: string;
-  enabled: boolean;
-  reason?: string | null;
-}
-
-export interface FeatureFlagKillSwitchRequest {
-  expectedUpdatedAt?: string | null;
-  killSwitchActive: boolean;
-  reason?: string | null;
-}
-
-export interface CohortSummary {
-  cohortName: string;
-  memberCount: number;
-}
-
-export interface CohortAssignmentRequest {
-  userId: string;
-}
-
-export interface CohortMember {
-  userId: string;
-  displayName?: string | null;
-  email?: string | null;
-  role: 'student' | 'advisor' | 'admin' | 'auditor';
-  assignedAt: string;
-}
-
-export interface CohortAssignmentResponse {
-  status: 'assigned';
-  cohortName: string;
-  userId: string;
-}
-
-export interface EffectiveFlagsResponse {
-  flags: Record<string, boolean>;
-}
-
-export interface EffectiveQuotaResponse {
-  remainingQueriesMinute: number;
-  remainingQueriesDay: number;
-  minuteQueryLimit: number;
-  dailyQueryLimit: number;
-  activeJobsLimit: number;
-  resetDaySeconds: number;
-}
-
-export interface QuotaPolicySummary {
-  policyId: string;
-  scopeType: 'global' | 'cohort' | 'workspace' | 'user';
-  scopeId: string;
-  queriesPerMinute?: number | null;
-  queriesPerDay?: number | null;
-  tokensPerDay?: number | null;
-  spendUsdPerDay?: number | null;
-  maxActiveJobs?: number | null;
-  createdAt?: string | null;
-  updatedAt?: string | null;
-}
-
-export interface QuotaPolicyUpsertRequest {
-  scopeType: 'global' | 'cohort' | 'workspace' | 'user';
-  scopeId: string;
-  queriesPerMinute?: number | null;
-  queriesPerDay?: number | null;
-  tokensPerDay?: number | null;
-  spendUsdPerDay?: number | null;
-  maxActiveJobs?: number | null;
-}
-
-export interface AlertStatusResponse {
-  alertName: string;
-  status: 'firing' | 'resolved' | 'unknown';
-  severity: 'critical' | 'warning' | 'info';
-  currentValue: number | null;
-  threshold: number;
-  owner: string;
-  runbook: string;
-  description: string;
-  evaluatedAt: string;
 }
 
 export interface SourceReviewProposal {
@@ -1219,16 +828,6 @@ export interface SourceReviewDetailResponse {
   dependencies: SourceDependencies;
 }
 
-export interface SourceImpactPreviewResponse {
-  sourceId: string;
-  filename: string;
-  programCount: number;
-  courseCount: number;
-  gapCount: number;
-  researchRunCount: number;
-  programs?: Array<Record<string, any>>;
-}
-
 export interface SourceReviewProposalCreate {
   expectedMetadataRevision: number;
   sourceCategory: string;
@@ -1249,10 +848,6 @@ export interface SourceReviewProposalCreate {
   lifecycleStatus?: string;
   replacementIntent?: string | null;
   reviewNotes?: string | null;
-}
-
-export interface SourceReviewProposalReject {
-  reason: string;
 }
 
 export interface SourceLifecycleChangeRequest {
@@ -1336,93 +931,6 @@ export interface ProgramInspectionResponse {
   currentRelease?: ProgramRuleReleaseDetail | null;
 }
 
-export interface ProgramRuleDraftCreate {
-  rulesTree?: Record<string, any> | null;
-  notes?: string;
-}
-
-export interface ProgramRuleReviewAction {
-  notes?: string;
-}
-
-export interface ProgramRuleRejectAction {
-  reason: string;
-}
-
-export interface ProgramRuleDiffResponse {
-  programId: string;
-  releaseIdA: string;
-  versionA: number;
-  releaseIdB: string;
-  versionB: number;
-  addedNodeIds?: string[];
-  removedNodeIds?: string[];
-  modifiedNodes?: Array<Record<string, any>>;
-  digestMatch: boolean;
-}
-
-export interface ClaimAssessmentUnit {
-  ordinal: number;
-  answerStart: number;
-  answerEnd: number;
-  text: string;
-  coverage: string;
-  modelAssessment: string;
-  modelConfidence: number | null;
-  evidence: Record<string, unknown>[];
-  /** Always false: a model assessment is never human verification. */
-  humanVerified: boolean;
-}
-
-export interface ClaimReview {
-  reviewId: string;
-  responseId: string;
-  state: 'pending' | 'completed' | 'refused' | 'invalid' | 'failed' | 'unknown' | 'abandoned';
-  reviewVersion: number;
-  profileRevision: number | null;
-  provider: string | null;
-  model: string | null;
-  usage: { source: 'provider' | 'estimated' | 'unknown'; promptTokens: number | null; completionTokens: number | null };
-  units: ClaimAssessmentUnit[];
-}
-
-export interface CatalogEditionItem {
-  editionId: string;
-  revision: number;
-  editionKey: string;
-  isCurrent: boolean;
-  topicBuildId?: string | null;
-  sourceIds?: string[];
-}
-
-export interface CatalogRefreshBatchResponse {
-  batchId: string;
-  collectionId: string;
-  editionKey: string;
-  status: 'staging' | 'cancelled' | 'published';
-  baseRevision: number;
-  stagedRevision: number;
-  compatible: boolean;
-  /** Null until the collection's first edition is published. */
-  currentEdition?: CatalogEditionItem | null;
-  stagedEdition: CatalogEditionItem;
-}
-
-export interface CatalogRefreshStatusResponse {
-  currentEdition?: CatalogEditionItem | null;
-  staging?: CatalogRefreshBatchResponse | null;
-}
-
-export interface CatalogRefreshStartRequest {
-  collectionId: string;
-  editionKey: string;
-  compatible?: boolean;
-}
-
-export interface CatalogRefreshPublishRequest {
-  expectedRevision: number;
-}
-
 export interface ResponseFeedbackRequest {
   responseId: string;
   vote: 'up' | 'down';
@@ -1440,20 +948,6 @@ export interface ResponseFeedbackResponse {
   reasonCode: string;
   comment?: string | null;
   currentVotes: number;
-  createdAt: string;
-}
-
-export interface EvalCandidateCreateRequest {
-  redactedPrompt: string;
-  redactedExpected: string;
-  sourceFeedbackId?: string | null;
-}
-
-export interface EvalCandidateResponse {
-  candidateId: string;
-  redactedPrompt: string;
-  redactedExpected: string;
-  sourceFeedbackId?: string | null;
   createdAt: string;
 }
 
@@ -1509,60 +1003,6 @@ export interface EvalCandidatePromotionResponse {
   sourceIndexRevision: number;
   promotionState: 'current' | 'stale';
   reviewState: 'reviewed' | 're_reviewed';
-  createdAt: string;
-}
-
-export interface DebugExperimentCreateRequest {
-  conversationId: string;
-  requestId: string;
-  snapshot: Record<string, unknown>;
-}
-
-export interface DebugExperimentResponse {
-  experimentId: string;
-  sourceConversationId: string;
-  sourceRequestId: string;
-  state: 'recorded';
-  createdAt: string;
-}
-
-export interface PromptVersionCreateRequest {
-  name: string;
-  templateText: string;
-  versionId?: string | null;
-}
-
-export interface PromptVersionResponse {
-  versionId: string;
-  name: string;
-  templateText: string;
-  contentDigest: string;
-  reviewState: 'draft' | 'approved';
-  createdAt: string;
-}
-
-export interface PromptFixtureCreateRequest {
-  suiteName: string;
-  fixtureText: string;
-}
-
-export interface PromptFixtureResponse {
-  fixtureId: string;
-  suiteName: string;
-  fixtureDigest: string;
-  present: boolean;
-}
-
-export interface PromptPromotionRequest {
-  suiteName: string;
-}
-
-export interface PromptPromotionResponse {
-  promotionId: string;
-  versionId: string;
-  suiteName: string;
-  fixtureDigest: string;
-  status: 'published';
   createdAt: string;
 }
 
@@ -1712,8 +1152,4 @@ export interface AdminCourseChangeCreate {
   sourceId?: string | null;
   reason: string;
   expectedRevision?: number;
-}
-
-export interface AdminCourseChangeReject {
-  reason: string;
 }

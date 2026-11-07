@@ -19,7 +19,6 @@ class RoutingConfig:
     max_quality_escalations: int
     complex_terms: tuple[str, ...]
     fast_job_kinds: tuple[str, ...]
-    decision_job_kinds: tuple[str, ...]
     complex_token_threshold: int
     course_lookup_patterns: tuple[str, ...] = ()
     simple_lookup_max_words: int = 10
@@ -32,7 +31,7 @@ class RoutingConfig:
         if unknown:
             raise ValueError(f"unknown routing keys: {sorted(unknown)}")
         signals = data.get("signals", {})
-        signal_keys = {"complex_terms", "fast_job_kinds", "decision_job_kinds",
+        signal_keys = {"complex_terms", "fast_job_kinds",
                        "complex_token_threshold", "course_lookup_patterns",
                        "simple_lookup_max_words"}
         if set(signals) - signal_keys:
@@ -48,7 +47,7 @@ class RoutingConfig:
             raise ValueError("default_role must be a generation role")
         if uncertain_role not in GENERATION_ROLES:
             raise ValueError("uncertain_role must be a generation role")
-        for key in ("complex_terms", "fast_job_kinds", "decision_job_kinds"):
+        for key in ("complex_terms", "fast_job_kinds"):
             value = signals.get(key, ())
             if (not isinstance(value, list) or any(not isinstance(item, str) or not item
                                                    for item in value)):
@@ -71,7 +70,6 @@ class RoutingConfig:
         return cls(data.get("version"), data.get("default_role", "standard"),
             data.get("uncertain_role", "complex"), escalations,
             tuple(signals.get("complex_terms", ())), tuple(signals.get("fast_job_kinds", ())),
-            tuple(signals.get("decision_job_kinds", ())),
             threshold, tuple(patterns), simple_max_words)
 
 
@@ -101,8 +99,6 @@ class RouteDecision:
 
 def classify_role(config: RoutingConfig, *, query: str, difficulty: str | None = None,
                   job_kind: str | None = None) -> tuple[str, str]:
-    if job_kind and job_kind in config.decision_job_kinds:
-        return "decision", "decision task kind"
     if job_kind and job_kind in config.fast_job_kinds:
         return "fast_generation", "independent batch generation"
     level = (difficulty or "unknown").lower()
@@ -143,9 +139,6 @@ def choose_route(config: RoutingConfig, candidates: Sequence[Candidate], *, quer
                 if c.serves(for_role, required_capabilities, data_scope, required_data_scopes)]
 
     eligible = serving(role)
-    if not eligible and role == "decision":
-        role, reason = "complex", "no decision candidate; use stronger structured classifier"
-        eligible = serving(role)
     eligible = [c for c in eligible if c.eval_passed]
     if not eligible:
         raise LookupError(f"no eval-approved candidate for route role {role!r}")

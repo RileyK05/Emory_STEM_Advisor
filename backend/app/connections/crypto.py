@@ -26,7 +26,7 @@ def validate_encryption_key(key: str | bytes | None) -> None:
 
 def encrypt_credentials(secret: Mapping[str, str], key: str | bytes | None,
                         *, provider: str) -> bytes:
-    allowed = {"api_token"} if provider == "cloudflare-clef" else {"api_key"}
+    allowed = {"api_key"}
     if provider == "hf-local":
         raise ProfileValidationError("hf-local profiles do not accept credentials")
     if not secret or set(secret) != allowed or any(not isinstance(v, str) or not v for v in secret.values()):
@@ -48,7 +48,7 @@ def decrypt_credentials(ciphertext: bytes, key: str | bytes | None,
         raise
     except (InvalidToken, ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
         raise CredentialUnreadable("stored credentials cannot be decrypted") from None
-    expected = {"api_token"} if provider == "cloudflare-clef" else {"api_key"}
+    expected = {"api_key"}
     if (not isinstance(values, dict) or set(values) != {"provider", "credentials"}
             or values["provider"] != provider):
         raise CredentialUnreadable("stored credentials belong to a different provider or have an invalid shape")

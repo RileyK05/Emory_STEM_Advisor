@@ -12,7 +12,7 @@ from app.db import queries
 
 # model_calls columns a caller may set; anything left out is stored as NULL.
 _MODEL_CALL_FIELDS = (
-    "trace_id", "decision_id", "claim_review_id", "status", "finish_reason", "request_id",
+    "trace_id", "status", "finish_reason", "request_id",
     "latency_ms", "error_type", "operation_id", "sampling_policy", "reasoning_effort",
     "requested_output_tokens", "requested_timeout_seconds", "requested_temperature",
     "profile_id", "profile_revision",
