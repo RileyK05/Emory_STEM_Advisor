@@ -38,12 +38,37 @@ def validate_spec(kind: str, payload: dict) -> Spec:
 class ArtifactStore:
     def __init__(self, conn, *, workspace_key: str, data_dir: Path,
                  max_artifacts: int = MAX_ARTIFACTS_PER_WORKSPACE,
-                 max_revisions: int = MAX_REVISIONS_PER_ARTIFACT):
+                 max_revisions: int = MAX_REVISIONS_PER_ARTIFACT,
+                 max_storage_bytes: int | None = None):
         self.conn = conn
         self.workspace_key = workspace_key
         self.data_dir = data_dir
         self.max_artifacts = max_artifacts
         self.max_revisions = max_revisions
+        self.max_storage_bytes = max_storage_bytes
+
+    def _check_storage_quota(
+        self,
+        spec: Spec,
+        *,
+        original: bytes | None = None,
+        candidate_original_path: Path | None = None,
+        lock: bool = True,
+    ) -> None:
+        from app.quotas.service import QuotaService, StorageQuotaError, spec_storage_bytes
+
+        try:
+            QuotaService.check_storage_quota(
+                self.conn,
+                workspace_key=self.workspace_key,
+                delta_bytes=spec_storage_bytes(spec),
+                max_bytes=self.max_storage_bytes,
+                candidate_original_path=candidate_original_path,
+                original_bytes=len(original) if original is not None else 0,
+                lock=lock,
+            )
+        except StorageQuotaError as exc:
+            raise ArtifactLimitError(str(exc)) from exc
 
     def _reject_deleted_workspace(self) -> None:
         require_live_workspace(self.conn, self.workspace_key, lock=True)
@@ -96,6 +121,7 @@ class ArtifactStore:
         """Insert an artifact using the caller's transaction; do not commit."""
         self._reject_deleted_workspace()
         self._check_artifact_cap()
+        self._check_storage_quota(spec, lock=True)
         artifact_id, revision_id = uuid4(), uuid4()
         self.conn.execute(
             queries.get("insert_artifact"),
@@ -147,6 +173,7 @@ class ArtifactStore:
                     raise RevisionConflict("draft ID already has different revision content")
                 return existing
         self._check_revision_cap(artifact_id)
+        self._check_storage_quota(spec, lock=True)
         current = self.get(artifact_id)
         if current["kind"] != spec.kind:
             raise ValueError("a revision cannot change artifact kind")
@@ -186,6 +213,12 @@ class ArtifactStore:
             digest = hashlib.sha256(original).hexdigest()
             workspace_hash = hashlib.sha256(self.workspace_key.encode()).hexdigest()
             directory = self.data_dir / "artifacts" / "originals" / workspace_hash
+            self._check_storage_quota(
+                spec,
+                original=original,
+                candidate_original_path=directory / digest,
+                lock=False,
+            )
             io_path(directory).mkdir(parents=True, exist_ok=True)
             path = directory / digest
             stored = io_path(path)
@@ -209,6 +242,9 @@ class ArtifactStore:
         with self.conn.transaction():
             self._reject_deleted_workspace()
             self._check_artifact_cap()
+            self._check_storage_quota(
+                spec, original=original, candidate_original_path=path, lock=True
+            )
             self.conn.execute(
                 queries.get("insert_artifact"),
                 {
@@ -267,6 +303,7 @@ class ArtifactStore:
         self.conn.commit()
         with self.conn.transaction():
             self._check_revision_cap(artifact_id)
+            self._check_storage_quota(spec, lock=True)
             updated = self.conn.execute(
                 queries.get("advance_artifact_head"),
                 {

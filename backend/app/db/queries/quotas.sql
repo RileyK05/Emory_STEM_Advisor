@@ -81,3 +81,30 @@ INSERT INTO quota_policies (
     %(tokens_per_day)s, %(spend_usd_per_day)s, %(max_active_jobs)s
 )
 ON CONFLICT (scope_type, scope_id) DO NOTHING;
+
+-- name: lock_workspace_storage
+SELECT pg_advisory_xact_lock(hashtextextended('storage:' || %(workspace_key)s, 0));
+
+-- name: get_workspace_artifact_spec_bytes
+SELECT COALESCE(SUM(octet_length(r.spec::text)), 0)::bigint AS spec_bytes
+FROM artifact_revisions r
+JOIN artifacts a ON a.artifact_id = r.artifact_id
+WHERE a.workspace_key = %(workspace_key)s;
+
+-- name: list_workspace_storage_artifact_originals
+SELECT DISTINCT original_path
+FROM artifacts
+WHERE workspace_key = %(workspace_key)s
+  AND original_path IS NOT NULL;
+
+-- name: list_workspace_storage_sources
+SELECT s.source_id,
+       s.raw_path,
+       COALESCE((
+           SELECT SUM(octet_length(c.text))
+           FROM chunks c
+           WHERE c.source_id = s.source_id
+       ), 0)::bigint AS chunk_bytes
+FROM sources s
+WHERE s.workspace_key = %(workspace_key)s
+  AND (%(exclude_source_id)s::uuid IS NULL OR s.source_id <> %(exclude_source_id)s::uuid);

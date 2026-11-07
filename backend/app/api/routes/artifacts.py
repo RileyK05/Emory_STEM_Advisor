@@ -29,7 +29,12 @@ WorkspaceDep = Annotated[str, Depends(get_workspace_key)]
 
 
 def _store(conn, settings: Settings, workspace_key: str) -> ArtifactStore:
-    return ArtifactStore(conn, workspace_key=workspace_key, data_dir=settings.data_dir)
+    return ArtifactStore(
+        conn,
+        workspace_key=workspace_key,
+        data_dir=settings.data_dir,
+        max_storage_bytes=settings.workspace_storage_max_bytes,
+    )
 
 
 @router.get("", response_model=list[NativeArtifactSummary], response_model_exclude_unset=True)

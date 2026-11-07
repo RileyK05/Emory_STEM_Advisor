@@ -102,14 +102,40 @@ def test_malformed_specs_are_rejected():
         validate_spec("document", {**spec(), "surprise": "bad"})
 
 
-def test_artifact_count_and_revision_caps_are_enforced(db, tmp_path):
+@pytest.mark.parametrize("cap_kind", ["count", "storage_bytes"])
+def test_artifact_count_and_revision_caps_are_enforced(db, tmp_path, cap_kind):
     from app.artifacts.errors import ArtifactLimitError
+    from app.db import queries
+    from app.quotas.service import WORKSPACE_STORAGE_FULL_MESSAGE, spec_storage_bytes
 
-    store = ArtifactStore(db, workspace_key="development", data_dir=tmp_path,
-                          max_artifacts=1, max_revisions=1)
-    first = store.create(HtmlArtifactSpec(title="One", html="<p>one</p>"))
-    with pytest.raises(ArtifactLimitError):
+    first_spec = HtmlArtifactSpec(title="One", html="<p>one</p>")
+    if cap_kind == "count":
+        store = ArtifactStore(
+            db, workspace_key="development", data_dir=tmp_path, max_artifacts=1, max_revisions=1
+        )
+    else:
+        store = ArtifactStore(
+            db,
+            workspace_key="development",
+            data_dir=tmp_path,
+            max_storage_bytes=spec_storage_bytes(first_spec) + 16,
+        )
+    first = store.create(first_spec)
+    with pytest.raises(ArtifactLimitError) as create_exc:
         store.create(HtmlArtifactSpec(title="Two", html="<p>two</p>"))
-    with pytest.raises(ArtifactLimitError):
-        store.revise(first["artifact_id"], first["revision_id"],
-                     HtmlArtifactSpec(title="One", html="<p>changed</p>"))
+    with pytest.raises(ArtifactLimitError) as revise_exc:
+        store.revise(
+            first["artifact_id"],
+            first["revision_id"],
+            HtmlArtifactSpec(title="One", html="<p>changed</p>"),
+        )
+    if cap_kind == "storage_bytes":
+        assert str(create_exc.value) == WORKSPACE_STORAGE_FULL_MESSAGE
+        assert str(revise_exc.value) == WORKSPACE_STORAGE_FULL_MESSAGE
+        db.execute(
+            queries.get("delete_artifact_for_workspace"),
+            {"artifact_id": first["artifact_id"], "workspace_key": "development"},
+        )
+        db.commit()
+        reclaimed = store.create(HtmlArtifactSpec(title="Two", html="<p>two</p>"))
+        assert reclaimed["spec"]["title"] == "Two"

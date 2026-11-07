@@ -161,6 +161,8 @@ def upload_source(
     temp_path = temp_dir / filename
     temp_path.write_bytes(raw)
     try:
+        from app.quotas.service import StorageQuotaError
+
         source_id = ingest_file(
             conn,
             collection_id=collection_id,
@@ -171,11 +173,15 @@ def upload_source(
             embed_model=settings.embedding_model_id,
             config=config,
             workspace_key=workspace,
+            max_storage_bytes=settings.workspace_storage_max_bytes,
         )
         rows = conn.execute(
             queries.get("list_sources"), {"collection_id": collection_id}
         ).fetchall()
         match = next(r for r in rows if r["source_id"] == source_id)
+    except StorageQuotaError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except Exception as exc:
         conn.rollback()
         raise HTTPException(
@@ -217,13 +223,19 @@ def reindex_source(
         raise HTTPException(status_code=503, detail="embedding tokenizer is unavailable")
     conn.commit()
     try:
+        from app.quotas.service import StorageQuotaError
+
         ingest_file(
             conn, collection_id=row["collection_id"], path=raw_path,
             content_type=row["content_type"], count_tokens=count_tokens,
             embedder=embedder, embed_model=settings.embedding_model_id, config=config,
             workspace_key=workspace, force=True,
             expected_index_revision=body.expectedIndexRevision,
+            max_storage_bytes=settings.workspace_storage_max_bytes,
         )
+    except StorageQuotaError as exc:
+        conn.rollback()
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
     except ValueError as exc:
         conn.rollback()
         if "revision changed" in str(exc):

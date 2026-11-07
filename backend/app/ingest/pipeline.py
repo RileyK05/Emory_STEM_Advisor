@@ -251,6 +251,7 @@ def ingest_file(
     expected_index_revision: int | None = None,
     allow_chunking_change: bool = False,
     provenance=None,
+    max_storage_bytes: int | None = None,
 ) -> UUID:
     """Index one file. `provenance` (`app.ingest.provenance.SourceProvenance`) is a
     verified importer's classification; only trusted import paths pass one."""
@@ -283,6 +284,19 @@ def ingest_file(
     if not allow_chunking_change:
         _guard_chunking_change(conn, source_id, config.chunking.chunker_version,
                                count_tokens)
+
+    if workspace_key is not None:
+        from app.quotas.service import QuotaService
+
+        with conn.transaction():
+            QuotaService.check_storage_quota(
+                conn,
+                workspace_key=workspace_key,
+                delta_bytes=len(raw),
+                max_bytes=max_storage_bytes,
+                exclude_source_id=existing["source_id"] if existing is not None else None,
+                lock=True,
+            )
 
     raw_path = _store_raw(collection_id, file_hash, raw, workspace_key)
     conn.execute(

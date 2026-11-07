@@ -1,8 +1,10 @@
 """Quota and rate limit enforcement service."""
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import isfinite
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -10,6 +12,24 @@ from fastapi import HTTPException
 
 from app.db import queries
 from app.util.json import iso
+from app.util.localpath import io_path
+
+WORKSPACE_STORAGE_FULL_MESSAGE = (
+    "Your workspace storage is full. Remove an uploaded file or saved artifact before adding more."
+)
+
+
+class StorageQuotaError(ValueError):
+    """Raised when a private upload or artifact save would exceed the workspace byte cap."""
+
+    def __init__(self, message: str = WORKSPACE_STORAGE_FULL_MESSAGE):
+        super().__init__(message)
+
+
+def spec_storage_bytes(spec: Any) -> int:
+    """Measure an artifact spec the same way Postgres ``octet_length(spec::text)`` does."""
+    payload = spec.model_dump(mode="json") if hasattr(spec, "model_dump") else spec
+    return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
 
 
 @dataclass(frozen=True)
@@ -450,4 +470,89 @@ class QuotaService:
         d["createdAt"] = iso(d["created_at"])
         d["updatedAt"] = iso(d["updated_at"])
         return d
+
+    @staticmethod
+    def _file_size_or_none(raw_path: str | None) -> int | None:
+        if not raw_path:
+            return None
+        try:
+            target = io_path(Path(raw_path))
+            if target.is_file():
+                return int(target.stat().st_size)
+        except OSError:
+            return None
+        return None
+
+    @staticmethod
+    def workspace_storage_bytes(
+        conn,
+        workspace_key: str,
+        *,
+        exclude_source_id: UUID | None = None,
+    ) -> int:
+        """Total live bytes stored by ``workspace_key`` across artifacts and private uploads."""
+        spec_row = conn.execute(
+            queries.get("get_workspace_artifact_spec_bytes"),
+            {"workspace_key": workspace_key},
+        ).fetchone()
+        total = int(spec_row["spec_bytes"]) if spec_row else 0
+
+        for row in conn.execute(
+            queries.get("list_workspace_storage_artifact_originals"),
+            {"workspace_key": workspace_key},
+        ).fetchall():
+            size = QuotaService._file_size_or_none(row["original_path"])
+            if size is not None:
+                total += size
+
+        seen_raw_paths: set[str] = set()
+        for row in conn.execute(
+            queries.get("list_workspace_storage_sources"),
+            {"workspace_key": workspace_key, "exclude_source_id": exclude_source_id},
+        ).fetchall():
+            raw_path = row["raw_path"]
+            if raw_path and raw_path in seen_raw_paths:
+                continue
+            if raw_path:
+                seen_raw_paths.add(raw_path)
+            size = QuotaService._file_size_or_none(raw_path)
+            total += size if size is not None else int(row["chunk_bytes"])
+        return total
+
+    @staticmethod
+    def check_storage_quota(
+        conn,
+        *,
+        workspace_key: str,
+        delta_bytes: int,
+        max_bytes: int | None = None,
+        exclude_source_id: UUID | None = None,
+        candidate_original_path: Path | None = None,
+        original_bytes: int = 0,
+        lock: bool = False,
+    ) -> int:
+        """Verify adding ``delta_bytes`` stays within the workspace storage ceiling."""
+        if max_bytes is None:
+            from app.config import load_settings
+
+            max_bytes = load_settings().workspace_storage_max_bytes
+        if lock:
+            conn.execute(queries.get("lock_workspace_storage"), {"workspace_key": workspace_key})
+        effective_delta = max(0, int(delta_bytes))
+        if candidate_original_path is not None and original_bytes > 0:
+            existing_originals = {
+                row["original_path"]
+                for row in conn.execute(
+                    queries.get("list_workspace_storage_artifact_originals"),
+                    {"workspace_key": workspace_key},
+                ).fetchall()
+            }
+            if str(candidate_original_path) not in existing_originals:
+                effective_delta += int(original_bytes)
+        used = QuotaService.workspace_storage_bytes(
+            conn, workspace_key, exclude_source_id=exclude_source_id
+        )
+        if effective_delta > 0 and used + effective_delta > max_bytes:
+            raise StorageQuotaError()
+        return used + effective_delta
 

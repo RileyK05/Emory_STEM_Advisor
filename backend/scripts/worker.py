@@ -120,7 +120,11 @@ def main() -> None:
         configure_runtime_database(dsn)
         settings = replace(settings, database_url=dsn)
         handlers = build_worker_handlers(settings)
-        artifact_executor = RunExecutor(handlers.artifacts, data_dir=settings.data_dir)
+        artifact_executor = RunExecutor(
+            handlers.artifacts,
+            data_dir=settings.data_dir,
+            max_storage_bytes=settings.workspace_storage_max_bytes,
+        )
         executor = KindDispatchingExecutor(
             conversation=handlers.conversation, artifacts=artifact_executor)
         connect_fn = connector(settings)

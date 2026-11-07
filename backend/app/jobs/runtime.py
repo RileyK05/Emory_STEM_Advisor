@@ -79,6 +79,7 @@ class RunExecutor:
         handlers: Mapping[str, RunHandler],
         *,
         data_dir: Path = Path("data"),
+        max_storage_bytes: int | None = None,
         workspace_key_resolver: Callable[[Job], str] = lambda job: job.scope_key,
     ):
         if not isinstance(handlers, Mapping) or not handlers:
@@ -89,6 +90,7 @@ class RunExecutor:
             raise ValueError("run handlers contain an unsupported kind or non-callable handler")
         self._handlers = dict(handlers)
         self._data_dir = data_dir
+        self._max_storage_bytes = max_storage_bytes
         self._workspace_key_resolver = workspace_key_resolver
 
     def __call__(self, job: Job, context: JobContext) -> StagedRunResult:
@@ -127,7 +129,14 @@ class RunExecutor:
         except HTTPException as exc:
             raise SafeJobError("access_changed", "Workspace or feature access changed; output was withheld.",
                                retryable=False) from exc
-        store = ArtifactStore(conn, workspace_key=workspace_key, data_dir=self._data_dir)
+        from app.artifacts.errors import ArtifactLimitError
+
+        store = ArtifactStore(
+            conn,
+            workspace_key=workspace_key,
+            data_dir=self._data_dir,
+            max_storage_bytes=self._max_storage_bytes,
+        )
         artifact_ids = []
         artifact_revisions = []
         for staged in value.artifacts:
@@ -156,16 +165,19 @@ class RunExecutor:
                         "The selected model connection changed during generation.",
                     )
             spec = validate_spec(staged.kind, dict(staged.spec))
-            if staged.operation == "create":
-                record = store.create_uncommitted(spec)
-            else:
-                assert staged.artifact_id is not None and staged.expected_revision_id is not None
-                record = store.revise_uncommitted(
-                    staged.artifact_id,
-                    staged.expected_revision_id,
-                    spec,
-                    draft_id=staged.draft_id,
-                )
+            try:
+                if staged.operation == "create":
+                    record = store.create_uncommitted(spec)
+                else:
+                    assert staged.artifact_id is not None and staged.expected_revision_id is not None
+                    record = store.revise_uncommitted(
+                        staged.artifact_id,
+                        staged.expected_revision_id,
+                        spec,
+                        draft_id=staged.draft_id,
+                    )
+            except ArtifactLimitError as exc:
+                raise SafeJobError("artifact_limit", str(exc), retryable=False) from exc
             artifact_ids.append(str(record["artifact_id"]))
             artifact_revisions.append({
                 "artifactId": str(record["artifact_id"]),

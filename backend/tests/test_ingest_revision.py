@@ -172,3 +172,75 @@ def test_upload_embedding_deadline_is_checked_between_batches(
     ).fetchone()["source_id"])
     assert state["status"] == "failed"
     assert "upload time limit" in state["error_message"]
+
+
+@pytest.mark.parametrize("prior_kind", ["upload", "artifact"])
+def test_workspace_storage_byte_quota_refuses_upload_and_reclaims_deleted_space(
+    db, collection, prior_kind,
+):
+    from dataclasses import replace
+    from uuid import UUID
+
+    from app.artifacts.models import HtmlArtifactSpec
+    from app.artifacts.storage import ArtifactStore
+    from app.quotas.service import WORKSPACE_STORAGE_FULL_MESSAGE, spec_storage_bytes
+    from tests.helpers import collection_name
+
+    upload_payload = b"course planning notes " * 4  # 88 bytes
+    if prior_kind == "upload":
+        prior_payload = b"existing syllabus text " * 4  # 92 bytes
+        budget = len(prior_payload) + 30
+    else:
+        prior_spec = HtmlArtifactSpec(title="Saved plan", html="<p>Fall semester</p>")
+        budget = spec_storage_bytes(prior_spec) + 30
+
+    client = api_client(db, collection)
+    client.app.state.settings = replace(
+        client.app.state.settings,
+        default_collection=collection_name(db, collection),
+        workspace_storage_max_bytes=budget,
+    )
+
+    if prior_kind == "upload":
+        first = client.post(
+            "/api/sources",
+            files={"file": ("first.txt", prior_payload, "text/plain")},
+        )
+        assert first.status_code == 200, first.text
+        first_id = UUID(first.json()["id"])
+        reindexed = client.post(
+            f"/api/sources/{first_id}/reindex",
+            json={"expectedIndexRevision": first.json()["indexRevision"]},
+        )
+        assert reindexed.status_code == 200, reindexed.text
+    else:
+        store = ArtifactStore(
+            db,
+            workspace_key="development",
+            data_dir=client.app.state.settings.data_dir,
+            max_storage_bytes=budget,
+        )
+        prior_artifact = store.create(prior_spec)
+
+    refused = client.post(
+        "/api/sources",
+        files={"file": ("second.txt", upload_payload, "text/plain")},
+    )
+    assert refused.status_code == 413
+    assert refused.json()["detail"] == WORKSPACE_STORAGE_FULL_MESSAGE
+
+    if prior_kind == "upload":
+        db.execute(queries.get("delete_source"), {"source_id": first_id})
+    else:
+        db.execute(
+            queries.get("delete_artifact_for_workspace"),
+            {"artifact_id": prior_artifact["artifact_id"], "workspace_key": "development"},
+        )
+    db.commit()
+
+    accepted = client.post(
+        "/api/sources",
+        files={"file": ("second.txt", upload_payload, "text/plain")},
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["status"] == "indexed"

@@ -101,6 +101,12 @@ class Settings:
     upload_max_chunks: int = 300
     upload_embed_batch_size: int = 64
     upload_index_timeout_seconds: float = 60.0
+    # Per-workspace byte ceiling across private source uploads and saved
+    # artifact revisions/originals. 100 MiB (5x the 20 MiB single-upload cap)
+    # fits dozens of syllabi or transcripts plus hundreds of advising plans
+    # while bounding disk and JSONB growth per student (500 x 16 MB specs was
+    # up to 8 GB before this cap).
+    workspace_storage_max_bytes: int = 100 * 1024 * 1024
     request_max_bytes: int = 21 * 1024 * 1024
     readiness_timeout_seconds: int = 3
     # Optional HTTP liveness/readiness port for scripts.worker; 0 disables it.
@@ -379,6 +385,9 @@ class Settings:
             raise ValueError("Office requires an authenticated remote sandbox")
         if self.upload_max_bytes <= 0 or self.request_max_bytes <= 0:
             raise ValueError("UPLOAD_MAX_BYTES must be positive")
+        if (type(self.workspace_storage_max_bytes) is not int
+                or not 1 <= self.workspace_storage_max_bytes <= 100 * 1024 * 1024 * 1024):
+            raise ValueError("WORKSPACE_STORAGE_MAX_BYTES must be between 1 and 107374182400")
         if (min(self.upload_max_extracted_chars, self.upload_max_segment_chars,
                 self.upload_max_chunks, self.upload_embed_batch_size) <= 0
                 or not math.isfinite(self.upload_index_timeout_seconds)
@@ -474,6 +483,7 @@ def load_settings() -> Settings:
         upload_max_chunks=_int("UPLOAD_MAX_CHUNKS", 300),
         upload_embed_batch_size=_int("UPLOAD_EMBED_BATCH_SIZE", 64),
         upload_index_timeout_seconds=_float("UPLOAD_INDEX_TIMEOUT_SECONDS", 60),
+        workspace_storage_max_bytes=_int("WORKSPACE_STORAGE_MAX_BYTES", 100 * 1024 * 1024),
         embedding_device=os.environ.get("EMBEDDING_DEVICE", "cpu"),
         embedder_warmup_on_startup=_bool("EMBEDDER_WARMUP_ON_STARTUP", False),
         request_max_bytes=_int("REQUEST_MAX_BYTES", 21 * 1024 * 1024),

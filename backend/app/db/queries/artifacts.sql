@@ -50,3 +50,8 @@ SELECT count(*) AS count FROM artifacts WHERE workspace_key = %(workspace_key)s;
 SELECT count(*) AS count
 FROM artifact_revisions r JOIN artifacts a ON a.artifact_id = r.artifact_id
 WHERE a.artifact_id = %(artifact_id)s AND a.workspace_key = %(workspace_key)s;
+
+-- name: delete_artifact_for_workspace
+DELETE FROM artifacts
+WHERE artifact_id = %(artifact_id)s AND workspace_key = %(workspace_key)s
+RETURNING artifact_id, original_path;
