@@ -1,7 +1,8 @@
 # Production-readiness progress ledger
 
 Branch: `goal/production-readiness` (cut from `main` at `eb968c1`).
-Plan: [production-readiness.md](production-readiness.md). This is the only
+Plan: [production-launch.md](production-launch.md) (superseding Phases 2–6 of
+[production-readiness.md](production-readiness.md)). This is the only
 status file for the run; every other diagnostic goes to the terminal.
 
 Status values: `todo`, `doing`, `done`, `BLOCKED`.
@@ -28,15 +29,15 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | P1.4 | done | P1.4 | Support grants and admin chat access are gone end to end: `auth/grants.py`, the admin `/grants*`, `/grant-requests*`, `/conversations*` (list, transcript, download, delete) and granted-result routes, their store methods, the grant/transcript schemas, `GRANT_SUPPORT_ACCESS`/`REVOKE_GRANTS`, the worker and runtime publication fences, and `db/queries/grants.sql` (its two workspace-execution queries moved to `auth.sql`). `check_workspace_access` is ownership-only; migration 080 drops `resource_grants`, `support_grant_requests` and `granted_result_staging`. No route under `/api/admin` reads another user's conversation. Grant/transcript tests deleted; `test_feedback` now proves a staff role has no route onto another workspace, and the records lifecycle drops its grant-driven verification case (records go in P1.6). Gate: 1746 passed, 2 skipped (Windows-only), 0 xfailed in 431.97s; ruff clean; 32 browser tests, typecheck, format:check and check:callers green. |
 | P1.5 | done | P1.5 | Removed the admin `/artifacts` read and the `/collections` GET/POST/PATCH/DELETE routes, `AdminStore.artifacts/collections/create_collection/rename_collection/delete_collection`, their eight named queries in `db/queries/admin.sql`, the `AdminArtifact`/`AdminCollection`/`AdminCollectionWrite` schemas, and `test_admin_collection_crud`. The gap queue reads sources through `listSources`, so no collection read was needed. `docs/architecture.md` no longer lists the routes. Gate: `test_admin_debug`, `test_api`, `test_contract_drift`, `test_openapi_complete` pass (57 tests); ruff clean. |
 | P1.6 | done | P1.6, P1.14 and data layer | Added `advisor_audit_program` and `advisor_suggest_courses`, `RESEARCH_TOOLS_VERSION` 15, one research-scenario row each. Removed `routes/audits.py`, `routes/comparisons.py`, `routes/records.py`, `advising/audit_service.py`, `advising/comparison_service.py`, `records/` and their queries; migration 081 drops the 9 tables and the `degree_audit_current_state` view. Published rules: 0, so every audit today takes the `reviewed_rules: false` line-match path, which the plan did not name. Reported courses carry no credit hours (`courses` has no credits column), so credit rules stay unresolved on the reviewed path. Gate: 1769 passed, 2 skipped; ruff clean; typecheck and format clean; `npm test` 32 passed. Live, `minimax-m3.1-flash`, 9 cases: audit called on all 4 that reported courses, the Oxford codes matched their lines, and the no-history case asked. In one Oxford answer the model still wrote that courses satisfy lines, so that wording has no enforcement. |
-| P1.7 | done | uncommitted | Roles are student and admin. Migration 086 maps `advisor` and `auditor` to `student` (0 users remapped on the dev database, which holds no users) and narrows the check. `EXPORT_AUDIT` and `VERIFY_ACADEMIC_RECORD` are gone; `/audit/export` went earlier. |
-| P1.8 | done | uncommitted | `flags/` and `routes/flags.py` are gone; `auth.capabilities.execution_settings` keeps the workspace check and the setting ceilings. Migration 085. See [data-layer-changes.md](data-layer-changes.md). |
-| P1.9 | in progress | uncommitted | Catalog refresh is gone (migration 085). Debug sessions, experiments and `DEBUG_*` in `apps.bicep` stay until the user decides: the cut message can be read either way, and nothing reaches them since P1.2. |
-| P1.10 | done | uncommitted | Bulk drafts are gone. Migration 083. |
-| P1.11 | done | uncommitted | Routes are gone (migrations 083, 084). `import_docx`, `import_xlsx`, `parse_markdown`, `artifacts/revisions.py`, `/api/artifacts/{id}/original` and the PDF render dispatch are gone too. Stored-original columns stay: old backups restore through them. `claims` stays. |
+| P1.7 | done | e250fa6 | Roles are student and admin. Migration 086 maps `advisor` and `auditor` to `student` (0 users remapped on the dev database, which holds no users) and narrows the check. `EXPORT_AUDIT` and `VERIFY_ACADEMIC_RECORD` are gone; `/audit/export` went earlier. |
+| P1.8 | done | e250fa6 | `flags/` and `routes/flags.py` are gone; `auth.capabilities.execution_settings` keeps the workspace check and the setting ceilings. Migration 085. See [data-layer-changes.md](data-layer-changes.md). |
+| P1.9 | BLOCKED | e250fa6 | Catalog refresh is gone (migration 085). BLOCKED on U1: debug sessions, experiments and `DEBUG_*` in `apps.bicep` stay until the user decides whether to keep or cut the debug backend. |
+| P1.10 | done | e250fa6 | Bulk drafts are gone. Migration 083. |
+| P1.11 | done | e250fa6 | Routes are gone (migrations 083, 084). `import_docx`, `import_xlsx`, `parse_markdown`, `artifacts/revisions.py`, `/api/artifacts/{id}/original` and the PDF render dispatch are gone too. Stored-original columns stay: old backups restore through them. `claims` stays. |
 | P1.12 | done | P1.12 | Deleted the `/v1/execute` endpoint, `ExecuteBody`/`InputFile`, `_decode_inputs`/`_program_response`, and the program-execution `run`/`_payload`/`_parse_result` from `sandbox/remote.py`; the worker health now reports the Office image and, when configured, the browser image. `DockerCliRuntime.probe` reads only Office (+browser) image IDs; `host_app` no longer reads the removed image env vars. Deleted `sandbox/Dockerfile.python`, `sandbox/Dockerfile.javascript`, their lines in `WORKER.md` and `compose.worker.yaml`, and `docs/architecture.md`'s code-execution claims. Program-execution tests removed; the shared runtime/transport tests stay. **Follow-up:** deleted `SandboxConfig.python_image`/`javascript_image`, `SandboxRunner.run`, `build_create_argv` and `_check_run_limits` (all program-execution paths), with the seven tests that only drove them; `test_sandbox.py` keeps the screenshot argv, isolation, cleanup, cancellation, path-escape and output-symlink tests. Full-suite gate: 1753 passed, 2 skipped (Windows-only), 0 xfailed in 900.48s; ruff clean. |
-| P1.13 | done | uncommitted | 18 test files merged into their area file; 1655 collected before and after, none lost. 93 backend test files (target 95). `test_chunker_consistency.py` stays: its helper collides with `test_chunker.py`. `test_program_rule_drafts.py`, `test_campus_equivalence.py`, `test_passage_identity_reading.py`, `test_citation_integrity.py`, `test_course_identity_guard.py`, `test_enrollment_restrictions.py` and `test_provider_bounds.py` stay as area files. No test reads the repository `data/` folder. |
+| P1.13 | done | e250fa6 | 18 test files merged into their area file; 1655 collected before and after, none lost. 93 backend test files (target 95). `test_chunker_consistency.py` stays: its helper collides with `test_chunker.py`. `test_program_rule_drafts.py`, `test_campus_equivalence.py`, `test_passage_identity_reading.py`, `test_citation_integrity.py`, `test_course_identity_guard.py`, `test_enrollment_restrictions.py` and `test_provider_bounds.py` stay as area files. No test reads the repository `data/` folder. |
 | P1.14 | done | P1.6, P1.14 and data layer | Republished the Atlas-primary master with `scripts.reconcile_atlas --publish` and reran the sweep; `db-data-review.md` holds the 2026-11-06 counts. A 340, B 0, C 0, D two kinds, E 229 (all campus equivalence), F 56, cycles 0. No hand edits to `prereq_nodes` or `prereq_mentions`. |
-| P1.15 | done | uncommitted | `types.ts` 1,406 to about 1,160 lines, `styles.css` 2,550 to 2,487. A script finds no orphan type or schema model; the one absent class, `gap-state-resolved`, is built at runtime in `GapItem.tsx`. |
+| P1.15 | done | e250fa6 | `types.ts` 1,406 to about 1,160 lines, `styles.css` 2,550 to 2,487. A script finds no orphan type or schema model; the one absent class, `gap-state-resolved`, is built at runtime in `GapItem.tsx`. |
 
 ## Phase 2: one answering path
 
@@ -56,7 +57,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | P3.1 | todo | | |
 | P3.2 | todo | | |
 | P3.3 | todo | | |
-| P3.4 | BLOCKED | - | Needs the user to score 10 artifacts 1-5 (D6). |
+| P3.4 | BLOCKED | - | BLOCKED on U4: needs the user to score 10 artifacts 1-5 from `data/manual-checks/artifact-sample/`. |
 
 ## Phase 4: sandbox benchmark
 
@@ -64,11 +65,11 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | --- | --- | --- | --- |
 | P4.1 | todo | | |
 | P4.2 | todo | | |
-| P4.3 | BLOCKED | - | No Linux host with Docker and gVisor: `docker` is not installed on Windows, and `wsl -d Ubuntu -- bash -lc "docker --version; runsc --version"` prints `bash: line 1: docker: command not found` and `bash: line 1: runsc: command not found`. Reserved for the user's Claude session, which sets up the WSL2 host; this run installs nothing. |
-| P4.4 | BLOCKED | - | Depends on P4.3 (host). |
-| P4.5 | BLOCKED | - | Depends on P4.3 (host). |
-| P4.6 | BLOCKED | - | Depends on P4.3 (host). |
-| P4.7 | BLOCKED | - | Depends on P4.3 (host). |
+| P4.3 | BLOCKED | - | reserved for Claude (Stage H: Linux host with Docker and gVisor `runsc`; this run never installs or touches WSL, Docker or gVisor). |
+| P4.4 | BLOCKED | - | reserved for Claude (depends on P4.3 host). |
+| P4.5 | BLOCKED | - | reserved for Claude (depends on P4.3 host). |
+| P4.6 | BLOCKED | - | reserved for Claude (depends on P4.3 host). |
+| P4.7 | BLOCKED | - | reserved for Claude (depends on P4.3 host). |
 
 ## Phase 5: scale and cost
 
@@ -76,10 +77,11 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | --- | --- | --- | --- |
 | P5.1 | todo | | Needs P2.1's numbers (D4 is settled). |
 | P5.2 | todo | | D5 settled: build the limiter, off by default. |
-| P5.3 | todo | | |
+| P5.3 | done | P5.3 | Added `LLM_MAX_CONCURRENCY=8` in `config.py` and `.env.example`, wired per-process `ProviderGate` across cloud/compatible SDK sync and stream calls bounded by remaining operation deadline, and updated `retry_transient` (shared by legacy and research controllers) for exponential backoff with jitter, `Retry-After` honouring, immediate rate-limited failure when `Retry-After >= remaining_seconds`, deadline ceiling on backoff waits, and no replay on `ProviderTimeoutError(request_sent=True)`. `FakeClock` rows in `test_generation.py` and `test_provider_bounds.py` verify all four invariants with zero real `sleep`. Gate: `.venv\Scripts\python.exe -m pytest -c backend/pyproject.toml --rootdir backend --basetemp data/test-runs/pytest-p53-gate backend/tests` -> 1666 passed, 2 skipped (Windows-only), 0 xfailed in 731.12s; `.venv\Scripts\python.exe -m ruff check backend` -> All checks passed; `npm.cmd --prefix frontend run typecheck` -> pass; `npm.cmd --prefix frontend test` -> 19 unit passed, 32 browser passed; `npm.cmd --prefix frontend run format:check` -> pass; `npm.cmd --prefix frontend run check:callers` -> pass (37 AdvisorClient, 32 backoffice). |
 | P5.4 | todo | | |
 | P5.5 | todo | | D4 settled: two tiers, 300 gating and 6000 recorded. |
 | P5.6 | todo | | Needs P2.1's numbers (D4 is settled). |
+| P5.7 | todo | | |
 
 ## Phase 6: no dead ends
 
@@ -94,42 +96,56 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 | P6.7 | todo | | |
 | P6.8 | todo | | |
 
+## Phase 7: hosting
+
+| ID | Status | Commit | Evidence |
+| --- | --- | --- | --- |
+| P7.1 | todo | | |
+| P7.2 | todo | | |
+| P7.3 | todo | | |
+| P7.4 | todo | | |
+| P7.5 | todo | | |
+| P7.6 | todo | | |
+| P7.7 | todo | | |
+| P7.8 | todo | | |
+
+## Phase 8: known answer misses
+
+| ID | Status | Commit | Evidence |
+| --- | --- | --- | --- |
+| P8.1 | todo | | Reproduce and fix during Stage D (`P2.2`). |
+
+## Stage I: user items
+
+| ID | Status | Commit | Evidence |
+| --- | --- | --- | --- |
+| U1 | BLOCKED | - | User decision: keep or cut the debug backend (`debug/`, `api/routes/debug.py`, `conversations/experiments.py`, `DEBUG_*` in `apps.bicep`, debug fixture/client helpers). Unblocks P1.9. |
+| U2 | BLOCKED | - | User review: publish reviewed requirement rules for top programs (`0` published today). Unblocks real degree audits. |
+| U3 | BLOCKED | - | User review: review 51 entries in `requirement_gold.toml` and 48 retrieval eval cases. Unblocks trustworthy eval numbers. |
+| U4 | BLOCKED | - | User review: score 10 artifacts 1–5 from `data/manual-checks/artifact-sample/`. Unblocks P3.4. |
+| U5 | BLOCKED | - | User decision: confirm production model (D1) and rerun P2.1/P3.2 if different from `minimax-m3.1-flash`. Unblocks launch sign-off. |
+| U6 | BLOCKED | - | User confirmation: verify provider plan capacity against P5.6's tier-1 call rate. Unblocks launch. |
+| U7 | BLOCKED | - | User/hosting team answers: 14 questions in `azure-hosting-requirements.md` §9. Unblocks school auth adapter and real deploy. |
+| U8 | BLOCKED | - | User/Emory confirmation: graduation credits (127 vs 126 in `configs/source_conflicts.toml`) and Math BS hours/courses figure. Unblocks removing disclosed conflicts. |
+| U9 | BLOCKED | - | User action: upload `data/team/advisor-20261107.zip` privately (never in git). Unblocks teammates. |
+
 ## Size table
 
 Measured with the same method as the plan (`wc -l` equivalent).
 
-| Measure | Before (main `eb968c1`) | After (this commit) | Target |
+| Measure | Before (main `eb968c1`) | After (`e250fa6`) | Target |
 | --- | --- | --- | --- |
-| `backend/app` Python lines | 52,308 | 49,385 | ≤ 42,000 |
-| Backend test files | 125 | 123 | ≤ 95 |
-| `frontend/src/admin` + `frontend/src/debug` lines | 4,700 | 3,168 | ≤ 3,300 |
-| `frontend/src/api/types.ts` lines | 2,093 | 1,719 | ≤ 1,400 |
-| `frontend/src/styles.css` lines | 2,887 | 2,887 | record only |
+| `backend/app` Python lines | 52,308 | 40,860 | ≤ 42,000 |
+| Backend test files | 125 | 93 | ≤ 95 |
+| `frontend/src/admin` + `frontend/src/debug` lines | 4,700 | 3,132 | ≤ 3,300 |
+| `frontend/src/api/types.ts` lines | 2,093 | 1,155 | ≤ 1,400 |
+| `frontend/src/styles.css` lines | 2,887 | 2,487 | record only |
 | Admin tabs | 18 | 7 | 7 |
-| Roles | 4 | 4 | 2 |
+| Roles | 4 | 2 | 2 |
 
-Current working tree, uncommitted (2026-11-06): `backend/app` 40,860 lines, 93 backend test
-files, admin 3,132 lines, `types.ts` 1,155 lines, `styles.css` 2,487 lines, 2 roles. Every
-target is met.
+## Run status: in progress
 
-## Run status: stopped before the final gate
-
-This run implemented Phase 0 (R1, R2, R3, R4, R5, R6, R10) and P1.1-P1.6 and
-P1.12. It stopped with the final gate **not** met: P1.7-P1.11, P1.13-P1.15,
-Phases 2-6 and the benchmark work are not done, so no benchmark score exists.
-
-Nothing below is BLOCKED except where the plan makes it depend on a user
-decision or a host. The rest is simply not started, and is `todo` in the tables
-above.
-
-| Item | Why it cannot be finished by the agent | What unblocks it |
-| --- | --- | --- |
-| P2.1, P2.2 | needs live runs on the configured model; no runs were made in this session | a session that runs the probes |
-| P3.2, P3.3 | needs P3.1's benchmark built and run; P3.3 needs Office on this machine | building and running P3.1 |
-| P3.4 | needs the user to score 10 artifacts 1-5 (D6) | the user's scores |
-| P4.3-P4.7 | needs a Linux host with Docker and gVisor `runsc`; this machine has none | the user's Claude session sets up WSL2 |
-| P5.4 | open risk 3 of `docs/audit/security-attack-notes.md`; not started | implementation |
-| All of D6 | human review of 51 gold entries and 48 eval cases | the user's review |
+Implementing `docs/plans/production-launch.md` stage by stage on `goal/production-readiness`.
 
 ## Candidates for the user
 

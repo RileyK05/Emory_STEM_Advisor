@@ -18,6 +18,7 @@ from app.llm.base import (
     GenerationResult,
     InvalidRequestError,
     ProviderError,
+    ProviderGate,
     ProviderTimeoutError,
     RateLimitError,
     StreamEvent,
@@ -45,6 +46,8 @@ def _chat_usage(raw: Any) -> Usage:
 
 
 def _error(provider: str, exc: Exception) -> ProviderError:
+    if isinstance(exc, ProviderError):
+        return exc
     error: ProviderError
     if "timeout" in type(exc).__name__.lower() or isinstance(exc, TimeoutError):
         error = ProviderTimeoutError(f"{provider} request timed out", provider=provider,
@@ -279,6 +282,32 @@ def _google_tool_config(tool_choice: str, types):
         mode=tool_choice.upper()))
 
 
+_PROVIDER_GATES_LOCK = threading.Lock()
+_PROVIDER_GATES: dict[tuple[str, str], ProviderGate] = {}
+
+
+def provider_gate(key: tuple[str, str], limit: int, *, provider: str = "unknown") -> ProviderGate:
+    """Return the process-wide concurrency gate for ``key``, updating its limit."""
+    with _PROVIDER_GATES_LOCK:
+        gate = _PROVIDER_GATES.get(key)
+        if gate is None:
+            gate = ProviderGate(limit, provider=provider)
+            _PROVIDER_GATES[key] = gate
+        else:
+            gate.set_limit(limit)
+        return gate
+
+
+def _google_config(base_config: Mapping[str, Any], request: GenerationRequest, types):
+    config = dict(base_config)
+    if request.timeout_seconds is not None:
+        config["http_options"] = types.HttpOptions(
+            timeout=max(1, round(request.timeout_seconds * 1000)),
+            retry_options=types.HttpRetryOptions(attempts=1),
+        )
+    return types.GenerateContentConfig(**config) if config else None
+
+
 class _SDKProvider:
     """Shared construction and the `chat()` convenience over `generate()`."""
 
@@ -286,8 +315,21 @@ class _SDKProvider:
     # The controller must use complete typed results for tool conversations.
     stream_supports_tools = False
 
-    def __init__(self, client, model: str):
-        self.client, self.model = client, model
+    def __init__(self, client, model: str, *, gate: ProviderGate | None = None):
+        self.client, self.model, self.gate = client, model, gate
+
+    def _slot(self, request: GenerationRequest):
+        if self.gate is None:
+            return contextlib.nullcontext(request)
+        return self.gate.acquire(request)
+
+    def _call(self, request: GenerationRequest, call):
+        with self._slot(request) as active:
+            return _bounded(active, lambda: call(active))
+
+    def _stream(self, request: GenerationRequest, open_stream):
+        with self._slot(request) as active:
+            yield from _bounded_stream(active, lambda: open_stream(active))
 
 
 class OpenAIProvider(_SDKProvider):
@@ -302,7 +344,8 @@ class OpenAIProvider(_SDKProvider):
         if request.response_schema:
             payload["text"] = _openai_text_format(request.response_schema)
         try:
-            response = _bounded(request, lambda: self.client.responses.create(**payload, **_timeout(request)))
+            response = self._call(request, lambda req: self.client.responses.create(
+                **payload, **_timeout(req)))
         except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
             raise _error("openai", exc) from None
         calls, refusal, texts = [], None, []
@@ -337,8 +380,8 @@ class OpenAIProvider(_SDKProvider):
         try:
             parts = []
             final = None
-            for event in _bounded_stream(request, lambda: self.client.responses.create(
-                    **payload, **_timeout(request))):
+            for event in self._stream(request, lambda req: self.client.responses.create(
+                    **payload, **_timeout(req))):
                 if _get(event, "type") == "response.output_text.delta":
                     delta = _get(event, "delta", "")
                     parts.append(delta)
@@ -382,7 +425,8 @@ class AnthropicProvider(_SDKProvider):
         if request.response_schema:
             payload["output_config"] = _anthropic_output_config(request.response_schema)
         try:
-            response = _bounded(request, lambda: self.client.messages.create(**payload, **_timeout(request)))
+            response = self._call(request, lambda req: self.client.messages.create(
+                **payload, **_timeout(req)))
         except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
             raise _error("anthropic", exc) from None
         calls, texts, refusal = [], [], None
@@ -414,8 +458,8 @@ class AnthropicProvider(_SDKProvider):
             parts = []
             prompt_tokens = completion_tokens = None
             stop_reason = request_id = model = None
-            for event in _bounded_stream(request, lambda: self.client.messages.create(
-                    **payload, **_timeout(request))):
+            for event in self._stream(request, lambda req: self.client.messages.create(
+                    **payload, **_timeout(req))):
                 event_type = _get(event, "type")
                 if event_type == "message_start":
                     message = _get(event, "message")
@@ -457,14 +501,10 @@ class GoogleProvider(_SDKProvider):
             config["tools"] = _google_tools(request.tools, types)
         if request.tool_choice:
             config["tool_config"] = _google_tool_config(request.tool_choice, types)
-        if request.timeout_seconds is not None:
-            config["http_options"] = types.HttpOptions(
-                timeout=max(1, round(request.timeout_seconds * 1000)),
-                retry_options=types.HttpRetryOptions(attempts=1))
         try:
-            response = _bounded(request, lambda: self.client.models.generate_content(
-                model=request.model or self.model, contents=contents,
-                config=types.GenerateContentConfig(**config) if config else None))
+            response = self._call(request, lambda req: self.client.models.generate_content(
+                model=req.model or self.model, contents=contents,
+                config=_google_config(config, req, types)))
         except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
             raise _error("google", exc) from None
         candidate = (getattr(response, "candidates", None) or [None])[0]
@@ -495,16 +535,12 @@ class GoogleProvider(_SDKProvider):
             config["max_output_tokens"] = request.max_output_tokens
         if request.temperature is not None:
             config["temperature"] = request.temperature
-        if request.timeout_seconds is not None:
-            config["http_options"] = types.HttpOptions(
-                timeout=max(1, round(request.timeout_seconds * 1000)),
-                retry_options=types.HttpRetryOptions(attempts=1))
         try:
             parts = []
             usage = final_candidate = None
-            stream = _bounded_stream(request, lambda: self.client.models.generate_content_stream(
-                model=request.model or self.model, contents=contents,
-                config=types.GenerateContentConfig(**config) if config else None))
+            stream = self._stream(request, lambda req: self.client.models.generate_content_stream(
+                model=req.model or self.model, contents=contents,
+                config=_google_config(config, req, types)))
             for chunk in stream:
                 usage = getattr(chunk, "usage_metadata", None) or usage
                 candidates = getattr(chunk, "candidates", None) or ()
@@ -526,8 +562,8 @@ class OpenAICompatibleProvider(OpenAIProvider):
     """OpenAI Chat Completions-compatible service with an explicit base URL."""
 
     def __init__(self, client, model: str, *, thinking: str | None = None,
-                 cache_key: bool = False):
-        super().__init__(client, model)
+                 cache_key: bool = False, gate: ProviderGate | None = None):
+        super().__init__(client, model, gate=gate)
         if thinking not in {None, "enabled", "disabled"}:
             raise ValueError("unsupported compatible thinking control")
         self.thinking = thinking
@@ -560,8 +596,8 @@ class OpenAICompatibleProvider(OpenAIProvider):
             payload["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": "response", "strict": True, "schema": dict(request.response_schema)}}
         try:
-            response = _bounded(request, lambda: self.client.chat.completions.create(
-                **payload, **_timeout(request)))
+            response = self._call(request, lambda req: self.client.chat.completions.create(
+                **payload, **_timeout(req)))
         except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
             raise _error("openai-compatible", exc) from None
         if not response.choices:
@@ -593,8 +629,8 @@ class OpenAICompatibleProvider(OpenAIProvider):
             finish_reason = "unknown"
             usage = Usage(source="unknown")
             model = None
-            for chunk in _bounded_stream(request, lambda: self.client.chat.completions.create(
-                    **payload, **_timeout(request))):
+            for chunk in self._stream(request, lambda req: self.client.chat.completions.create(
+                    **payload, **_timeout(req))):
                 observed = getattr(chunk, "usage", None)
                 if observed is not None:
                     usage = _chat_usage(observed)

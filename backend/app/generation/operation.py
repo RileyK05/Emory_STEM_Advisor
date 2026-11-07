@@ -49,7 +49,8 @@ class GenerationOperation:
             minimum_output_tokens=request.max_output_tokens if require_full_output else None,
         )
         self.last_request = replace(request, max_output_tokens=self.reservation.output_grant,
-                                    timeout_seconds=self.reservation.timeout_seconds)
+                                    timeout_seconds=self.reservation.timeout_seconds,
+                                    deadline_seconds=self.reservation.remaining_seconds)
         return self.last_request
 
     def account(self, result, error):

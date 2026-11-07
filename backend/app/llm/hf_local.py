@@ -109,7 +109,7 @@ def _acquire_generation_slot(slot, *, deadline, cancel_requested=None):
 
 
 def _slot_timeout_error(message="hf-local generation timed out"):
-    error = ProviderTimeoutError(message, provider="hf-local")
+    error = ProviderTimeoutError(message, provider="hf-local", request_sent=False)
     error.usage = Usage(source="unknown")
     return error
 

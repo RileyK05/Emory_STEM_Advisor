@@ -504,7 +504,7 @@ class ResearchController:
                                           before_provider_call=before_provider_call)
             prepared, result = retry_transient(call, remaining_calls=status.remaining_calls,
                                                remaining_seconds=status.remaining_seconds,
-                                               check_cancelled=check_cancelled, max_retries=3)
+                                               check_cancelled=check_cancelled, max_retries=5)
             usages.append(result.usage)
             session.last_call = (prepared.messages[0].content, user, result.model)
             check_cancelled()

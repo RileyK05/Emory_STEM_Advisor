@@ -365,35 +365,132 @@ def test_stream_invalid_completion_is_a_typed_provider_failure():
     assert "untrusted" not in str(attempts[0][1])
 
 
-def test_rate_limited_provider_is_retried_once_within_the_operation_budget():
+@pytest.mark.parametrize(
+    ("scenario", "remaining_calls", "remaining_seconds", "max_retries", "succeeds", "expected_calls", "expected_slept"),
+    [
+        ("retry_after_ok", 2, 30.0, 1, True, 2, [4.5]),
+        ("retry_after_exceeds_deadline", 4, 10.0, 3, False, 1, []),
+        ("no_spare_call", 1, 30.0, 1, False, 1, []),
+        ("no_spare_time", 2, 0.0, 1, False, 1, []),
+        ("backoff_stops_at_deadline", 6, 4.0, 5, False, 3, "deadline_bounded"),
+        ("unknown_outcome_timeout", 4, 30.0, 3, False, 1, []),
+    ],
+)
+def test_retry_transient_backoff_retry_after_deadline_and_unknown_outcomes(
+    scenario, remaining_calls, remaining_seconds, max_retries, succeeds, expected_calls, expected_slept
+):
     from app.generation.controller import retry_transient
-    from app.llm.base import RateLimitError
+    from app.llm.base import ProviderTimeoutError, RateLimitError, TransientProviderError
+    from tests.fakes import FakeClock
 
+    clock = FakeClock()
     calls = []
 
     def generate():
         calls.append(1)
-        if len(calls) == 1:
-            raise RateLimitError("slow down", provider="fake", retry_after=0.01)
-        return "ok"
+        if scenario == "retry_after_ok":
+            if len(calls) == 1:
+                raise RateLimitError("slow down", provider="fake", retry_after=4.5)
+            return "ok"
+        if scenario == "retry_after_exceeds_deadline":
+            raise RateLimitError("blocked", provider="fake", retry_after=90.0)
+        if scenario in {"no_spare_call", "no_spare_time"}:
+            raise RateLimitError("slow down", provider="fake", retry_after=0.5)
+        if scenario == "backoff_stops_at_deadline":
+            raise TransientProviderError("503", provider="fake")
+        raise ProviderTimeoutError("timed out after send", provider="fake")
 
-    result = retry_transient(generate, remaining_calls=2, remaining_seconds=30,
-                                         check_cancelled=lambda: None)
-    assert result == "ok" and len(calls) == 2
+    if succeeds:
+        assert retry_transient(
+            generate, remaining_calls=remaining_calls, remaining_seconds=remaining_seconds,
+            check_cancelled=lambda: None, max_retries=max_retries, clock=clock, jitter=lambda: 0.0,
+        ) == "ok"
+    else:
+        with pytest.raises((RateLimitError, TransientProviderError)):
+            retry_transient(
+                generate, remaining_calls=remaining_calls, remaining_seconds=remaining_seconds,
+                check_cancelled=lambda: None, max_retries=max_retries, clock=clock, jitter=lambda: 0.0,
+            )
+    assert len(calls) == expected_calls
+    if expected_slept == "deadline_bounded":
+        assert clock.slept == [1.0, 2.0]
+        assert sum(clock.slept) < remaining_seconds
+    else:
+        assert clock.slept == expected_slept
 
 
-def test_rate_limit_is_not_retried_without_a_spare_call_or_time():
-    from app.generation.controller import retry_transient
-    from app.llm.base import RateLimitError
+def test_concurrency_gate_serializes_concurrent_generation_without_instant_failure():
+    import threading
 
-    def generate():
-        raise RateLimitError("slow down", provider="fake", retry_after=0.01)
+    from app.llm.base import GenerationRequest, ProviderGate, ProviderTimeoutError
+    from tests.fakes import FakeClock
 
-    for remaining_calls, remaining_seconds in [(1, 30), (2, 0.0)]:
-        with pytest.raises(RateLimitError):
-            retry_transient(generate, remaining_calls=remaining_calls,
-                                        remaining_seconds=remaining_seconds,
-                                        check_cancelled=lambda: None)
+    clock = FakeClock()
+    gate = ProviderGate(1, provider="fake", clock=clock)
+    first_in_flight = threading.Event()
+    release_first = threading.Event()
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+    outcomes: list = []
+
+    def on_call(_request):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        first_in_flight.set()
+        release_first.wait(timeout=2.0)
+        with lock:
+            active -= 1
+
+    provider = FakeProvider("Fact [1].", gate=gate, on_call=on_call)
+
+    def run_turn(timeout_seconds: float):
+        try:
+            ans = answer_from_context(
+                chunks(1), "question", provider=provider, timeout_seconds=timeout_seconds,
+            )
+            outcomes.append(ans.text)
+        except ProviderError as exc:
+            outcomes.append(exc)
+
+    t1 = threading.Thread(target=run_turn, args=(30.0,))
+    t2 = threading.Thread(target=run_turn, args=(30.0,))
+    t1.start()
+    assert first_in_flight.wait(timeout=2.0)
+    t2.start()
+    assert gate.wait_for_waiters(1, timeout=2.0)
+    release_first.set()
+    t1.join(timeout=2.0)
+    t2.join(timeout=2.0)
+    assert peak == 1
+    assert outcomes == ["Fact [1].", "Fact [1]."]
+
+    # Now hold the slot and advance FakeClock past a waiter's remaining time.
+    release_first.clear()
+    first_in_flight.clear()
+    outcomes.clear()
+    holder = threading.Thread(target=run_turn, args=(30.0,))
+    waiter = threading.Thread(target=lambda: outcomes.append(
+        _capture(lambda: gate.acquire(GenerationRequest([], deadline_seconds=5.0)).__enter__())
+    ))
+    holder.start()
+    assert first_in_flight.wait(timeout=2.0)
+    waiter.start()
+    assert gate.wait_for_waiters(1, timeout=2.0)
+    clock.advance(5.0)
+    waiter.join(timeout=2.0)
+    release_first.set()
+    holder.join(timeout=2.0)
+    assert any(isinstance(item, ProviderTimeoutError) and not item.request_sent for item in outcomes)
+
+
+def _capture(fn):
+    try:
+        return fn()
+    except ProviderError as exc:
+        return exc
 
 
 def test_guard_accepts_reports_suffix_lists_denials_and_reviewed_qtm_aliases():

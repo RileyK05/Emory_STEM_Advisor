@@ -117,6 +117,7 @@ class UsageReservation:
     timeout_seconds: float
     deadline_at: datetime
     remaining_tokens: int
+    remaining_seconds: float = 0.0
 
 
 class OperationBudgetController:
@@ -222,6 +223,7 @@ class OperationBudgetController:
                 prompt_reserved_tokens=prompt_reserved_tokens, output_grant=output_grant,
                 timeout_seconds=min(float(row["per_call_timeout_seconds"]), remaining_seconds),
                 deadline_at=row["deadline_at"], remaining_tokens=remaining_tokens,
+                remaining_seconds=remaining_seconds,
             )
 
     def account_usage(self, conn, reservation: UsageReservation, *, usage: Usage | None,

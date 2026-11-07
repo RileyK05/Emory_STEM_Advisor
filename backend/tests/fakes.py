@@ -1,6 +1,7 @@
 """Deterministic test doubles. No models, no network, no randomness across runs."""
 
 import hashlib
+import threading
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
@@ -54,19 +55,33 @@ def whitespace_tokens(text: str) -> int:
 class FakeProvider:
     """Deterministic stand-in for the LLM provider. Records the last messages."""
 
-    def __init__(self, text: str = "An answer citing [1] the context.") -> None:
+    def __init__(
+        self,
+        text: str = "An answer citing [1] the context.",
+        *,
+        gate=None,
+        on_call=None,
+    ) -> None:
         self.text = text
+        self.gate = gate
+        self.on_call = on_call
         self.last_messages: list[dict[str, str]] = []
         self.calls = 0
 
     def generate(self, request) -> GenerationResult:
-        self.calls += 1
-        self.last_messages = [dict(m) for m in request.messages]
-        words = sum(len(str(m.get("content", "")).split()) for m in self.last_messages)
-        return GenerationResult(
-            text=self.text, finish_reason="stop",
-            usage=Usage(words, len(self.text.split()), source="estimated"),
-        )
+        import contextlib
+
+        slot = self.gate.acquire(request) if self.gate is not None else contextlib.nullcontext(request)
+        with slot as active:
+            if self.on_call is not None:
+                self.on_call(active)
+            self.calls += 1
+            self.last_messages = [dict(m) for m in active.messages]
+            words = sum(len(str(m.get("content", "")).split()) for m in self.last_messages)
+            return GenerationResult(
+                text=self.text, finish_reason="stop",
+                usage=Usage(words, len(self.text.split()), source="estimated"),
+            )
 
 
 class ScriptedProvider:
@@ -116,9 +131,36 @@ class ScriptedProvider:
 class FakeClock:
     def __init__(self):
         self.value = datetime(2026, 10, 7, tzinfo=UTC)
+        self.slept: list[float] = []
+        self._lock = threading.Lock()
+        self._listeners: list = []
 
     def __call__(self):
-        return self.value
+        with self._lock:
+            return self.value
 
     def advance(self, seconds):
-        self.value += timedelta(seconds=seconds)
+        with self._lock:
+            self.value += timedelta(seconds=seconds)
+            listeners = tuple(self._listeners)
+        for listener in listeners:
+            listener()
+
+    def sleep(self, seconds: float) -> None:
+        with self._lock:
+            self.slept.append(seconds)
+            self.value += timedelta(seconds=seconds)
+            listeners = tuple(self._listeners)
+        for listener in listeners:
+            listener()
+
+    def subscribe(self, listener):
+        with self._lock:
+            self._listeners.append(listener)
+
+        def unsubscribe():
+            with self._lock:
+                if listener in self._listeners:
+                    self._listeners.remove(listener)
+
+        return unsubscribe

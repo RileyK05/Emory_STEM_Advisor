@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import random
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -17,6 +18,7 @@ from app.llm.base import (
     GenerationRequest,
     GenerationResult,
     Message,
+    ProviderTimeoutError,
     RateLimitError,
     TextMessage,
     ToolCall,
@@ -257,29 +259,52 @@ def _generate(provider, prepared: GenerationRequest, on_provisional_text) -> Gen
 
 _DEFAULT_RETRY_DELAY_SECONDS = 1.0
 _MAX_RETRY_DELAY_SECONDS = 30.0
+_RETRY_JITTER_FRACTION = 0.25
 
 
 def retry_transient(call, *, remaining_calls: int, remaining_seconds: float, check_cancelled,
-                    max_retries: int = 1):
+                    max_retries: int = 1, clock=None, jitter: Callable[[], float] | None = None):
     """Re-run a rate-limited or transient provider call inside the operation fence.
 
-    A provider rate limit or dropped connection used to surface immediately as a
-    503 that blamed the settings (EMO-029). Retry within the remaining call/time
-    budget, honoring ``retry_after``; anything else still propagates.
+    Backs off exponentially with jitter, honours ``Retry-After`` when it fits in
+    the remaining operation time, fails at once when ``Retry-After`` exceeds the
+    remaining time, and never replays a post-send timeout whose outcome is unknown.
     """
+    now = (lambda: float(clock().timestamp())) if clock is not None else time.monotonic
+    sleep = (
+        (clock.sleep if callable(getattr(clock, "sleep", None)) else clock.advance)
+        if clock is not None
+        else time.sleep
+    )
+    sample_jitter = jitter if jitter is not None else random.random
+    started = now()
+    spent = 0.0
     retries = 0
     while True:
         try:
             return call()
         except (RateLimitError, TransientProviderError) as exc:
+            if isinstance(exc, ProviderTimeoutError) and exc.request_sent:
+                raise
             retries += 1
-            delay = min(float(getattr(exc, "retry_after", None)
-                              or _DEFAULT_RETRY_DELAY_SECONDS), _MAX_RETRY_DELAY_SECONDS)
-            if retries > max_retries or remaining_calls - 1 < retries or remaining_seconds <= delay:
+            left = remaining_seconds - max(spent, now() - started)
+            retry_after = getattr(exc, "retry_after", None)
+            if retry_after is not None and retry_after > 0:
+                delay = float(retry_after)
+                if isinstance(exc, RateLimitError) and delay >= left:
+                    raise
+                if not isinstance(exc, RateLimitError):
+                    delay = min(delay, _MAX_RETRY_DELAY_SECONDS)
+            else:
+                base = min(_DEFAULT_RETRY_DELAY_SECONDS * (2 ** (retries - 1)),
+                           _MAX_RETRY_DELAY_SECONDS)
+                delay = min(base * (1.0 + _RETRY_JITTER_FRACTION * float(sample_jitter())),
+                            _MAX_RETRY_DELAY_SECONDS)
+            if retries > max_retries or remaining_calls - 1 < retries or left <= delay:
                 raise
             check_cancelled()
-            time.sleep(delay)
-            remaining_seconds -= delay
+            sleep(delay)
+            spent = max(spent + delay, now() - started)
 
 
 def _attempt(provider, prepared: GenerationRequest, operation, *, on_attempt, on_provisional_text,

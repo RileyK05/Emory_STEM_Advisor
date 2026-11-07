@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
 import re
+import threading
+import time
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
 
 _CACHE_KEY = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -118,12 +121,18 @@ class GenerationRequest:
     # changes the prompt, and callers derive it from the prefix content so
     # different scopes cannot share a key.
     cache_key: str | None = None
+    # Remaining operation time budget used to bound local concurrency-slot waits.
+    deadline_seconds: float | None = None
 
     def __post_init__(self) -> None:
         if self.timeout_seconds is not None and (
             not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0
         ):
             raise ValueError("generation timeout_seconds must be positive and finite")
+        if self.deadline_seconds is not None and (
+            not math.isfinite(self.deadline_seconds) or self.deadline_seconds <= 0
+        ):
+            raise ValueError("generation deadline_seconds must be positive and finite")
         if self.max_output_tokens is not None and self.max_output_tokens <= 0:
             raise ValueError("max_output_tokens must be positive")
         if self.reasoning_effort is not None and self.reasoning_effort not in {
@@ -220,6 +229,127 @@ class TransientProviderError(ProviderError):
 
 class ProviderTimeoutError(TransientProviderError):
     """A single bounded provider request exceeded its timeout."""
+
+    def __init__(self, message: str, *, provider: str, request_id: str | None = None,
+                 request_sent: bool = True):
+        super().__init__(message, provider=provider, request_id=request_id)
+        self.request_sent = request_sent
+
+
+class ProviderGate:
+    """Per-process cap on model calls in flight for one provider."""
+
+    def __init__(self, limit: int, *, provider: str = "unknown", clock=None):
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("provider concurrency limit must be a positive integer")
+        self._limit = limit
+        self._provider = provider
+        self._clock = clock
+        self._in_flight = 0
+        self._waiting = 0
+        self._cond = threading.Condition()
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    @property
+    def in_flight(self) -> int:
+        with self._cond:
+            return self._in_flight
+
+    @property
+    def waiting(self) -> int:
+        with self._cond:
+            return self._waiting
+
+    def set_limit(self, limit: int) -> None:
+        if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
+            raise ValueError("provider concurrency limit must be a positive integer")
+        with self._cond:
+            self._limit = limit
+            self._cond.notify_all()
+
+    def wait_for_waiters(self, count: int, *, timeout: float = 2.0) -> bool:
+        with self._cond:
+            return self._cond.wait_for(lambda: self._waiting >= count, timeout=timeout)
+
+    def _now(self) -> float:
+        if self._clock is not None:
+            return float(self._clock().timestamp())
+        return time.monotonic()
+
+    def _wake(self) -> None:
+        with self._cond:
+            self._cond.notify_all()
+
+    @contextlib.contextmanager
+    def acquire(self, request: GenerationRequest) -> Iterator[GenerationRequest]:
+        wait_budget = (
+            request.deadline_seconds
+            if request.deadline_seconds is not None
+            else request.timeout_seconds
+        )
+        unsubscribe = None
+        with self._cond:
+            if self._in_flight < self._limit:
+                self._in_flight += 1
+                effective = request
+            else:
+                started = self._now()
+                deadline = None if wait_budget is None else started + wait_budget
+                subscribe = getattr(self._clock, "subscribe", None)
+                if callable(subscribe):
+                    unsubscribe = subscribe(self._wake)
+                self._waiting += 1
+                self._cond.notify_all()
+                try:
+                    while self._in_flight >= self._limit:
+                        if deadline is not None:
+                            remaining = deadline - self._now()
+                            if remaining <= 0:
+                                raise ProviderTimeoutError(
+                                    f"{self._provider} concurrency wait timed out",
+                                    provider=self._provider,
+                                    request_sent=False,
+                                )
+                        if self._clock is not None:
+                            self._cond.wait(timeout=5.0)
+                        else:
+                            self._cond.wait(timeout=remaining if deadline is not None else None)
+                    if deadline is not None and self._now() >= deadline:
+                        raise ProviderTimeoutError(
+                            f"{self._provider} concurrency wait timed out",
+                            provider=self._provider,
+                            request_sent=False,
+                        )
+                    self._in_flight += 1
+                    if wait_budget is not None:
+                        remaining_budget = wait_budget - max(0.0, self._now() - started)
+                        timeout = (
+                            remaining_budget
+                            if request.timeout_seconds is None
+                            else min(request.timeout_seconds, remaining_budget)
+                        )
+                        effective = replace(
+                            request,
+                            timeout_seconds=timeout,
+                            deadline_seconds=(
+                                remaining_budget if request.deadline_seconds is not None else None
+                            ),
+                        )
+                    else:
+                        effective = request
+                finally:
+                    self._waiting -= 1
+                    if unsubscribe is not None:
+                        unsubscribe()
+        try:
+            yield effective
+        finally:
+            with self._cond:
+                self._in_flight -= 1
+                self._cond.notify_all()
 
 
 class ProviderUnavailableError(ProviderError):

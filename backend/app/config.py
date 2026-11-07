@@ -109,6 +109,9 @@ class Settings:
     embedder_warmup_on_startup: bool = False
     profile_encryption_key: str | None = field(default=None, repr=False)
     llm_timeout_seconds: float = 60.0
+    # Per-process, per-provider cap on model calls in flight. Callers wait up to
+    # the operation's remaining time rather than failing immediately at the cap.
+    llm_max_concurrency: int = 8
     llm_max_output_tokens: int = 1024
     # A reply cut off at the output limit is retried with a doubled allowance up
     # to this ceiling: a reasoning model can spend its whole allowance before it
@@ -366,6 +369,8 @@ class Settings:
         if (not math.isfinite(self.llm_timeout_seconds)
                 or self.llm_timeout_seconds <= 0 or self.llm_max_output_tokens <= 0):
             raise ValueError("generation limits must be positive")
+        if type(self.llm_max_concurrency) is not int or not 1 <= self.llm_max_concurrency <= 1000:
+            raise ValueError("LLM_MAX_CONCURRENCY must be between 1 and 1000")
         if self.answer_truncation_max_output_tokens < self.llm_max_output_tokens:
             raise ValueError(
                 "ANSWER_TRUNCATION_MAX_OUTPUT_TOKENS must be at least LLM_MAX_OUTPUT_TOKENS")
@@ -455,6 +460,7 @@ def load_settings() -> Settings:
         readiness_timeout_seconds=_int("READINESS_TIMEOUT_SECONDS", 3),
         profile_encryption_key=_optional("PROFILE_ENCRYPTION_KEY"),
         llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 60),
+        llm_max_concurrency=_int("LLM_MAX_CONCURRENCY", 8),
         llm_max_output_tokens=_int("LLM_MAX_OUTPUT_TOKENS", 1024),
         answer_truncation_max_output_tokens=_int("ANSWER_TRUNCATION_MAX_OUTPUT_TOKENS", 16_384),
         routing_enabled=_bool("ROUTING_ENABLED", False),

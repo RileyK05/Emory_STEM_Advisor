@@ -44,7 +44,7 @@ from app.llm.base import (
 )
 from app.operations.budget import BudgetExceeded
 from app.retrieval.types import CitedChunk
-from tests.fakes import ScriptedProvider
+from tests.fakes import FakeClock, ScriptedProvider
 from tests.helpers import api_client, collection_name, ingest_text
 
 
@@ -460,26 +460,8 @@ def test_the_source_of_the_legacy_path_names_no_truncation_retry():
         "cannot raise the output allowance for a reply that ran out of it")
 
 
-class _Clock:
-    """Records the sleeps a retry asks for, without waiting."""
-
-    def __init__(self):
-        self.slept: list[float] = []
-
-    def sleep(self, seconds: float) -> None:
-        self.slept.append(seconds)
-
-    def cancel(self) -> None:
-        return None
-
-
 class _TimeProxy:
-    """The `time` module with only its `sleep` replaced.
-
-    Patching `time.sleep` globally would also capture the sleeps of any other
-    thread still running in the session, and the retry's own record would
-    carry them.
-    """
+    """The `time` module with only its `sleep` replaced."""
 
     def __init__(self, sleep):
         self.sleep = sleep
@@ -490,7 +472,7 @@ class _TimeProxy:
 
 @pytest.fixture()
 def clock(monkeypatch):
-    fake = _Clock()
+    fake = FakeClock()
     monkeypatch.setattr("app.generation.controller.time", _TimeProxy(fake.sleep))
     return fake
 
@@ -516,7 +498,7 @@ def test_a_transient_failure_is_retried_and_can_succeed(clock):
         return "answered"
 
     result = retry_transient(call, remaining_calls=4, remaining_seconds=60,
-                             check_cancelled=clock.cancel)
+                             check_cancelled=lambda: None, clock=clock)
     assert result == "answered"
     assert len(attempts) == 2
 
@@ -531,7 +513,7 @@ def test_a_rate_limit_is_retried(clock):
         return "answered"
 
     assert retry_transient(call, remaining_calls=4, remaining_seconds=60,
-                            check_cancelled=clock.cancel) == "answered"
+                           check_cancelled=lambda: None, clock=clock) == "answered"
 
 
 def test_the_providers_retry_hint_is_honoured(clock):
@@ -540,18 +522,39 @@ def test_the_providers_retry_hint_is_honoured(clock):
 
     with pytest.raises(RateLimitError):
         retry_transient(call, remaining_calls=4, remaining_seconds=60,
-                        check_cancelled=clock.cancel)
+                        check_cancelled=lambda: None, clock=clock)
     assert clock.slept == [7.5]
 
 
-def test_the_wait_is_capped(clock):
+def test_long_retry_after_fails_at_once_without_waiting(clock):
+    attempts = []
+
     def call():
+        attempts.append(1)
         raise _rate_limited(retry_after=9999)
 
     with pytest.raises(RateLimitError):
         retry_transient(call, remaining_calls=4, remaining_seconds=60,
-                        check_cancelled=clock.cancel)
-    assert clock.slept == [_MAX_RETRY_DELAY_SECONDS]
+                        check_cancelled=lambda: None, clock=clock)
+    assert len(attempts) == 1
+    assert clock.slept == []
+
+
+def test_exponential_backoff_caps_at_max_delay_and_stops_at_deadline(clock):
+    attempts = []
+
+    def call():
+        attempts.append(1)
+        raise _transient()
+
+    with pytest.raises(TransientProviderError):
+        retry_transient(call, remaining_calls=12, remaining_seconds=80,
+                        check_cancelled=lambda: None, max_retries=10,
+                        clock=clock, jitter=lambda: 0.0)
+    # 1 + 2 + 4 + 8 + 16 + 30 = 61s (< 80s); the next 30s wait would cross 80s.
+    assert clock.slept == [1.0, 2.0, 4.0, 8.0, 16.0, _MAX_RETRY_DELAY_SECONDS]
+    assert sum(clock.slept) < 80
+    assert len(attempts) == 7
 
 
 def test_a_second_failure_is_not_retried_again(clock):
@@ -563,7 +566,7 @@ def test_a_second_failure_is_not_retried_again(clock):
 
     with pytest.raises(TransientProviderError):
         retry_transient(call, remaining_calls=8, remaining_seconds=60,
-                        check_cancelled=clock.cancel)
+                        check_cancelled=lambda: None, clock=clock)
     assert len(attempts) == 2, "the default allows exactly one retry"
 
 
@@ -576,7 +579,7 @@ def test_no_retry_when_the_call_budget_is_gone(clock):
 
     with pytest.raises(TransientProviderError):
         retry_transient(call, remaining_calls=1, remaining_seconds=60,
-                        check_cancelled=clock.cancel)
+                        check_cancelled=lambda: None, clock=clock)
     assert len(attempts) == 1, "a retry with no remaining call must not be made"
     assert clock.slept == []
 
@@ -590,22 +593,38 @@ def test_no_retry_when_the_time_budget_cannot_cover_the_wait(clock):
 
     with pytest.raises(TransientProviderError):
         retry_transient(call, remaining_calls=8, remaining_seconds=0.5,
-                        check_cancelled=clock.cancel)
+                        check_cancelled=lambda: None, clock=clock)
     assert len(attempts) == 1
     assert clock.slept == []
 
 
-def test_a_timeout_is_transient_and_is_retried(clock):
+@pytest.mark.parametrize(
+    ("request_sent", "expected_attempts"),
+    [
+        (True, 1),
+        (False, 2),
+    ],
+)
+def test_unknown_outcome_timeout_is_never_replayed_while_unsent_slot_timeout_can_retry(
+    clock, request_sent, expected_attempts
+):
     attempts = []
 
     def call():
         attempts.append(1)
         if len(attempts) == 1:
-            raise ProviderTimeoutError("timed out", provider="test")
+            raise ProviderTimeoutError("timed out", provider="test", request_sent=request_sent)
         return "answered"
 
-    assert retry_transient(call, remaining_calls=4, remaining_seconds=60,
-                            check_cancelled=clock.cancel) == "answered"
+    if request_sent:
+        with pytest.raises(ProviderTimeoutError):
+            retry_transient(call, remaining_calls=4, remaining_seconds=60,
+                            check_cancelled=lambda: None, clock=clock)
+        assert clock.slept == []
+    else:
+        assert retry_transient(call, remaining_calls=4, remaining_seconds=60,
+                               check_cancelled=lambda: None, clock=clock) == "answered"
+    assert len(attempts) == expected_attempts
 
 
 @pytest.mark.parametrize("error", [
@@ -621,7 +640,7 @@ def test_other_provider_errors_are_not_retried(clock, error):
 
     with pytest.raises(type(error)):
         retry_transient(call, remaining_calls=8, remaining_seconds=60,
-                        check_cancelled=clock.cancel)
+                        check_cancelled=lambda: None, clock=clock)
     assert len(attempts) == 1
     assert clock.slept == []
 
@@ -639,7 +658,7 @@ def test_cancellation_is_checked_before_waiting(clock):
 
     with pytest.raises(RuntimeError, match="cancelled"):
         retry_transient(call, remaining_calls=4, remaining_seconds=60,
-                        check_cancelled=check)
+                        check_cancelled=check, clock=clock)
     assert checks == [1], "cancellation is checked before each wait"
     assert clock.slept == [], "a cancelled turn must not wait before failing"
 
@@ -654,19 +673,123 @@ def test_a_bigger_retry_allowance_is_honoured(clock):
         return "answered"
 
     assert retry_transient(call, remaining_calls=8, remaining_seconds=60,
-                            check_cancelled=clock.cancel, max_retries=3) == "answered"
+                           check_cancelled=lambda: None, max_retries=3, clock=clock) == "answered"
     assert len(attempts) == 3
     assert len(clock.slept) == 2
+    assert clock.slept[0] < clock.slept[1]
 
 
-def test_the_default_wait_is_short(clock):
+def test_the_default_wait_is_short_with_jitter(clock):
     def call():
         raise _transient()
 
     with pytest.raises(TransientProviderError):
         retry_transient(call, remaining_calls=4, remaining_seconds=60,
-                        check_cancelled=clock.cancel)
-    assert clock.slept == [1.0]
+                        check_cancelled=lambda: None, clock=clock)
+    assert len(clock.slept) == 1
+    assert 1.0 <= clock.slept[0] <= 1.25
+
+
+def test_provider_concurrency_cap_holds_across_callers_and_bounds_slot_waits():
+    from app.llm.base import ProviderGate
+
+    clock = FakeClock()
+    both_in_flight = threading.Barrier(2)
+    release_slots = threading.Event()
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def create(**_kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            first_wave = active <= 2 and not release_slots.is_set()
+        if first_wave:
+            import contextlib
+
+            with contextlib.suppress(threading.BrokenBarrierError):
+                both_in_flight.wait(timeout=2.0)
+            release_slots.wait(timeout=2.0)
+        with lock:
+            active -= 1
+        return SimpleNamespace(
+            output=[SimpleNamespace(type="message", content=[SimpleNamespace(type="output_text", text="ok")])],
+            status="completed",
+            usage=SimpleNamespace(input_tokens=4, output_tokens=2),
+            _request_id="req-1",
+            model="m",
+        )
+
+    client = SimpleNamespace(responses=SimpleNamespace(create=create))
+    settings = SimpleNamespace(
+        llm_provider="openai", llm_model_id="m", llm_base_url="https://cap-test.example/v1",
+        llm_max_concurrency=2,
+    )
+    provider_a = get_provider(settings, api_key="k", client=client)
+    provider_b = get_provider(settings, api_key="k", client=client)
+    assert provider_a.gate is provider_b.gate and provider_a.gate.limit == 2
+
+    results: list = []
+
+    def worker(provider, req):
+        try:
+            results.append(provider.generate(req).text)
+        except ProviderTimeoutError as exc:
+            results.append(exc)
+
+    req = GenerationRequest([{"role": "user", "content": "hi"}], timeout_seconds=30.0)
+    threads = [
+        threading.Thread(target=worker, args=(provider_a if idx % 2 == 0 else provider_b, req))
+        for idx in range(4)
+    ]
+    for thread in threads[:2]:
+        thread.start()
+    for thread in threads[2:]:
+        thread.start()
+    assert provider_a.gate.wait_for_waiters(2, timeout=2.0)
+    assert peak == 2
+    release_slots.set()
+    for thread in threads:
+        thread.join(timeout=2.0)
+    assert peak == 2
+    assert results == ["ok", "ok", "ok", "ok"]
+
+    # Prove FakeClock bounds a slot wait at the operation's remaining time without real sleep.
+    timed_gate = ProviderGate(1, provider="openai", clock=clock)
+    provider_c = get_provider(settings, api_key="k", client=client)
+    provider_c.gate = timed_gate
+    held = threading.Event()
+    unblock = threading.Event()
+
+    def hold_create(**_kwargs):
+        held.set()
+        unblock.wait(timeout=2.0)
+        return create()
+
+    provider_c.client = SimpleNamespace(responses=SimpleNamespace(create=hold_create))
+    outcomes: list = []
+    holder = threading.Thread(target=lambda: outcomes.append(provider_c.generate(req).text))
+    waiter_req = GenerationRequest([{"role": "user", "content": "hi"}], timeout_seconds=30.0, deadline_seconds=8.0)
+    waiter = threading.Thread(target=lambda: outcomes.append(_catch(lambda: provider_c.generate(waiter_req))))
+    holder.start()
+    assert held.wait(timeout=2.0)
+    waiter.start()
+    assert timed_gate.wait_for_waiters(1, timeout=2.0)
+    clock.advance(8.0)
+    waiter.join(timeout=2.0)
+    unblock.set()
+    holder.join(timeout=2.0)
+    timeout_err = next(item for item in outcomes if isinstance(item, ProviderTimeoutError))
+    assert timeout_err.request_sent is False
+
+
+def _catch(fn):
+    try:
+        return fn()
+    except ProviderTimeoutError as exc:
+        return exc
 
 
 def test_factory_honors_hf_model_override_and_model_specific_stops(monkeypatch):

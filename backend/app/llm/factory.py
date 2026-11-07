@@ -9,6 +9,7 @@ from app.config import Settings, with_hf_model
 from app.llm.base import Provider
 
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 60.0
+DEFAULT_LLM_MAX_CONCURRENCY = 8
 
 
 def _sdk_client(sdk: str, api_key: str | None, timeout_seconds: float, purpose: str,
@@ -62,6 +63,16 @@ def get_provider(settings: Settings, *, provider: str | None = None,
         GoogleProvider,
         OpenAICompatibleProvider,
         OpenAIProvider,
+        provider_gate,
+    )
+    max_concurrency = getattr(settings, "llm_max_concurrency", DEFAULT_LLM_MAX_CONCURRENCY)
+    if isinstance(max_concurrency, bool) or not isinstance(max_concurrency, int) or max_concurrency < 1:
+        raise ValueError("LLM_MAX_CONCURRENCY must be a positive integer")
+    provider_key = "google" if name == "gemini" else name
+    gate = provider_gate(
+        (provider_key, (base_url or "").rstrip("/")),
+        max_concurrency,
+        provider=provider_key,
     )
     if name in ("openai", "openai-compatible"):
         if client is None:
@@ -70,16 +81,16 @@ def get_provider(settings: Settings, *, provider: str | None = None,
         cls = OpenAICompatibleProvider if name == "openai-compatible" else OpenAIProvider
         if name == "openai-compatible":
             return cls(client, model_id, thinking=settings.llm_compatible_thinking,
-                       cache_key=settings.llm_compatible_cache_key)
-        return cls(client, model_id)
+                       cache_key=settings.llm_compatible_cache_key, gate=gate)
+        return cls(client, model_id, gate=gate)
     if name == "anthropic":
         if client is None:
             client = _sdk_client("anthropic", api_key, timeout_seconds, "to use this provider")
-        return AnthropicProvider(client, model_id)
+        return AnthropicProvider(client, model_id, gate=gate)
     if name in ("google", "gemini"):
         if client is None:
             client = _sdk_client("google", api_key, timeout_seconds, "to use this provider")
-        return GoogleProvider(client, model_id)
+        return GoogleProvider(client, model_id, gate=gate)
     raise ValueError(f"unknown LLM_PROVIDER: {name!r}")
 
 
