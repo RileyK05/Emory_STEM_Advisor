@@ -522,7 +522,13 @@ export interface CollectionDoc {
   name: string;
 }
 
+export interface ReadinessStatus {
+  status: 'ready' | 'unavailable';
+  reasons?: string[];
+}
+
 export interface AdvisorClient {
+  getReadiness(): Promise<ReadinessStatus>;
   listCollections(): Promise<CollectionDoc[]>;
   query(req: QueryRequest): Promise<QueryResponse>;
   listConversations(archived?: boolean, limit?: number, offset?: number): Promise<ConversationSummary[]>;

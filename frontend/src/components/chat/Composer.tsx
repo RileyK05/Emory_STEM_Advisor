@@ -11,7 +11,7 @@ interface Props {
 
 export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const canSend = !chat.busy && chat.draft.trim().length > 0;
+  const canSend = chat.advisingModelConfigured && !chat.busy && chat.draft.trim().length > 0;
 
   // Grow with the text, up to a cap where it starts to scroll.
   useEffect(() => {
@@ -64,6 +64,7 @@ export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
         value={chat.draft}
         onChange={(event) => chat.setDraft(event.target.value)}
         onKeyDown={onKeyDown}
+        disabled={!chat.advisingModelConfigured}
         placeholder="Ask about courses, prerequisites, or program requirements…"
       />
       <div className="composer-bar">

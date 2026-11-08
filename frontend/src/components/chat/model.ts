@@ -114,6 +114,8 @@ export interface ChatController {
   loadEarlier: () => void;
   draft: string;
   setDraft: (text: string) => void;
+  /** False when the instance has no tools-capable advising model. */
+  advisingModelConfigured: boolean;
   /** Sending is not possible right now (a turn is in flight, or the chat is loading). */
   busy: boolean;
   send: (attachments: Attachment[], onAccepted?: () => void) => void;

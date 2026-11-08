@@ -72,6 +72,11 @@ export function ChatView({ chat, attachments, onRemoveAttachment }: Props) {
               </button>
             </div>
           )}
+          {!chat.advisingModelConfigured && (
+            <div className="banner banner-error">
+              <p role="alert">The advisor isn&apos;t set up yet.</p>
+            </div>
+          )}
           <Composer chat={chat} attachments={attachments} onRemoveAttachment={onRemoveAttachment} />
           <p className="composer-hint">
             Answers use only Emory sources and can be incomplete. Confirm important decisions with your advisor.

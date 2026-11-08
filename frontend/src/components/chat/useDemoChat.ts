@@ -87,6 +87,7 @@ export function useDemoChat(): ChatController {
     loadEarlier: () => undefined,
     draft,
     setDraft,
+    advisingModelConfigured: true,
     busy: sending,
     send: (_attachments, onAccepted) => {
       send();

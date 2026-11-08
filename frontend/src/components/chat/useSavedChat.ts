@@ -44,6 +44,7 @@ export function useSavedChat(): ChatController {
   const [creatingConversation, setCreatingConversation] = useState(false);
   const [busyIds, setBusyIds] = useState<Set<string>>(() => new Set());
   const [abandoningIds, setAbandoningIds] = useState<Set<string>>(() => new Set());
+  const [advisingModelConfigured, setAdvisingModelConfigured] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [streamPreview, setStreamPreview] = useState<StreamPreview | null>(null);
@@ -156,6 +157,21 @@ export function useSavedChat(): ChatController {
     pollingRequests.current.set(key, { epoch, promise });
     return promise;
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    void getClient()
+      .getReadiness()
+      .then((status) => {
+        if (!cancelled && status.reasons?.includes('no_advising_model_configured')) {
+          setAdvisingModelConfigured(false);
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const epoch = ++listEpoch.current;
@@ -528,6 +544,7 @@ export function useSavedChat(): ChatController {
     loadEarlier: () => void loadEarlier(),
     draft,
     setDraft: (text) => setDrafts((current) => ({ ...current, [draftKey]: text })),
+    advisingModelConfigured,
     busy: currentBusy || abandoning || loadingConversation || !!conversation?.pendingRequestId,
     send: (attachments, onAccepted) => void send(attachments, onAccepted),
     retry,

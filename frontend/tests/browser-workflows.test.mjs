@@ -281,6 +281,7 @@ async function setupPage({
   workerDown = false,
   failDemoArtifactRun = false,
   dropStreamNetworkOnce = false,
+  advisingModelConfigured = true,
 } = {}) {
   const context = await browser.newContext();
   if (sessionStorageEntries) {
@@ -412,6 +413,14 @@ async function setupPage({
   const gapRows = structuredClone(initialGaps);
   const capturedGapResolutions = [];
   let failGapConflict = gapConflictOnce;
+  await page.route('**/ready', async (route) =>
+    route.fulfill({
+      status: advisingModelConfigured ? 200 : 503,
+      json: advisingModelConfigured
+        ? { status: 'ready' }
+        : { status: 'unavailable', reasons: ['no_advising_model_configured'] },
+    }),
+  );
   await page.route('**/api/**', async (route) => {
     const req = route.request();
     const apiUrl = new URL(req.url());
@@ -3125,6 +3134,17 @@ test('reaching the daily query limit shows the reset time without a raw 429 and 
     assert.equal(await message(page).inputValue(), 'Can I take CS 253 next?');
     const visibleText = await page.locator('body').innerText();
     assert.equal(visibleText.includes('429'), false, 'no raw 429 reaches the student');
+  } finally {
+    await context.close();
+  }
+});
+
+test("no advising model shows 'The advisor isn't set up yet.' and disables the composer", async () => {
+  const { context, page } = await setupPage({ advisingModelConfigured: false });
+  try {
+    await page.getByRole('alert').getByText("The advisor isn't set up yet.", { exact: true }).waitFor();
+    assert.equal(await message(page).isDisabled(), true);
+    assert.equal(await page.getByRole('button', { name: 'Send', exact: true }).isDisabled(), true);
   } finally {
     await context.close();
   }

@@ -10,6 +10,7 @@ import type {
   SeamStatus,
   SourceDoc,
   AuthSession,
+  ReadinessStatus,
   ArtifactPreview,
   ArtifactRevisionSummary,
   ArtifactRun,
@@ -241,6 +242,10 @@ export class MockClient implements AdvisorClient {
   async uploadSource(_file: File): Promise<SourceDoc> {
     await sleep(300);
     throw new Error('Upload requires the backend ingest pipeline, which is not connected yet.');
+  }
+
+  async getReadiness(): Promise<ReadinessStatus> {
+    return { status: 'ready' };
   }
 
   async getSession(): Promise<AuthSession> {

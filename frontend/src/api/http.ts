@@ -30,6 +30,7 @@ import type {
   PrivacyExportResponse,
   ResponseFeedbackRequest,
   ResponseFeedbackResponse,
+  ReadinessStatus,
 } from './types';
 
 /** Base URL of the backend. Defaults to the Vite dev proxy path. */
@@ -370,6 +371,24 @@ export class HttpClient implements AdvisorClient {
   async diagnoseConnection(id: string): Promise<ConnectionDiagnostic> {
     return request<ConnectionDiagnostic>(`/api/admin/connections/${encodeURIComponent(id)}/diagnose`);
   }
+  async getReadiness(): Promise<ReadinessStatus> {
+    // /ready is unauthenticated and answers 503 with bounded reason codes when
+    // the instance is not ready, so this reads the body instead of throwing.
+    const response = await fetch(`${API_BASE_URL}/ready`, {
+      headers: { Accept: 'application/json' },
+      credentials: 'same-origin',
+      cache: 'no-store',
+    });
+    const body = (await response.json().catch(() => ({}))) as {
+      status?: unknown;
+      reasons?: unknown;
+    };
+    return {
+      status: body.status === 'ready' ? 'ready' : 'unavailable',
+      reasons: Array.isArray(body.reasons) ? body.reasons.map(String) : [],
+    };
+  }
+
   async getSession(): Promise<AuthSession> {
     return request<AuthSession>('/api/session', { cache: 'no-store' });
   }
