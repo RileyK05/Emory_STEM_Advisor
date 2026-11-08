@@ -280,6 +280,7 @@ async function setupPage({
   faults = {},
   workerDown = false,
   failDemoArtifactRun = false,
+  dropStreamNetworkOnce = false,
 } = {}) {
   const context = await browser.newContext();
   if (sessionStorageEntries) {
@@ -909,6 +910,10 @@ async function setupPage({
             done: false,
           },
         });
+      if (dropStreamNetworkOnce) {
+        dropStreamNetworkOnce = false;
+        return route.abort('failed');
+      }
       const body = stream.body ?? { query: 'Resumed request' };
       const failed = conversationTurnFailures > 0 || workerDiedMidTurn;
       if (conversationTurnFailures > 0) conversationTurnFailures--;
@@ -3214,6 +3219,32 @@ test("artifact run fails: panel card says \"Couldn't make this. Try again.\" and
     await retryBtn.click();
     await page.waitForFunction((expected) => expected.length === 1, capturedRunRetries);
     assert.deepEqual(capturedRunRetries, ['demo-artifact-run']);
+  } finally {
+    await context.close();
+  }
+});
+
+test('network drops mid-stream: draft stays during reconnect and saved answer replaces it when turn finishes', async () => {
+  const { context, page } = await setupPage({
+    dropStreamNetworkOnce: true,
+  });
+  try {
+    await send(page, 'What is a basis?');
+    // Provisional draft is visible
+    const provisional = page.locator('.provisional');
+    await provisional.getByText('Unverified provisional text.').waitFor();
+
+    // Reconnecting notice appears while the draft stays visible
+    await page.getByText('Reconnecting to the answer in progress… Your question will not be sent twice.').waitFor();
+    assert.equal(await provisional.getByText('Unverified provisional text.').count(), 1);
+
+    // Turn completes: saved answer replaces provisional draft
+    await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
+    assert.equal(await page.locator('.provisional').count(), 0);
+    assert.equal(
+      await page.getByText('Reconnecting to the answer in progress… Your question will not be sent twice.').count(),
+      0,
+    );
   } finally {
     await context.close();
   }

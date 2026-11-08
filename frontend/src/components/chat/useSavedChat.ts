@@ -111,6 +111,11 @@ export function useSavedChat(): ChatController {
             const afterEventId = eventCursor.current[key] ?? 0;
             const page = await getClient().getConversationTurnEvents(id, requestId, afterEventId);
             if (!isCurrent(id, epoch) || !ownsPoll()) return;
+            setNotice((current) =>
+              current === 'Reconnecting to the answer in progress… Your question will not be sent twice.'
+                ? null
+                : current,
+            );
             eventCursor.current[key] = Math.max(afterEventId, page.nextEventId);
             for (const event of page.events) {
               setStreamPreview((current) => applyStreamEvent(current, requestId, event));
@@ -120,6 +125,12 @@ export function useSavedChat(): ChatController {
                 settledUnknownRequests.current.add(key);
                 setNotice(
                   'This answer stopped before it finished, and it will not be retried automatically. Stop it, then ask again.',
+                );
+              } else {
+                setNotice((current) =>
+                  current === 'Reconnecting to the answer in progress… Your question will not be sent twice.'
+                    ? null
+                    : current,
                 );
               }
               setStreamPreview((current) => (current?.requestId === requestId ? null : current));
