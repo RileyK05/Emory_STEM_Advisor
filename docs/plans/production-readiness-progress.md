@@ -176,10 +176,22 @@ gate.
 | P3.2 | Three live artifact-benchmark runs after the quota resets, with the correctness/scope/completion/time bars. |
 | P3.3 | P3.2's final run, then `scripts.manual.office_export_native_qa` on this Windows machine. |
 | P3.4 | U4: the user scores 10 artifacts 1–5 (mean ≥4, none below 3). |
-| P4.3–P4.7 | Claude's Linux/Docker/gVisor host work; the implementer never installs or touches WSL, Docker or gVisor. |
+| P4.3 | Claude builds the Linux Docker/gVisor `runsc` host. |
+| P4.4 | P4.3 exists; then run the function probes (health, Office recalculation, HTML screenshots, latency). |
+| P4.5 | P4.3 exists; then run the ten containment probes through P4.2's script. |
+| P4.6 | P4.3 exists; then run the 200-sequential/100-concurrent soak and recovery checks. |
+| P4.7 | P4.3–P4.6 pass; then rerun P3.2 with `OFFICE_ENABLED=true` and `SCREENSHOT_RENDERER=sandbox`. |
 | P5.1 | P2.1's complete p95 call/tool-call/token data, then set the research budgets to p95 +25%. |
 | P5.5 | An idle production-sized host or multiple replicas plus a connection pooler. The measured Tier 1 failure is in `docs/plans/scale-6000.md`: best p95 first token 42.7 s, p95 full answer 62.4 s, 284/300 completed, conversation pool 30/30 exhausted. |
-| U1–U9 | The user's decisions/reviews/actions listed in the Stage I table. |
+| U1 | The user decides whether to keep or cut the debug backend; this unblocks P1.9. |
+| U2 | The user publishes reviewed requirement rules for the most-asked programs. |
+| U3 | The user reviews the 51 gold entries and 48 retrieval eval cases. |
+| U4 | The user scores 10 artifacts 1–5 (mean ≥4, none below 3); this unblocks P3.4. |
+| U5 | The user confirms the production model and reruns P2.1/P3.2 if it differs from `minimax-m3.1-flash`. |
+| U6 | The user confirms the provider plan can carry P5.6's Tier 1 call rate (currently it cannot). |
+| U7 | The hosting team answers the 14 questions in `azure-hosting-requirements.md` §9. |
+| U8 | Emory confirms the graduation-credit and Math BS figures in `configs/source_conflicts.toml`. |
+| U9 | The user uploads `data/team/advisor-20261107.zip` somewhere private, never in git. |
 
 ### Benchmark scores
 
