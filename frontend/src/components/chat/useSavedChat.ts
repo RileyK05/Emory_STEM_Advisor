@@ -31,7 +31,12 @@ export function useSavedChat(): ChatController {
   const [archivedConversations, setArchivedConversations] = useState<ConversationSummary[]>([]);
   const [showArchived, setShowArchived] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [conversation, setConversation] = useState<ConversationRecord | null>(null);
+  const [conversation, setConversationState] = useState<ConversationRecord | null>(null);
+  const conversationRef = useRef<ConversationRecord | null>(null);
+  const setConversation = (next: ConversationRecord | null) => {
+    conversationRef.current = next;
+    setConversationState(next);
+  };
   const [turnsAfter, setTurnsAfter] = useState(0);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [loadingList, setLoadingList] = useState(true);
@@ -267,7 +272,7 @@ export function useSavedChat(): ChatController {
   const ensureConversation = async (
     titleText: string,
   ): Promise<{ id: string; record: ConversationRecord | null; epoch: number } | null> => {
-    if (conversationId) return { id: conversationId, record: conversation, epoch: viewEpoch.current };
+    if (conversationId) return { id: conversationId, record: conversationRef.current, epoch: viewEpoch.current };
     if (creatingRef.current) return null;
     creatingRef.current = true;
     setCreatingConversation(true);
@@ -371,10 +376,50 @@ export function useSavedChat(): ChatController {
     void send([], undefined, text);
   };
 
-  const abandon = async () => {
-    if (!conversationId || !conversation?.pendingRequestId || abandoningRef.current.has(conversationId)) return;
+  const retryPending = async () => {
+    const currentRecord = conversationRef.current ?? conversation;
+    if (!conversationId || !currentRecord?.pendingRequestId || abandoningRef.current.has(conversationId)) return;
     const id = conversationId;
-    const requestId = conversation.pendingRequestId;
+    const requestId = currentRecord.pendingRequestId;
+    const pendingTurn = currentRecord.turns.find((turn) => turn.requestId === requestId && turn.role === 'user');
+    const textToResend = pendingTurn?.text ?? draft;
+    const epoch = viewEpoch.current;
+    const pendingOwner = busyRef.current.get(id);
+    abandoningRef.current.add(id);
+    setAbandoningIds((current) => new Set(current).add(id));
+    setError(null);
+    let shouldResend = false;
+    try {
+      await getClient().abandonConversationTurn(id, requestId);
+      if (!isCurrent(id, epoch)) return;
+      pollingRequests.current.delete(`${id}:${requestId}`);
+      releaseBusy(id, pendingOwner);
+      setStreamPreview(null);
+      await loadConversation(id, epoch);
+      shouldResend = isCurrent(id, epoch);
+    } catch (cause) {
+      if (!isCurrent(id, epoch)) return;
+      setError(errorMessage(cause));
+      await loadConversation(id, epoch);
+    } finally {
+      abandoningRef.current.delete(id);
+      if (alive.current)
+        setAbandoningIds((current) => {
+          const next = new Set(current);
+          next.delete(id);
+          return next;
+        });
+    }
+    if (shouldResend) {
+      void send([], undefined, textToResend);
+    }
+  };
+
+  const abandon = async () => {
+    const currentRecord = conversationRef.current ?? conversation;
+    if (!conversationId || !currentRecord?.pendingRequestId || abandoningRef.current.has(conversationId)) return;
+    const id = conversationId;
+    const requestId = currentRecord.pendingRequestId;
     const epoch = viewEpoch.current;
     const pendingOwner = busyRef.current.get(id);
     abandoningRef.current.add(id);
@@ -464,7 +509,9 @@ export function useSavedChat(): ChatController {
     loadingList,
     loadingConversation,
     entries,
-    pending: conversation?.pendingRequestId ? { preview: streamPreview, abandoning } : null,
+    pending: conversation?.pendingRequestId
+      ? { requestId: conversation.pendingRequestId, preview: streamPreview, abandoning }
+      : null,
     abandon: () => void abandon(),
     hasEarlier: turnsAfter > 0,
     loadEarlier: () => void loadEarlier(),
@@ -473,6 +520,7 @@ export function useSavedChat(): ChatController {
     busy: currentBusy || abandoning || loadingConversation || !!conversation?.pendingRequestId,
     send: (attachments, onAccepted) => void send(attachments, onAccepted),
     retry,
+    retryPending,
     changeScope: (next) => {
       scopeChanged.current = true;
       setScope(next);

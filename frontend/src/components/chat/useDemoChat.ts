@@ -96,6 +96,7 @@ export function useDemoChat(): ChatController {
       setDraft(text);
       send();
     },
+    retryPending: () => undefined,
     changeScope: setScope,
     open: () => undefined,
     startNew: () => {

@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { getClient } from '../../api/client';
 import { CheckIcon, CopyIcon, KindIcon, StopIcon, ThumbDownIcon, ThumbUpIcon } from '../icons';
 import { AnswerText } from './AnswerText';
@@ -188,14 +188,28 @@ export const MessageView = memo(function MessageView({
 
 /** The answer to a saved question that is still being written: unverified text, and a way to stop it. */
 export function PendingAnswer({
+  requestId,
   preview,
   abandoning,
   onStop,
+  onRetry,
 }: {
+  requestId?: string;
   preview: StreamPreview | null;
   abandoning: boolean;
   onStop: () => void;
+  onRetry?: () => void;
 }) {
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    setSlow(false);
+    const timer = window.setTimeout(() => {
+      setSlow(true);
+    }, 20_000);
+    return () => window.clearTimeout(timer);
+  }, [requestId ?? preview?.requestId]);
+
   return (
     <div className="message message-assistant message-pending" role="status">
       <div className="thinking">
@@ -205,6 +219,16 @@ export function PendingAnswer({
         <div className="provisional">
           <span className="provisional-label">Draft — sources are still being checked</span>
           <p aria-label="Unverified provisional answer">{preview.text}</p>
+        </div>
+      )}
+      {slow && (
+        <div className="slow-notice" role="status">
+          <p>This is taking longer than usual.</p>
+          {onRetry && (
+            <button type="button" className="ghost-button" onClick={onRetry} disabled={abandoning}>
+              Retry
+            </button>
+          )}
         </div>
       )}
       <button type="button" className="ghost-button" onClick={onStop} disabled={abandoning}>

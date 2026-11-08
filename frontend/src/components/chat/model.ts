@@ -108,7 +108,7 @@ export interface ChatController {
   loadingConversation: boolean;
   entries: ChatEntry[];
   /** A saved turn whose answer has not finished. */
-  pending: { preview: StreamPreview | null; abandoning: boolean } | null;
+  pending: { requestId?: string; preview: StreamPreview | null; abandoning: boolean } | null;
   abandon: () => void;
   hasEarlier: boolean;
   loadEarlier: () => void;
@@ -119,6 +119,8 @@ export interface ChatController {
   send: (attachments: Attachment[], onAccepted?: () => void) => void;
   /** Retry sending a failed question. */
   retry?: (text: string) => void;
+  /** Abandon a slow pending turn and resend the question. */
+  retryPending?: () => void;
   /** Change the source scope for the next question. */
   changeScope: (scope: SourceScope) => void;
   open: (id: string) => void;

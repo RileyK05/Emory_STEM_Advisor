@@ -48,7 +48,13 @@ export function ChatView({ chat, attachments, onRemoveAttachment }: Props) {
             chat.entries.map((entry) => <MessageView key={entry.key} entry={entry} onRetry={chat.retry} />)
           )}
           {chat.pending && (
-            <PendingAnswer preview={chat.pending.preview} abandoning={chat.pending.abandoning} onStop={chat.abandon} />
+            <PendingAnswer
+              requestId={chat.pending.requestId}
+              preview={chat.pending.preview}
+              abandoning={chat.pending.abandoning}
+              onStop={chat.abandon}
+              onRetry={chat.retryPending}
+            />
           )}
           <div ref={bottom} />
         </div>

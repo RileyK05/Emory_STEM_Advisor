@@ -278,6 +278,7 @@ async function setupPage({
   dailyQueryLimit = 0,
   /** 'METHOD /api/path' -> [status, detail]: that request fails once with the given status. */
   faults = {},
+  workerDown = false,
 } = {}) {
   const context = await browser.newContext();
   if (sessionStorageEntries) {
@@ -400,6 +401,7 @@ async function setupPage({
   );
   let conversationTurnFailures = 0;
   let nextConversationTurnFailureText = null;
+  let isWorkerDown = workerDown;
   let conversationProviderCalls = 0;
   let acceptedDailyQueries = 0;
   let demoRunPolls = 0;
@@ -886,9 +888,9 @@ async function setupPage({
       const key = `${id}:${requestId}`;
       const stream = conversationStreams.get(key);
       const afterEventId = Number(apiUrl.searchParams.get('afterEventId') ?? 0);
-      if (!stream)
+      if (!stream || isWorkerDown)
         return route.fulfill({
-          json: { events: [], nextEventId: afterEventId, requestState: 'pending', jobState: 'unknown', done: false },
+          json: { events: [], nextEventId: afterEventId, requestState: 'pending', jobState: isWorkerDown ? 'queued' : 'unknown', done: false },
         });
       const record = conversationRecords.get(id);
       if (stream.polls++ === 0)
@@ -1893,6 +1895,9 @@ async function setupPage({
     failNextConversationTurn: (failureText = null) => {
       conversationTurnFailures++;
       nextConversationTurnFailureText = failureText;
+    },
+    setWorkerDown: (down) => {
+      isWorkerDown = down;
     },
     sourcesRequested,
     capturedApiRequests,
@@ -3095,6 +3100,40 @@ test('provider error settles with "The advisor couldn\'t answer that. Try again.
     assert.equal(capturedConversationStreams[0].body.query, 'What is a basis?');
 
     await retryButton.click();
+    await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
+    assert.equal(capturedConversationStreams.length, 2);
+    assert.equal(capturedConversationStreams[1].body.query, 'What is a basis?');
+  } finally {
+    await context.close();
+  }
+});
+
+test('worker down turn never starts: after 20 s shows "This is taking longer than usual." and Retry abandons and resends', async () => {
+  const { context, page, capturedConversationStreams, setWorkerDown } = await setupPage({ workerDown: true });
+  try {
+    await page.clock.install();
+    await send(page, 'What is a basis?');
+    await page.getByRole('status').getByText('Thinking…', { exact: true }).waitFor();
+    assert.equal(capturedConversationStreams.length, 1);
+    assert.equal(capturedConversationStreams[0].body.query, 'What is a basis?');
+
+    // At 15 seconds, slow notice is not visible
+    await page.clock.fastForward(15000);
+    assert.equal(await page.getByText('This is taking longer than usual.').count(), 0);
+
+    // After 20 seconds, slow notice and Retry button appear
+    await page.clock.fastForward(6000);
+    const slowNotice = page.locator('.slow-notice');
+    await slowNotice.getByText('This is taking longer than usual.').waitFor();
+    const retryBtn = slowNotice.getByRole('button', { name: 'Retry' });
+    await retryBtn.waitFor();
+
+    // Worker comes back up
+    setWorkerDown(false);
+
+    // Clicking Retry abandons the pending request and resends
+    await retryBtn.click();
+    await page.clock.resume();
     await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
     assert.equal(capturedConversationStreams.length, 2);
     assert.equal(capturedConversationStreams[1].body.query, 'What is a basis?');
