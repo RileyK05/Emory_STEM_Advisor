@@ -4,7 +4,9 @@ This is the deployable base for the advisor: production images, a two-phase
 Bicep deployment, and a script that builds, pushes, migrates and prints the
 public URL. It is intentionally a **base**, not the final school-hosted
 topology. `docs/plans/azure-hosting-requirements.md` lists the decisions still
-open (custom identity, private networking, retention).
+open (custom identity, retention). PostgreSQL, Blob/File storage and Key Vault
+are private-only through a VNet and private endpoints; only the web container
+has public ingress.
 
 ## What is created
 
@@ -17,9 +19,11 @@ open (custom identity, private networking, retention).
 | PostgreSQL Flexible Server | `<prefix>-pg-*` | Database `advisor`, `vector` allowlisted, PITR |
 | Key Vault | `<prefix>-kv-*` | `database-url`, `llm-api-key`, `auth-server-key`, `profile-encryption-key`, `oidc-client-secret` |
 | User-assigned identity | `<prefix>-id-*` | ACR pull, Key Vault read, Blob data access |
-| Container Apps environment | `<prefix>-env-*` | Shares Azure Files as `/workspace/data` |
-| Container App `api` | `<prefix>-api-*` | FastAPI, external HTTPS, `/health` + `/ready` |
-| Container App `web` | `<prefix>-web-*` | nginx + Vite build, proxies `/api` |
+| Virtual network + subnets | `<prefix>-vnet-*` | Delegated Container Apps subnet and private-endpoint subnet |
+| Private DNS zones + endpoints | `privatelink.*` | PostgreSQL, Blob, File and Key Vault private access |
+| Container Apps environment | `<prefix>-env-*` | VNet-injected; shares Azure Files as `/workspace/data` |
+| Container App `api` | `<prefix>-api-*` | FastAPI, internal ingress only, `/health` + `/ready` |
+| Container App `web` | `<prefix>-web-*` | nginx + Vite build, the only public ingress, proxies `/api` |
 | Container App `worker` | `<prefix>-worker-*` | `scripts.worker --concurrency N` |
 | Container Apps job | `<prefix>-migrate-*` | `scripts.migrate`, run by the deploy script |
 
@@ -27,7 +31,16 @@ Azure Files is the interim shared data path. It lets more than one replica read
 the same raw/artifact files without a code change, but it is **not** the target
 storage design. The Blob adapter in
 `docs/plans/azure-hosting-requirements.md` §3 is required before horizontal API
-scaling is treated as correct rather than convenient.
+scaling is treated as correct rather than convenient. The storage account has
+public network access disabled; Blob and File each have a private endpoint.
+
+The VNet has one subnet delegated to `Microsoft.App/environments` for the
+Container Apps environment and one subnet for private endpoints. Private DNS
+zones for `privatelink.postgres.database.azure.com`,
+`privatelink.blob.*`, `privatelink.file.*` and `privatelink.vaultcore.azure.net`
+are linked to the VNet. The API, worker and migrate job reach PostgreSQL, the
+storage account and Key Vault through those endpoints. The web container is the
+only resource with public ingress; the API is internal to the environment.
 
 ## Prerequisites
 
@@ -40,6 +53,12 @@ scaling is treated as correct rather than convenient.
 - Build egress to Docker Hub (`python`, `node`, `nginx` base images), PyPI/PyTorch
   and Hugging Face. Mirror the base images and clear
   `PRELOAD_EMBEDDING_MODEL` if the school blocks any of them.
+
+With private endpoints and no public PostgreSQL firewall rule, run
+`deploy/azure/deploy.sh` from a host connected to the VNet (VPN, jumpbox or a
+deployment agent in the same network). The script writes Key Vault secrets and
+the migrate job reaches PostgreSQL over the private endpoint. Do not re-add a
+`0.0.0.0` firewall rule to make a laptop work; use the private path instead.
 
 The first institutional administrator is created on first verified login by
 `ADMIN_BOOTSTRAP_EMAILS` (requires a verified email claim) or
@@ -188,9 +207,6 @@ extension availability and ACR build minutes are account-specific.
 
 ## Deliberately not in this base
 
-- **Private networking.** PostgreSQL currently allows Azure service traffic via
-  a `0.0.0.0` firewall rule; Container Apps use public ingress. Add a VNet,
-  delegated subnet, private DNS and private endpoints before student data.
 - **Custom identity.** `AUTH_MODE=oidc` uses the existing OIDC adapter. The
   school's internal sign-in needs the `AuthProvider` seam and either an
   introspection or trusted-gateway-header adapter.

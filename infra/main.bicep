@@ -6,9 +6,10 @@
 //   2. The script builds/pushes images and sets Key Vault secrets.
 //   3. deployApps=true creates the API, web, worker and migrate job.
 //
-// This base deliberately uses public ingress and a PostgreSQL firewall rule for
-// Azure services. Private networking, Blob-backed artifact storage and the
-// school's custom identity adapter are follow-up work; see infra/README.md.
+// PostgreSQL, Blob/File storage and Key Vault are reached through private
+// endpoints. Only the web container has public ingress; the API is internal to
+// the Container Apps environment. Blob-backed artifact storage and the school's
+// custom identity adapter remain follow-up work; see infra/README.md.
 
 targetScope = 'resourceGroup'
 
@@ -197,6 +198,15 @@ param admissionMaxPendingGlobal int = 200
 @maxValue(5120)
 param dataShareQuotaGb int = 100
 
+@description('VNet address space for the deployment.')
+param vnetAddressPrefix string = '10.42.0.0/16'
+
+@description('Subnet delegated to the Container Apps environment.')
+param appsSubnetPrefix string = '10.42.0.0/23'
+
+@description('Subnet that holds the private endpoints.')
+param privateEndpointsSubnetPrefix string = '10.42.2.0/24'
+
 var suffix = uniqueString(resourceGroup().id, environmentName)
 var compactPrefix = replace(namePrefix, '-', '')
 var acrName = toLower(take('${compactPrefix}${suffix}', 50))
@@ -212,6 +222,13 @@ var webName = take('${namePrefix}-web-${suffix}', 32)
 var workerName = take('${namePrefix}-worker-${suffix}', 32)
 var migrateJobName = take('${namePrefix}-migrate-${suffix}', 32)
 var dataShareName = 'advisor-data'
+var vnetName = take('${namePrefix}-vnet-${suffix}', 64)
+var appsSubnetName = 'apps'
+var privateEndpointsSubnetName = 'private-endpoints'
+var postgresDnsZoneName = 'privatelink.postgres.database.azure.com'
+var blobDnsZoneName = 'privatelink.blob.${environment().suffixes.storage}'
+var fileDnsZoneName = 'privatelink.file.${environment().suffixes.storage}'
+var vaultDnsZoneName = 'privatelink.vaultcore.azure.net'
 
 var acrPullRole = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 var keyVaultSecretsUserRole = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -237,6 +254,115 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: logAnalytics.id
+  }
+}
+
+resource virtualNetwork 'Microsoft.Network/virtualNetworks@2023-04-01' = {
+  name: vnetName
+  location: location
+  tags: tags
+  properties: {
+    addressSpace: {
+      addressPrefixes: [
+        vnetAddressPrefix
+      ]
+    }
+  }
+}
+
+resource appsSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-04-01' = {
+  parent: virtualNetwork
+  name: appsSubnetName
+  properties: {
+    addressPrefix: appsSubnetPrefix
+    delegations: [
+      {
+        name: 'container-apps'
+        properties: {
+          serviceName: 'Microsoft.App/environments'
+        }
+      }
+    ]
+  }
+}
+
+resource privateEndpointsSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-04-01' = {
+  parent: virtualNetwork
+  name: privateEndpointsSubnetName
+  properties: {
+    addressPrefix: privateEndpointsSubnetPrefix
+  }
+}
+
+resource postgresDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: postgresDnsZoneName
+  location: 'global'
+  tags: tags
+}
+
+resource blobDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: blobDnsZoneName
+  location: 'global'
+  tags: tags
+}
+
+resource fileDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: fileDnsZoneName
+  location: 'global'
+  tags: tags
+}
+
+resource vaultDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
+  name: vaultDnsZoneName
+  location: 'global'
+  tags: tags
+}
+
+resource postgresDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: postgresDnsZone
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+    virtualNetwork: {
+      id: virtualNetwork.id
+    }
+    registrationEnabled: false
+  }
+}
+
+resource blobDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: blobDnsZone
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+    virtualNetwork: {
+      id: virtualNetwork.id
+    }
+    registrationEnabled: false
+  }
+}
+
+resource fileDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: fileDnsZone
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+    virtualNetwork: {
+      id: virtualNetwork.id
+    }
+    registrationEnabled: false
+  }
+}
+
+resource vaultDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
+  parent: vaultDnsZone
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+    virtualNetwork: {
+      id: virtualNetwork.id
+    }
+    registrationEnabled: false
   }
 }
 
@@ -267,8 +393,9 @@ resource storage 'Microsoft.Storage/storageAccounts@2023-01-01' = {
     allowSharedKeyAccess: true
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
+    publicNetworkAccess: 'Disabled'
     networkAcls: {
-      defaultAction: 'Allow'
+      defaultAction: 'Deny'
       bypass: 'AzureServices'
     }
   }
@@ -350,17 +477,6 @@ resource vectorExtension 'Microsoft.DBforPostgreSQL/flexibleServers/configuratio
   }
 }
 
-// Base scaffold only: this permits Azure service traffic. Replace with a
-// private endpoint/VNet before student data is loaded.
-resource allowAzureServices 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2022-12-01' = {
-  parent: postgres
-  name: 'allow-azure-services'
-  properties: {
-    startIpAddress: '0.0.0.0'
-    endIpAddress: '0.0.0.0'
-  }
-}
-
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
   location: location
@@ -375,7 +491,158 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
     enableSoftDelete: true
     softDeleteRetentionInDays: 7
     enablePurgeProtection: true
-    publicNetworkAccess: 'Enabled'
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+    }
+  }
+}
+
+resource postgresPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
+  name: take('${postgresName}-pe', 63)
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointsSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'postgresql'
+        properties: {
+          privateLinkServiceId: postgres.id
+          groupIds: [
+            'postgresqlServer'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource postgresPrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = {
+  parent: postgresPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'postgres'
+        properties: {
+          privateDnsZoneId: postgresDnsZone.id
+        }
+      }
+    ]
+  }
+}
+
+resource blobPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
+  name: take('${storage.name}-blob-pe', 63)
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointsSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'blob'
+        properties: {
+          privateLinkServiceId: storage.id
+          groupIds: [
+            'blob'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource blobPrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = {
+  parent: blobPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'blob'
+        properties: {
+          privateDnsZoneId: blobDnsZone.id
+        }
+      }
+    ]
+  }
+}
+
+resource filePrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
+  name: take('${storage.name}-file-pe', 63)
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointsSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'file'
+        properties: {
+          privateLinkServiceId: storage.id
+          groupIds: [
+            'file'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource filePrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = {
+  parent: filePrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'file'
+        properties: {
+          privateDnsZoneId: fileDnsZone.id
+        }
+      }
+    ]
+  }
+}
+
+resource vaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
+  name: take('${keyVault.name}-pe', 63)
+  location: location
+  tags: tags
+  properties: {
+    subnet: {
+      id: privateEndpointsSubnet.id
+    }
+    privateLinkServiceConnections: [
+      {
+        name: 'vault'
+        properties: {
+          privateLinkServiceId: keyVault.id
+          groupIds: [
+            'vault'
+          ]
+        }
+      }
+    ]
+  }
+}
+
+resource vaultPrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = {
+  parent: vaultPrivateEndpoint
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      {
+        name: 'vault'
+        properties: {
+          privateDnsZoneId: vaultDnsZone.id
+        }
+      }
+    ]
   }
 }
 
@@ -390,6 +657,10 @@ resource containerEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' = {
   location: location
   tags: tags
   properties: {
+    vnetConfiguration: {
+      infrastructureSubnetId: appsSubnet.id
+      internal: false
+    }
     appLogsConfiguration: {
       logAnalyticsConfiguration: {
         customerId: logAnalytics.properties.customerId

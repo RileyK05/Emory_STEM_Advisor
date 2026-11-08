@@ -195,6 +195,10 @@ var commonEnv = [
     value: string(dbPoolMaxSize)
   }
   {
+    name: 'DB_EXPECTED_REPLICAS'
+    value: string(apiMaxReplicas)
+  }
+  {
     name: 'HTTP_THREADPOOL_TOKENS'
     value: string(httpThreadpoolTokens)
   }
@@ -276,7 +280,7 @@ resource api 'Microsoft.App/containerApps@2023-05-01' = {
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
-        external: true
+        external: false
         targetPort: 8000
         transport: 'http'
         allowInsecure: false
