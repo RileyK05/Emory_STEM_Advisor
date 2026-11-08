@@ -399,6 +399,7 @@ async function setupPage({
     resumeStreams.map((stream) => [`${stream.conversationId}:${stream.requestId}`, { ...stream, polls: 0 }]),
   );
   let conversationTurnFailures = 0;
+  let nextConversationTurnFailureText = null;
   let conversationProviderCalls = 0;
   let acceptedDailyQueries = 0;
   let demoRunPolls = 0;
@@ -911,7 +912,7 @@ async function setupPage({
       const sameName = sameNameCitation && /shared notes/i.test(body.query ?? '');
       const wantsArtifact = !failed && !refusal && /make|plan/i.test(body.query ?? '');
       const answer = failed
-        ? 'Conversation request failed. Saved turns were retained.'
+        ? (nextConversationTurnFailureText ?? "The advisor couldn't answer that. Try again.")
         : refusal
           ? 'No sources were selected for this question.'
           : sameName
@@ -1889,8 +1890,9 @@ async function setupPage({
       return conversationProviderCalls;
     },
     waitForConversationCreate: () => conversationCreateStarted,
-    failNextConversationTurn: () => {
+    failNextConversationTurn: (failureText = null) => {
       conversationTurnFailures++;
+      nextConversationTurnFailureText = failureText;
     },
     sourcesRequested,
     capturedApiRequests,
@@ -2170,7 +2172,7 @@ test('saved conversation opens on the latest bounded page and explicitly loads o
     await page.waitForFunction(() => document.querySelector('.composer textarea').value === '');
     assert.equal(await transcript.getByText('New question after 400 saved turns', { exact: true }).count(), 1);
 
-    failNextConversationTurn();
+    failNextConversationTurn('Conversation request failed. Saved turns were retained.');
     await send(page, 'Keep this failed long-conversation draft');
     await transcript
       .getByRole('alert')
@@ -3075,6 +3077,27 @@ test('reaching the daily query limit shows the reset time without a raw 429 and 
     assert.equal(await message(page).inputValue(), 'Can I take CS 253 next?');
     const visibleText = await page.locator('body').innerText();
     assert.equal(visibleText.includes('429'), false, 'no raw 429 reaches the student');
+  } finally {
+    await context.close();
+  }
+});
+
+test('provider error settles with "The advisor couldn\'t answer that. Try again." and Retry sends the same text', async () => {
+  const { context, page, capturedConversationStreams, failNextConversationTurn } = await setupPage();
+  try {
+    failNextConversationTurn();
+    await send(page, 'What is a basis?');
+    const alert = page.getByRole('alert');
+    await alert.getByText("The advisor couldn't answer that. Try again.", { exact: true }).waitFor();
+    const retryButton = alert.getByRole('button', { name: 'Retry', exact: true });
+    await retryButton.waitFor();
+    assert.equal(capturedConversationStreams.length, 1);
+    assert.equal(capturedConversationStreams[0].body.query, 'What is a basis?');
+
+    await retryButton.click();
+    await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
+    assert.equal(capturedConversationStreams.length, 2);
+    assert.equal(capturedConversationStreams[1].body.query, 'What is a basis?');
   } finally {
     await context.close();
   }

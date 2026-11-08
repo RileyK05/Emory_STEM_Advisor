@@ -361,6 +361,8 @@ class ResearchController:
                 raise
             decision = session.salvage()
             if decision is None:
+                if isinstance(exc, (ToolConversationError, OperationBudgetError)):
+                    raise ToolConversationError("The advisor couldn't answer that. Try again.") from exc
                 raise
             session.decision = decision
             system, user, model = session.last_call

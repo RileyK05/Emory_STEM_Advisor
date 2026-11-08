@@ -92,6 +92,10 @@ export function useDemoChat(): ChatController {
       send();
       onAccepted?.();
     },
+    retry: (text) => {
+      setDraft(text);
+      send();
+    },
     changeScope: setScope,
     open: () => undefined,
     startNew: () => {

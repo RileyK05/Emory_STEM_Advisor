@@ -87,7 +87,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
-| P6.1 | todo | | |
+| P6.1 | done | 132b54c | Provider failures/timeouts and exhausted research budgets without valid finish settle as "The advisor couldn't answer that. Try again." with Retry sending the same question text: updated ConversationTurnExecutor.on_failure in `conversations/worker.py`, error mapping in `research_service.py`, and `ResearchController.run` in `generation/research_controller.py`; added `ToolConversationError` row to `test_a_provider_dropout_keeps_what_the_run_already_proposed` in `test_research_types.py` asserting the student-readable outcome, plus assertion in `test_conversation_failure_hook_settles_the_pending_request` in `test_conversations.py`; in frontend, added `chat.retry` and Retry button in `callout-error` in `MessageView.tsx`, `ChatView.tsx`, and `useSavedChat.ts`, verified by browser test "provider error settles with 'The advisor couldn't answer that. Try again.' and Retry sends the same text". Gate: pytest 1674 passed, 2 skipped (Windows-only), 0 xfailed; ruff clean; typecheck pass; npm test 19 unit passed, 34 browser passed; format:check pass; check:callers pass (37 AdvisorClient, 32 backoffice). |
 | P6.2 | todo | | |
 | P6.3 | todo | | |
 | P6.4 | todo | | |

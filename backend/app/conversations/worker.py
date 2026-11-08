@@ -235,7 +235,7 @@ class ConversationTurnExecutor:
         turn is rejected with 409 until the student manually abandons it.
         """
         cls._settle(conn, job, state="failed", reason=(
-            "The answer could not be completed. You can retry this turn."
+            "The advisor couldn't answer that. Try again."
         ))
 
     @classmethod

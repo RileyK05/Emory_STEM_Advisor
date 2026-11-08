@@ -117,6 +117,8 @@ export interface ChatController {
   /** Sending is not possible right now (a turn is in flight, or the chat is loading). */
   busy: boolean;
   send: (attachments: Attachment[], onAccepted?: () => void) => void;
+  /** Retry sending a failed question. */
+  retry?: (text: string) => void;
   /** Change the source scope for the next question. */
   changeScope: (scope: SourceScope) => void;
   open: (id: string) => void;
@@ -171,7 +173,7 @@ export function entriesFromTurns(turns: ConversationTurn[]): ChatEntry[] {
       sequence: turn.sequence,
       role: 'assistant',
       kind,
-      text: turn.text,
+      text: turn.text || (turn.status === 'failed' ? "The advisor couldn't answer that. Try again." : ''),
       citations: assistantEvidence?.citations ?? [],
       context: assistantEvidence?.contextBlock ?? [],
       responseId: assistantEvidence?.traceId,

@@ -197,5 +197,6 @@ def research_response(body, conn, settings, config, embedder, provider, *, colle
         if isinstance(exc, ProviderError):
             raise HTTPException(503, provider_failure_detail(exc, "Research model")) from exc
         if isinstance(exc, (OperationBudgetError, ToolConversationError, ToolLedgerError)):
-            raise HTTPException(422, "Research could not finish safely: " + str(exc)) from exc
+            detail = str(exc) if str(exc) == "The advisor couldn't answer that. Try again." else "Research could not finish safely: " + str(exc)
+            raise HTTPException(422, detail) from exc
         raise

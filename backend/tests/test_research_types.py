@@ -675,14 +675,18 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone():
     assert session.salvage().blocks[0].text == "There is no PSYC 219 in the Course Atlas."
 
 
-@pytest.mark.parametrize("failure", ["TransientProviderError", "RateLimitError"])
+@pytest.mark.parametrize("failure", ["TransientProviderError", "RateLimitError", "ToolConversationError"])
 def test_a_provider_dropout_keeps_what_the_run_already_proposed(monkeypatch, failure):
     from types import SimpleNamespace
 
     from app import llm
+    from app.generation.controller import ToolConversationError
     from app.generation.research_controller import ResearchController
 
-    error = getattr(llm.base, failure)("dropped", provider="fake")
+    if failure == "ToolConversationError":
+        error = ToolConversationError("final decision failed its bounded correction")
+    else:
+        error = getattr(llm.base, failure)("dropped", provider="fake")
 
     def dropped_after_one_call(session, *_args, **_kwargs):
         session.last_call = ("system", "user", "model")
@@ -695,8 +699,10 @@ def test_a_provider_dropout_keeps_what_the_run_already_proposed(monkeypatch, fai
     decision, *_ = controller.run(session, None, None)
     assert decision is session.decision is salvaged
 
-    with pytest.raises(type(error)):  # Nothing to keep, so the student is told to retry.
-        controller.run(SimpleNamespace(salvage=lambda: None), None, None)
+    with pytest.raises(type(error)) as exc_info:  # Nothing to keep, so the student is told to retry.
+        controller.run(SimpleNamespace(salvage=lambda: None, last_call=("system", "user", "model")), None, None)
+    if failure == "ToolConversationError":
+        assert str(exc_info.value) == "The advisor couldn't answer that. Try again."
 
 
 def test_opening_many_courses_is_one_evidence_step(monkeypatch):

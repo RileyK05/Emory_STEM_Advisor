@@ -88,9 +88,10 @@ function VoteButtons({ entry }: { entry: AssistantEntry }) {
 
 interface AssistantProps {
   entry: AssistantEntry;
+  onRetry?: (text: string) => void;
 }
 
-function AssistantMessage({ entry }: AssistantProps) {
+function AssistantMessage({ entry, onRetry }: AssistantProps) {
   const [openPassage, setOpenPassage] = useState<number | null>(null);
 
   if (entry.kind === 'thinking')
@@ -108,6 +109,11 @@ function AssistantMessage({ entry }: AssistantProps) {
         <div className="callout callout-error" role="alert">
           <strong>Something went wrong.</strong>
           <p>{entry.text}</p>
+          {onRetry && entry.question && (
+            <button type="button" className="ghost-button" onClick={() => onRetry(entry.question!)}>
+              Retry
+            </button>
+          )}
         </div>
       )}
       {entry.kind === 'refusal' && (
@@ -154,7 +160,13 @@ function AssistantMessage({ entry }: AssistantProps) {
   );
 }
 
-export const MessageView = memo(function MessageView({ entry }: { entry: ChatEntry }) {
+export const MessageView = memo(function MessageView({
+  entry,
+  onRetry,
+}: {
+  entry: ChatEntry;
+  onRetry?: (text: string) => void;
+}) {
   if (entry.role === 'user')
     return (
       <div className="message message-user">
@@ -171,7 +183,7 @@ export const MessageView = memo(function MessageView({ entry }: { entry: ChatEnt
         )}
       </div>
     );
-  return <AssistantMessage entry={entry} />;
+  return <AssistantMessage entry={entry} onRetry={onRetry} />;
 });
 
 /** The answer to a saved question that is still being written: unverified text, and a way to stop it. */

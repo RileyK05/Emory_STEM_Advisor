@@ -478,6 +478,7 @@ def test_conversation_failure_hook_settles_the_pending_request(db, migrated_dsn)
 
     transcript = store.get(conversation_id)
     assert transcript["pending_request_id"] is None
+    assert store.turns(conversation_id)["turns"][-1]["text"] == "The advisor couldn't answer that. Try again."
     request = db.execute(
         "SELECT state FROM conversation_requests WHERE conversation_id=%s AND request_id=%s",
         (conversation_id, request_id),

@@ -299,8 +299,8 @@ export function useSavedChat(): ChatController {
     }
   };
 
-  const send = async (attachments: Attachment[], onAccepted?: () => void) => {
-    const query = draft.trim();
+  const send = async (attachments: Attachment[], onAccepted?: () => void, queryText?: string) => {
+    const query = (queryText ?? draft).trim();
     if (!query) return;
     setError(null);
     setNotice(null);
@@ -329,7 +329,7 @@ export function useSavedChat(): ChatController {
         : {}),
     };
     const busyOwner = markBusy(id);
-    const sentText = draft;
+    const sentText = queryText ?? draft;
     try {
       await getClient().startConversationTurnStream(id, request);
       onAccepted?.();
@@ -364,6 +364,11 @@ export function useSavedChat(): ChatController {
     } finally {
       releaseBusy(id, busyOwner);
     }
+  };
+
+  const retry = (text: string) => {
+    setDrafts((current) => ({ ...current, [draftKey]: text }));
+    void send([], undefined, text);
   };
 
   const abandon = async () => {
@@ -467,6 +472,7 @@ export function useSavedChat(): ChatController {
     setDraft: (text) => setDrafts((current) => ({ ...current, [draftKey]: text })),
     busy: currentBusy || abandoning || loadingConversation || !!conversation?.pendingRequestId,
     send: (attachments, onAccepted) => void send(attachments, onAccepted),
+    retry,
     changeScope: (next) => {
       scopeChanged.current = true;
       setScope(next);
