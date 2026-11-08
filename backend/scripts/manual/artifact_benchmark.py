@@ -1,8 +1,8 @@
-"""The artifact benchmark runner and mechanical checks (K1 to K10).
+"""The artifact benchmark runner and mechanical checks (K1 to K11).
 
 Drives the real API and worker against the dev collection with the configured
 model, evaluates 70 cases (30 artifact cases + 40 scope cases), and verifies
-mechanical invariants K1 through K10.
+mechanical invariants K1 through K11.
 
 Usage (from backend/):
     python -m scripts.manual.artifact_benchmark --cases scripts/manual/artifact_benchmark_cases.jsonl --out report.json
@@ -41,6 +41,7 @@ from app.config import configure_runtime_database, load_settings
 from app.db import queries
 from app.db.connection import close_pools, connector, open_connection, resolved_database_url
 from app.generation.artifacts import build_worker_handlers
+from app.generation.research_final import SCOPE_DECLINE_TEXT
 from app.jobs.dispatch import KindDispatchingExecutor
 from app.jobs.runtime import RunExecutor
 from app.jobs.store import JobStore
@@ -184,7 +185,7 @@ def evaluate_checks(
     collection_id: UUID,
     parent_sha256_before: str | None = None,
 ) -> list[CheckResult]:
-    """Run mechanical checks K1 through K10 on a completed case."""
+    """Run mechanical checks K1 through K11 on a completed case."""
     results: list[CheckResult] = []
     expected = case.get("expected", {})
     spec = artifact_record.get("spec") if artifact_record else None
@@ -440,6 +441,19 @@ def evaluate_checks(
     k10_detail = "clean text" if k10_ok else f"leaks found: {leaks[:3]}"
     results.append(CheckResult("K10", k10_ok, k10_detail))
 
+    # K11: Scope (P2.6): an off-topic case gets exactly the fixed decline and
+    # nothing else; an on-topic case gets an answer, never the decline.
+    reply = (turn.get("text") or "").strip()
+    if expected.get("off_topic"):
+        k11_ok = reply == SCOPE_DECLINE_TEXT
+        k11_detail = "declined" if k11_ok else f"not declined: {reply[:80]!r}"
+    elif expected.get("on_topic"):
+        k11_ok = bool(reply) and reply != SCOPE_DECLINE_TEXT
+        k11_detail = "answered" if k11_ok else "declined or empty"
+    else:
+        k11_ok, k11_detail = True, "N/A"
+    results.append(CheckResult("K11", k11_ok, k11_detail))
+
     return results
 
 
@@ -467,7 +481,8 @@ def run_benchmark_offline(
         expected = case.get("expected", {})
         # Synthetic turn response and artifact for dry-run
         sim_turn: dict[str, Any] = {
-            "text": f"Advising response for {c_id}",
+            "text": (SCOPE_DECLINE_TEXT if expected.get("off_topic")
+                     else f"Advising response for {c_id}"),
             "citations": [{"chunkId": "00000000-0000-0000-0000-000000000001"}],
         }
         sim_record: dict[str, Any] | None = None
@@ -577,11 +592,11 @@ def run_benchmark_offline(
 
 def print_results_table(results: list[BenchmarkResult], verbose: bool = False) -> None:
     """Print the per-case, per-check table."""
-    headers = ["Case", "Category", "Turn", "Run", "K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K10", "Status"]
+    headers = ["Case", "Category", "Turn", "Run", "K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K10", "K11", "Status"]
     print()
     print(f"{headers[0]:<5} {headers[1]:<16} {headers[2]:>6} {headers[3]:>6} " + " ".join(f"{h:>3}" for h in headers[4:14]) + f"  {headers[14]}")
     print("-" * 88)
-    check_names = ["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K10"]
+    check_names = ["K1", "K2", "K3", "K4", "K5", "K6", "K7", "K8", "K9", "K10", "K11"]
     pass_counts = {k: 0 for k in check_names}
     total_passed = 0
 

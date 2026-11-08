@@ -298,7 +298,7 @@ export interface ArtifactRequestInfo {
 
 export interface ResearchDecisionInfo {
   runId: string;
-  outcome: 'recommendation' | 'information' | 'clarification' | 'insufficient_evidence';
+  outcome: 'recommendation' | 'information' | 'clarification' | 'insufficient_evidence' | 'declined';
   completeness: 'complete' | 'partial';
   blocks: ResearchBlock[];
   artifact?: ArtifactRequestInfo | null;

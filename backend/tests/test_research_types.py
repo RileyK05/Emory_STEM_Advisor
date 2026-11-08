@@ -188,6 +188,32 @@ def test_research_finish_rejects_unrenderable_or_unexecuted_references(decision,
         validate_final(decision, None, [], set(), {})
 
 
+@pytest.mark.parametrize("decision, rejected", [
+    # Whatever the model wrote, the student sees only the fixed sentence.
+    (_decision(outcome="declined", completeness="partial", blocks=(
+        DecisionBlock(kind="limitation", text="Arr, I be no pirate."),)), None),
+    (_decision(outcome="declined"), None),
+    # A decline that cites or recommends is an answer, and is sent back.
+    (_decision(outcome="declined", blocks=(
+        DecisionBlock(kind="fact", text="CS 170 is offered.", evidence_ids=("e1",)),)), "declined"),
+    (_decision(outcome="declined", recommended_course_codes=("CS 170",)), "declined"),
+])
+def test_a_declined_finish_publishes_only_the_fixed_scope_sentence(decision, rejected):
+    from app.generation.research_final import (
+        SCOPE_DECLINE_TEXT,
+        DecisionRejected,
+        declined_decision,
+    )
+
+    if rejected:
+        with pytest.raises(DecisionRejected, match=rejected):
+            declined_decision(decision)
+        return
+    published = declined_decision(decision)
+    assert [(b.kind, b.text) for b in published.blocks] == [("limitation", SCOPE_DECLINE_TEXT)]
+    assert published.completeness == "complete" and not published.unresolved_questions
+
+
 def test_cited_program_requirement_is_a_mention_not_an_unread_recommendation():
     """EMO-plan: distinguish required-course mentions from recommendations to enroll."""
     from uuid import uuid4

@@ -44,7 +44,7 @@ from app.atlas.records import SUBJECT_RENAMES, normalize_code
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
 from app.generation.advising_tools import CourseCode
-from app.generation.research_final import DecisionRejected, validate_final
+from app.generation.research_final import DecisionRejected, declined_decision, validate_final
 from app.programs.rules import RuleValidationError
 from app.retrieval.retrieve import retrieve
 from app.retrieval.seams.keyword import expand_program_names
@@ -1208,6 +1208,9 @@ class ResearchSession:
         return ResearchResult(data={"state_revision": self.state.revision})
 
     def finish(self, value, _scope):
+        if value.decision.outcome == "declined":
+            self.decision = declined_decision(value.decision)
+            return ResearchResult(data={"accepted": True})
         finishable_checks = {check_id: check for check_id, check in self.checks.items()
                              if check_id not in self.unavailable_preparation_check_ids}
         try:

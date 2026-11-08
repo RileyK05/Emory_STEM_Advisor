@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from app.advising.research_types import (
+    DecisionBlock,
     EvidenceRecord,
     FinalDecision,
     ResearchState,
@@ -19,7 +20,7 @@ from app.generation.answer import _NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-43"
+RESEARCH_PROMPT_VERSION = "research-44"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
 # A fact block that asserts a course is required, listed or part of a program
@@ -81,6 +82,12 @@ def retired_course_problems(decision: FinalDecision, recommended: set[str],
             "Drop it, or say it is no longer offered in the same sentence, and name the current "
             "course from the program list or requisites instead")
     return problems
+
+
+# The whole reply to a request outside academic advising. It is fixed so a
+# declined request never carries model-written text.
+SCOPE_DECLINE_TEXT = ("I can only help with Emory academic advising: courses, majors, "
+                      "requirements, policies, and planning for grad school or a career.")
 
 
 class DecisionRejected(ValueError):
@@ -274,3 +281,23 @@ def render_final(decision: FinalDecision, evidence: list[EvidenceRecord], *,
                              user_prompt, usage.prompt_tokens, usage.completion_tokens,
                              warnings, usage.source, model_id)
     return RenderedDecision(answer, chunks, blocks)
+
+
+def declined_decision(decision: FinalDecision) -> FinalDecision:
+    """The published form of outcome=declined: the fixed sentence and nothing else.
+
+    A decline is not an answer, so it may not cite, weigh candidates, recommend
+    courses or make an artifact; a proposal that does is answering and is sent
+    back to finish as one.
+    """
+    if (decision.candidate_ids or decision.recommended_course_codes
+            or decision.preparation_check_ids or decision.preparation_claims
+            or decision.artifact is not None
+            or any(block.evidence_ids or block.candidate_ids for block in decision.blocks)):
+        raise DecisionRejected(
+            "outcome=declined is for requests outside academic advising and carries no "
+            "citations, candidates, courses or artifact; if this is advising, finish with "
+            "outcome=information instead")
+    return decision.model_copy(update={
+        "completeness": "complete", "unresolved_questions": (),
+        "blocks": (DecisionBlock(kind="limitation", text=SCOPE_DECLINE_TEXT),)})

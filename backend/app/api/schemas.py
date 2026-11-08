@@ -108,7 +108,8 @@ class ArtifactRequestInfo(BaseModel):
 
 class ResearchDecisionInfo(BaseModel):
     runId: str
-    outcome: Literal["recommendation", "information", "clarification", "insufficient_evidence"]
+    outcome: Literal["recommendation", "information", "clarification", "insufficient_evidence",
+                     "declined"]
     completeness: Literal["complete", "partial"]
     blocks: list[ResearchBlock]
     artifact: ArtifactRequestInfo | None = None

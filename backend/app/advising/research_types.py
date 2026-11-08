@@ -66,7 +66,7 @@ CandidateStatus = Literal["investigating", "viable", "conditional", "not_preferr
 QuestionImportance = Literal["material", "optional"]
 QuestionNextAction = Literal["research", "ask_student", "disclose"]
 DecisionOutcome = Literal[
-    "recommendation", "information", "clarification", "insufficient_evidence"
+    "recommendation", "information", "clarification", "insufficient_evidence", "declined"
 ]
 DecisionCompleteness = Literal["complete", "partial"]
 BlockKind = Literal["fact", "judgment", "assumption", "limitation", "question"]
