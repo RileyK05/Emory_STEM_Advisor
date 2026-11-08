@@ -492,9 +492,100 @@ def run_audit(output_file: Path, start_idx: int = 0, count: int | None = None,
     print(f"\nAudit completed. Total records saved: {len(results)} to {output_file}")
 
 
+def run_product(output_file: Path, modes: list[str], case_filter: str | None = None) -> None:
+    """Ask every case through the product's /api/query and grade it mechanically.
+
+    The bare-model audit above measures the model alone. This asks the same
+    prompts through retrieval and the selected answering path, and scores each
+    answer with the clarity probe's checks for the spec's checkable rules:
+    course codes that exist (which also catches wrong campus prefixes), no
+    promised outcome (seats, admission, salary), and citations that resolve.
+    """
+    from dataclasses import replace
+
+    from fastapi.testclient import TestClient
+
+    from app.api import create_app
+    from app.db.connection import open_connection, resolved_database_url
+    from scripts.manual.advising_clarity_probe import (
+        Probe,
+        Result,
+        _check_citations_resolve,
+        _check_code_existence,
+        _check_no_promise,
+    )
+
+    settings = load_settings()
+    if settings.llm_provider == "hf-local" or not settings.llm_api_key:
+        raise SystemExit("configure a real cloud provider and key locally")
+    cases = [c for c in TEST_CASES if not case_filter
+             or case_filter.lower() in c["id"].lower()]
+    report = {"started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "provider": settings.llm_provider, "model": settings.llm_model_id,
+              "cases": len(cases), "results": []}
+    with open_connection(settings) as conn:
+        dsn = resolved_database_url(settings, conn)
+        chunk_text = {str(r["chunk_id"]): r["text"] for r in
+                      conn.execute("select chunk_id, text from chunks").fetchall()}
+        collection = settings.default_collection
+        for mode in modes:
+            research = mode == "research"
+            # Legacy keeps the advisor's scoped tools, as the clarity probe's --tools does.
+            app = create_app(settings=replace(
+                settings, database_url=dsn, advising_research_enabled=research,
+                tools_enabled=True))
+            app.state.database_ready = True
+            with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50001),
+                            raise_server_exceptions=False) as client:
+                for case in cases:
+                    started = time.perf_counter()
+                    try:
+                        response = client.post("/api/query", json={
+                            "query": case["query"], "collectionId": collection})
+                        payload = response.json()
+                    except (RuntimeError, ValueError, KeyError) as exc:
+                        print(f"  [{mode}] {case['id']}: ERROR {exc}", flush=True)
+                        continue
+                    result = Result(
+                        probe=Probe(case["id"], case["query"], case["category"]),
+                        http=response.status_code,
+                        seconds=round(time.perf_counter() - started, 2),
+                        answer=payload.get("answer") or "",
+                        reason=payload.get("reason"),
+                        citations=payload.get("citations") or [])
+                    result.cited_text = [chunk_text.get(c.get("chunkId"), "")
+                                         for c in result.citations]
+                    if response.status_code == 200:
+                        _check_code_existence(conn, result)
+                        _check_no_promise(result)
+                        _check_citations_resolve(conn, result)
+                    else:
+                        result.checks.append({"check": "answered", "ok": False,
+                                              "detail": f"HTTP {response.status_code}"})
+                    failed = result.failed
+                    report["results"].append({
+                        "mode": mode, "id": case["id"], "http": response.status_code,
+                        "seconds": result.seconds, "type": payload.get("type"),
+                        "answer": result.answer, "reason": result.reason,
+                        "citations": result.citations, "checks": result.checks})
+                    print(f"  [{mode}] {case['id']:<34} {response.status_code} "
+                          f"{result.seconds:>6.1f}s"
+                          + (f"  FAILED {[c.get('code') or c['check'] for c in failed]}"
+                             if failed else ""), flush=True)
+    for mode in modes:
+        rows = [r for r in report["results"] if r["mode"] == mode]
+        clean = sum(1 for r in rows if all(c["ok"] for c in r["checks"]))
+        print(f"{mode.upper()}: {clean}/{len(rows)} cases fully passed")
+    output_file.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str),
+                           encoding="utf-8")
+    print(f"wrote {output_file}")
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
+    parser.add_argument("--product", choices=["legacy", "research", "both"],
+                        help="Ask through the product's /api/query and grade mechanically")
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--count", type=int, default=None)
     parser.add_argument("--timeout", type=float, default=600.0)
@@ -503,4 +594,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
     out = Path(args.output)
     out.parent.mkdir(parents=True, exist_ok=True)
+    if args.product:
+        run_product(out, ["legacy", "research"] if args.product == "both" else [args.product],
+                    case_filter=args.filter)
+        raise SystemExit(0)
     run_audit(out, start_idx=args.start, count=args.count, timeout_seconds=args.timeout, case_filter=args.filter)
