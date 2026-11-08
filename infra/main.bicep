@@ -201,6 +201,12 @@ param dataShareQuotaGb int = 100
 @description('UTC cron schedule for the logical backup job.')
 param backupSchedule string = '0 2 * * *'
 
+@description('Optional email address for release alerts. Empty creates the rules without a receiver.')
+param alertEmail string = ''
+
+@description('Per-workspace storage ceiling, matching WORKSPACE_STORAGE_MAX_BYTES.')
+param workspaceStorageMaxBytes int = 104857600
+
 @description('VNet address space for the deployment.')
 param vnetAddressPrefix string = '10.42.0.0/16'
 
@@ -720,6 +726,20 @@ resource storageBlobDataContributor 'Microsoft.Authorization/roleAssignments@202
       'Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRole)
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+module alerts 'modules/alerts.bicep' = {
+  name: 'advisor-alerts'
+  params: {
+    location: location
+    tags: tags
+    namePrefix: namePrefix
+    suffix: suffix
+    logAnalyticsId: logAnalytics.id
+    postgresId: postgres.id
+    alertEmail: alertEmail
+    storageQuotaBytes: workspaceStorageMaxBytes
   }
 }
 

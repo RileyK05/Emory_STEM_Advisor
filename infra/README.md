@@ -224,6 +224,28 @@ extension availability and ACR build minutes are account-specific.
 - **Provider cache warm-up.** See `docs/plans/azure-hosting-requirements.md` and
   the cache discussion: the deployment does not assume a warm provider cache.
 
+## Alerts
+
+`modules/alerts.bicep` creates one action group and six rules. Set
+`alertEmail` to receive mail; an empty value still creates the rules for the
+Azure Monitor alert list.
+
+| Alert | Signal and query | Threshold |
+| --- | --- | --- |
+| API 5xx rate | `AppRequests` 5xx share over 5 minutes | > 5% |
+| Worker queue depth | `AppMetrics` `advisor_jobs` with `status="queued"` | > 50 |
+| Oldest queued job | `AppMetrics` `advisor_job_oldest_queued_seconds` | > 60 s |
+| Provider 429 rate | `AppMetrics` `advisor_provider_rate_limited_total`, fed from `model_calls` | > 10 per 5 min |
+| PostgreSQL connections | `Microsoft.DBforPostgreSQL/flexibleServers` `active_connections` | > 80 |
+| Workspace storage | `AppMetrics` `advisor_workspace_storage_bytes` | > 90% of `WORKSPACE_STORAGE_MAX_BYTES` |
+
+The API already exposes the queue, oldest-job and pool gauges at `/metrics`;
+the alert probe exposes provider failures and storage use. The deployment must
+export those values to Application Insights as the custom metrics named above
+for the `AppMetrics` rules to evaluate. The queries and thresholds live here so
+the deployment owns the definitions; telemetry export and on-call routing are
+operator steps.
+
 ## Backup and restore drill
 
 The `backup` Container Apps job runs `python -m scripts.backup create` on the
