@@ -54,7 +54,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
-| P3.1 | todo | | |
+| P3.1 | done | 7531d0a | Added backend/scripts/manual/artifact_benchmark.py and frozen 70 cases in artifact_benchmark_cases.jsonl (30 artifact cases A01-A30, 40 scope cases S01-S40). Runner exercises mechanical checks K1-K10 and prints per-case, per-check table and summary. Verified offline dry-run: 70/70 cases passed. Gate: pytest 1682 passed, 2 skipped in 284.17s; ruff clean; typecheck pass; npm test 19 unit passed, 38 browser passed in 63.10s; format:check pass; check:callers pass (38 AdvisorClient, 32 backoffice). |
 | P3.2 | todo | | |
 | P3.3 | todo | | |
 | P3.4 | BLOCKED | - | BLOCKED on U4: needs the user to score 10 artifacts 1-5 from `data/manual-checks/artifact-sample/`. |
