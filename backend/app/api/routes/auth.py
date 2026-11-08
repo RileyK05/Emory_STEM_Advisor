@@ -7,14 +7,14 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from httpx import HTTPError
 
 from app.api.schemas import AuthSession
-from app.auth.dependencies import _boundary
+from app.auth.dependencies import _auth_provider, _boundary
 from app.auth.service import COOKIE_NAME, LOGIN_COOKIE_NAME, AuthRejected
 
 router = APIRouter()
 
 
 def _service(request: Request):
-    service = getattr(request.app.state, "auth_service", None)
+    service = _auth_provider(request)
     if service is None:
         raise HTTPException(status_code=503, detail="authentication is not configured")
     return service
@@ -95,7 +95,7 @@ async def callback(request: Request):
         return _callback_error(400, "login could not be completed")
     response = RedirectResponse("/", status_code=303)
     response.set_cookie(
-        COOKIE_NAME, token, max_age=service.oidc.session_ttl_seconds,
+        COOKIE_NAME, token, max_age=service.session_ttl_seconds,
         httponly=True, secure=True, samesite="lax", path="/",
     )
     response.delete_cookie(LOGIN_COOKIE_NAME, path="/", secure=True, httponly=True, samesite="lax")
@@ -109,7 +109,7 @@ def logout(request: Request):
     service = _service(request)
     if service.mode == "oidc":
         origin = request.headers.get("origin")
-        callback = urlsplit(service.oidc.redirect_uri)
+        callback = urlsplit(service.redirect_uri)
         expected_origin = f"{callback.scheme}://{callback.netloc}"
         if not origin or origin != expected_origin:
             raise HTTPException(status_code=403, detail="same-origin logout is required")

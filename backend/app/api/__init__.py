@@ -134,6 +134,7 @@ def create_app(
     embedder=None,
     provider=None,
     auth_service=None,
+    auth_provider=None,
     allow_test_client: bool = False,
     readiness_connect=None,
 ) -> FastAPI:
@@ -164,8 +165,11 @@ def create_app(
         timeout_seconds=state.settings.readiness_timeout_seconds,
         connect_fn=readiness_connect or connect,
     )
-    state.auth_service = auth_service or build_auth_service(
+    state.auth_provider = auth_provider or auth_service or build_auth_service(
         state.settings, _auth_connection_factory(app), allow_test_client=allow_test_client)
+    # Existing routes and readiness read the same provider object under its
+    # original name; authentication has one entry point.
+    state.auth_service = state.auth_provider
     state.office_runner = _office_runner(state.settings)
 
     @app.middleware("http")

@@ -134,6 +134,14 @@ class AuthService:
         elif not self.server_key or len(self.server_key) < 32:
             raise AuthConfigurationError("development auth requires a server key")
 
+    @property
+    def redirect_uri(self) -> str:
+        return self.oidc.redirect_uri if self.oidc is not None else ""
+
+    @property
+    def session_ttl_seconds(self) -> int:
+        return self.oidc.session_ttl_seconds if self.oidc is not None else 0
+
     def _connection(self):
         return self.connect()
 

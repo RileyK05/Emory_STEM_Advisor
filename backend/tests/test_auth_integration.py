@@ -143,6 +143,35 @@ def test_two_verified_users_cannot_read_or_mutate_private_resources(db, collecti
     assert "no-store" in made.headers["cache-control"]
 
 
+def test_fake_auth_provider_mints_isolated_workspaces(db, collection, migrated_dsn):
+    from app.auth.fake import FakeAuthProvider
+    from app.auth.service import COOKIE_NAME
+
+    provider = FakeAuthProvider(redirect_uri=ORIGIN + "/api/auth/callback")
+    settings = replace(load_settings(), database_url=migrated_dsn, auth_mode="oidc")
+    app = create_app(settings=settings, config=lenient_config(), embedder=FakeEmbedder(8),
+                     provider=FakeProvider(), auth_provider=provider)
+    app.state.override_conn = db
+    alice = TestClient(app, base_url=ORIGIN)
+    bob = TestClient(app, base_url=ORIGIN)
+    alice.cookies.set(COOKIE_NAME, provider.issue("fake-alice"))
+    bob.cookies.set(COOKIE_NAME, provider.issue("fake-bob"))
+
+    assert alice.get("/api/session").json()["workspaceKey"] == "fake-alice"
+    assert bob.get("/api/session").json()["workspaceKey"] == "fake-bob"
+    assert alice.get("/api/artifacts").status_code == 200
+    assert bob.get("/api/artifacts").json() == []
+
+    disabled = TestClient(app, base_url=ORIGIN)
+    disabled.cookies.set(COOKIE_NAME, provider.issue("fake-disabled", status="disabled"))
+    assert disabled.get("/api/artifacts").status_code == 403
+
+    token = alice.cookies.get(COOKIE_NAME)
+    assert alice.post("/api/auth/logout", headers={"Origin": ORIGIN}).status_code == 204
+    provider.logout(token)
+    assert alice.get("/api/artifacts").status_code == 401
+
+
 def test_development_boundary_rejects_external_hosts_and_forwarded_requests(db, collection):
     from tests.helpers import api_client
     client = api_client(db, collection)

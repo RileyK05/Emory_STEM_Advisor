@@ -22,7 +22,7 @@ def _boundary(request: Request, service) -> None:
             raise HTTPException(403, detail="local development Host is required")
         expected_origin = request.url.scheme + "://" + request.headers.get("host", "")
     else:
-        callback = urlsplit(service.oidc.redirect_uri)
+        callback = urlsplit(service.redirect_uri)
         expected_origin = f"{callback.scheme}://{callback.netloc}"
         if request.headers.get("host") != callback.netloc:
             raise HTTPException(403, detail="configured application Host is required")
@@ -35,8 +35,16 @@ def _boundary(request: Request, service) -> None:
         raise HTTPException(403, detail="cross-site API requests are rejected")
 
 
+def _auth_provider(request: Request):
+    """The one authentication entry point used by every protected route."""
+    provider = getattr(request.app.state, "auth_provider", None)
+    if provider is None:
+        provider = getattr(request.app.state, "auth_service", None)
+    return provider
+
+
 def get_principal(request: Request) -> Principal:
-    service = getattr(request.app.state, "auth_service", None)
+    service = _auth_provider(request)
     if service is None:
         raise HTTPException(status_code=503, detail="authentication is not configured")
     _boundary(request, service)
