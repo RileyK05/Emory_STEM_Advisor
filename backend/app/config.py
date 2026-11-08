@@ -191,7 +191,7 @@ class Settings:
     admin_bootstrap_subjects: tuple[str, ...] = ()
     auth_session_ttl_seconds: int = 28800
     auth_transaction_ttl_seconds: int = 300
-    tools_enabled: bool = False
+    tools_enabled: bool = True
     answer_citation_repair_enabled: bool = True
     tool_max_calls: int = 4
     # Opt-in: before retrieval, the answering connection reads the scoped catalog
@@ -206,7 +206,7 @@ class Settings:
     # permitted provider and TOOLS_ENABLED; an unavailable research provider is
     # a clear feature-unavailable error, never a silent fallback to a materially
     # different advising workflow.
-    advising_research_enabled: bool = False
+    advising_research_enabled: bool = True
     # One research run gets exactly one operation with these limits; they
     # replace the legacy answer limits for that operation rather than stacking
     # on top of them. Reservation units are serialized prompt bytes, so the
@@ -362,15 +362,8 @@ class Settings:
             raise ValueError("research limits are invalid")
         if self.advising_research_enabled and not self.tools_enabled:
             raise ValueError("ADVISING_RESEARCH_ENABLED requires TOOLS_ENABLED=true")
-        if (self.advising_research_enabled and self.llm_provider == "hf-local"
-                and not self.routing_enabled):
-            raise ValueError(
-                "research advising requires a tools-capable cloud connection or evaluated routing"
-            )
         if not 1 <= self.tool_max_calls <= 100:
             raise ValueError("TOOL_MAX_CALLS must be between 1 and 100")
-        if self.tools_enabled and self.llm_provider == "hf-local" and not self.routing_enabled:
-            raise ValueError("native tools require a capable cloud connection or evaluated routing")
         if self.auth_mode not in {"development", "oidc"}:
             raise ValueError("AUTH_MODE must be development or oidc")
         if self.storage_backend not in {"local", "blob", "dual"}:
@@ -551,12 +544,12 @@ def load_settings() -> Settings:
         debug_session_ttl_seconds=_int("DEBUG_SESSION_TTL_SECONDS", 28800),
         auth_session_ttl_seconds=_int("AUTH_SESSION_TTL_SECONDS", 28800),
         auth_transaction_ttl_seconds=_int("AUTH_TRANSACTION_TTL_SECONDS", 300),
-        tools_enabled=_bool("TOOLS_ENABLED", False),
+        tools_enabled=_bool("TOOLS_ENABLED", True),
         answer_citation_repair_enabled=_bool("ANSWER_CITATION_REPAIR_ENABLED", True),
         tool_max_calls=_int("TOOL_MAX_CALLS", 4),
         query_planning_enabled=_bool("QUERY_PLANNING_ENABLED", False),
         query_planning_token_budget=_int("QUERY_PLANNING_TOKEN_BUDGET", 300_000),
-        advising_research_enabled=_bool("ADVISING_RESEARCH_ENABLED", False),
+        advising_research_enabled=_bool("ADVISING_RESEARCH_ENABLED", True),
         research_max_calls=_int("RESEARCH_MAX_CALLS", 14),
         research_max_tool_calls=_int("RESEARCH_MAX_TOOL_CALLS", 24),
         research_reasoning_effort=os.environ.get("RESEARCH_REASONING_EFFORT", "medium") or None,

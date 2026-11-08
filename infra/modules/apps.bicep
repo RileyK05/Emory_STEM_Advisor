@@ -238,7 +238,7 @@ var commonEnv = [
   }
   {
     name: 'TOOLS_ENABLED'
-    value: 'false'
+    value: 'true'
   }
   {
     name: 'QUERY_PLANNING_ENABLED'
@@ -246,7 +246,7 @@ var commonEnv = [
   }
   {
     name: 'ADVISING_RESEARCH_ENABLED'
-    value: 'false'
+    value: 'true'
   }
 ]
 

@@ -65,7 +65,8 @@ def _setup(db, collection, migrated_dsn, tmp_path, *, tools=False,
         load_settings(), database_url=migrated_dsn, data_dir=tmp_path,
         default_collection=collection_name(db, collection), routing_enabled=True,
         routing_eval_suite_hash=suite_hash, profile_encryption_key=Fernet.generate_key().decode(),
-        tools_enabled=tools, operation_max_calls=operation_max_calls,
+        tools_enabled=tools, advising_research_enabled=False,
+        operation_max_calls=operation_max_calls,
         operation_token_budget=operation_token_budget, llm_max_output_tokens=128,
     )
     standard = SequenceProvider("standard-model", [])

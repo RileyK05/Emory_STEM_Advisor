@@ -18,8 +18,9 @@ from tests.helpers import collection_name, ingest_text, lenient_config
 
 
 def api_client(db, provider):
-    settings = replace(load_settings(), tools_enabled=True, llm_provider="openai",
-                       llm_model_id="mock-tools", database_url=connection_dsn(db))
+    settings = replace(load_settings(), tools_enabled=True, advising_research_enabled=False,
+                       llm_provider="openai", llm_model_id="mock-tools",
+                       database_url=connection_dsn(db))
     app = create_app(settings=settings, allow_test_client=True, config=lenient_config(),
                      embedder=FakeEmbedder(8), provider=provider)
     app.state.override_conn = db
@@ -109,8 +110,9 @@ def test_incomplete_query_tool_response_is_accounted_without_execution(db, colle
 
 def test_plain_query_stream_callback_path_does_not_pass_tool_reset_keyword(db, collection, tmp_path):
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is a documented concept.\n")
-    settings = replace(load_settings(), tools_enabled=False, llm_provider="openai",
-                       llm_model_id="offline-stream", database_url=connection_dsn(db))
+    settings = replace(load_settings(), tools_enabled=False, advising_research_enabled=False,
+                       llm_provider="openai", llm_model_id="offline-stream",
+                       database_url=connection_dsn(db))
 
     class StreamProvider:
         def stream(self, request):
@@ -134,8 +136,9 @@ def test_plain_query_stream_callback_path_does_not_pass_tool_reset_keyword(db, c
 
 def test_tool_query_stream_callbacks_reset_tool_attempt_output(db, collection, tmp_path):
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha has value 0.3.\n")
-    settings = replace(load_settings(), tools_enabled=True, llm_provider="openai",
-                       llm_model_id="offline-tools", database_url=connection_dsn(db))
+    settings = replace(load_settings(), tools_enabled=True, advising_research_enabled=False,
+                       llm_provider="openai", llm_model_id="offline-tools",
+                       database_url=connection_dsn(db))
 
     class StreamToolProvider:
         def __init__(self):

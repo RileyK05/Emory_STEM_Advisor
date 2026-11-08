@@ -166,6 +166,7 @@ def test_planned_course_reaches_the_answer_and_planning_shares_the_operation(
     provider = _PlanningProvider(plan_text)
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake-planner",
                        query_planning_enabled=True, tools_enabled=False,
+                       advising_research_enabled=False,
                        embedding_model_id=MODEL, database_url=connection_dsn(db),
                        default_collection=collection_name(db, collection), data_dir=tmp_path)
     app = create_app(settings=settings, config=lenient_config(), provider=provider,

@@ -29,6 +29,14 @@ def test_readiness_accepts_complete_legacy_history_and_rejects_pending_upgrade()
         auth_mode="development").reasons == ("schema_mismatch",)
 
 
+def test_readiness_reports_a_missing_advising_model():
+    result = ReadinessProbe(connect_fn=lambda _dsn: FakeConnection()).check(
+        dsn="postgresql://safe/db", auth_service=SimpleNamespace(mode="development"),
+        auth_mode="development", advising_model_configured=False,
+    )
+    assert result.reasons == ("no_advising_model_configured",)
+
+
 def test_readiness_accepts_legacy_crlf_checksums_like_apply_migrations():
     # A legacy CRLF checkout's digest: the LF-normalized content re-expanded to
     # CRLF, which differs from the canonical (LF) digest readiness now accepts.
@@ -209,7 +217,8 @@ def test_ready_route_is_public_and_returns_minimal_stable_json():
     conn = FakeConnection()
     settings = replace(load_settings(), database_url="postgresql://safe/db",
                        auth_mode="development", readiness_timeout_seconds=2,
-                       office_enabled=False, tools_enabled=False, routing_enabled=False)
+                       office_enabled=False, tools_enabled=False,
+                       advising_research_enabled=False, routing_enabled=False)
     app = create_app(
         settings=settings, config=load_retrieval_config(settings=settings),
         embedder=object(), provider=object(), auth_service=SimpleNamespace(mode="development"),
@@ -227,7 +236,8 @@ def test_ready_route_returns_503_with_only_bounded_reason_codes():
     from app.retrieval.config import load_retrieval_config
 
     settings = replace(load_settings(), database_url=None, auth_mode="development",
-                       office_enabled=False, tools_enabled=False, routing_enabled=False)
+                       office_enabled=False, tools_enabled=False,
+                       advising_research_enabled=False, routing_enabled=False)
     calls = []
     app = create_app(
         settings=settings, config=load_retrieval_config(settings=settings),

@@ -50,7 +50,8 @@ class ReadinessProbe:
         self._expires_at = 0.0
         self._cached: ReadinessResult | None = None
 
-    def check(self, *, dsn: str | None, auth_service: object | None, auth_mode: str) -> ReadinessResult:
+    def check(self, *, dsn: str | None, auth_service: object | None, auth_mode: str,
+              advising_model_configured: bool = True) -> ReadinessResult:
         now = self.monotonic()
         cached = self._cached
         if cached is not None and now < self._expires_at:
@@ -60,16 +61,22 @@ class ReadinessProbe:
             cached = self._cached
             if cached is not None and now < self._expires_at:
                 return cached
-            result = self._probe(dsn=dsn, auth_service=auth_service, auth_mode=auth_mode)
+            result = self._probe(
+                dsn=dsn, auth_service=auth_service, auth_mode=auth_mode,
+                advising_model_configured=advising_model_configured,
+            )
             self._cached = result
             self._expires_at = self.monotonic() + self.cache_seconds
             return result
 
-    def _probe(self, *, dsn: str | None, auth_service: object | None, auth_mode: str) -> ReadinessResult:
+    def _probe(self, *, dsn: str | None, auth_service: object | None, auth_mode: str,
+               advising_model_configured: bool = True) -> ReadinessResult:
         reasons: list[str] = []
         service_mode = getattr(auth_service, "mode", None)
         if auth_service is None or service_mode != auth_mode or auth_mode not in {"development", "oidc"}:
             reasons.append("auth_not_configured")
+        if not advising_model_configured:
+            reasons.append("no_advising_model_configured")
 
         if not dsn:
             reasons.append("database_not_configured")

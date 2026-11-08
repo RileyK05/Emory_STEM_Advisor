@@ -331,7 +331,8 @@ def test_the_tools_path_reserves_a_call_for_the_answer_s_retry(db, collection, t
         _truncated(_ANSWER),
         _complete(),
     ])
-    settings = replace(load_settings(), tools_enabled=True, llm_provider="openai",
+    settings = replace(load_settings(), tools_enabled=True, advising_research_enabled=False,
+                       llm_provider="openai",
                        llm_model_id="mock-tools", database_url=connection_dsn(db),
                        operation_max_calls=4)
     app = create_app(settings=settings, allow_test_client=True, config=lenient_config(),

@@ -289,7 +289,8 @@ def _pooled_client(dsn, *, provider=None, **overrides):
     from tests.fakes import FakeEmbedder
 
     settings = replace(load_settings(), database_url=dsn, db_pool_max_size=1,
-                       db_pool_timeout_seconds=1.0, **overrides)
+                       db_pool_timeout_seconds=1.0, advising_research_enabled=False,
+                       **overrides)
     app = create_app(settings=settings, allow_test_client=True, config=lenient_config(),
                      embedder=FakeEmbedder(dim=8), provider=provider)
     return TestClient(app)

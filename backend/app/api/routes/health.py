@@ -15,10 +15,20 @@ def health() -> dict:
 
 @router.get("/ready", include_in_schema=False)
 def readiness(request: Request) -> JSONResponse:
+    settings = request.app.state.settings
+    provider = getattr(request.app.state, "provider", None)
+    tools_capable = settings.routing_enabled or (
+        provider is not None and settings.llm_provider != "hf-local"
+    )
     result = request.app.state.readiness_probe.check(
-        dsn=request.app.state.settings.database_url,
+        dsn=settings.database_url,
         auth_service=request.app.state.auth_service,
-        auth_mode=request.app.state.settings.auth_mode,
+        auth_mode=settings.auth_mode,
+        advising_model_configured=(
+            not settings.advising_research_enabled
+            or not settings.tools_enabled
+            or tools_capable
+        ),
     )
     return JSONResponse(
         result.as_dict(),

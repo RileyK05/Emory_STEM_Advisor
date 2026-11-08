@@ -245,7 +245,8 @@ def test_three_independent_advising_tools_fit_in_two_provider_calls(db, collecti
             )
 
     provider = Provider()
-    settings = replace(load_settings(), tools_enabled=True, llm_provider="openai",
+    settings = replace(load_settings(), tools_enabled=True, advising_research_enabled=False,
+                       llm_provider="openai",
                        llm_model_id="offline-advising-tools", operation_max_calls=2,
                        database_url=connection_dsn(db))
     app = create_app(settings=settings, allow_test_client=True, config=lenient_config(),

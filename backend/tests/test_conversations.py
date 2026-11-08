@@ -367,7 +367,7 @@ def _admission_client(db, collection, provider, *, database_url=None, **override
     from app.config import load_settings
     from tests.fakes import FakeEmbedder
 
-    settings = replace(load_settings(), **overrides)
+    settings = replace(load_settings(), advising_research_enabled=False, **overrides)
     if database_url is not None:
         settings = replace(settings, database_url=database_url)
     app = create_app(settings=settings, allow_test_client=True,

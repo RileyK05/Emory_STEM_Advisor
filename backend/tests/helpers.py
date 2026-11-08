@@ -27,7 +27,9 @@ def lenient_config():
 
 def api_client(db, collection, provider=None, embedder=None):
     app = create_app(
-        settings=load_settings(),
+        # Legacy-path tests until P2.4 deletes that route; research tests set
+        # advising_research_enabled=True explicitly.
+        settings=replace(load_settings(), advising_research_enabled=False),
         allow_test_client=True,
         config=lenient_config(),
         embedder=embedder or FakeEmbedder(dim=8),

@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import numpy as np
 
-from app.llm.base import GenerationResult, Usage
+from app.llm.base import GenerationResult, Usage, normalize_message
 
 
 class FakeEmbedder:
@@ -76,7 +76,7 @@ class FakeProvider:
             if self.on_call is not None:
                 self.on_call(active)
             self.calls += 1
-            self.last_messages = [dict(m) for m in active.messages]
+            self.last_messages = [normalize_message(m) for m in active.messages]
             words = sum(len(str(m.get("content", "")).split()) for m in self.last_messages)
             return GenerationResult(
                 text=self.text, finish_reason="stop",
