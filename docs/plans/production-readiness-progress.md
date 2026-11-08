@@ -63,7 +63,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
-| P4.1 | todo | | |
+| P4.1 | done | 0601fe0 | test_sandbox_request_limits_contract in backend/tests/test_sandbox.py tests bad_bearer_token (401), input_bytes (413), output_bytes (503), timeout (408 + cpu ulimit), pids (503 + pids limit), and memory (503 + memory limit). Gate: pytest 1688 passed, 2 skipped (314.57s); ruff clean; typecheck pass; npm test 19 unit passed, 38 browser passed (62.49s); format:check pass; check:callers pass (38 AdvisorClient, 32 backoffice). |
 | P4.2 | todo | | |
 | P4.3 | BLOCKED | - | reserved for Claude (Stage H: Linux host with Docker and gVisor `runsc`; this run never installs or touches WSL, Docker or gVisor). |
 | P4.4 | BLOCKED | - | reserved for Claude (depends on P4.3 host). |

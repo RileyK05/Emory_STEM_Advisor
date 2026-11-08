@@ -1,19 +1,26 @@
+import base64
+import hashlib
 import io
 import os
 import shutil
 import sys
 import threading
+import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.sandbox import (
     DockerCliRuntime,
     IsolationUnavailable,
     SandboxConfig,
     UnsafeSandboxOutput,
+    create_worker_app,
 )
-from app.sandbox.runner import check_output_entry, collect_outputs
+from app.sandbox.office import MAX_OFFICE_INPUT_BYTES, OfficeRunner
+from app.sandbox.runner import RuntimeResult, check_output_entry, collect_outputs
 
 
 def make_config(tmp_path, **changes):
@@ -139,3 +146,169 @@ def test_output_symlink_escape_is_rejected_when_host_supports_symlinks(tmp_path)
     else:
         with pytest.raises(UnsafeSandboxOutput):
             collect_outputs(output, max_files=8, max_bytes=1024)
+
+
+def zip_bytes():
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        archive.writestr("[Content_Types].xml", "<Types/>")
+    return buf.getvalue()
+
+
+class FakeContainerRuntime:
+    def __init__(
+        self,
+        output: bytes | None = None,
+        *,
+        exit_code: int = 0,
+        timed_out: bool = False,
+        cancelled: bool = False,
+        output_exceeded: bool = False,
+    ):
+        self.output = output
+        self.exit_code = exit_code
+        self.timed_out = timed_out
+        self.cancelled = cancelled
+        self.output_exceeded = output_exceeded
+        self.argv: list[str] | None = None
+        self.called = False
+
+    def probe(self, cfg: SandboxConfig) -> dict[str, str]:
+        return {cfg.office_image: "sha256:" + "a" * 64}
+
+    def execute(
+        self,
+        argv: list[str],
+        *,
+        container_name: str,
+        timeout_seconds: int,
+        output_limit_bytes: int,
+        cancel_event: threading.Event | None,
+    ) -> RuntimeResult:
+        self.argv = argv
+        self.called = True
+        if self.output is not None:
+            out_mount = next(a for a in argv if "target=/output" in a)
+            out_dir = Path(out_mount.split("source=", 1)[1].split(",target=", 1)[0])
+            (out_dir / "input.xlsx").write_bytes(self.output)
+        return RuntimeResult(
+            self.exit_code,
+            b"",
+            b"",
+            timed_out=self.timed_out,
+            cancelled=self.cancelled,
+            output_exceeded=self.output_exceeded,
+        )
+
+
+@pytest.mark.parametrize(
+    "limit_name, runtime_kwargs, request_kwargs, expected_status, verify_argv",
+    [
+        (
+            "bad_bearer_token",
+            {},
+            {"auth_header": "Bearer " + "wrong" * 8},
+            401,
+            None,
+        ),
+        (
+            "input_bytes",
+            {},
+            {"oversized_input": True},
+            413,
+            None,
+        ),
+        (
+            "output_bytes",
+            {"output_exceeded": True},
+            {},
+            503,
+            None,
+        ),
+        (
+            "timeout",
+            {"timed_out": True},
+            {},
+            408,
+            lambda argv: "--ulimit" in argv and "cpu=10:10" in argv[argv.index("--ulimit") + 1],
+        ),
+        (
+            "pids",
+            {"exit_code": 137},
+            {},
+            503,
+            lambda argv: "--pids-limit" in argv and argv[argv.index("--pids-limit") + 1] == "64",
+        ),
+        (
+            "memory",
+            {"exit_code": 137},
+            {},
+            503,
+            lambda argv: "--memory" in argv and argv[argv.index("--memory") + 1] == "512m",
+        ),
+    ],
+)
+def test_sandbox_request_limits_contract(
+    tmp_path, limit_name, runtime_kwargs, request_kwargs, expected_status, verify_argv
+):
+    cfg = SandboxConfig(
+        work_root=tmp_path / "sandbox-work",
+        production=True,
+        separate_sandbox_host=True,
+        runtime="runsc",
+        max_pids=64,
+        max_memory_bytes=512 * 1024 * 1024,
+        max_timeout_seconds=10,
+    )
+    token = "s" * 40
+    runtime = FakeContainerRuntime(**runtime_kwargs)
+    runner = OfficeRunner(cfg, runtime)
+    app = create_worker_app(cfg, token, office_runner=runner)
+    client = TestClient(app)
+
+    raw = zip_bytes()
+    headers = {"Authorization": request_kwargs.get("auth_header", f"Bearer {token}")}
+
+    if request_kwargs.get("oversized_input"):
+        res = client.post(
+            "/v1/office/execute",
+            headers={**headers, "content-length": str((MAX_OFFICE_INPUT_BYTES * 4 // 3) + 5000)},
+            content=b"x" * 1024,
+        )
+        assert res.status_code == expected_status
+        with pytest.raises(ValueError, match="byte limit"):
+            runner.run("recalculate_xlsx", b"PK" + b"x" * (MAX_OFFICE_INPUT_BYTES + 1))
+        with pytest.raises(ValueError):
+            SandboxConfig(work_root=tmp_path / "w", max_input_bytes=-1)
+        return
+
+    body = {
+        "request_id": f"req-{limit_name}",
+        "operation": "recalculate_xlsx",
+        "input_base64": base64.b64encode(raw).decode("ascii"),
+        "input_sha256": hashlib.sha256(raw).hexdigest(),
+        "timeout_seconds": 10,
+    }
+    res = client.post("/v1/office/execute", headers=headers, json=body)
+    assert res.status_code == expected_status
+
+    if verify_argv:
+        assert runtime.called
+        assert verify_argv(runtime.argv)
+
+    if limit_name == "bad_bearer_token":
+        with pytest.raises(ValueError):
+            create_worker_app(cfg, "too_short")
+    elif limit_name == "output_bytes":
+        with pytest.raises(ValueError):
+            SandboxConfig(work_root=tmp_path / "w", max_output_bytes=500)
+    elif limit_name == "timeout":
+        with pytest.raises(ValueError):
+            SandboxConfig(work_root=tmp_path / "w", max_timeout_seconds=0)
+    elif limit_name == "pids":
+        with pytest.raises(ValueError):
+            SandboxConfig(work_root=tmp_path / "w", max_pids=0)
+    elif limit_name == "memory":
+        with pytest.raises(ValueError):
+            SandboxConfig(work_root=tmp_path / "w", max_memory_bytes=1024)
+
