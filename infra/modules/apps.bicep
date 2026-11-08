@@ -15,6 +15,8 @@ param apiName string
 param webName string
 param workerName string
 param migrateJobName string
+param backupJobName string
+param backupSchedule string = '0 2 * * *'
 
 param apiImage string
 param webImage string
@@ -267,6 +269,17 @@ var migrateEnv = [
   {
     name: 'AUTH_MODE'
     value: authMode
+  }
+]
+
+var backupEnv = [
+  {
+    name: 'DATABASE_URL'
+    secretRef: 'database-url'
+  }
+  {
+    name: 'DATA_DIR'
+    value: '/workspace/data'
   }
 ]
 
@@ -536,6 +549,64 @@ resource worker 'Microsoft.App/containerApps@2023-05-01' = {
         minReplicas: workerReplicas
         maxReplicas: workerReplicas
       }
+    }
+  }
+}
+
+resource backupJob 'Microsoft.App/jobs@2023-05-01' = {
+  name: backupJobName
+  location: location
+  tags: tags
+  identity: serviceIdentity
+  properties: {
+    environmentId: environmentId
+    configuration: {
+      triggerType: 'Schedule'
+      replicaRetryLimit: 1
+      replicaTimeout: 3600
+      scheduleTriggerConfig: {
+        cronExpression: backupSchedule
+        parallelism: 1
+        replicaCompletionCount: 1
+      }
+      registries: [
+        {
+          server: acrLoginServer
+          identity: identityId
+        }
+      ]
+      secrets: appSecrets
+    }
+    template: {
+      containers: [
+        {
+          name: 'backup'
+          image: apiImage
+          command: [
+            '/bin/sh'
+            '-c'
+            'python -m scripts.backup create --backup "/workspace/data/backups/advisor-$(date -u +%Y%m%dT%H%M%SZ).zip" --maintenance-confirmed'
+          ]
+          resources: {
+            cpu: json('1.0')
+            memory: '2Gi'
+          }
+          env: backupEnv
+          volumeMounts: [
+            {
+              volumeName: dataVolumeName
+              mountPath: '/workspace/data'
+            }
+          ]
+        }
+      ]
+      volumes: [
+        {
+          name: dataVolumeName
+          storageType: 'AzureFile'
+          storageName: storageName
+        }
+      ]
     }
   }
 }

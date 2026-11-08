@@ -198,6 +198,9 @@ param admissionMaxPendingGlobal int = 200
 @maxValue(5120)
 param dataShareQuotaGb int = 100
 
+@description('UTC cron schedule for the logical backup job.')
+param backupSchedule string = '0 2 * * *'
+
 @description('VNet address space for the deployment.')
 param vnetAddressPrefix string = '10.42.0.0/16'
 
@@ -221,6 +224,7 @@ var apiName = take('${namePrefix}-api-${suffix}', 32)
 var webName = take('${namePrefix}-web-${suffix}', 32)
 var workerName = take('${namePrefix}-worker-${suffix}', 32)
 var migrateJobName = take('${namePrefix}-migrate-${suffix}', 32)
+var backupJobName = take('${namePrefix}-backup-${suffix}', 32)
 var dataShareName = 'advisor-data'
 var vnetName = take('${namePrefix}-vnet-${suffix}', 64)
 var appsSubnetName = 'apps'
@@ -734,6 +738,8 @@ module apps 'modules/apps.bicep' = if (deployApps) {
     webName: webName
     workerName: workerName
     migrateJobName: migrateJobName
+    backupJobName: backupJobName
+    backupSchedule: backupSchedule
     apiImage: apiImage
     webImage: webImage
     workerImage: empty(workerImage) ? apiImage : workerImage
@@ -781,5 +787,6 @@ output apiName string = apiName
 output webName string = webName
 output workerName string = workerName
 output migrateJobName string = migrateJobName
+output backupJobName string = backupJobName
 output apiUrl string = deployApps ? 'https://${apiName}.${containerEnvironment.properties.defaultDomain}' : ''
 output webUrl string = deployApps ? 'https://${webName}.${containerEnvironment.properties.defaultDomain}' : ''

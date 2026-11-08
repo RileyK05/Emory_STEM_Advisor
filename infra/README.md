@@ -224,6 +224,33 @@ extension availability and ACR build minutes are account-specific.
 - **Provider cache warm-up.** See `docs/plans/azure-hosting-requirements.md` and
   the cache discussion: the deployment does not assume a warm provider cache.
 
+## Backup and restore drill
+
+The `backup` Container Apps job runs `python -m scripts.backup create` on the
+UTC cron in `backupSchedule` (default `0 2 * * *`). It writes
+`/workspace/data/backups/advisor-<UTC timestamp>.zip` on the mounted Azure Files
+share. The archive holds the logical database dump plus every referenced raw
+upload and artifact original, with checksums. It refuses while live jobs or
+pending requests exist, so a scheduled run can fail during busy periods; that
+refusal is reported in the job execution log. The share is the same storage
+account as the live data, so copy archives to separate retention storage or a
+private backup account for disaster recovery. Retention, offsite copies and
+monitoring are deployment acceptance work.
+
+Restore drill, using the same image and a fresh directory:
+
+```bash
+python -m scripts.restore_consolidated /workspace/data/backups/advisor-<stamp>.zip \
+  --data-dir /workspace/restore-drill
+```
+
+The command builds a separate embedded database, applies the real migration
+path, verifies row fingerprints and foreign keys, rebases every file reference,
+and prints a report. A passing drill has `row_fingerprints_match: true`,
+`foreign_keys_valid: true`, and a nonzero `referenced_files` count. Discard the
+drill directory afterwards; never restore over a running installation and never
+put an archive in git or a public release.
+
 ## Teardown
 
 ```bash
