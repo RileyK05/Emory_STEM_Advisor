@@ -902,3 +902,7 @@ def test_reconcile_settles_an_expired_running_lease(db):
     settled = reconcile_pending_requests(db)
     assert [item["requestId"] for item in settled] == [str(request_id)]
     assert store.get(conversation_id)["pending_request_id"] is None
+    turns = store.turns(conversation_id)["turns"]
+    assert turns[-1]["role"] == "assistant"
+    assert turns[-1]["status"] == "failed"
+    assert turns[-1]["text"] == "The advisor couldn't answer that. Try again."

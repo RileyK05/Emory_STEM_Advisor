@@ -96,7 +96,7 @@ def reconcile_pending_requests(
                     {
                         "type": "failed",
                         "reason": (
-                            "The answer could not be completed. You can retry this turn."
+                            "The advisor couldn't answer that. Try again."
                         ),
                     },
                     state="failed",

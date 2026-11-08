@@ -402,6 +402,7 @@ async function setupPage({
   let conversationTurnFailures = 0;
   let nextConversationTurnFailureText = null;
   let isWorkerDown = workerDown;
+  let workerDiedMidTurn = false;
   let conversationProviderCalls = 0;
   let acceptedDailyQueries = 0;
   let demoRunPolls = 0;
@@ -907,8 +908,9 @@ async function setupPage({
           },
         });
       const body = stream.body ?? { query: 'Resumed request' };
-      const failed = conversationTurnFailures > 0;
-      if (failed) conversationTurnFailures--;
+      const failed = conversationTurnFailures > 0 || workerDiedMidTurn;
+      if (conversationTurnFailures > 0) conversationTurnFailures--;
+      if (workerDiedMidTurn) workerDiedMidTurn = false;
       const refusal = body.sourceIds?.length === 0;
       const status = failed ? 'failed' : refusal ? 'refusal' : 'answer';
       const sameName = sameNameCitation && /shared notes/i.test(body.query ?? '');
@@ -1895,6 +1897,9 @@ async function setupPage({
     failNextConversationTurn: (failureText = null) => {
       conversationTurnFailures++;
       nextConversationTurnFailureText = failureText;
+    },
+    workerDiesMidTurn: () => {
+      workerDiedMidTurn = true;
     },
     setWorkerDown: (down) => {
       isWorkerDown = down;
@@ -3134,6 +3139,27 @@ test('worker down turn never starts: after 20 s shows "This is taking longer tha
     // Clicking Retry abandons the pending request and resends
     await retryBtn.click();
     await page.clock.resume();
+    await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
+    assert.equal(capturedConversationStreams.length, 2);
+    assert.equal(capturedConversationStreams[1].body.query, 'What is a basis?');
+  } finally {
+    await context.close();
+  }
+});
+
+test('worker dies mid-turn: expired lease settles turn as failed with "The advisor couldn\'t answer that. Try again." and Retry', async () => {
+  const { context, page, capturedConversationStreams, workerDiesMidTurn } = await setupPage();
+  try {
+    workerDiesMidTurn();
+    await send(page, 'What is a basis?');
+    const alert = page.getByRole('alert');
+    await alert.getByText("The advisor couldn't answer that. Try again.", { exact: true }).waitFor();
+    const retryButton = alert.getByRole('button', { name: 'Retry', exact: true });
+    await retryButton.waitFor();
+    assert.equal(capturedConversationStreams.length, 1);
+    assert.equal(capturedConversationStreams[0].body.query, 'What is a basis?');
+
+    await retryButton.click();
     await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
     assert.equal(capturedConversationStreams.length, 2);
     assert.equal(capturedConversationStreams[1].body.query, 'What is a basis?');
