@@ -211,15 +211,21 @@ class Settings:
     # replace the legacy answer limits for that operation rather than stacking
     # on top of them. Reservation units are serialized prompt bytes, so the
     # token budget is an accounting ceiling, not a promised token bill.
-    research_max_calls: int = 14
-    research_max_tool_calls: int = 24
+    # Budgets are P2.1's p95 plus 25%, rounded (P5.1). Measured 2026-11-08 over
+    # 800 settled research-43 turns on minimax-m3.1-flash: model calls p50 4,
+    # p95 13 (19 turns hit the old cap of 14); tool calls p50 2, p95 11;
+    # tokens p50 44,354, p95 165,843 (max 195,952). A run that spends its
+    # budget still answers from what it read (salvage) or settles with P6.1's
+    # message.
+    research_max_calls: int = 16
+    research_max_tool_calls: int = 14
     # Effort a research round asks of a provider that supports it, unless the
     # connection sets its own; empty sends none. Measured 2026-11-04 on 12 live
     # questions: medium cut the median run from 213 s to 80 s and kept the facts low
     # dropped. Research alone gives up greedy reproducibility for this.
     research_reasoning_effort: str | None = "medium"
     research_operation_timeout_seconds: float = 360.0
-    research_operation_token_budget: int = 640_000
+    research_operation_token_budget: int = 210_000
     research_max_prompt_bytes: int = 52_000
     # Reasoning models spend most of this on hidden deliberation: a structured
     # state update or final answer routinely takes 5,000 to 9,000 tokens.
@@ -550,11 +556,11 @@ def load_settings() -> Settings:
         query_planning_enabled=_bool("QUERY_PLANNING_ENABLED", False),
         query_planning_token_budget=_int("QUERY_PLANNING_TOKEN_BUDGET", 300_000),
         advising_research_enabled=_bool("ADVISING_RESEARCH_ENABLED", True),
-        research_max_calls=_int("RESEARCH_MAX_CALLS", 14),
-        research_max_tool_calls=_int("RESEARCH_MAX_TOOL_CALLS", 24),
+        research_max_calls=_int("RESEARCH_MAX_CALLS", 16),
+        research_max_tool_calls=_int("RESEARCH_MAX_TOOL_CALLS", 14),
         research_reasoning_effort=os.environ.get("RESEARCH_REASONING_EFFORT", "medium") or None,
         research_operation_timeout_seconds=_float("RESEARCH_OPERATION_TIMEOUT_SECONDS", 360),
-        research_operation_token_budget=_int("RESEARCH_OPERATION_TOKEN_BUDGET", 640_000),
+        research_operation_token_budget=_int("RESEARCH_OPERATION_TOKEN_BUDGET", 210_000),
         research_max_prompt_bytes=_int("RESEARCH_MAX_PROMPT_BYTES", 52_000),
         research_max_output_tokens=_int("RESEARCH_MAX_OUTPUT_TOKENS", 10_240),
         research_truncation_max_output_tokens=_int("RESEARCH_TRUNCATION_MAX_OUTPUT_TOKENS", 16_384),
