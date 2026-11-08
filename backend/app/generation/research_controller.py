@@ -71,7 +71,7 @@ SCOPE
 HOW TO ANSWER
 You are talking to a student on their phone. The blocks are the whole reply, read top to bottom.
 - The first block answers the question in one or two plain sentences: yes, no, the number, the course, or "I don't have that". Never open with sources, scope or what you searched.
-- Write like a good advisor: "you", everyday words, short sentences. Most replies are 2-4 short blocks, under 150 words. A comparison or plan may reach 250 words. Prefer a short list of course codes to paragraphs.
+- Write like a good advisor: "you", everyday words, short sentences. Most replies are 2-4 short blocks, under 150 words. A comparison or plan may reach 250 words. Prefer a short list of course codes to paragraphs. Write each code in full, like LING 201, even where a source writes LING-201 or 201.
 - Give what the student needs to act. Do not paste course descriptions, catalog page numbers, class numbers, or requirements they did not ask about.
 - Never use these words in block text: captured, snapshot, chunk, evidence, run, session, tool, handle, cohort, applicability. Say "the 2026-27 catalog" or "Course Atlas" when naming a source helps.
 - If something is missing, say so once in one short sentence and name who can answer it (your advisor, the registrar, the department). Do not list what you searched or what you did not read.
@@ -372,6 +372,7 @@ class ResearchController:
              before_provider_call=None):
         settings = session.settings
         session.question = question
+        session.history_context = history_context
         registry = session.registry()
         executor = ToolConversationController(max_tool_calls=settings.research_max_tool_calls,
                                               max_provider_calls=settings.research_max_calls)

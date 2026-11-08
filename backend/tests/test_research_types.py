@@ -85,6 +85,45 @@ def test_research_preparation_serializes_bounded_grouped_alternatives(monkeypatc
     assert len(blocker["alternative_groups"]) == 128
 
 
+@pytest.mark.parametrize(("question", "history", "completed", "unstated"), [
+    # The sweep's FREN 351 miss: FREN 314 required FREN 310, so the model
+    # counted FREN 310 as done and answered "yes".
+    ("i've taken FREN 314. can i take FREN 351?", None, ["FREN 314", "FREN 310"], "FREN 310"),
+    ("i've taken FREN 314. can i take FREN 351?", None, ["FREN 314"], None),
+    # The other campus's offering of a stated course is the same course.
+    ("i've taken FREN 314. can i take FREN 351?", None, ["FREN_OX 314"], None),
+    # A course named in an earlier turn was stated.
+    ("can i take FREN 351 now?", "Student: I finished FREN 310 and FREN 314.", ["FREN 310"], None),
+])
+def test_research_preparation_counts_only_courses_the_student_stated(
+        monkeypatch, question, history, completed, unstated):
+    from app.generation import research_tools
+    from app.generation.research_tools import (
+        InvalidResearchRecord,
+        PreparationInput,
+        ResearchSession,
+    )
+
+    monkeypatch.setattr(research_tools, "read_courses", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(research_tools, "load_advising_context", lambda *_a, **_k: {"courses": []})
+    monkeypatch.setattr(research_tools, "load_campus_equivalents", lambda *_a, **_k: {
+        "FREN 314": frozenset({"FREN_OX 314"}), "FREN_OX 314": frozenset({"FREN 314"})})
+    session = ResearchSession.__new__(ResearchSession)
+    session.conn = SimpleNamespace(commit=lambda: None)
+    session.scope = SimpleNamespace(collection_id="collection", sources={})
+    session.acquire = lambda *_args, **_kwargs: []
+    session.checks = {}
+    session.store = SimpleNamespace(record_action=lambda *_args, **_kwargs: None)
+    session.run = SimpleNamespace(run_id="run")
+    session.question, session.history_context = question, history
+    value = PreparationInput(selected_codes=["FREN 351"], completed_codes=completed)
+    if unstated:
+        with pytest.raises(InvalidResearchRecord, match=unstated):
+            session.preparation(value, None)
+    else:
+        assert session.preparation(value, None).data["completed_codes"] == completed
+
+
 @pytest.mark.parametrize(
     ("blocks", "expected_problem"),
     [
@@ -665,17 +704,19 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
         assert json.loads(user)["executed_preparation_checks"][0]["check_id"] == "p_test"
 
 
-def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone():
+def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch):
     from types import SimpleNamespace
 
     from app.advising.research_types import EvidenceRecord
+    from app.generation import research_tools
     from app.generation.research_tools import ResearchSession
 
+    monkeypatch.setattr(research_tools, "load_campus_equivalents", lambda *_a, **_k: {})
     record = EvidenceRecord(evidence_id="e1", source_id=str(uuid4()), source_revision=1,
         source_kind="institutional_policy", source_name="Policy", chunk_id=str(uuid4()),
         locator_label="Rules", exact_text="Students must earn 124 credit hours.",
         text_digest="a" * 64, acquired_step=1, content_completeness="complete")
-    session = ResearchSession(None, SimpleNamespace(sources={}, programs={}),
+    session = ResearchSession(None, SimpleNamespace(sources={}, programs={}, collection_id=None),
         SimpleNamespace(evidence=lambda _run: [record]), SimpleNamespace(run_id=uuid4()),
         settings=None, config=None, embedder=None)
     session._course_codes = frozenset()

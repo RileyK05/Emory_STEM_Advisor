@@ -64,7 +64,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "24"
+RESEARCH_TOOLS_VERSION = "25"
 
 
 _CONFLICTS_PATH = Path(__file__).resolve().parents[2] / "configs" / "source_conflicts.toml"
@@ -413,6 +413,7 @@ class ResearchSession:
         self.decision = None
         self.rejected_decision = None
         self.question = None
+        self.history_context = None
         self.execution_id = None
         self.new_evidence = 0
         self.read_count = 0
@@ -1039,7 +1040,28 @@ class ResearchSession:
             limitations=["Compares read requirement items only; shared mentions establish no credit savings."]
             + (["Additional comparison entries were omitted to fit the page."] if incomplete else []))
 
+    def _unstated_completed(self, codes) -> list[str]:
+        """Completed courses the student never named, in this question or earlier turns.
+
+        An eligibility answer may count only what the student reported. A course
+        that a stated course itself required is still unstated: the student may
+        hold the stated one through transfer credit or a waiver.
+        """
+        if not codes:
+            return []
+        said = set(course_codes_in_query(f"{self.question or ''}\n{self.history_context or ''}"))
+        equivalents = load_campus_equivalents(self.conn, collection_id=self.scope.collection_id)
+        said |= {other for code in said for other in equivalents.get(code, ())}
+        return [code for code in codes
+                if (normal := normalize_code(code)) is not None and normal not in said]
+
     def preparation(self, value, _scope):
+        unstated = self._unstated_completed(value.completed_codes)
+        if unstated:
+            raise InvalidResearchRecord([(
+                "completed_codes may hold only courses the student said they completed; they "
+                f"did not name {', '.join(unstated)}. Check with what they said and tell them "
+                "what else the course needs, rather than assuming it is done")])
         pending = list(value.selected_codes)
         visited, all_chunks, refs = set(), {}, {}
         context = {"courses": []}
@@ -1332,8 +1354,15 @@ class ResearchSession:
         if not named:
             return {}
         known = self._known_course_codes()
+        unknown = [code for code in named if code not in known]
+        if not unknown:
+            return {}
+        # The Atlas's campus equivalence names the same course on the other
+        # campus; a code paired with a current course is real, even when that
+        # campus's own record is retired.
+        equivalents = load_campus_equivalents(self.conn, collection_id=self.scope.collection_id)
         return {code: sorted(k for k in known if course_stem(k) == course_stem(code))[:6]
-                for code in named if code not in known}
+                for code in unknown if not equivalents.get(code, frozenset()) & known}
 
     def _known_course_codes(self) -> frozenset[str]:
         """The collection's course identities, for the identity check.

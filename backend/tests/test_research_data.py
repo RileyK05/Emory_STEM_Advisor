@@ -1524,6 +1524,12 @@ def test_research_answers_progressively_and_persists_its_decision(
                 "What is ECON 201?" if scenario in {"truncated_research_repair", "truncated_research_exhausted",
                                                      "rate_limited_research_retry"} else
                 "Describe ECON 101 Principles of Macroeconomics." if scenario == "factual_evidence_retention"
+                # A preparation check counts only courses the student stated.
+                else "Help choose a path. I have completed ECON 101."
+                if scenario in {"preparation", "program_read_before_preparation"}
+                else "Help choose a path. I have completed BIOL 101."
+                if scenario in {"preparation_or_completed",
+                                "preparation_or_completed_long_unselected_branch"}
                 else "Help choose a path")
     if scenario == "finish_rejects_unsupported_references":
         from fastapi import HTTPException
@@ -1839,6 +1845,9 @@ def test_research_reserves_a_finish_and_withholds_stale_or_cancelled_results(
     ("is econ 999 required", {"ECON 999": []}),
     ("is econ 101 required", {}),
     ("what is a major", {}),
+    # The sweep's ENG_OX 330W miss: the Atlanta code has no current record,
+    # but the Atlas pairs it with a current Oxford course, so it is real.
+    ("i took ECON_OX 998 at oxford, is that the same as ECON 998?", {}),
 ])
 def test_a_named_course_that_does_not_exist_is_flagged(db, collection, tmp_path, question, unknown):
     from app.config import load_settings
@@ -1849,6 +1858,8 @@ def test_a_named_course_that_does_not_exist_is_flagged(db, collection, tmp_path,
     _corpus_ids, scope, store, run = _run(db, collection, tmp_path)
     session = ResearchSession(db, scope, store, run, settings=load_settings(),
                               config=lenient_config(), embedder=FakeEmbedder(8))
+    db.execute("INSERT INTO course_campus_equivalents (collection_id, oxford_code, atlanta_code,"
+               " basis) VALUES (%s, 'ECON_OX 998', 'ECON 998', 'course_record')", (collection,))
     session.question = question
     assert session.unknown_question_codes() == unknown
 
