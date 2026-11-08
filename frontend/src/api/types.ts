@@ -555,6 +555,7 @@ export interface AdvisorClient {
   getArtifactRun(id: string): Promise<ArtifactRun>;
   listArtifactRunEvents(id: string, afterEventId?: number): Promise<ArtifactRunEvent[]>;
   cancelArtifactRun(id: string): Promise<ArtifactRun>;
+  retryArtifactRun(id: string): Promise<ArtifactRun>;
   listConnectionProfiles(): Promise<ConnectionProfile[]>;
   createConnectionProfile(
     body: ConnectionProfileWrite & { secret?: Record<string, string> },

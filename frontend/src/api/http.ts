@@ -325,6 +325,10 @@ export class HttpClient implements AdvisorClient {
     return request<ArtifactRun>(`/api/runs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   }
 
+  async retryArtifactRun(id: string): Promise<ArtifactRun> {
+    return request<ArtifactRun>(`/api/runs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+  }
+
   async listConnectionProfiles(): Promise<ConnectionProfile[]> {
     return request<ConnectionProfile[]>('/api/admin/connections');
   }

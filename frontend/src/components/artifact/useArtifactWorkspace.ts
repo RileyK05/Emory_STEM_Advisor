@@ -205,6 +205,23 @@ export function useArtifactWorkspace(workspaceKey: string, chatKey: string | nul
     }
   };
 
+  const retryRun = async (localId: string) => {
+    const item = runsRef.current.find((existing) => existing.localId === localId);
+    if (!item) return;
+    try {
+      const nextRun = await getClient().retryArtifactRun(item.run.runId);
+      updateRun(localId, (current) => ({
+        ...current,
+        localId: nextRun.runId,
+        run: nextRun,
+        events: [],
+        pollError: null,
+      }));
+    } catch (cause) {
+      updateRun(localId, (current) => ({ ...current, pollError: errorMessage(cause) }));
+    }
+  };
+
   const dismissRun = (localId: string) =>
     setRuns((current) => current.filter((existing) => existing.localId !== localId));
 
@@ -259,6 +276,7 @@ export function useArtifactWorkspace(workspaceKey: string, chatKey: string | nul
     artifactChanged,
     trackRun,
     cancelRun,
+    retryRun,
     dismissRun,
     openArtifact,
     showRecord,

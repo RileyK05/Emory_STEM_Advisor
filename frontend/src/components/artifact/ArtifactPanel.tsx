@@ -5,7 +5,17 @@ import { readableStage } from './labels';
 import type { ArtifactWorkspace, RunItem } from './useArtifactWorkspace';
 import { runOutputs } from './useArtifactWorkspace';
 
-function RunCard({ item, onCancel, onDismiss }: { item: RunItem; onCancel: () => void; onDismiss: () => void }) {
+function RunCard({
+  item,
+  onCancel,
+  onRetry,
+  onDismiss,
+}: {
+  item: RunItem;
+  onCancel: () => void;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
   const lastStage = [...item.events].reverse().find((event) => event.stage)?.stage;
   const state = item.run.state;
   const active = state === 'queued' || state === 'running';
@@ -23,14 +33,14 @@ function RunCard({ item, onCancel, onDismiss }: { item: RunItem; onCancel: () =>
               ? 'Waiting to start…'
               : (readableStage(lastStage) ?? 'Working…')
             : state === 'failed'
-              ? 'Couldn’t finish this draft.'
+              ? "Couldn't make this. Try again."
               : state === 'cancelled'
                 ? 'Cancelled.'
                 : nothingSaved
                   ? 'Finished, but nothing was saved.'
                   : 'Finishing…'}
         </span>
-        {item.run.error && <span className="form-error">{item.run.error}</span>}
+        {state !== 'failed' && item.run.error && <span className="form-error">{item.run.error}</span>}
         {item.pollError && <span className="muted">Status check failed, retrying: {item.pollError}</span>}
         {active && <span className="progress" aria-hidden />}
       </div>
@@ -39,9 +49,16 @@ function RunCard({ item, onCancel, onDismiss }: { item: RunItem; onCancel: () =>
           Cancel
         </button>
       ) : (
-        <button type="button" className="icon-button" aria-label="Dismiss" onClick={onDismiss}>
-          <CloseIcon size={16} />
-        </button>
+        <>
+          {state === 'failed' && (
+            <button type="button" className="ghost-button" onClick={onRetry}>
+              Retry
+            </button>
+          )}
+          <button type="button" className="icon-button" aria-label="Dismiss" onClick={onDismiss}>
+            <CloseIcon size={16} />
+          </button>
+        </>
       )}
     </div>
   );
@@ -88,6 +105,7 @@ export function ArtifactPanel({ workspace }: { workspace: ArtifactWorkspace }) {
               <RunCard
                 item={run}
                 onCancel={() => void workspace.cancelRun(run.localId)}
+                onRetry={() => void workspace.retryRun(run.localId)}
                 onDismiss={() => workspace.dismissRun(run.localId)}
               />
             ) : (

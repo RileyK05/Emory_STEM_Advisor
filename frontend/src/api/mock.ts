@@ -313,6 +313,9 @@ export class MockClient implements AdvisorClient {
   async cancelArtifactRun(): Promise<ArtifactRun> {
     return { ...DEMO_RUN, state: 'cancelled' };
   }
+  async retryArtifactRun(id: string): Promise<ArtifactRun> {
+    return { ...DEMO_RUN, runId: `retry-${id}`, state: 'queued' };
+  }
 
   listConnectionProfiles = unavailable(CONNECTIONS, 404);
   createConnectionProfile = unavailable(CONNECTIONS, 404);

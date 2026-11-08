@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -21,7 +22,7 @@ class MemoryStore:
         self.event_rows = {}
         self.next_event = 1
 
-    def create(self, *, kind, scope_key, idempotency_key, payload):
+    def create(self, *, kind, scope_key, idempotency_key, payload, **_kwargs):
         key = (scope_key, idempotency_key)
         if key in self.keys:
             return self.jobs[self.keys[key]]
@@ -82,14 +83,29 @@ def _queue(store, key, inputs=None, scope="local-development"):
                             payload={"kind": "document", "inputs": inputs or {}}).job_id)
 
 
-def client_for(*, scope="local-development"):
+class _FakeRevisionConn:
+    def __init__(self, row):
+        self.row = row
+
+    def execute(self, query, params=None):
+        return self
+
+    def fetchone(self):
+        return self.row
+
+
+def client_for(*, scope="local-development", conn=None):
     app = FastAPI()
     app.state.job_store = MemoryStore()
     app.state.settings = SimpleNamespace(
-        operation_max_calls=2, operation_token_budget=16_000, llm_max_output_tokens=1024,
+        operation_max_calls=2,
+        operation_token_budget=16_000,
+        llm_max_output_tokens=1024,
+        data_dir="data",
+        workspace_storage_max_bytes=104857600,
     )
     app.dependency_overrides[get_workspace_key] = lambda: scope
-    app.dependency_overrides[get_conn] = lambda: None
+    app.dependency_overrides[get_conn] = lambda: conn
     app.include_router(router)
     return TestClient(app), app.state.job_store
 
@@ -184,7 +200,143 @@ def test_run_routes_integrate_with_postgres_job_store(migrated_dsn, db):
         payload={"kind": "workbook", "inputs": {"prompt": "Build a grade tracker"}}).job_id)
     assert client.get(f"/api/runs/{run_id}").json()["state"] == "queued"
     assert client.get(f"/api/runs/{run_id}/events").json()[0]["state"] == "queued"
-    assert client.post(f"/api/runs/{run_id}/cancel").json()["state"] == "cancelled"
+
+    # Retrying a queued run is rejected
+    assert client.post(f"/api/runs/{run_id}/retry").status_code == 409
+
+    claimed = app.state.job_store.claim("test-worker")
+    assert claimed is not None and str(claimed.job_id) == run_id
+    app.state.job_store._finish_failure(
+        claimed, claimed.lease_token, {"message": "failed"}, retryable=False
+    )
+    assert client.get(f"/api/runs/{run_id}").json()["state"] == "failed"
+
+    retried = client.post(f"/api/runs/{run_id}/retry")
+    assert retried.status_code == 200
+    retried_data = retried.json()
+    assert retried_data["state"] == "queued"
+    assert retried_data["runId"] != run_id
+
+
+@pytest.mark.parametrize(
+    "case,status,payload,conn_row,expected_status,expected_state",
+    [
+        (
+            "success_new_artifact",
+            JobStatus.FAILED,
+            {"kind": "document", "inputs": {"prompt": "Create guide"}},
+            None,
+            200,
+            "queued",
+        ),
+        (
+            "success_matching_revision",
+            JobStatus.FAILED,
+            {
+                "kind": "document",
+                "inputs": {
+                    "prompt": "Revise guide",
+                    "artifactId": "00000000-0000-0000-0000-000000000001",
+                    "expectedRevisionId": "00000000-0000-0000-0000-000000000002",
+                },
+            },
+            {
+                "head_revision_id": "00000000-0000-0000-0000-000000000002",
+                "revision_id": "00000000-0000-0000-0000-000000000002",
+                "kind": "document",
+            },
+            200,
+            "queued",
+        ),
+        (
+            "reject_queued_job",
+            JobStatus.QUEUED,
+            {"kind": "document", "inputs": {"prompt": "Create guide"}},
+            None,
+            409,
+            None,
+        ),
+        (
+            "reject_running_job",
+            JobStatus.RUNNING,
+            {"kind": "document", "inputs": {"prompt": "Create guide"}},
+            None,
+            409,
+            None,
+        ),
+        (
+            "reject_succeeded_job",
+            JobStatus.SUCCEEDED,
+            {"kind": "document", "inputs": {"prompt": "Create guide"}},
+            None,
+            409,
+            None,
+        ),
+        (
+            "reject_stale_revision",
+            JobStatus.FAILED,
+            {
+                "kind": "document",
+                "inputs": {
+                    "prompt": "Revise guide",
+                    "artifactId": "00000000-0000-0000-0000-000000000001",
+                    "expectedRevisionId": "00000000-0000-0000-0000-000000000002",
+                },
+            },
+            {
+                "head_revision_id": "00000000-0000-0000-0000-000000000003",
+                "revision_id": "00000000-0000-0000-0000-000000000003",
+                "kind": "document",
+            },
+            409,
+            None,
+        ),
+        (
+            "reject_missing_artifact",
+            JobStatus.FAILED,
+            {
+                "kind": "document",
+                "inputs": {
+                    "prompt": "Revise guide",
+                    "artifactId": "00000000-0000-0000-0000-000000000001",
+                    "expectedRevisionId": "00000000-0000-0000-0000-000000000002",
+                },
+            },
+            "not_found",
+            404,
+            None,
+        ),
+        (
+            "reject_other_workspace",
+            JobStatus.FAILED,
+            {"kind": "document", "inputs": {"prompt": "Create guide"}},
+            None,
+            404,
+            None,
+        ),
+    ],
+)
+def test_retry_run_table(case, status, payload, conn_row, expected_status, expected_state):
+    scope = "local-development"
+    job_scope = "other-workspace" if case == "reject_other_workspace" else scope
+    fake_conn = (
+        _FakeRevisionConn(None if conn_row == "not_found" else conn_row)
+        if conn_row is not None
+        else None
+    )
+    client, store = client_for(scope=scope, conn=fake_conn)
+    run_id = _queue(store, f"key-{case}", payload.get("inputs"), scope=job_scope)
+    job = store.get(UUID(run_id))
+    store.jobs[job.job_id] = Job(**{**job.__dict__, "status": status, "payload": payload})
+
+    res = client.post(f"/api/runs/{run_id}/retry")
+    assert res.status_code == expected_status
+    if expected_status == 200:
+        body = res.json()
+        assert body["state"] == expected_state
+        assert body["runId"] != run_id
+        new_job = store.get(UUID(body["runId"]))
+        assert new_job.payload["inputs"] == payload["inputs"]
 
 
 def test_response_models_keep_the_exact_wire_shape_absent_keys_stay_absent():

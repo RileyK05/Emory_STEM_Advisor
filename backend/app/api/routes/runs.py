@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import re
 from typing import Annotated, Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from app.api import deps
 from app.api.deps import request_job_store
 from app.api.schemas import ArtifactRun, ArtifactRunEvent
 from app.auth.dependencies import get_workspace_key
+from app.db.connection import PooledConnection
 from app.jobs.store import JobNotFound, JobStore
 from app.jobs.types import Job, JobEvent, JobStatus
 
@@ -196,3 +198,87 @@ def cancel_run(run_id: UUID, request: Request, workspace: WorkspaceDep) -> dict[
     if job.scope_key != scope_key:
         raise HTTPException(404, detail="Run not found.")
     return _public_run(job)
+
+
+def _check_expected_revision(
+    conn: Any,
+    workspace: str,
+    inputs: dict[str, Any],
+    settings: Any,
+) -> None:
+    artifact_id_raw = inputs.get("artifactId") or inputs.get("artifact_id")
+    if not artifact_id_raw:
+        return
+    try:
+        artifact_id = UUID(str(artifact_id_raw))
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, detail="Invalid artifact ID in run inputs.") from exc
+
+    expected_rev_raw = inputs.get("expectedRevisionId") or inputs.get("expected_revision_id")
+
+    if conn is None:
+        return
+
+    from app.artifacts.storage import ArtifactNotFound, ArtifactStore
+
+    data_dir = getattr(settings, "data_dir", "data")
+    max_storage_bytes = getattr(settings, "workspace_storage_max_bytes", 104857600)
+    art_store = ArtifactStore(
+        conn,
+        workspace_key=workspace,
+        data_dir=data_dir,
+        max_storage_bytes=max_storage_bytes,
+    )
+    try:
+        current = art_store.get(artifact_id)
+    except ArtifactNotFound as exc:
+        raise HTTPException(404, detail="Target artifact not found.") from exc
+
+    current_head = str(current.get("head_revision_id") or current.get("revision_id"))
+    if expected_rev_raw is not None and current_head != str(expected_rev_raw):
+        raise HTTPException(409, detail="Artifact revision is stale; cannot retry.")
+
+
+@router.post("/{run_id}/retry", response_model=ArtifactRun, response_model_exclude_unset=True)
+def retry_run(
+    run_id: UUID,
+    request: Request,
+    workspace: WorkspaceDep,
+    conn: Annotated[object, Depends(deps.get_conn)],
+) -> dict[str, Any]:
+    store = _store(request)
+    job = _get_scoped(store, run_id, workspace)
+    if job.kind != "artifact.run":
+        raise HTTPException(400, detail="Only artifact runs can be retried.")
+    if job.status is not JobStatus.FAILED:
+        raise HTTPException(409, detail="Only failed runs can be retried.")
+
+    payload = job.payload if isinstance(job.payload, dict) else {}
+    kind = payload.get("kind", "document")
+    inputs = payload.get("inputs")
+    if not isinstance(inputs, dict):
+        raise HTTPException(400, detail="Run has invalid inputs.")
+
+    settings = getattr(request.app.state, "settings", None)
+    _check_expected_revision(conn, workspace, inputs, settings)
+
+    if isinstance(conn, PooledConnection):
+        conn.close()
+
+    from app.jobs.artifact_runs import admit_artifact_run
+
+    header_key = request.headers.get("Idempotency-Key")
+    if header_key and 1 <= len(header_key) <= 200:
+        idempotency_key = header_key
+    else:
+        idempotency_key = f"retry:{job.job_id}:{uuid4()}"
+
+    new_job = admit_artifact_run(
+        store,
+        kind=kind,
+        inputs=inputs,
+        scope_key=workspace,
+        idempotency_key=idempotency_key,
+        settings=settings,
+    )
+    return _public_run(new_job)

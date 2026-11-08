@@ -279,6 +279,7 @@ async function setupPage({
   /** 'METHOD /api/path' -> [status, detail]: that request fails once with the given status. */
   faults = {},
   workerDown = false,
+  failDemoArtifactRun = false,
 } = {}) {
   const context = await browser.newContext();
   if (sessionStorageEntries) {
@@ -296,6 +297,7 @@ async function setupPage({
   const capturedQueries = [];
   const capturedRevisions = [];
   const capturedRuns = [];
+  const capturedRunRetries = [];
   const capturedConnectionWrites = [];
   const capturedReindexes = [];
   const capturedApiRequests = [];
@@ -1752,7 +1754,37 @@ async function setupPage({
         },
       });
     }
+    const retryMatch = /^\/api\/runs\/([^/]+)\/retry$/.exec(apiUrl.pathname);
+    if (retryMatch && req.method() === 'POST') {
+      const targetRunId = retryMatch[1];
+      capturedRunRetries.push(targetRunId);
+      return route.fulfill({
+        json: {
+          runId: `${targetRunId}-retried`,
+          state: 'queued',
+        },
+      });
+    }
+    if (apiUrl.pathname === '/api/runs/demo-artifact-run-retried' && req.method() === 'GET') {
+      return route.fulfill({
+        json: {
+          runId: 'demo-artifact-run-retried',
+          state: 'queued',
+        },
+      });
+    }
+    if (apiUrl.pathname === '/api/runs/demo-artifact-run-retried/events' && req.method() === 'GET')
+      return route.fulfill({ json: [] });
     if (apiUrl.pathname === '/api/runs/demo-artifact-run' && req.method() === 'GET') {
+      if (failDemoArtifactRun) {
+        return route.fulfill({
+          json: {
+            runId: 'demo-artifact-run',
+            state: 'failed',
+            error: 'Generation failed.',
+          },
+        });
+      }
       demoRunPolls += 1;
       const ready = demoRunPolls > 1;
       return route.fulfill({
@@ -1876,6 +1908,7 @@ async function setupPage({
     capturedQueries,
     capturedRevisions,
     capturedRuns,
+    capturedRunRetries,
     capturedConnectionWrites,
     capturedReindexes,
     capturedConversationTurns,
@@ -3163,6 +3196,24 @@ test('worker dies mid-turn: expired lease settles turn as failed with "The advis
     await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
     assert.equal(capturedConversationStreams.length, 2);
     assert.equal(capturedConversationStreams[1].body.query, 'What is a basis?');
+  } finally {
+    await context.close();
+  }
+});
+
+test("artifact run fails: panel card says \"Couldn't make this. Try again.\" and Retry calls POST /api/runs/{runId}/retry", async () => {
+  const { context, page, capturedRunRetries } = await setupPage({
+    failDemoArtifactRun: true,
+  });
+  try {
+    await send(page, 'make a plan for next semester');
+    const status = page.getByRole('status');
+    await status.getByText("Couldn't make this. Try again.", { exact: true }).waitFor();
+    const retryBtn = status.getByRole('button', { name: 'Retry', exact: true });
+    await retryBtn.waitFor();
+    await retryBtn.click();
+    await page.waitForFunction((expected) => expected.length === 1, capturedRunRetries);
+    assert.deepEqual(capturedRunRetries, ['demo-artifact-run']);
   } finally {
     await context.close();
   }
