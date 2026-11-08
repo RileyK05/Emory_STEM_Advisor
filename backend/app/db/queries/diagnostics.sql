@@ -1,3 +1,6 @@
+-- name: server_max_connections
+SELECT current_setting('max_connections')::int AS max_connections;
+
 -- name: diagnostic_connection_states
 SELECT coalesce(state, 'unknown') AS state, count(*) AS connections
 FROM pg_stat_activity

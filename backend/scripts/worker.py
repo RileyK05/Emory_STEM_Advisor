@@ -21,6 +21,7 @@ from app.auth.service import AuthConfigurationError
 from app.config import configure_runtime_database, load_settings
 from app.conversations.recovery import reconcile_pending_requests
 from app.db.bootstrap import prepare_database
+from app.db.budget import WORKER_POOL_ROLES, check_connection_budget
 from app.db.connection import connector, open_connection, resolved_database_url
 from app.generation.artifacts import build_worker_handlers
 from app.jobs.dispatch import KindDispatchingExecutor
@@ -115,6 +116,7 @@ def main() -> None:
     # DATABASE_URL is unset this holds the embedded pgserver running. Exiting
     # the block would stop the server the loop still needs.
     with open_connection(settings) as startup_conn:
+        check_connection_budget(startup_conn, settings, roles=WORKER_POOL_ROLES)
         prepare_database(startup_conn, settings.default_collection)
         dsn = resolved_database_url(settings, startup_conn)
         configure_runtime_database(dsn)

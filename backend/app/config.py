@@ -239,6 +239,10 @@ class Settings:
     # Limit per pool role per process; conversation workers use two roles.
     # 0 disables pooling.
     db_pool_max_size: int = 20
+    # Replicas of this process kind expected at peak, used by the startup
+    # connection-budget preflight. Set it to the larger of the API and worker
+    # replica counts in a deployment; the default assumes one of each.
+    db_expected_replicas: int = 1
     db_pool_timeout_seconds: float = 10.0
     # Server-side limits for pooled application connections, so a slow plan or a
     # request that leaves a transaction open cannot pin a slot indefinitely.
@@ -279,6 +283,8 @@ class Settings:
             raise ValueError("WORKER_HEALTH_PORT must be between 0 (disabled) and 65535")
         if type(self.db_pool_max_size) is not int or not 0 <= self.db_pool_max_size <= 200:
             raise ValueError("DB_POOL_MAX_SIZE must be between 0 (disabled) and 200")
+        if type(self.db_expected_replicas) is not int or not 1 <= self.db_expected_replicas <= 1000:
+            raise ValueError("DB_EXPECTED_REPLICAS must be between 1 and 1000")
         if not math.isfinite(self.db_pool_timeout_seconds) or not 0.1 <= self.db_pool_timeout_seconds <= 120:
             raise ValueError("DB_POOL_TIMEOUT_SECONDS must be between 0.1 and 120")
         if type(self.db_statement_timeout_ms) is not int or not 0 <= self.db_statement_timeout_ms <= 600_000:
@@ -570,6 +576,7 @@ def load_settings() -> Settings:
         office_max_input_bytes=_int("OFFICE_MAX_INPUT_BYTES", 16 * 1024 * 1024),
         office_max_output_bytes=_int("OFFICE_MAX_OUTPUT_BYTES", 32 * 1024 * 1024),
         db_pool_max_size=_int("DB_POOL_MAX_SIZE", 20),
+        db_expected_replicas=_int("DB_EXPECTED_REPLICAS", 1),
         db_pool_timeout_seconds=_float("DB_POOL_TIMEOUT_SECONDS", 10),
         db_statement_timeout_ms=_int("DB_STATEMENT_TIMEOUT_MS", 30_000),
         db_idle_transaction_timeout_ms=_int("DB_IDLE_TRANSACTION_TIMEOUT_MS", 60_000),

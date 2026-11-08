@@ -9,6 +9,7 @@ from psycopg_pool import PoolTimeout
 
 from app.config import load_settings
 from app.db import connection, queries
+from app.db.budget import ConnectionBudgetError, check_connection_budget
 from app.db.connection import (
     PooledConnection,
     close_pools,
@@ -135,6 +136,35 @@ def test_connector_pools_by_default_and_falls_back_to_plain_connections_when_dis
         assert isinstance(plain, psycopg.Connection)
     finally:
         plain.close()
+
+
+@pytest.mark.parametrize(
+    "max_connections,pool_size,replicas,roles,allowed",
+    [
+        (70, 20, 1, 3, True),
+        (60, 20, 1, 3, False),
+        (100, 0, 5, 3, True),
+    ],
+    ids=["exact-fit", "over-budget", "pooling-disabled"],
+)
+def test_connection_budget_preflight_uses_the_server_max_connections(
+    max_connections, pool_size, replicas, roles, allowed,
+):
+    class FakeConnection:
+        def execute(self, _statement):
+            return self
+
+        def fetchone(self):
+            return {"max_connections": max_connections}
+
+    settings = replace(
+        load_settings(), db_pool_max_size=pool_size, db_expected_replicas=replicas
+    )
+    if allowed:
+        check_connection_budget(FakeConnection(), settings, roles=roles)
+    else:
+        with pytest.raises(ConnectionBudgetError, match="connection budget"):
+            check_connection_budget(FakeConnection(), settings, roles=roles)
 
 
 def test_pool_settings_are_validated():

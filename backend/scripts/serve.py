@@ -13,6 +13,7 @@ import uvicorn
 
 from app.config import configure_runtime_database, load_settings
 from app.db.bootstrap import prepare_database
+from app.db.budget import API_POOL_ROLES, check_connection_budget
 from app.db.connection import open_connection, resolved_database_url
 
 
@@ -24,6 +25,7 @@ def main() -> None:
     args = parser.parse_args()
     settings = load_settings()
     with open_connection(settings) as conn:
+        check_connection_budget(conn, settings, roles=API_POOL_ROLES)
         prepare_database(conn, settings.default_collection)
         configure_runtime_database(resolved_database_url(settings, conn))
         uvicorn.run(
