@@ -43,7 +43,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
-| P2.1 | todo | | |
+| P2.1 | BLOCKED | f1f74c1 | In progress. Clarity probe 3 runs completed: Run 1 30/38 (Legacy 15/19, Research 15/19), Run 2 32/38 (Legacy 14/19, Research 18/19), Run 3 33/38 (Legacy 16/19, Research 17/19). Advising sweep Run 1 (seed 101) 118/124 passed. Run 2 (seed 202) completed 62 cases, then was blocked by the application daily quota limit (300 queries/day reached on workspace 'development' for 2026-11-08). Model calls (300 turns analyzed): calls/turn p50=4.0 p95=12.1 (mean 5.2); tokens/turn p50=35,702 p95=154,683 (mean 52,824); seconds/turn p50=12.57s p95=56.98s (mean 19.71s). BLOCKED on app quota; per operating rules, never edit quota rows by hand, stopping to ask user. |
 | P2.2 | todo | | |
 | P2.3 | todo | | |
 | P2.4 | todo | | |
