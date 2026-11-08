@@ -21,20 +21,22 @@ The deployable base is now in the repository:
   migration.
 - `.github/workflows/azure-deploy.yml` — optional manual OIDC deployment.
 
-It still uses public ingress, a PostgreSQL Azure-services firewall rule and
-Azure Files for `DATA_DIR`. The gaps in this document (custom identity, private
-networking, Blob adapter, SIGTERM drain, retention) remain.
+PostgreSQL, Blob/File storage and Key Vault are private through a VNet,
+delegated subnet, private DNS and private endpoints; only the web container has
+public ingress. The worker drains on SIGTERM and serves health/readiness. Azure
+Files remains the interim `DATA_DIR`, and the storage seam stores object keys
+while the real Azure Blob SDK adapter and custom identity shape stay open.
 
 ## 1. Containers to build
 
 | Container | Purpose | Port / probe | Notes |
 | --- | --- | --- | --- |
 | `api` | FastAPI + uvicorn | 8000, HTTP `/health`, `/ready` | No `--reload`; `--workers` or multiple replicas; non-root |
-| `worker` | Job queue (`scripts.worker`) | small HTTP health port (to add) | Handles conversation turns, artifact runs; needs graceful SIGTERM drain |
+| `worker` | Job queue (`scripts.worker`) | `WORKER_HEALTH_PORT` (`/health`, `/ready`) | Handles conversation turns and artifact runs; drains on SIGTERM without claiming new jobs |
 | `migrate` | One-shot schema migration | none | Runs `scripts.migrate` / `prepare_database` as a release job, then exits |
 | `web` | Built frontend + nginx | 80/443 | Optional if Front Door/Static Web Apps serves the build |
 | `pgbouncer` | Connection pooler | 6432 | Only if the replica × pool budget exceeds Flexible Server limits |
-| `backup` | Scheduled logical backup | none | Existing `scripts.backup`; runs as a job with object-storage output |
+| `backup` | Scheduled logical backup | none | Existing `scripts.backup`; runs as a scheduled Container Apps job writing to the mounted data share |
 
 Not containerized: PostgreSQL (Flexible Server), Blob Storage, Key Vault,
 Front Door/App Gateway, Log Analytics. The Office/sandbox runner is a separate
@@ -67,22 +69,19 @@ host or Azure Container Instances job; it already has its own image contract.
 
 ## 3. Storage: the one prerequisite for more than one replica
 
-Artifact originals and raw uploads are currently written under `DATA_DIR` and
-their **absolute local paths are stored in the database**
-(`backend/app/artifacts/storage.py`, `backend/app/ingest/pipeline.py`). Two
-replicas with different disks cannot read each other's files.
+Artifact originals and raw uploads now go through `app/storage/` and are
+addressed by backend-neutral object keys (`raw/...` and
+`artifacts/originals/<workspace-hash>/<sha256>`). `storage_objects` records
+each write, `scripts.backfill_storage` moves legacy absolute paths onto keys
+with a checksum check, and old backups still restore because every reader
+resolves either form. Local storage is the default and the only production
+backend. `BlobStorageAdapter` is an in-process fake used by tests; a real Azure
+Blob SDK adapter is still required before Azure Files can be removed.
 
-Two options:
-
-1. **Interim — Azure Files mounted at the same path** on every replica. No code
-   change; works for a small number of replicas; watch latency and POSIX
-   semantics.
-2. **Target — Blob Storage adapter.** Replace the local-path store with an
-   object-key store (`workspace/hash` keys), keep a local cache only for
-   processing, and backfill existing paths with a checksummed, resumable job.
-
-Horizontal API scaling is blocked on one of these. The Blob adapter is a code
-change and is not implemented yet.
+For now, Azure Files is mounted at `DATA_DIR` on every replica as the interim
+shared path. It works for a small number of replicas; watch latency and POSIX
+semantics. Two replicas with different disks still cannot share `DATA_DIR`
+until the Blob SDK adapter replaces the mount.
 
 ## 4. Authentication: build a seam, not a guess
 
@@ -98,17 +97,15 @@ plausible shapes, and the base should support all three behind one interface:
    (student ID, email, affiliation); the app verifies the signature/issuer and
    maps it to a workspace key.
 
-Base to build now:
+Base status:
 
-- an `AuthProvider` seam with `login_redirect`, `callback`, `resolve`, and
-  `logout`, keeping the current `development` and `oidc` implementations;
-- a generic **introspection adapter** (`INTROSPECTION_URL`,
-  `INTROSPECTION_CREDENTIAL`, token source cookie/header, claim map, cache TTL,
-  timeout) behind an explicit mode;
-- a **trusted-header adapter** for gateway-terminated auth, refusing unsigned or
-  wrong-issuer headers;
-- a fake identity provider for tests and load tests (mint sessions for many
-  workspaces without real credentials).
+- **Done:** an `AuthProvider` seam (`app/auth/provider.py`) behind
+  `get_principal`, with the current `development` and `oidc` implementations in
+  `AuthService`.
+- **Done:** a fake identity provider (`app/auth/fake.py`) that mints sessions
+  for many workspaces without real credentials, used by tests and load runs.
+- **Not built:** a generic introspection adapter and a trusted-header adapter.
+  Both depend on the school's answer below, and no guessing is allowed.
 
 Do not implement a guessed protocol. The single most useful answer from the
 school is: **does their system issue a JWT we can verify with JWKS, an opaque
@@ -122,13 +119,15 @@ already scopes conversations, uploads, artifacts, and gaps by that key.
 Every runtime setting is env-driven in `backend/app/config.py`. The Azure
 deployment needs at least:
 
-- `DATABASE_URL`, `DATA_DIR` (or the Blob settings), `DEFAULT_COLLECTION`
+- `DATABASE_URL`, `DATA_DIR` (or the Blob settings), `DEFAULT_COLLECTION`,
+  `STORAGE_BACKEND` (local is the production default)
 - `AUTH_MODE`, `AUTH_SERVER_KEY`, `OIDC_*` or the internal-auth settings
 - `LLM_PROVIDER`, `LLM_MODEL_ID`, `LLM_API_KEY` / managed-identity option,
   `LLM_BASE_URL` (Azure OpenAI uses the `openai-compatible` adapter)
 - `EMBEDDING_PROVIDER`, `EMBEDDING_MODEL_ID`, `EMBEDDING_DEVICE`
-- `DB_POOL_MAX_SIZE`, `DB_POOL_TIMEOUT_SECONDS`, `DB_STATEMENT_TIMEOUT_MS`,
-  `DB_IDLE_TRANSACTION_TIMEOUT_MS`, `HTTP_THREADPOOL_TOKENS`
+- `DB_POOL_MAX_SIZE`, `DB_EXPECTED_REPLICAS`, `DB_POOL_TIMEOUT_SECONDS`,
+  `DB_STATEMENT_TIMEOUT_MS`, `DB_IDLE_TRANSACTION_TIMEOUT_MS`,
+  `HTTP_THREADPOOL_TOKENS`
 - `ADMISSION_MAX_PENDING_WORKSPACE`, `ADMISSION_MAX_PENDING_GLOBAL`
 - `ADMIN_API_ENABLED` (loopback-only connection/metrics admin; the institutional
   Admin and Debug bundles are separate role-gated surfaces)
@@ -149,24 +148,29 @@ must survive redeploys and restores.
 - Proxy timeouts longer than the longest polling/answer path; the client polls
   job events, so a 30–60 s proxy read timeout is sufficient unless SSE is added.
 - Health probes: `/health` for liveness, `/ready` for readiness (DB + auth).
-- Graceful termination: uvicorn drain plus a worker SIGTERM handler that stops
-  claiming, finishes in-flight work within a grace period, and exits. The worker
-  currently handles `KeyboardInterrupt` only; SIGTERM handling is a code change.
-- Private networking for Postgres/Blob/Key Vault if the school requires it.
+- Graceful termination: uvicorn drain plus the worker's SIGTERM/SIGINT/SIGBREAK
+  handler, which stops claiming, finishes in-flight work within its lease, and
+  exits. The worker also serves `/health` and `/ready` while accepting jobs.
+- Private networking for PostgreSQL, Blob/File and Key Vault is in the base:
+  a VNet, delegated Container Apps subnet, private DNS zones and private
+  endpoints. Only the web container has public ingress.
 
 ## 7. Observability
 
 `/metrics` is loopback-only today. On Azure, either scrape it through a sidecar
 on the same loopback, or expose it on an internal-only port behind the platform.
-Alerts to define:
+`infra/modules/alerts.bicep` now defines rules (with their queries and
+thresholds) for:
 
-- queue depth and oldest queued age;
-- pool waiting/timeouts by role;
-- 5xx rate and 429 admission rate;
-- provider errors, rate limits, and timeouts;
-- DB connections vs the configured limit;
-- replica CPU/memory and worker lease-renewal failures;
-- storage/backup success.
+- API 5xx rate;
+- worker queue depth and oldest queued age;
+- provider 429 rate from `model_calls`;
+- PostgreSQL connections;
+- workspace storage near the per-student quota.
+
+The deployment must export the existing `/metrics` and alert-probe values to
+Application Insights as the custom metrics those rules read. Replica CPU/memory,
+lease-renewal failures and backup success remain operator alerts.
 
 ## 8. CI/CD
 
@@ -175,8 +179,9 @@ Alerts to define:
   credentials are stored in the repo.
 - Deploy order: migrate job → api → worker → smoke check.
 - Rollout must be additive-schema compatible; never edit an applied migration.
-- Keep the existing CI checks (pytest, real DB, ruff, frontend typecheck/build,
-  browser tests) as the gate.
+- Keep the existing CI checks (pytest with a pgvector Postgres service, ruff,
+  frontend typecheck/build, format:check, check:callers and browser tests) as
+  the gate; `.github/workflows/ci.yml` runs them on pull requests.
 
 ## 9. Questions for the hosting team
 
@@ -203,12 +208,15 @@ Alerts to define:
 
 ## 10. What I can do now vs what is blocked
 
-**Can do now:** production image, Bicep/Terraform for the resources above,
-Blob adapter with local/Azurite tests, the auth-provider seam plus a fake
-identity provider, worker SIGTERM drain, batch/upload admission, connection
-budget preflight, alert definitions.
+**Done in the code:** production image; Bicep for the platform and apps,
+including private networking and private endpoints; the storage seam with
+backend-neutral keys and a checksummed backfill; the auth-provider seam and fake
+identity provider; worker SIGTERM drain and health port; batch/upload
+admission; connection-budget preflight; alert definitions; the scheduled backup
+job and restore drill; and pull-request CI.
 
-**Blocked on answers:** which auth shape to implement first; whether to use
-Azure Files or Blob; ingress/private networking; the model endpoint and its
-authentication; and the actual subscription/resource group for deployment
-verification.
+**Still open:** a real Azure Blob SDK adapter (the current blob adapter is an
+in-process fake, so Azure Files remains the interim shared path); the school's
+auth shape (U7); the model endpoint and its authentication; and the actual
+subscription/resource group for deployment verification. No deployment has been
+made from this repository yet.

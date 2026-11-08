@@ -44,8 +44,10 @@ plans and `docs/audit/` the review status.
     expiring overrides), `privacy/`, `quotas/`,
     `pricing/` (price schedules; `record_model_call` writes every model_calls
     row), `gaps/`, `observability/`, `ops/` (readiness, backup).
-  - `storage/` — local/blob/dual-read storage seam and `storage_objects`
-    queries. Deliberately not wired in yet: groundwork for Azure hosting.
+  - `storage/` — the storage seam used by artifact originals and raw uploads:
+    local backend by default, blob/dual-read adapters for in-process tests,
+    backend-neutral object keys, `storage_objects` catalog queries, and the
+    `scripts.backfill_storage` migration for legacy absolute paths.
 - `backend/configs/` — `retrieval.toml` (unknown keys are errors),
   `routing.toml`, `simgraph_nudges.toml` and `departments.toml` (hand-written),
   `programs.toml`, `advising_sources.toml` (the reviewed upload allowlist),
@@ -125,6 +127,7 @@ From `backend/`:
 ../.venv/Scripts/python -m pytest                       # all tests, incl. DB
 ../.venv/Scripts/python -m ruff check .
 ../.venv/Scripts/python -m scripts.ingest --collection NAME FILE [FILE ...]
+../.venv/Scripts/python -m scripts.backfill_storage --limit 500   # legacy absolute paths -> storage keys
 ../.venv/Scripts/python -m scripts.scrape_catalog        # courses -> data/atlas/emory_college.jsonl
 ../.venv/Scripts/python -m scripts.scrape_catalog --offline   # rebuild JSONL from raw cache
 ../.venv/Scripts/python -m scripts.scrape_programs       # majors/minors -> data/programs/{catalog,departments}/, programs.jsonl

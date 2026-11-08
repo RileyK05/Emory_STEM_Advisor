@@ -268,11 +268,15 @@ A collection is a container of sources (no owner, no memory). A source is one
 ingested file. Its nullable `workspace_key` distinguishes shared operator-imported
 material from private uploads. `file_hash` dedups re-uploads within the same
 collection and ownership scope; private IDs use a UUID5 workspace namespace.
-The raw bytes live on disk under `DATA_DIR/raw/`, not in the database; there is
-no pluggable storage backend (the `storage_objects` table and
-`artifacts.original_storage_key` from migration 049 are unused schema).
-`status` is `uploaded`, `parsed`, `chunked`, `indexed`, or `failed` (with
-`error_message`). Current retrieval requires both `status='indexed'` and
+Raw bytes and artifact originals go through the storage seam in `app/storage/`
+with backend-neutral object keys (`raw/<collection>/[private/<workspace-hash>/]
+<sha256>`, `artifacts/originals/<workspace-hash>/<sha256>`); local is the
+default backend and the only production adapter. Each write is recorded in
+`storage_objects`, `artifacts.original_storage_key` carries the artifact key,
+and legacy absolute paths in `sources.raw_path`/`artifacts.original_path` still
+resolve so old backups restore. `scripts.backfill_storage` moves old rows onto
+keys with a checksum check. `status` is `uploaded`, `parsed`, `chunked`,
+`indexed`, or `failed` (with `error_message`). Current retrieval requires both `status='indexed'` and
 `is_current=true`. Historical sources and chunks remain readable for stored
 citations and immutable evidence snapshots.
 

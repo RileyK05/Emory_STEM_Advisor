@@ -24,8 +24,10 @@ has public ingress.
 | Container Apps environment | `<prefix>-env-*` | VNet-injected; shares Azure Files as `/workspace/data` |
 | Container App `api` | `<prefix>-api-*` | FastAPI, internal ingress only, `/health` + `/ready` |
 | Container App `web` | `<prefix>-web-*` | nginx + Vite build, the only public ingress, proxies `/api` |
-| Container App `worker` | `<prefix>-worker-*` | `scripts.worker --concurrency N` |
+| Container App `worker` | `<prefix>-worker-*` | `scripts.worker --concurrency N`, health/readiness port |
 | Container Apps job | `<prefix>-migrate-*` | `scripts.migrate`, run by the deploy script |
+| Container Apps job | `<prefix>-backup-*` | Scheduled `scripts.backup` into the data share |
+| Alert rules | `<prefix>-alert-*` | API, queue, provider, database and storage alerts |
 
 Azure Files is the interim shared data path. It lets more than one replica read
 the same raw/artifact files without a code change, but it is **not** the target
@@ -137,6 +139,7 @@ parameters. The important ones:
 | `WORKER_REPLICAS` | `1` | Keep at one until throughput is measured |
 | `WORKER_CONCURRENCY` | `4` | Jobs per worker process |
 | `DB_POOL_MAX_SIZE` | `20` | Per process and role |
+| `DB_EXPECTED_REPLICAS` | `apiMaxReplicas` | Startup connection-budget check |
 | `HTTP_THREADPOOL_TOKENS` | `80` | Sync dependency/handler pool |
 | `ADMISSION_MAX_PENDING_WORKSPACE` | `4` | Outstanding turns per workspace |
 | `ADMISSION_MAX_PENDING_GLOBAL` | `200` | Outstanding turns per instance |
@@ -197,6 +200,7 @@ docker build -f deploy/docker/Dockerfile.web -t advisor-web:local .
 ```bash
 bicep build infra/main.bicep --outfile /tmp/main.json
 bicep build infra/modules/apps.bicep --outfile /tmp/apps.json
+bicep build infra/modules/alerts.bicep --outfile /tmp/alerts.json
 bash -n deploy/azure/deploy.sh
 python -m py_compile deploy/azure/write-params.py
 ```
@@ -207,20 +211,21 @@ extension availability and ACR build minutes are account-specific.
 
 ## Deliberately not in this base
 
-- **Custom identity.** `AUTH_MODE=oidc` uses the existing OIDC adapter. The
-  school's internal sign-in needs the `AuthProvider` seam and either an
-  introspection or trusted-gateway-header adapter.
-- **Blob storage adapter.** Azure Files is mounted at `DATA_DIR`; the database
-  still stores local absolute paths. See §3 of the hosting requirements.
-- **Worker SIGTERM drain.** The worker handles `KeyboardInterrupt`; Container
-  Apps sends SIGTERM on revision replacement. Add a signal handler before
-  relying on in-flight work surviving deploys.
+- **Custom identity.** `AUTH_MODE=oidc` uses the existing OIDC adapter behind the
+  `AuthProvider` seam. The school's internal sign-in still needs an
+  introspection or trusted-gateway-header adapter; its shape is U7.
+- **Real Azure Blob SDK adapter.** The storage seam, object keys and backfill
+  exist and are wired, but `BlobStorageAdapter` is the in-process fake used by
+  tests. Azure Files remains the interim `DATA_DIR` mount until a real SDK
+  adapter replaces it. See §3 of the hosting requirements.
 - **Office/sandbox host.** The sandbox worker is a separate hardened host, not a
   Container App (`sandbox/WORKER.md`).
 - **Custom domain/TLS.** Container Apps provides a managed `*.azurecontainerapps.io`
   hostname. Front Door/custom domain is a follow-up and should own WAF.
-- **Backups.** PostgreSQL PITR is enabled; a logical backup job and restore
-  drill are not part of this base.
+- **Backup retention, offsite copies and monitoring.** The scheduled logical
+  backup and restore drill exist; they write to the same storage account, so
+  separate retention storage, offsite copies and failure alerting are deployment
+  acceptance work.
 - **Provider cache warm-up.** See `docs/plans/azure-hosting-requirements.md` and
   the cache discussion: the deployment does not assume a warm provider cache.
 
