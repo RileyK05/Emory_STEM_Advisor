@@ -102,6 +102,8 @@ def _purge_originals(paths: list[str], data_dir: Path | None, conn=None) -> None
         target = io_path(resolved)
         if target.is_file():
             target.unlink()
+        # The local storage backend keeps a checksum sidecar beside each object.
+        io_path(resolved.with_name(resolved.name + ".meta.json")).unlink(missing_ok=True)
         if conn is not None and is_storage_key(raw):
             conn.execute(queries.get("delete_storage_object"), {"storage_key": raw})
 

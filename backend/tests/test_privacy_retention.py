@@ -374,8 +374,9 @@ def test_deletion_resume_does_not_restore_local_originals(db, collection, tmp_pa
     monkeypatch.setattr(PrivacyService, "_delete_owned_rows", interrupted)
     with pytest.raises(RuntimeError, match="deletion interrupted"):
         PrivacyService.delete_workspace(db, ws, user_id=user_id, data_dir=tmp_path)
-    assert not io_path(path).exists()
-    assert not io_path(upload).exists()
+    for removed in (path, upload):
+        assert not io_path(removed).exists()
+        assert not io_path(removed.with_name(removed.name + ".meta.json")).exists()
     deletion = db.execute(
         queries.get("list_privacy_deletions"),
         {"workspace_key": ws, "limit": 1},

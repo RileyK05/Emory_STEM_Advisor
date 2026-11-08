@@ -264,7 +264,8 @@ def _paragraph(document: int, block: int, words: int) -> str:
     return f"document {document} section {block} {body}"
 
 
-def _seed(dsn: str, name: str, *, documents: int, chunks_per_document: int,
+def _seed(dsn: str, name: str, *, disposable: bool, documents: int,
+          chunks_per_document: int,
           embedder: LatencyEmbedder, config, model: str, root: Path) -> tuple[UUID, int]:
     """Create a collection of synthetic text once; return its id and chunk count."""
     from app.db import queries
@@ -275,9 +276,11 @@ def _seed(dsn: str, name: str, *, documents: int, chunks_per_document: int,
     conn = connect(dsn)
     try:
         apply_migrations(conn)
-        # The harness measures capacity, not the developer policy seeds.
-        conn.execute(queries.get("schema_clear_fresh_quota_policies"))
-        conn.commit()
+        if disposable:
+            # The harness measures capacity, not the developer policy seeds. Never
+            # clear the policies of a database the caller passed in.
+            conn.execute(queries.get("schema_clear_fresh_quota_policies"))
+            conn.commit()
         row = conn.execute(queries.get("get_collection_by_name"), {"name": name}).fetchone()
         if row is None:
             conn.execute(queries.get("insert_collection"),
@@ -657,7 +660,7 @@ def main() -> None:
         finally:
             bootstrap.close()
         collection_id, chunks = _seed(
-            dsn, collection, documents=args.documents,
+            dsn, collection, disposable=not args.database_url, documents=args.documents,
             chunks_per_document=args.chunks_per_document, embedder=embedder,
             config=config, model=settings.embedding_model_id, root=root,
         )
