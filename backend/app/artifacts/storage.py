@@ -12,7 +12,10 @@ from app.artifacts.errors import ArtifactLimitError
 from app.artifacts.models import DocumentSpec, HtmlArtifactSpec, WorkbookSpec
 from app.db import queries
 from app.privacy.fence import require_live_workspace
-from app.util.localpath import io_path
+from app.storage.base import StorageProtocol
+from app.storage.catalog import record_storage_object
+from app.storage.factory import build_storage
+from app.storage.keys import artifact_original_key
 
 Spec = DocumentSpec | WorkbookSpec | HtmlArtifactSpec
 SPEC_TYPES = {"document": DocumentSpec, "workbook": WorkbookSpec, "html": HtmlArtifactSpec}
@@ -39,13 +42,15 @@ class ArtifactStore:
     def __init__(self, conn, *, workspace_key: str, data_dir: Path,
                  max_artifacts: int = MAX_ARTIFACTS_PER_WORKSPACE,
                  max_revisions: int = MAX_REVISIONS_PER_ARTIFACT,
-                 max_storage_bytes: int | None = None):
+                 max_storage_bytes: int | None = None,
+                 storage: StorageProtocol | None = None):
         self.conn = conn
         self.workspace_key = workspace_key
-        self.data_dir = data_dir
+        self.data_dir = Path(data_dir)
         self.max_artifacts = max_artifacts
         self.max_revisions = max_revisions
         self.max_storage_bytes = max_storage_bytes
+        self.storage = storage or build_storage(data_dir=data_dir)
 
     def _check_storage_quota(
         self,
@@ -66,6 +71,7 @@ class ArtifactStore:
                 candidate_original_path=candidate_original_path,
                 original_bytes=len(original) if original is not None else 0,
                 lock=lock,
+                data_dir=self.data_dir,
             )
         except StorageQuotaError as exc:
             raise ArtifactLimitError(str(exc)) from exc
@@ -133,6 +139,7 @@ class ArtifactStore:
                 "original_filename": None,
                 "original_sha256": None,
                 "original_path": None,
+                "original_storage_key": None,
             },
         )
         self.conn.execute(
@@ -206,45 +213,30 @@ class ArtifactStore:
     ) -> dict:
         self._reject_deleted_workspace()
         artifact_id, revision_id = uuid4(), uuid4()
-        digest, path = None, None
+        digest, key = None, None
+        stored_object = None
         if original is not None:
             if len(original) > 20 * 1024 * 1024:
                 raise ValueError("original file exceeds 20 MB")
             digest = hashlib.sha256(original).hexdigest()
-            workspace_hash = hashlib.sha256(self.workspace_key.encode()).hexdigest()
-            directory = self.data_dir / "artifacts" / "originals" / workspace_hash
+            key = artifact_original_key(self.workspace_key, digest)
             self._check_storage_quota(
                 spec,
                 original=original,
-                candidate_original_path=directory / digest,
+                candidate_original_path=key,
                 lock=False,
             )
-            io_path(directory).mkdir(parents=True, exist_ok=True)
-            path = directory / digest
-            stored = io_path(path)
-            if stored.exists():
-                if hashlib.sha256(stored.read_bytes()).hexdigest() != digest:
-                    raise ValueError("stored original failed integrity check")
-            else:
-                temporary = directory / (str(uuid4()) + ".tmp")
-                staged = io_path(temporary)
-                with staged.open("xb") as handle:
-                    handle.write(original)
-                try:
-                    if (
-                        temporary.resolve().parent != directory.resolve()
-                        or path.resolve().parent != directory.resolve()
-                    ):
-                        raise ValueError("original storage path escaped configured directory")
-                    staged.replace(stored)  # Publish complete bytes atomically.
-                finally:
-                    staged.unlink(missing_ok=True)
+            stored_object = self.storage.put(key, original, content_type=None)
+            if stored_object.sha256 != digest:
+                raise ValueError("stored original failed integrity check")
         with self.conn.transaction():
             self._reject_deleted_workspace()
             self._check_artifact_cap()
             self._check_storage_quota(
-                spec, original=original, candidate_original_path=path, lock=True
+                spec, original=original, candidate_original_path=key, lock=True
             )
+            if stored_object is not None:
+                record_storage_object(self.conn, stored_object, self.storage)
             self.conn.execute(
                 queries.get("insert_artifact"),
                 {
@@ -254,7 +246,8 @@ class ArtifactStore:
                     "revision_id": revision_id,
                     "original_filename": filename,
                     "original_sha256": digest,
-                    "original_path": str(path) if path else None,
+                    "original_path": key,
+                    "original_storage_key": key,
                 },
             )
             self.conn.execute(

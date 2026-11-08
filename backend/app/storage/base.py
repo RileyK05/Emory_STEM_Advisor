@@ -26,6 +26,8 @@ class StorageIntegrityError(StorageError):
 
 
 class StorageProtocol(Protocol):
+    backend_name: str
+
     def put(self, key: str, data: bytes, *, content_type: str | None = None) -> StorageObject:
         """Atomically store data under key; returns verified metadata."""
         ...

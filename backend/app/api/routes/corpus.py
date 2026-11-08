@@ -29,6 +29,7 @@ from app.embeddings.base import Embedder
 from app.ingest.pipeline import ingest_file
 from app.llm.base import Provider
 from app.retrieval.config import RetrievalConfig
+from app.storage.keys import stored_path
 from app.util.localpath import io_path
 
 router = APIRouter()
@@ -211,7 +212,7 @@ def reindex_source(
     }).fetchone()
     if row is None:
         raise HTTPException(status_code=404, detail="owned source not found")
-    raw_path = Path(row["raw_path"]).resolve()
+    raw_path = stored_path(row["raw_path"], settings.data_dir).resolve()
     raw_root = (settings.data_dir / "raw" / str(row["collection_id"]) / "private"
                 / hashlib.sha256(workspace.encode("utf-8")).hexdigest()).resolve()
     if raw_path.parent != raw_root or raw_path.name != row["file_hash"]:

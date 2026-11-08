@@ -343,13 +343,16 @@ def test_deletion_resume_does_not_restore_local_originals(db, collection, tmp_pa
     created = ArtifactStore(db, workspace_key=ws, data_dir=tmp_path).create(
         spec, original=b"private-bytes", filename="note.txt"
     )
-    path = Path(created["original_path"])
+    from app.storage.keys import stored_path
+
+    path = stored_path(created["original_path"], tmp_path)
     assert io_path(path).read_bytes() == b"private-bytes"
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     upload_id = ingest_text(db, collection, tmp_path, "upload.txt", "Private upload text.",
                             workspace_key=ws)
-    upload = Path(db.execute("SELECT raw_path FROM sources WHERE source_id = %(s)s",
-                             {"s": upload_id}).fetchone()["raw_path"])
+    upload = stored_path(db.execute(
+        "SELECT raw_path FROM sources WHERE source_id = %(s)s", {"s": upload_id}
+    ).fetchone()["raw_path"], tmp_path)
     assert io_path(upload).is_file()
     db.execute(
         queries.get("insert_response_feedback"),

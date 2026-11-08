@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 
 class DualReadStorageAdapter(StorageProtocol):
+    backend_name = "dual"
+
     def __init__(
         self,
         primary: StorageProtocol,

@@ -1,10 +1,11 @@
 -- name: insert_artifact
 INSERT INTO artifacts (
     artifact_id, workspace_key, kind, head_revision_id,
-    original_filename, original_sha256, original_path
+    original_filename, original_sha256, original_path, original_storage_key
 ) VALUES (
     %(artifact_id)s, %(workspace_key)s, %(kind)s, %(revision_id)s,
-    %(original_filename)s, %(original_sha256)s, %(original_path)s
+    %(original_filename)s, %(original_sha256)s, %(original_path)s,
+    %(original_storage_key)s
 );
 -- name: insert_artifact_revision
 INSERT INTO artifact_revisions (

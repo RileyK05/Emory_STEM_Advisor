@@ -120,6 +120,10 @@ def _run(command: list[str], env: dict[str, str]) -> str:
 
 def _resolved_file(root: Path, raw_path: str, allowed: Path) -> Path:
     raw = Path(raw_path)
+    if not raw.is_absolute():
+        # A storage key is relative to DATA_DIR; the local backend keeps its
+        # bytes at exactly that relative path.
+        raw = root / raw
     if any(part.is_symlink() for part in (raw, *raw.parents) if part.exists()):
         raise BackupError("a database file reference crosses a symbolic link")
     path = raw.resolve(strict=True)

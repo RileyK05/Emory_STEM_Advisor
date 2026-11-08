@@ -132,8 +132,11 @@ def _verify_source(row, group, department_urls):
         raise OriginReconciliationError("a source is already assigned to a different origin")
     if row["status"] != "indexed" or row["content_type"] not in ("text/markdown", "application/pdf"):
         raise OriginReconciliationError("only indexed Markdown or PDF sources can be reconciled")
+    from app.config import load_settings
+    from app.storage.keys import stored_path
+
     try:
-        raw = Path(row["raw_path"]).read_bytes()
+        raw = stored_path(row["raw_path"], load_settings().data_dir).read_bytes()
     except OSError as exc:
         raise OriginReconciliationError("a source raw file is unavailable") from exc
     file_hash = row["file_hash"]

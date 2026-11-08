@@ -12,8 +12,15 @@ def build_storage(
     *,
     data_dir: Path | None = None,
 ) -> StorageProtocol:
-    root = data_dir or (Path(settings.data_dir) if settings and hasattr(settings, "data_dir") else Path("data"))
-    local_adapter = LocalStorageAdapter(root / "storage")
+    root = (
+        Path(data_dir)
+        if data_dir is not None
+        else Path(settings.data_dir) if settings and hasattr(settings, "data_dir")
+        else Path("data")
+    )
+    # Keys are relative to DATA_DIR, so `raw/...` and `artifacts/originals/...`
+    # land where the existing layout and the backup archive expect them.
+    local_adapter = LocalStorageAdapter(root)
 
     backend = getattr(settings, "storage_backend", "local").lower() if settings else "local"
 

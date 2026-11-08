@@ -4,7 +4,7 @@ import hashlib
 import time
 from collections.abc import Callable
 from pathlib import Path
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid5
 
 import numpy as np
 from psycopg import Connection
@@ -17,7 +17,10 @@ from app.ingest.chunker import chunk
 from app.ingest.evidence import preserve_indexed_source_evidence
 from app.ingest.extract import extract
 from app.retrieval.config import RetrievalConfig
-from app.util.localpath import io_path
+from app.storage.base import StorageObject, StorageProtocol
+from app.storage.catalog import record_storage_object
+from app.storage.factory import build_storage
+from app.storage.keys import raw_source_key
 from app.util.workspace import is_valid_workspace_key
 
 # Called inside the transaction that inserts locators and chunks. Receives the
@@ -125,27 +128,14 @@ def _guard_chunking_change(conn: Connection, source_id: UUID, version: str,
             "chunker_version, or re-index the source deliberately.")
 
 
-def _store_raw(collection_id: UUID, file_hash: str, raw: bytes,
-               workspace_key: str | None = None) -> Path:
-    """Store content-addressed bytes; private uploads get a per-workspace directory."""
-    directory = load_settings().data_dir / "raw" / str(collection_id)
-    if workspace_key is not None:
-        workspace_dir = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()
-        directory = directory / "private" / workspace_dir
-    path = directory / file_hash
-    target = io_path(path)
-    if not target.exists():
-        io_path(directory).mkdir(parents=True, exist_ok=True)
-        temporary = io_path(directory / f"{uuid4().hex}.tmp")
-        try:
-            temporary.write_bytes(raw)
-            # Atomic; a concurrent writer of the same hash wrote identical bytes.
-            temporary.replace(target)
-        finally:
-            temporary.unlink(missing_ok=True)
-    if hashlib.sha256(target.read_bytes()).hexdigest() != file_hash:
+def _store_raw(collection_id: UUID, file_hash: str, raw: bytes, storage: StorageProtocol,
+               workspace_key: str | None = None) -> tuple[str, StorageObject]:
+    """Store content-addressed bytes and return the object key and catalog entry."""
+    key = raw_source_key(str(collection_id), file_hash, workspace_key)
+    obj = storage.put(key, raw, content_type=None)
+    if obj.sha256 != file_hash:
         raise ValueError("stored raw source failed integrity check")
-    return path
+    return key, obj
 
 
 def _mark_failed(conn: Connection, source_id: UUID, index_revision: int, exc: Exception) -> None:
@@ -252,6 +242,7 @@ def ingest_file(
     allow_chunking_change: bool = False,
     provenance=None,
     max_storage_bytes: int | None = None,
+    storage: StorageProtocol | None = None,
 ) -> UUID:
     """Index one file. `provenance` (`app.ingest.provenance.SourceProvenance`) is a
     verified importer's classification; only trusted import paths pass one."""
@@ -296,9 +287,14 @@ def ingest_file(
                 max_bytes=max_storage_bytes,
                 exclude_source_id=existing["source_id"] if existing is not None else None,
                 lock=True,
+                data_dir=load_settings().data_dir,
             )
 
-    raw_path = _store_raw(collection_id, file_hash, raw, workspace_key)
+    adapter = storage or build_storage(load_settings())
+    raw_key, stored_object = _store_raw(
+        collection_id, file_hash, raw, adapter, workspace_key
+    )
+    record_storage_object(conn, stored_object, adapter)
     conn.execute(
         queries.get("upsert_source"),
         {
@@ -308,7 +304,7 @@ def ingest_file(
             "filename": existing["filename"] if force and existing else path.name,
             "content_type": content_type,
             "file_hash": file_hash,
-            "raw_path": str(raw_path),
+            "raw_path": raw_key,
             "origin_key": origin_key,
         },
     )

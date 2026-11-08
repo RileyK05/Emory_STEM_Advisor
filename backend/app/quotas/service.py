@@ -11,8 +11,8 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 
 from app.db import queries
+from app.storage.keys import stored_path
 from app.util.json import iso
-from app.util.localpath import io_path
 
 WORKSPACE_STORAGE_FULL_MESSAGE = (
     "Your workspace storage is full. Remove an uploaded file or saved artifact before adding more."
@@ -472,11 +472,15 @@ class QuotaService:
         return d
 
     @staticmethod
-    def _file_size_or_none(raw_path: str | None) -> int | None:
+    def _file_size_or_none(raw_path: str | None, data_dir: Path | None = None) -> int | None:
         if not raw_path:
             return None
+        if data_dir is None:
+            from app.config import load_settings
+
+            data_dir = Path(load_settings().data_dir)
         try:
-            target = io_path(Path(raw_path))
+            target = stored_path(raw_path, data_dir)
             if target.is_file():
                 return int(target.stat().st_size)
         except OSError:
@@ -489,6 +493,7 @@ class QuotaService:
         workspace_key: str,
         *,
         exclude_source_id: UUID | None = None,
+        data_dir: Path | None = None,
     ) -> int:
         """Total live bytes stored by ``workspace_key`` across artifacts and private uploads."""
         spec_row = conn.execute(
@@ -501,7 +506,7 @@ class QuotaService:
             queries.get("list_workspace_storage_artifact_originals"),
             {"workspace_key": workspace_key},
         ).fetchall():
-            size = QuotaService._file_size_or_none(row["original_path"])
+            size = QuotaService._file_size_or_none(row["original_path"], data_dir)
             if size is not None:
                 total += size
 
@@ -515,7 +520,7 @@ class QuotaService:
                 continue
             if raw_path:
                 seen_raw_paths.add(raw_path)
-            size = QuotaService._file_size_or_none(raw_path)
+            size = QuotaService._file_size_or_none(raw_path, data_dir)
             total += size if size is not None else int(row["chunk_bytes"])
         return total
 
@@ -527,9 +532,10 @@ class QuotaService:
         delta_bytes: int,
         max_bytes: int | None = None,
         exclude_source_id: UUID | None = None,
-        candidate_original_path: Path | None = None,
+        candidate_original_path: Path | str | None = None,
         original_bytes: int = 0,
         lock: bool = False,
+        data_dir: Path | None = None,
     ) -> int:
         """Verify adding ``delta_bytes`` stays within the workspace storage ceiling."""
         if max_bytes is None:
@@ -540,17 +546,18 @@ class QuotaService:
             conn.execute(queries.get("lock_workspace_storage"), {"workspace_key": workspace_key})
         effective_delta = max(0, int(delta_bytes))
         if candidate_original_path is not None and original_bytes > 0:
+            candidate = Path(candidate_original_path).as_posix()
             existing_originals = {
-                row["original_path"]
+                Path(row["original_path"]).as_posix()
                 for row in conn.execute(
                     queries.get("list_workspace_storage_artifact_originals"),
                     {"workspace_key": workspace_key},
                 ).fetchall()
             }
-            if str(candidate_original_path) not in existing_originals:
+            if candidate not in existing_originals:
                 effective_delta += int(original_bytes)
         used = QuotaService.workspace_storage_bytes(
-            conn, workspace_key, exclude_source_id=exclude_source_id
+            conn, workspace_key, exclude_source_id=exclude_source_id, data_dir=data_dir
         )
         if effective_delta > 0 and used + effective_delta > max_bytes:
             raise StorageQuotaError()

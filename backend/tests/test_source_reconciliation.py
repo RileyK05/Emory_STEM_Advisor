@@ -1,7 +1,6 @@
 """Explicit legacy provenance and raw-hash reconciliation against Postgres."""
 
 import hashlib
-from pathlib import Path
 
 import pytest
 
@@ -151,7 +150,10 @@ def test_reconcile_checks_raw_bytes_against_stored_sha256(
     group = {"origin_key": department_origin_key(url),
              "source_sha256s": [row["file_hash"]], "current_sha256": row["file_hash"]}
     if mutation == "raw":
-        Path(row["raw_path"]).write_bytes(raw + b"tampered")
+        from app.config import load_settings
+        from app.storage.keys import stored_path
+
+        stored_path(row["raw_path"], load_settings().data_dir).write_bytes(raw + b"tampered")
     else:
         group["provenance_by_sha256"] = {row["file_hash"]: {
             "source_category": "institutional_department", "source_url": url,

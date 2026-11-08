@@ -14,8 +14,9 @@ from psycopg.types.json import Jsonb
 from app.conversations.store import ConversationStore
 from app.db import queries
 from app.privacy.fence import require_live_workspace
+from app.storage.keys import is_storage_key, stored_path
 from app.util.json import iso
-from app.util.localpath import io_path
+from app.util.localpath import io_path, plain_path
 
 _DELETE_STEPS = (
     "delete_workspace_feedback_events",
@@ -85,14 +86,15 @@ def _original_paths(conn, workspace_key: str) -> list[str]:
     return paths
 
 
-def _purge_originals(paths: list[str], data_dir: Path | None) -> None:
+def _purge_originals(paths: list[str], data_dir: Path | None, conn=None) -> None:
     """Remove local originals. Missing files stay missing; nothing is written back."""
-    roots = ([(Path(data_dir) / sub).resolve() for sub in ("artifacts/originals", "raw")]
+    roots = ([plain_path((Path(data_dir) / sub).resolve())
+              for sub in ("artifacts/originals", "raw")]
              if data_dir is not None else None)
     for raw in paths:
-        path = Path(raw)
+        path = stored_path(raw, data_dir) if data_dir is not None else Path(raw)
         try:
-            resolved = path.resolve()
+            resolved = plain_path(path.resolve())
         except OSError:
             continue
         if roots is not None and not any(resolved.is_relative_to(root) for root in roots):
@@ -100,6 +102,8 @@ def _purge_originals(paths: list[str], data_dir: Path | None) -> None:
         target = io_path(resolved)
         if target.is_file():
             target.unlink()
+        if conn is not None and is_storage_key(raw):
+            conn.execute(queries.get("delete_storage_object"), {"storage_key": raw})
 
 
 class PrivacyService:
@@ -264,7 +268,7 @@ class PrivacyService:
             # fence. Release the workspace lock before cancelling those rows.
             conn.execute(queries.get("cancel_workspace_jobs"), {"workspace_key": workspace_key})
             conn.commit()
-            _purge_originals(paths, data_dir)
+            _purge_originals(paths, data_dir, conn)
             PrivacyService._write_deletion(
                 conn,
                 deletion_id,
@@ -327,7 +331,7 @@ class PrivacyService:
         paths.extend(path for path in _original_paths(conn, workspace_key) if path not in paths)
         payload = dict(stored)
         payload["purgedOriginals"] = paths
-        _purge_originals(paths, data_dir)
+        _purge_originals(paths, data_dir, conn)
         PrivacyService._delete_owned_rows(conn, workspace_key)
         return PrivacyService._finish_deletion(
             conn,

@@ -24,3 +24,13 @@ def io_path(path: Path | str) -> Path:
     if text.startswith("\\\\"):
         return Path("\\\\?\\UNC\\" + text[2:])
     return Path("\\\\?\\" + text)
+
+
+def plain_path(path: Path | str) -> Path:
+    """Strip the Windows extended-length prefix for comparisons and messages."""
+    text = os.fspath(path)
+    if text.startswith("\\\\?\\UNC\\"):
+        text = "\\\\" + text[8:]
+    elif text.startswith("\\\\?\\"):
+        text = text[4:]
+    return Path(text)

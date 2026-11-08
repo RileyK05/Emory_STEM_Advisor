@@ -11,15 +11,18 @@ from app.storage.base import (
     StorageProtocol,
     compute_sha256,
 )
+from app.util.localpath import io_path
 
 _META_SUFFIX = ".meta.json"
 
 
 class LocalStorageAdapter(StorageProtocol):
+    backend_name = "local"
+
     def __init__(self, root_dir: Path):
-        self.root_dir = root_dir.resolve()
+        self.root_dir = io_path(root_dir.resolve())
         self.root_dir.mkdir(parents=True, exist_ok=True)
-        self.tmp_dir = self.root_dir / ".tmp"
+        self.tmp_dir = io_path(self.root_dir / ".tmp")
         self.tmp_dir.mkdir(parents=True, exist_ok=True)
 
     def _resolve_path(self, key: str) -> Path:
@@ -27,11 +30,11 @@ class LocalStorageAdapter(StorageProtocol):
         path = (self.root_dir / clean_key).resolve()
         if not path.is_relative_to(self.root_dir):
             raise ValueError(f"storage key path traversal attempted: {key}")
-        return path
+        return io_path(path)
 
     @staticmethod
     def _meta_path(path: Path) -> Path:
-        return path.with_name(path.name + _META_SUFFIX)
+        return io_path(path.with_name(path.name + _META_SUFFIX))
 
     def _read_meta(self, path: Path) -> dict:
         meta = self._meta_path(path)
@@ -48,14 +51,14 @@ class LocalStorageAdapter(StorageProtocol):
         dest = self._resolve_path(key)
         dest.parent.mkdir(parents=True, exist_ok=True)
 
-        tmp_file = self.tmp_dir / f"{uuid4().hex}.tmp"
+        tmp_file = io_path(self.tmp_dir / f"{uuid4().hex}.tmp")
         try:
             with open(tmp_file, "wb") as f:
                 f.write(data)
 
             # Atomic rename / replace
             tmp_file.replace(dest)
-            meta_tmp = self.tmp_dir / f"{uuid4().hex}.meta"
+            meta_tmp = io_path(self.tmp_dir / f"{uuid4().hex}.meta")
             meta_tmp.write_text(json.dumps({
                 "sha256": sha256,
                 "size_bytes": len(data),
@@ -109,18 +112,20 @@ class LocalStorageAdapter(StorageProtocol):
     def list(self, prefix: str = "") -> list[StorageObject]:
         results = []
         clean_prefix = prefix.lstrip("/\\")
-        for p in self.root_dir.rglob("*"):
-            if p.is_file() and not p.is_relative_to(self.tmp_dir):
-                if p.name.endswith(_META_SUFFIX):
-                    continue
-                rel_key = p.relative_to(self.root_dir).as_posix()
-                if rel_key.startswith(clean_prefix):
-                    data = p.read_bytes()
-                    meta = self._read_meta(p)
-                    results.append(StorageObject(
-                        key=rel_key,
-                        size_bytes=len(data),
-                        sha256=meta.get("sha256") or compute_sha256(data),
-                        content_type=meta.get("content_type"),
-                    ))
+        for candidate in self.root_dir.rglob("*"):
+            if not candidate.is_file():
+                continue
+            rel_key = candidate.relative_to(self.root_dir).as_posix()
+            if candidate.name.endswith(_META_SUFFIX) or rel_key.startswith(".tmp/"):
+                continue
+            if rel_key.startswith(clean_prefix):
+                p = io_path(candidate)
+                data = p.read_bytes()
+                meta = self._read_meta(p)
+                results.append(StorageObject(
+                    key=rel_key,
+                    size_bytes=len(data),
+                    sha256=meta.get("sha256") or compute_sha256(data),
+                    content_type=meta.get("content_type"),
+                ))
         return results

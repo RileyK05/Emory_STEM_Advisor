@@ -1,6 +1,5 @@
 """Pipeline tests against a real Postgres. No models load."""
 
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -82,10 +81,14 @@ def test_raw_upload_goes_to_data_dir(db, collection, tmp_path):
     path = tmp_path / "doc.txt"
     path.write_text("alpha beta gamma\n", encoding="utf-8")
     _ingest(db, collection, path, "text/plain")
+    from app.storage.keys import stored_path
+
     raw_path = db.execute(
         "SELECT raw_path FROM sources WHERE collection_id = %(c)s", {"c": collection}
     ).fetchone()["raw_path"]
-    assert load_settings().data_dir.resolve() in Path(raw_path).resolve().parents
+    assert load_settings().data_dir.resolve() in stored_path(
+        raw_path, load_settings().data_dir
+    ).resolve().parents
 
 
 def test_a_reindex_that_would_move_a_chunk_is_refused(db, collection, tmp_path):

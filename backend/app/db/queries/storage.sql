@@ -36,3 +36,28 @@ UPDATE artifacts
 SET original_storage_key = %(storage_key)s
 WHERE artifact_id = %(artifact_id)s;
 
+-- name: list_sources_for_storage_backfill
+SELECT source_id, collection_id, workspace_key, file_hash, content_type, raw_path
+FROM sources
+WHERE raw_path NOT LIKE 'raw/%'
+ORDER BY source_id
+LIMIT %(limit)s;
+
+-- name: list_artifacts_for_storage_backfill
+SELECT artifact_id, workspace_key, original_sha256, original_path
+FROM artifacts
+WHERE original_path IS NOT NULL
+  AND original_path NOT LIKE 'artifacts/originals/%'
+ORDER BY artifact_id
+LIMIT %(limit)s;
+
+-- name: update_source_storage_path
+UPDATE sources
+SET raw_path = %(raw_path)s
+WHERE source_id = %(source_id)s::uuid;
+
+-- name: update_artifact_storage_reference
+UPDATE artifacts
+SET original_path = %(storage_key)s, original_storage_key = %(storage_key)s
+WHERE artifact_id = %(artifact_id)s::uuid;
+

@@ -114,6 +114,65 @@ def test_storage_factory_refuses_the_in_memory_blob_adapter(tmp_path):
             build_storage(SimpleNamespace(data_dir=str(tmp_path), storage_backend=backend), data_dir=tmp_path)
 
 
+@pytest.mark.parametrize("backend", ["local", "blob"])
+def test_artifact_originals_and_raw_uploads_store_backend_neutral_keys(
+    db, collection, tmp_path, backend,
+):
+    from app.artifacts.models import DocumentSpec, ParagraphBlock
+    from app.artifacts.storage import ArtifactStore
+    from app.db import queries
+    from app.ingest.pipeline import ingest_file
+    from app.storage.keys import artifact_original_key, raw_source_key
+    from tests.fakes import FakeEmbedder, whitespace_tokens
+    from tests.helpers import lenient_config
+
+    shared = {}
+    storage = (
+        LocalStorageAdapter(tmp_path)
+        if backend == "local"
+        else BlobStorageAdapter(shared_backend=shared)
+    )
+
+    from app.util.localpath import io_path
+
+    def stored(key: str) -> bytes:
+        return io_path(tmp_path / key).read_bytes() if backend == "local" else storage.get(key)
+
+    store = ArtifactStore(
+        db, workspace_key="development", data_dir=tmp_path, storage=storage
+    )
+    original = b"original office bytes"
+    artifact = store.create(
+        DocumentSpec(title="Plan", blocks=[ParagraphBlock(id="p1", text="Fall")]),
+        original=original,
+        filename="plan.docx",
+    )
+    digest = compute_sha256(original)
+    artifact_key = artifact_original_key("development", digest)
+    assert artifact["original_storage_key"] == artifact_key
+    assert artifact["original_path"] == artifact_key
+    assert stored(artifact_key) == original
+    row = db.execute(
+        queries.get("get_storage_object"), {"storage_key": artifact_key}
+    ).fetchone()
+    assert row["sha256"] == digest and row["backend"] == backend
+
+    path = tmp_path / "notes.txt"
+    path.write_bytes(b"alpha beta gamma\n")
+    source_id = ingest_file(
+        db, collection_id=collection, path=path, content_type="text/plain",
+        count_tokens=whitespace_tokens, embedder=FakeEmbedder(dim=8),
+        embed_model="test-embed", config=lenient_config(),
+        workspace_key="development", storage=storage,
+    )
+    raw_key = db.execute(
+        "SELECT raw_path FROM sources WHERE source_id = %s", (source_id,)
+    ).fetchone()["raw_path"]
+    assert raw_key == raw_source_key(str(collection), compute_sha256(b"alpha beta gamma\n"),
+                                     "development")
+    assert stored(raw_key) == b"alpha beta gamma\n"
+
+
 def test_blob_storage_checksum_integrity_error():
     blob = BlobStorageAdapter()
     key = "tamper_test.bin"

@@ -12,6 +12,8 @@ from app.storage.base import (
 
 
 class BlobStorageAdapter(StorageProtocol):
+    backend_name = "blob"
+
     def __init__(
         self,
         container_name: str = "advisor-data",

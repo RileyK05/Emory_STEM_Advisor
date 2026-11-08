@@ -89,6 +89,10 @@ class Settings:
     # Where ingest keeps raw uploads (`raw/`) and the dev database
     # (`pgserver/`). Gitignored. Tests point it at a temp dir.
     data_dir: Path
+    # Storage seam backend. `local` is the default and the only adapter wired
+    # into production; `blob` and `dual` remain test seams until an Azure Blob
+    # client is installed.
+    storage_backend: str = "local"
     # Optional exact tokenizer tokens that terminate a local model turn.
     # None selects defaults for the configured model; () disables additions.
     hf_stop_token_strings: tuple[str, ...] | None = None
@@ -363,6 +367,8 @@ class Settings:
             raise ValueError("native tools require a capable cloud connection or evaluated routing")
         if self.auth_mode not in {"development", "oidc"}:
             raise ValueError("AUTH_MODE must be development or oidc")
+        if self.storage_backend not in {"local", "blob", "dual"}:
+            raise ValueError("STORAGE_BACKEND must be local, blob or dual")
         if not 300 <= self.auth_session_ttl_seconds <= 86400 or not 60 <= self.auth_transaction_ttl_seconds <= 900:
             raise ValueError("authentication lifetimes are invalid")
         if not 300 <= self.debug_session_ttl_seconds <= 86400:
@@ -474,6 +480,7 @@ def load_settings() -> Settings:
         database_url=_optional("DATABASE_URL"),
         default_collection=os.environ.get("DEFAULT_COLLECTION", "default"),
         data_dir=data_dir,
+        storage_backend=os.environ.get("STORAGE_BACKEND", "local").lower(),
         llm_model_id=_optional("LLM_MODEL_ID"),
         llm_api_key=os.environ.get("LLM_API_KEY") or (os.environ.get(key_variable) if key_variable else None),
         llm_base_url=_optional("LLM_BASE_URL"),
