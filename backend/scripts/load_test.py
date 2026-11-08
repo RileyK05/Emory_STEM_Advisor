@@ -21,7 +21,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import math
 import os
+import random
 import shutil
 import statistics
 import threading
@@ -73,6 +75,9 @@ class LatencyEmbedder:
     def count_tokens(self, text: str) -> int:
         return len(text.split())
 
+    def chunk_tokens(self, text: str) -> int:
+        return len(text.split())
+
     def embed_documents(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.empty((0, self.dim), dtype=np.float32)
@@ -84,34 +89,99 @@ class LatencyEmbedder:
         return self.vectors(text)
 
 
-class LatencyProvider:
-    """The typed Provider contract with a configurable generation delay."""
+def _sample_lognormal(rng: random.Random, p50: float, p95: float) -> float:
+    """One draw matching a median and 95th percentile."""
+    if p50 <= 0:
+        return 0.0
+    if p95 <= p50:
+        return p50
+    sigma = (math.log(p95) - math.log(p50)) / 1.6448536269514722
+    return math.exp(rng.gauss(math.log(p50), sigma))
 
-    def __init__(self, delay_seconds: float = 3.0, text: str = _ANSWER) -> None:
+
+class LatencyProvider:
+    """The typed Provider contract with a configurable latency/token distribution.
+
+    A 429 burst is simulated by raising ``RateLimitError`` for the configured
+    fraction of calls, with a Retry-After the controller must honour.
+    """
+
+    def __init__(
+        self,
+        delay_seconds: float = 3.0,
+        text: str = _ANSWER,
+        *,
+        p50_seconds: float = 0.0,
+        p95_seconds: float = 0.0,
+        token_p50: int = 2048,
+        token_p95: int = 2048,
+        rate_limit_fraction: float = 0.0,
+        rate_limit_retry_after: float = 1.0,
+        seed: int = 20261108,
+    ) -> None:
         self.delay_seconds = delay_seconds
+        self.p50_seconds = p50_seconds
+        self.p95_seconds = p95_seconds
+        self.token_p50 = token_p50
+        self.token_p95 = max(token_p50, token_p95)
+        self.rate_limit_fraction = rate_limit_fraction
+        self.rate_limit_retry_after = rate_limit_retry_after
         self.text = text
         self.calls = 0
+        self.rate_limited = 0
+        self._rng = random.Random(seed)
+        self._lock = threading.Lock()
+
+    def _delay(self) -> float:
+        with self._lock:
+            if self.p50_seconds > 0:
+                return _sample_lognormal(self._rng, self.p50_seconds, self.p95_seconds)
+            return self.delay_seconds
 
     def _result(self):
         from app.llm.base import GenerationResult, Usage
 
-        self.calls += 1
+        with self._lock:
+            self.calls += 1
+            total = round(_sample_lognormal(
+                self._rng, float(self.token_p50), float(self.token_p95)
+            ))
+        total = max(2, total)
+        completion = max(1, min(total // 2, 256))
         return GenerationResult(
             text=self.text,
             finish_reason="stop",
-            usage=Usage(prompt_tokens=2048, completion_tokens=64, source="provider"),
+            usage=Usage(prompt_tokens=total - completion, completion_tokens=completion,
+                        source="provider"),
         )
 
+    def _maybe_rate_limit(self) -> None:
+        if self.rate_limit_fraction <= 0:
+            return
+        with self._lock:
+            limited = self._rng.random() < self.rate_limit_fraction
+            if limited:
+                self.rate_limited += 1
+        if limited:
+            from app.llm.base import RateLimitError
+
+            raise RateLimitError(
+                "fake provider rate limit", provider="load-test",
+                retry_after=self.rate_limit_retry_after,
+            )
+
     def generate(self, request):
-        time.sleep(self.delay_seconds)
+        self._maybe_rate_limit()
+        time.sleep(self._delay())
         return self._result()
 
     def stream(self, request):
         from app.llm.base import StreamEvent
 
+        self._maybe_rate_limit()
         first, _, last = self.text.partition(" ")
         yield StreamEvent(type="text_delta", text=first + " ")
-        time.sleep(self.delay_seconds)
+        time.sleep(self._delay())
         yield StreamEvent(
             type="text_delta", text=last
         )
@@ -121,6 +191,32 @@ class LatencyProvider:
         time.sleep(self.delay_seconds)
         self._result()
         return self.text
+
+
+class GatedProvider:
+    """Apply the P5.3 per-provider concurrency cap around the fake provider."""
+
+    def __init__(self, provider, limit: int):
+        from app.llm.base import ProviderGate
+
+        self.provider = provider
+        self.gate = ProviderGate(limit, provider="load-test")
+
+    @property
+    def calls(self) -> int:
+        return getattr(self.provider, "calls", 0)
+
+    @property
+    def rate_limited(self) -> int:
+        return getattr(self.provider, "rate_limited", 0)
+
+    def generate(self, request):
+        with self.gate.acquire(request) as active:
+            return self.provider.generate(active)
+
+    def stream(self, request):
+        with self.gate.acquire(request) as active:
+            yield from self.provider.stream(active)
 
 
 def _lenient_config(settings: Settings):
@@ -144,7 +240,15 @@ def _dsn_and_root(args) -> tuple[str, Path, object | None]:
         return args.database_url, root, None
     import pgserver
 
-    server = pgserver.get_server(root / "pgserver", cleanup_mode="stop")
+    pgdata = root / "pgserver"
+    if getattr(args, "max_connections", 0) > 0 and not (pgdata / "PG_VERSION").exists():
+        from pgserver._commands import initdb
+
+        pgdata.mkdir(parents=True, exist_ok=True)
+        initdb(["-U", "postgres", "--auth=trust", "-E", "UTF8"], pgdata=pgdata)
+        with (pgdata / "postgresql.conf").open("a", encoding="utf-8") as config:
+            config.write(f"\nmax_connections = {args.max_connections}\n")
+    server = pgserver.get_server(pgdata, cleanup_mode="stop")
     dsn = server.get_uri()
     os.environ["DATABASE_URL"] = dsn
     return dsn, root, server
@@ -171,6 +275,8 @@ def _seed(dsn: str, name: str, *, documents: int, chunks_per_document: int,
     conn = connect(dsn)
     try:
         apply_migrations(conn)
+        # The harness measures capacity, not the developer policy seeds.
+        conn.execute(queries.get("schema_clear_fresh_quota_policies"))
         conn.commit()
         row = conn.execute(queries.get("get_collection_by_name"), {"name": name}).fetchone()
         if row is None:
@@ -292,12 +398,12 @@ async def _run_arrivals(app, collection: str, rate: float, duration: float,
     return statuses, latencies, elapsed, extra, waits
 
 
-async def _warmup(app, timeout: float) -> None:
+async def _warmup(app, timeout: float, headers: dict[str, str] | None = None) -> None:
     """Run one request so per-process schema bootstrap is not measured as load."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://localhost",
                                  timeout=timeout) as client:
-        await client.get("/api/collections")
+        await client.get("/api/collections", headers=headers or {})
 
 
 async def _run_queries(app, collection: str, requests: int, concurrency: int,
@@ -377,10 +483,12 @@ def _start_workers(settings: Settings, config, embedder, provider, count: int,
 
 
 async def _run_conversations(app, collection: str, requests: int, concurrency: int,
-                             timeout: float, poll_seconds: float
-                             ) -> tuple[Counter, list[float], float, str]:
+                             timeout: float, poll_seconds: float, auth_provider
+                             ) -> tuple[Counter, list[float], list[float], float, str]:
     statuses: Counter = Counter()
+    details: Counter = Counter()
     latencies: list[float] = []
+    first_tokens: list[float] = []
     polls = 0
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://localhost",
@@ -389,11 +497,19 @@ async def _run_conversations(app, collection: str, requests: int, concurrency: i
 
         async def one(index: int) -> None:
             nonlocal polls
+            from app.auth.service import COOKIE_NAME
+
+            token = auth_provider.issue(f"load-workspace-{index}")
+            headers = {
+                "Cookie": f"{COOKIE_NAME}={token}",
+                "Origin": "http://localhost",
+            }
             async with gate:
                 start = time.perf_counter()
                 try:
-                    created = await client.post("/api/conversations",
-                                                json={"title": f"load {index}"})
+                    created = await client.post(
+                        "/api/conversations", json={"title": f"load {index}"}, headers=headers,
+                    )
                     conversation = created.json()["conversationId"]
                     request_id = str(uuid4())
                     started = await client.post(
@@ -401,22 +517,36 @@ async def _run_conversations(app, collection: str, requests: int, concurrency: i
                         json={"query": QUERIES[index % len(QUERIES)],
                               "collectionId": collection, "requestId": request_id,
                               "expectedSequence": 0},
+                        headers=headers,
                     )
                     started.raise_for_status()
                     after = 0
+                    first_seen = False
                     while True:
                         events = await client.get(
                             f"/api/conversations/{conversation}/turns/{request_id}/events",
-                            params={"afterEventId": after},
+                            params={"afterEventId": after}, headers=headers,
                         )
                         events.raise_for_status()
                         polls += 1
                         body = events.json()
+                        if not first_seen and any(
+                            event.get("type") == "provisional_delta" and event.get("text")
+                            for event in body.get("events", [])
+                        ):
+                            first_seen = True
+                            first_tokens.append(time.perf_counter() - start)
                         after = body.get("nextEventId", after)
                         if body.get("done"):
                             statuses[f"{body.get('requestState')}/{body.get('jobState')}"] += 1
                             break
                         await asyncio.sleep(poll_seconds)
+                except httpx.HTTPStatusError as exc:
+                    statuses[f"http_{exc.response.status_code}"] += 1
+                    try:
+                        details[str(exc.response.json().get("detail"))[:120]] += 1
+                    except Exception:  # noqa: BLE001 - diagnostics only
+                        details[exc.response.text[:120]] += 1
                 except Exception as exc:  # noqa: BLE001 - a failed request is a datum
                     statuses[type(exc).__name__] += 1
                 finally:
@@ -425,9 +555,12 @@ async def _run_conversations(app, collection: str, requests: int, concurrency: i
         started_at = time.perf_counter()
         await asyncio.gather(*(one(index) for index in range(requests)))
         elapsed = time.perf_counter() - started_at
-    return statuses, latencies, elapsed, (
+    extra = (
         f"concurrency={concurrency} polls={polls} pollInterval={poll_seconds * 1000:.0f}ms"
     )
+    if details:
+        extra += " errors=" + ", ".join(f"{key}×{value}" for key, value in details.items())
+    return statuses, latencies, first_tokens, elapsed, extra
 
 
 def main() -> None:
@@ -446,9 +579,24 @@ def main() -> None:
     parser.add_argument("--documents", type=int, default=40)
     parser.add_argument("--chunks-per-document", type=int, default=25)
     parser.add_argument("--provider-latency-ms", type=int, default=3000)
+    parser.add_argument("--provider-p50-ms", type=int, default=0,
+                        help="sample call latency from this median (0 uses fixed latency)")
+    parser.add_argument("--provider-p95-ms", type=int, default=0,
+                        help="95th percentile paired with --provider-p50-ms")
+    parser.add_argument("--token-p50", type=int, default=2048,
+                        help="sampled tokens per call median")
+    parser.add_argument("--token-p95", type=int, default=2048,
+                        help="sampled tokens per call 95th percentile")
+    parser.add_argument("--rate-limit-fraction", type=float, default=0.0,
+                        help="fraction of provider calls that get a 429 burst")
+    parser.add_argument("--rate-limit-retry-after", type=float, default=1.0)
+    parser.add_argument("--max-concurrency", type=int, default=8,
+                        help="P5.3 per-provider call cap")
     parser.add_argument("--embed-latency-ms", type=int, default=30)
     parser.add_argument("--poll-ms", type=int, default=250)
     parser.add_argument("--pool-size", type=int, default=20)
+    parser.add_argument("--max-connections", type=int, default=0,
+                        help="disposable server max_connections (0 keeps the server default)")
     parser.add_argument("--timeout-seconds", type=float, default=120.0)
     parser.add_argument("--database-url", default=None)
     parser.add_argument("--data-dir", default=None)
@@ -479,10 +627,28 @@ def main() -> None:
             tools_enabled=False, query_planning_enabled=False,
             advising_research_enabled=False,
             http_threadpool_tokens=max(64, args.concurrency),
+            llm_max_concurrency=args.max_concurrency,
+            operation_max_calls=4,
+            operation_token_budget=max(16_000, args.token_p95 * 4),
+            # The harness measures app capacity, not a developer's quota policy.
+            quota_queries_per_minute=0, quota_queries_per_day=0,
+            quota_tokens_per_day=0, quota_spend_usd_per_day=0.0,
+            quota_max_active_jobs=0,
         )
         config = _lenient_config(settings)
         embedder = LatencyEmbedder(delay_seconds=args.embed_latency_ms / 1000)
-        provider = LatencyProvider(delay_seconds=args.provider_latency_ms / 1000)
+        provider = GatedProvider(
+            LatencyProvider(
+                delay_seconds=args.provider_latency_ms / 1000,
+                p50_seconds=args.provider_p50_ms / 1000,
+                p95_seconds=args.provider_p95_ms / 1000,
+                token_p50=args.token_p50,
+                token_p95=args.token_p95,
+                rate_limit_fraction=args.rate_limit_fraction,
+                rate_limit_retry_after=args.rate_limit_retry_after,
+            ),
+            args.max_concurrency,
+        )
         collection = args.collection or f"loadtest-{uuid4().hex[:8]}"
 
         bootstrap = connect(dsn)
@@ -520,9 +686,30 @@ def main() -> None:
             for row in plan:
                 print("  " + row["QUERY PLAN"])
 
+        from app.auth.fake import FakeAuthProvider
+
+        auth_provider = (
+            FakeAuthProvider(redirect_uri="http://localhost/api/auth/callback")
+            if args.scenario == "conversation" else None
+        )
+        if auth_provider is not None:
+            # The fake provider stands in for every student's evaluated
+            # connection; this harness measures application capacity, not
+            # profile routing. Each turn still gets its own workspace.
+            from app.api import query_service as query_api
+
+            query_api._select_connection = lambda *args, **kwargs: None
         app = create_app(settings=settings, config=config, embedder=embedder,
-                         provider=provider)
-        asyncio.run(_warmup(app, args.timeout_seconds))
+                         provider=provider, auth_provider=auth_provider)
+        warm_headers = {}
+        if auth_provider is not None:
+            from app.auth.service import COOKIE_NAME
+
+            warm_headers = {
+                "Cookie": f"{COOKIE_NAME}={auth_provider.issue('load-warmup')}",
+                "Origin": "http://localhost",
+            }
+        asyncio.run(_warmup(app, args.timeout_seconds, warm_headers))
         stop = threading.Event()
         sampler = None
         if args.sample_pools:
@@ -554,9 +741,10 @@ def main() -> None:
             if args.scenario == "conversation":
                 workers = _start_workers(settings, config, embedder, provider,
                                          args.workers, stop)
-                statuses, latencies, elapsed, extra = asyncio.run(
+                statuses, latencies, first_tokens, elapsed, extra = asyncio.run(
                     _run_conversations(app, collection, args.requests, args.concurrency,
-                                       args.timeout_seconds, args.poll_ms / 1000))
+                                       args.timeout_seconds, args.poll_ms / 1000,
+                                       auth_provider))
             elif args.arrival_rate > 0:
                 statuses, latencies, elapsed, extra, waits = asyncio.run(
                     _run_arrivals(app, collection, args.arrival_rate, args.duration,
@@ -576,6 +764,26 @@ def main() -> None:
         from app.db.connection import close_pools
 
         _summary(args.scenario, statuses, latencies, elapsed, extra=extra, waits=waits)
+        if args.scenario == "conversation":
+            if first_tokens:
+                print(f"  first token ms: p50={_percentile(first_tokens, 0.50) * 1000:.0f} "
+                      f"p95={_percentile(first_tokens, 0.95) * 1000:.0f} "
+                      f"p99={_percentile(first_tokens, 0.99) * 1000:.0f}")
+            if provider.rate_limited:
+                print(f"  provider 429s: {provider.rate_limited}")
+            if any(status.startswith(("failed", "pending")) for status in statuses):
+                from app.db.connection import connect
+
+                debug = connect(dsn)
+                try:
+                    rows = debug.execute(
+                        "SELECT status, error FROM jobs WHERE status = 'failed' "
+                        "ORDER BY finished_at DESC LIMIT 5"
+                    ).fetchall()
+                finally:
+                    debug.close()
+                for row in rows:
+                    print(f"  failed job: {row['error']}")
         print(f"  provider calls: {provider.calls}")
         print(f"  corpus: {chunks} chunks in collection {collection_id}")
         _pools()

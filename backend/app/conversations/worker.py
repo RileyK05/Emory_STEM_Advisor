@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+import psycopg
 from fastapi import HTTPException
 
 from app.api.schemas import QueryRequest
@@ -251,12 +252,13 @@ class ConversationTurnExecutor:
         conversation_id, request_id = _request_ids(job)
         try:
             store = ConversationStore(conn, job.scope_key)
-            store.finish(
-                conversation_id,
-                request_id,
-                {"type": state, "reason": reason},
-                state=state,
-            )
+            result = {"type": state, "reason": reason}
+            if conn.info.transaction_status == psycopg.pq.TransactionStatus.IDLE:
+                store.finish(conversation_id, request_id, result, state=state)
+            else:
+                # The job worker invokes hooks inside its settlement
+                # transaction; committing here would abort that transaction.
+                store.finish_uncommitted(conversation_id, request_id, result, state=state)
         except HTTPException:
             # The request was already settled or abandoned concurrently.
             pass

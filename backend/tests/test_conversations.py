@@ -461,7 +461,10 @@ def test_stream_request_with_sync_identity_never_creates_another_job(db, collect
     assert events.json()["jobState"] == "unknown" and events.json()["done"] is True
 
 
-def test_conversation_failure_hook_settles_the_pending_request(db, migrated_dsn):
+@pytest.mark.parametrize("in_transaction", [False, True])
+def test_conversation_failure_hook_settles_the_pending_request(
+    db, migrated_dsn, in_transaction,
+):
     from app.conversations.worker import ConversationTurnExecutor
     from app.db.connection import connect
     from app.jobs.store import JobStore
@@ -474,7 +477,11 @@ def test_conversation_failure_hook_settles_the_pending_request(db, migrated_dsn)
         {"request": {"query": "will fail"}, "query": "will fail", "effective": {}},
     )
     job = JobStore(lambda: connect(migrated_dsn)).get(accepted["job_id"])
-    ConversationTurnExecutor.on_failure(db, job, RuntimeError("provider failed"))
+    if in_transaction:
+        with db.transaction():
+            ConversationTurnExecutor.on_failure(db, job, RuntimeError("provider failed"))
+    else:
+        ConversationTurnExecutor.on_failure(db, job, RuntimeError("provider failed"))
 
     transcript = store.get(conversation_id)
     assert transcript["pending_request_id"] is None
