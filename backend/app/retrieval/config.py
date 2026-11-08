@@ -38,6 +38,7 @@ class EmbedSeamConfig:
     # chunk is unrelated noise; it is dropped rather than fused. Vectors are
     # unit-norm, so this is a dot product in [-1, 1].
     min_similarity: float
+    ef_search: int = 40
 
 
 @dataclass(frozen=True)
@@ -190,12 +191,13 @@ def _parse_keyword(seams: dict) -> KeywordSeamConfig:
 
 def _parse_embed(seams: dict) -> EmbedSeamConfig:
     section = _section(
-        seams, "embed", {"enabled", "limit", "only_quota", "min_similarity"}, "seams")
+        seams, "embed", {"enabled", "limit", "only_quota", "min_similarity", "ef_search"}, "seams")
     embed = EmbedSeamConfig(
         enabled=bool(_require(section, "enabled", "seams.embed")),
         limit=int(_require(section, "limit", "seams.embed")),
         only_quota=int(_require(section, "only_quota", "seams.embed")),
         min_similarity=float(_require(section, "min_similarity", "seams.embed")),
+        ef_search=int(section.get("ef_search", 40)),
     )
     if embed.limit <= 0:
         raise ConfigError("seams.embed.limit must be positive")
@@ -203,6 +205,8 @@ def _parse_embed(seams: dict) -> EmbedSeamConfig:
         raise ConfigError("seams.embed.only_quota must be >= 0")
     if not -1.0 <= embed.min_similarity <= 1.0:
         raise ConfigError("seams.embed.min_similarity must be in [-1, 1]")
+    if embed.ef_search <= 0:
+        raise ConfigError("seams.embed.ef_search must be positive")
     return embed
 
 

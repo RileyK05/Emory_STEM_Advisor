@@ -47,9 +47,22 @@ def embed_seam(
         query_vec = embedder.embed_query(query)
 
     dim = len(query_vec)
-    rows = conn.execute(
-        queries.get("embed_search"),
-        {
+    if dim == 768:
+        conn.execute(queries.get("set_hnsw_ef_search"), {"ef_search": config.ef_search})
+        query_sql = queries.get("embed_search_768")
+        params = {
+            "q": query_vec,
+            "source_ids": source_ids,
+            "workspace_key": workspace_key,
+            "model": model,
+            "collection_id": collection_id,
+            "ann_limit": max(config.ef_search, config.limit * 5),
+            "limit": config.limit,
+            "min_similarity": config.min_similarity,
+        }
+    else:
+        query_sql = queries.get("embed_search")
+        params = {
             "q": query_vec,
             "source_ids": source_ids,
             "workspace_key": workspace_key,
@@ -58,8 +71,8 @@ def embed_seam(
             "collection_id": collection_id,
             "limit": config.limit,
             "min_similarity": config.min_similarity,
-        },
-    ).fetchall()
+        }
+    rows = conn.execute(query_sql, params).fetchall()
     if not rows:
         return SeamResult(
             name="embed",

@@ -18,6 +18,7 @@ only_quota = 4
 # Drop chunks whose cosine similarity to the query is below this. Starting
 # guess; tune on the real corpus with the eval set.
 min_similarity = 0.25
+ef_search = 200
 
 [seams.prereq]
 enabled = true
