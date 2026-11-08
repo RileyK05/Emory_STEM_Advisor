@@ -8,6 +8,11 @@ management and review, and **Debug** at `/debug` (`/debug.html`) for an expiring
 scoped prompt/retrieval session. Main, Admin, and Debug share authentication but
 load separate bundles. The two session roles are student and admin.
 
+## Contributing
+
+You can't push here directly: fork, branch, and open a pull request.
+Step-by-step instructions: [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Repository layout
 
 | Location | Purpose |
