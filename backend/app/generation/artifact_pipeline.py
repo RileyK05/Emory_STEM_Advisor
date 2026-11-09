@@ -74,6 +74,9 @@ _MAX_WORKBOOK_ROWS = 200
 _MAX_WORKBOOK_CELLS = 1_000
 _MAX_GROUNDED_COURSES = 40
 _MAX_PROGRAM_ITEMS = 120
+_MAX_SECTION_SLOTS = 8
+_MAX_SECTION_SLOT_CHARS = 4_000
+_MAX_SECTION_TEXT_CHARS = 12_000
 
 
 @dataclass(frozen=True)
@@ -262,6 +265,23 @@ class ArtifactPipeline:
 
     # --- outline / edits -----------------------------------------------------
 
+    def _outline_slots(self) -> list[tuple[int, object]]:
+        """The highest-signal slots for the outline, not the whole evidence register."""
+        limit = 12
+        if len(self.grounding.slots) <= limit:
+            return list(enumerate(self.grounding.slots, 1))
+        words = {word for word in re.findall(r"[a-z0-9]{4,}", self.inputs.prompt.casefold())}
+        codes = set(canonical_codes_in(self.inputs.prompt))
+        scored = []
+        for index, slot in enumerate(self.grounding.slots, 1):
+            text = slot.text.casefold()
+            score = sum(1 for word in words if word in text)
+            if any(code.casefold() in text for code in codes):
+                score += 5
+            scored.append((score, index, slot))
+        chosen = sorted(scored, key=lambda item: (-item[0], item[1]))[:limit]
+        return [(index, slot) for _score, index, slot in sorted(chosen, key=lambda item: item[1])]
+
     def _run_outline(self):
         candidates = self._program_candidates(self.inputs.prompt)
         payload = {
@@ -272,7 +292,7 @@ class ArtifactPipeline:
                        "max_workbook_rows": _MAX_WORKBOOK_ROWS},
             "slots": [{"slot": index, "source": slot.source_name,
                        "locator": slot.locator_label, "excerpt": slot.text[:160]}
-                      for index, slot in enumerate(self.grounding.slots, 1)],
+                      for index, slot in self._outline_slots()],
             "programs": candidates,
         }
         messages = _stage_messages(
@@ -745,7 +765,8 @@ class ArtifactPipeline:
             self._write_section(section)
 
     def _write_section(self, section, repair: str | None = None):
-        payload = self._section_payload(section, repair)
+        visible = self._visible_section(section)
+        payload = self._section_payload(visible, repair)
         messages = _stage_messages(
             "Write exactly one artifact section from the supplied source slots. Do not "
             "repeat the section heading. Every content block or row must cite the numbered "
@@ -757,12 +778,26 @@ class ArtifactPipeline:
             SECTION_TOOL,
             "Validate and accept this artifact section. Call this tool alone to finish.",
             StageSection,
-            lambda value, _scope: self._stage_section(section, value),
+            lambda value, _scope: self._stage_section(visible, value),
             messages,
             stage_key=section.id,
         )
         if section.id not in self.section_payloads:
             raise SafeJobError("invalid_output", "The model did not return a complete section.")
+
+    def _visible_section(self, section):
+        slots = list(getattr(section, "source_slots", []) or [])
+        selected = []
+        used = 0
+        for index in slots:
+            if not 1 <= index <= len(self.grounding.slots):
+                continue
+            size = min(len(self.grounding.slots[index - 1].text), _MAX_SECTION_SLOT_CHARS)
+            if len(selected) >= _MAX_SECTION_SLOTS or used + size > _MAX_SECTION_TEXT_CHARS:
+                break
+            selected.append(index)
+            used += size
+        return section.model_copy(update={"source_slots": selected})
 
     def _section_payload(self, section, repair: str | None) -> dict:
         slots = []
@@ -770,7 +805,8 @@ class ArtifactPipeline:
             if 1 <= index <= len(self.grounding.slots):
                 slot = self.grounding.slots[index - 1]
                 slots.append({"slot": index, "source": slot.source_name,
-                              "locator": slot.locator_label, "text": slot.text})
+                              "locator": slot.locator_label,
+                              "text": slot.text[:_MAX_SECTION_SLOT_CHARS]})
         written = []
         for existing in self._current_sections():
             if existing.id == section.id:
