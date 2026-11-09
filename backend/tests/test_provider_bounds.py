@@ -24,7 +24,7 @@ from app.generation.controller import (
     retry_transient,
 )
 from app.llm import get_provider
-from app.llm.adapters import _bounded, _bounded_stream
+from app.llm.adapters import _bounded
 from app.llm.base import (
     AuthenticationError,
     GenerationRequest,
@@ -95,78 +95,6 @@ def test_an_abandoned_call_does_not_deliver_a_later_result():
     time.sleep(0.2)
     # The point is that nothing raised a second time and no value escaped.
     assert True
-
-
-def test_a_hanging_stream_is_bounded():
-    """A stream that never yields is bounded like a call."""
-    def open_stream():
-        def gen():
-            while True:
-                time.sleep(0.05)
-                yield {"type": "x"}
-
-        return gen()
-
-    started = time.monotonic()
-    with pytest.raises(TimeoutError):
-        list(_bounded_stream(_request(0.2), open_stream))
-    assert time.monotonic() - started < 5
-
-
-def test_a_stream_that_ends_is_yielded_whole():
-    """A bounded stream still delivers every item it produced."""
-    def open_stream():
-        return iter([{"type": "a"}, {"type": "b"}])
-
-    assert list(_bounded_stream(_request(30), open_stream)) == [
-        {"type": "a"}, {"type": "b"}]
-
-
-def test_a_stream_error_surfaces_to_the_caller():
-    """An error raised while producing a stream is not swallowed."""
-    def open_stream():
-        def gen():
-            yield {"type": "a"}
-            raise RuntimeError("stream broke")
-
-        return gen()
-
-    with pytest.raises(RuntimeError, match="stream broke"):
-        list(_bounded_stream(_request(30), open_stream))
-
-
-def test_an_abandoned_stream_is_closed():
-    """The abandoned stream is closed, so its producer stops."""
-
-    class Stream:
-        def __init__(self):
-            self.closed = False
-
-        def __iter__(self):
-            while True:
-                time.sleep(0.05)
-                yield {"type": "x"}
-
-        def close(self):
-            self.closed = True
-
-    stream = Stream()
-
-    def open_stream():
-        return stream
-
-    with pytest.raises(TimeoutError):
-        list(_bounded_stream(_request(0.2), open_stream))
-    time.sleep(0.3)
-    assert stream.closed, "the abandoned stream was not closed"
-
-
-def test_an_unbounded_stream_is_not_bounded():
-    """No timeout means the stream is consumed as-is."""
-    def open_stream():
-        return iter([1, 2, 3])
-
-    assert list(_bounded_stream(_request(None), open_stream)) == [1, 2, 3]
 
 
 _TEXT = """# Course Policy

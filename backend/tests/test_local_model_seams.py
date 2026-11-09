@@ -1,5 +1,4 @@
 """Local provider cache and exact token-ceiling tests; no weights are loaded."""
-import threading
 import time
 from types import SimpleNamespace
 
@@ -55,7 +54,7 @@ def test_hf_timeout_preserves_measured_usage_without_decoding_partial_output(mon
     assert caught.value.usage.completion_tokens == 2
 
 
-def _stream_fixture(monkeypatch, model, *, model_id="fake-local"):
+def _provider_fixture(monkeypatch, model, *, model_id="fake-local"):
     import app.llm.hf_local as hf
 
     class Batch(dict):
@@ -104,7 +103,7 @@ def test_hf_resolves_configured_exact_stop_and_unions_native_eos(monkeypatch):
     assert hf._resolve_stop_token_ids(tokenizer, model, settings) == (2, 6)
 
 
-def test_hf_configured_stop_is_passed_to_generate_and_stream(monkeypatch):
+def test_hf_configured_stop_is_passed_to_generate(monkeypatch):
     import app.llm.hf_local as hf
     from app.llm.base import GenerationRequest
 
@@ -117,18 +116,10 @@ def test_hf_configured_stop_is_passed_to_generate_and_stream(monkeypatch):
 
         def generate(self, **kwargs):
             self.eos_values.append(kwargs["eos_token_id"])
-            ids = kwargs["input_ids"]
-            if "streamer" in kwargs:
-                kwargs["streamer"].put(ids)
-                ids = hf.torch.cat([ids, hf.torch.tensor([[6]])], dim=1)
-                kwargs["streamer"].put(hf.torch.tensor([6]))
-                kwargs["streamer"].end()
-            else:
-                ids = hf.torch.cat([ids, hf.torch.tensor([[6]])], dim=1)
-            return ids
+            return hf.torch.cat([kwargs["input_ids"], hf.torch.tensor([[6]])], dim=1)
 
     model = Model()
-    _hf, provider = _stream_fixture(monkeypatch, model)
+    _hf, provider = _provider_fixture(monkeypatch, model)
     provider._settings.hf_stop_token_strings = ("<|stop|>",)
     result = provider.generate(GenerationRequest(
         ({"role": "user", "content": "test"},), max_output_tokens=1,
@@ -136,13 +127,7 @@ def test_hf_configured_stop_is_passed_to_generate_and_stream(monkeypatch):
     assert result.finish_reason == "stop"
     assert result.usage.completion_tokens == 1
     assert result.text == ""
-    events = list(provider.stream(GenerationRequest(
-        ({"role": "user", "content": "test"},), max_output_tokens=1,
-    )))
-    assert events[-1].type == "completed"
-    assert events[-1].result.finish_reason == "stop"
-    assert events[-1].result.usage.completion_tokens == 1
-    assert model.eos_values == [[2, 6], [2, 6]]
+    assert model.eos_values == [[2, 6]]
 
 
 def test_hf_rejects_unavailable_configured_stop_before_generate(monkeypatch):
@@ -170,348 +155,7 @@ def test_hf_rejects_unavailable_configured_stop_before_generate(monkeypatch):
         provider.generate(GenerationRequest(({"role": "user", "content": "test"},)))
 
 
-def test_hf_stream_yields_incrementally_and_accounts_usage_once(monkeypatch):
-    import app.llm.hf_local as hf
-    from app.llm.base import GenerationRequest
-
-    class Model:
-        device = "cpu"
-
-        def __init__(self):
-            self.first_token = threading.Event()
-            self.release = threading.Event()
-            self.finished = threading.Event()
-            self.calls = 0
-
-        def generate(self, **kwargs):
-            self.calls += 1
-            ids = kwargs["input_ids"]
-            streamer = kwargs["streamer"]
-            streamer.put(ids)
-            for token in (4, 6, 5):
-                ids = hf.torch.cat([ids, hf.torch.tensor([[token]])], dim=1)
-                streamer.put(hf.torch.tensor([token]))
-                if token == 4:
-                    self.first_token.set()
-                    assert self.release.wait(1)
-                if kwargs["stopping_criteria"](ids, hf.torch.zeros((1, 1))):
-                    break
-            streamer.end()
-            self.finished.set()
-            return ids
-
-    model = Model()
-    _hf, provider = _stream_fixture(monkeypatch, model)
-    stream = iter(provider.stream(GenerationRequest(
-        ({"role": "user", "content": "test"},), max_output_tokens=8,
-    )))
-    first = next(stream)
-    assert first.type == "text_delta" and first.text == "hello "
-    assert model.first_token.wait(1)
-    assert not model.finished.is_set()
-    model.release.set()
-    remaining = list(stream)
-    assert len(remaining) == 2
-    assert remaining[0].type == "text_delta" and remaining[0].text == "world"
-    completed = remaining[1]
-    assert completed.type == "completed"
-    assert completed.result.text == "hello world"
-    assert completed.result.usage.prompt_tokens == 3
-    assert completed.result.usage.completion_tokens == 3
-    assert completed.result.usage.source == "provider"
-    assert completed.result.model == "fake-local"
-    assert model.calls == 1 and model.finished.is_set()
-
-
-def test_hf_stream_timeout_after_delta_raises_with_measured_usage(monkeypatch):
-    import app.llm.hf_local as hf
-    from app.llm.base import GenerationRequest, ProviderTimeoutError
-
-    class Model:
-        device = "cpu"
-
-        def generate(self, **kwargs):
-            ids = kwargs["input_ids"]
-            ids = hf.torch.cat([ids, hf.torch.tensor([[4]])], dim=1)
-            kwargs["streamer"].put(kwargs["input_ids"])
-            kwargs["streamer"].put(hf.torch.tensor([4]))
-            kwargs["stopping_criteria"][0].deadline = time.monotonic() - 1
-            kwargs["stopping_criteria"](ids, hf.torch.zeros((1, 1)))
-            kwargs["streamer"].end()
-            return ids
-
-    _hf, provider = _stream_fixture(monkeypatch, Model())
-    stream = iter(provider.stream(GenerationRequest(({"role": "user", "content": "test"},))))
-    delta = next(stream)
-    assert delta.type == "text_delta" and delta.text == "hello "
-    with pytest.raises(ProviderTimeoutError) as caught:
-        next(stream)
-    assert caught.value.usage.source == "provider"
-    assert caught.value.usage.prompt_tokens == 3
-    assert caught.value.usage.completion_tokens == 1
-
-
-def test_hf_stream_never_completes_on_stop_signal_before_generate_returns(monkeypatch):
-    from app.llm.base import GenerationRequest, ProviderTimeoutError
-
-    class Model:
-        device = "cpu"
-
-        def __init__(self):
-            self.release = threading.Event()
-            self.end_sent = threading.Event()
-            self.returned = threading.Event()
-
-        def generate(self, **kwargs):
-            ids = kwargs["input_ids"]
-            kwargs["streamer"].put(ids)
-            kwargs["streamer"].end()
-            self.end_sent.set()
-            assert self.release.wait(2)
-            self.returned.set()
-            return ids
-
-    model = Model()
-    _hf, provider = _stream_fixture(monkeypatch, model)
-    stream = iter(provider.stream(GenerationRequest(
-        ({"role": "user", "content": "test"},), timeout_seconds=0.05,
-    )))
-    with pytest.raises(ProviderTimeoutError) as caught:
-        next(stream)
-    assert model.end_sent.is_set()
-    assert not model.returned.is_set()
-    assert caught.value.usage.source == "unknown"
-    model.release.set()
-    assert model.returned.wait(1)
-
-
-def test_hf_stream_close_requests_stopping_criteria_and_joins_worker(monkeypatch):
-    import app.llm.hf_local as hf
-    from app.llm.base import GenerationRequest, InvalidRequestError
-
-    class Model:
-        device = "cpu"
-
-        def __init__(self):
-            self.release = threading.Event()
-            self.started = threading.Event()
-            self.finished = threading.Event()
-            self.calls = 0
-
-        def generate(self, **kwargs):
-            self.calls += 1
-            ids = kwargs["input_ids"]
-            kwargs["streamer"].put(ids)
-            ids = hf.torch.cat([ids, hf.torch.tensor([[4]])], dim=1)
-            kwargs["streamer"].put(hf.torch.tensor([4]))
-            self.started.set()
-            assert self.release.wait(2)
-            stopped = kwargs["stopping_criteria"](ids, hf.torch.zeros((1, 1)))
-            assert stopped is True
-            kwargs["streamer"].end()
-            self.finished.set()
-            return ids
-
-    model = Model()
-    _hf, provider = _stream_fixture(monkeypatch, model)
-    stream = iter(provider.stream(GenerationRequest(({"role": "user", "content": "test"},))))
-    assert next(stream).type == "text_delta"
-    assert model.started.wait(1)
-    stream.close()
-    model.release.set()
-    assert model.finished.wait(1)
-    assert model.calls == 1
-    end = time.monotonic() + 1
-    while any(t.name == "hf-local-generation" and t.is_alive()
-              for t in threading.enumerate()) and time.monotonic() < end:
-        time.sleep(0.01)
-    assert not any(t.name == "hf-local-generation" and t.is_alive()
-                   for t in threading.enumerate())
-
-    loads = []
-    monkeypatch.setattr(hf, "_load", lambda _settings: loads.append(True))
-    malformed = GenerationRequest((object(),))
-    with pytest.raises(InvalidRequestError, match="messages are malformed"):
-        next(provider.stream(malformed))
-    assert loads == []
-
-
-@pytest.mark.parametrize("sync_method", ["generate", "chat"])
-def test_hf_stream_close_keeps_single_flight_slot_until_sync_call_returns(monkeypatch, sync_method):
-    import app.llm.hf_local as hf
-    from app.llm.base import GenerationRequest, ProviderTimeoutError
-
-    class Model:
-        device = "cpu"
-
-        def __init__(self):
-            self.release = threading.Event()
-            self.first_started = threading.Event()
-            self.first_finished = threading.Event()
-            self.calls = 0
-            self.active = 0
-            self.max_active = 0
-            self.guard = threading.Lock()
-
-        def generate(self, **kwargs):
-            with self.guard:
-                self.calls += 1
-                self.active += 1
-                self.max_active = max(self.max_active, self.active)
-            try:
-                ids = kwargs["input_ids"]
-                if "streamer" in kwargs:
-                    kwargs["streamer"].put(ids)
-                    ids = hf.torch.cat([ids, hf.torch.tensor([[4]])], dim=1)
-                    kwargs["streamer"].put(hf.torch.tensor([4]))
-                    self.first_started.set()
-                    assert self.release.wait(3)
-                    assert kwargs["stopping_criteria"](ids, hf.torch.zeros((1, 1))) is True
-                    kwargs["streamer"].end()
-                    self.first_finished.set()
-                else:
-                    ids = hf.torch.cat([ids, hf.torch.tensor([[5]])], dim=1)
-                return ids
-            finally:
-                with self.guard:
-                    self.active -= 1
-
-    model = Model()
-    _hf, provider = _stream_fixture(
-        monkeypatch, model, model_id=f"fake-single-flight-{id(model)}",
-    )
-    provider._timeout_seconds = 0.08
-    stream = iter(provider.stream(GenerationRequest(
-        ({"role": "user", "content": "test"},), timeout_seconds=2.0,
-    )))
-    assert next(stream).type == "text_delta"
-    assert model.first_started.wait(1)
-    stream.close()
-
-    second_done = threading.Event()
-    second_result = {}
-
-    def second_sync_request():
-        try:
-            if sync_method == "chat":
-                provider.chat([{"role": "user", "content": "second"}])
-            else:
-                provider.generate(GenerationRequest(
-                    ({"role": "user", "content": "second"},), timeout_seconds=0.08,
-                ))
-        except Exception as exc:  # noqa: BLE001 - relay the worker result to the asserting thread
-            second_result["error"] = exc
-        finally:
-            second_done.set()
-
-    waiter = threading.Thread(target=second_sync_request)
-    waiter.start()
-    try:
-        assert second_done.wait(1), "single-flight wait must be bounded by the request deadline"
-        waiter.join(timeout=0.1)
-        assert isinstance(second_result.get("error"), ProviderTimeoutError)
-        assert second_result["error"].usage.source == "unknown"
-        assert model.calls == 1
-        assert model.active == 1 and model.max_active == 1
-    finally:
-        model.release.set()
-        waiter.join(timeout=1)
-
-    assert model.first_finished.wait(1)
-    assert model.active == 0
-    slot = hf._generation_slot(provider._settings)
-    assert slot.acquire(timeout=1), "producer releases the slot when model.generate returns"
-    slot.release()
-    reusable = provider.generate(GenerationRequest(
-        ({"role": "user", "content": "after release"},), timeout_seconds=1.0,
-    ))
-    assert reusable.usage.source == "provider"
-    assert model.calls == 2
-    assert model.max_active == 1
-
-
-def test_hf_stream_slot_wait_expires_without_starting_behind_sync_generation(monkeypatch):
-    import app.llm.hf_local as hf
-    from app.llm.base import GenerationRequest, ProviderTimeoutError
-
-    class Model:
-        device = "cpu"
-
-        def __init__(self):
-            self.release = threading.Event()
-            self.sync_started = threading.Event()
-            self.sync_finished = threading.Event()
-            self.calls = 0
-            self.active = 0
-            self.max_active = 0
-            self.guard = threading.Lock()
-
-        def generate(self, **kwargs):
-            with self.guard:
-                self.calls += 1
-                self.active += 1
-                self.max_active = max(self.max_active, self.active)
-            try:
-                ids = kwargs["input_ids"]
-                if "streamer" in kwargs:
-                    kwargs["streamer"].put(ids)
-                    ids = hf.torch.cat([ids, hf.torch.tensor([[4]])], dim=1)
-                    kwargs["streamer"].put(hf.torch.tensor([4]))
-                    kwargs["streamer"].end()
-                else:
-                    self.sync_started.set()
-                    assert self.release.wait(3)
-                    ids = hf.torch.cat([ids, hf.torch.tensor([[5]])], dim=1)
-                    self.sync_finished.set()
-                return ids
-            finally:
-                with self.guard:
-                    self.active -= 1
-
-    model = Model()
-    _hf, provider = _stream_fixture(
-        monkeypatch, model, model_id=f"fake-sync-single-flight-{id(model)}",
-    )
-    sync_result = {}
-    sync_done = threading.Event()
-
-    def first_sync_request():
-        try:
-            sync_result["value"] = provider.generate(GenerationRequest(
-                ({"role": "user", "content": "first"},), timeout_seconds=5.0,
-            ))
-        except Exception as exc:  # noqa: BLE001 - relay the worker result to the asserting thread
-            sync_result["error"] = exc
-        finally:
-            sync_done.set()
-
-    caller = threading.Thread(target=first_sync_request)
-    caller.start()
-    assert model.sync_started.wait(1)
-    try:
-        with pytest.raises(ProviderTimeoutError) as caught:
-            list(provider.stream(GenerationRequest(
-                ({"role": "user", "content": "second"},), timeout_seconds=0.08,
-            )))
-        assert caught.value.usage.source == "unknown"
-        assert model.calls == 1
-        assert model.active == 1 and model.max_active == 1
-    finally:
-        model.release.set()
-        caller.join(timeout=1)
-
-    assert sync_done.is_set() and model.sync_finished.is_set()
-    assert "error" not in sync_result
-    events = list(provider.stream(GenerationRequest(
-        ({"role": "user", "content": "after release"},), timeout_seconds=1.0,
-    )))
-    assert events[-1].type == "completed"
-    assert model.calls == 2
-    assert model.active == 0 and model.max_active == 1
-
-
-@pytest.mark.parametrize("streaming", [False, True])
-def test_hf_return_after_deadline_with_measured_output_is_withheld(monkeypatch, streaming):
+def test_hf_return_after_deadline_with_measured_output_is_withheld(monkeypatch):
     import app.llm.hf_local as hf
     from app.llm.base import GenerationRequest, ProviderTimeoutError
 
@@ -524,44 +168,22 @@ def test_hf_return_after_deadline_with_measured_output_is_withheld(monkeypatch, 
         def generate(self, **kwargs):
             ids = kwargs["input_ids"]
             generated = hf.torch.cat([ids, hf.torch.tensor([[4]])], dim=1)
-            if "streamer" in kwargs:
-                kwargs["streamer"].put(ids)
-                kwargs["streamer"].put(hf.torch.tensor([4]))
-                kwargs["streamer"].end()
             # Cross the deadline without depending on host scheduling or calling
             # stopping criteria. Stay within the consumer's completion grace.
             clock.now = 0.02
             return generated
 
-    _hf, provider = _stream_fixture(
-        monkeypatch, Model(), model_id=f"fake-return-timeout-{streaming}-{time.monotonic_ns()}",
+    _hf, provider = _provider_fixture(
+        monkeypatch, Model(), model_id=f"fake-return-timeout-{time.monotonic_ns()}",
     )
     request = GenerationRequest(
         ({"role": "user", "content": "test"},), timeout_seconds=0.01,
     )
-    if streaming:
-        with pytest.raises(ProviderTimeoutError) as caught:
-            list(provider.stream(request))
-    else:
-        with pytest.raises(ProviderTimeoutError) as caught:
-            provider.generate(request)
+    with pytest.raises(ProviderTimeoutError) as caught:
+        provider.generate(request)
     assert caught.value.usage.source == "provider"
     assert caught.value.usage.prompt_tokens == 3
     assert caught.value.usage.completion_tokens == 1
-
-
-def test_hf_stream_queue_is_bounded_and_backpressure_is_typed():
-    import app.llm.hf_local as hf
-
-    cancel = threading.Event()
-    streamer = hf._BoundedTextIteratorStreamer(
-        object(), cancel, deadline=None, queue_size=1, poll_seconds=0.01,
-        backpressure_seconds=0.02,
-    )
-    streamer.text_queue.put_nowait("occupied")
-    with pytest.raises(hf._StreamBackpressureTimeout):
-        streamer._put("bounded")
-    assert streamer.text_queue.maxsize == 1
 
 
 def test_granite_rejects_tokenizer_overflow_before_encode(monkeypatch):

@@ -5,9 +5,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import json
-import queue
 import threading
-import time
 from collections.abc import Mapping
 from dataclasses import replace
 from typing import Any
@@ -21,7 +19,6 @@ from app.llm.base import (
     ProviderGate,
     ProviderTimeoutError,
     RateLimitError,
-    StreamEvent,
     ToolCall,
     TransientProviderError,
     Usage,
@@ -311,10 +308,6 @@ def _google_config(base_config: Mapping[str, Any], request: GenerationRequest, t
 class _SDKProvider:
     """Shared construction and the `chat()` convenience over `generate()`."""
 
-    # Current SDK stream decoders handle text, not incremental tool arguments.
-    # The controller must use complete typed results for tool conversations.
-    stream_supports_tools = False
-
     def __init__(self, client, model: str, *, gate: ProviderGate | None = None):
         self.client, self.model, self.gate = client, model, gate
 
@@ -326,10 +319,6 @@ class _SDKProvider:
     def _call(self, request: GenerationRequest, call):
         with self._slot(request) as active:
             return _bounded(active, lambda: call(active))
-
-    def _stream(self, request: GenerationRequest, open_stream):
-        with self._slot(request) as active:
-            yield from _bounded_stream(active, lambda: open_stream(active))
 
 
 class OpenAIProvider(_SDKProvider):
@@ -373,38 +362,6 @@ class OpenAIProvider(_SDKProvider):
             _usage(_get(use, "input_tokens"), _get(use, "output_tokens")), refusal,
             _get(response, "_request_id"), _get(response, "model"), response)
 
-    def stream(self, request: GenerationRequest):
-        payload = {"model": request.model or self.model, "input": _responses_input(request.messages),
-                   "store": False, "stream": True}
-        _apply_responses_sampling(payload, request)
-        try:
-            parts = []
-            final = None
-            for event in self._stream(request, lambda req: self.client.responses.create(
-                    **payload, **_timeout(req))):
-                if _get(event, "type") == "response.output_text.delta":
-                    delta = _get(event, "delta", "")
-                    parts.append(delta)
-                    yield StreamEvent("text_delta", text=delta)
-                elif _get(event, "type") == "response.completed":
-                    final = _get(event, "response")
-                elif _get(event, "type") in {"response.incomplete", "response.failed"}:
-                    raise RuntimeError(
-                        f"provider stream ended without completion: {_get(event, 'type')}"
-                    )
-            if final is None:
-                raise RuntimeError("provider stream ended without a terminal response")
-            if _get(final, "status", "unknown") != "completed":
-                raise RuntimeError(
-                    f"provider stream terminated with status {_get(final, 'status', 'unknown')}"
-                )
-            usage = _get(final, "usage")
-            yield StreamEvent("completed", result=GenerationResult(
-                "".join(parts), finish_reason=_get(final, "status", "unknown"),
-                usage=_usage(_get(usage, "input_tokens"), _get(usage, "output_tokens")),
-                request_id=_get(final, "_request_id"), model=_get(final, "model")))
-        except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
-            raise _error("openai", exc) from None
 
 class AnthropicProvider(_SDKProvider):
     def generate(self, request: GenerationRequest) -> GenerationResult:
@@ -443,43 +400,6 @@ class AnthropicProvider(_SDKProvider):
             _usage(_get(use, "input_tokens"), _get(use, "output_tokens")), refusal,
             _get(response, "_request_id"), _get(response, "model"), response)
 
-    def stream(self, request: GenerationRequest):
-        _reject_reasoning_effort(request, "anthropic")
-        system, _ = _split_messages(request.messages)
-        messages = _anthropic_messages(request.messages)
-        payload = {"model": request.model or self.model,
-                   "max_tokens": request.max_output_tokens or 1024,
-                   "messages": messages, "stream": True}
-        if system:
-            payload["system"] = system
-        if request.temperature is not None:
-            payload["temperature"] = request.temperature
-        try:
-            parts = []
-            prompt_tokens = completion_tokens = None
-            stop_reason = request_id = model = None
-            for event in self._stream(request, lambda req: self.client.messages.create(
-                    **payload, **_timeout(req))):
-                event_type = _get(event, "type")
-                if event_type == "message_start":
-                    message = _get(event, "message")
-                    usage = _get(message, "usage")
-                    prompt_tokens = _get(usage, "input_tokens")
-                    request_id, model = _get(message, "_request_id"), _get(message, "model")
-                elif event_type == "content_block_delta":
-                    delta = _get(event, "delta")
-                    if _get(delta, "type") == "text_delta":
-                        value = _get(delta, "text", "")
-                        parts.append(value)
-                        yield StreamEvent("text_delta", text=value)
-                elif event_type == "message_delta":
-                    stop_reason = _get(_get(event, "delta"), "stop_reason")
-                    completion_tokens = _get(_get(event, "usage"), "output_tokens")
-            yield StreamEvent("completed", result=GenerationResult(
-                "".join(parts), finish_reason=stop_reason or "unknown",
-                usage=_usage(prompt_tokens, completion_tokens), request_id=request_id, model=model))
-        except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
-            raise _error("anthropic", exc) from None
 
 class GoogleProvider(_SDKProvider):
     def generate(self, request: GenerationRequest) -> GenerationResult:
@@ -523,40 +443,6 @@ class GoogleProvider(_SDKProvider):
             _usage(_get(use, "prompt_token_count"), _get(use, "candidates_token_count")),
             None, None, request.model or self.model, response)
 
-    def stream(self, request: GenerationRequest):
-        _reject_reasoning_effort(request, "google")
-        from google.genai import types
-        contents = _google_contents(request.messages)
-        system, _ = _split_messages(request.messages)
-        config = {}
-        if system:
-            config["system_instruction"] = system
-        if request.max_output_tokens is not None:
-            config["max_output_tokens"] = request.max_output_tokens
-        if request.temperature is not None:
-            config["temperature"] = request.temperature
-        try:
-            parts = []
-            usage = final_candidate = None
-            stream = self._stream(request, lambda req: self.client.models.generate_content_stream(
-                model=req.model or self.model, contents=contents,
-                config=_google_config(config, req, types)))
-            for chunk in stream:
-                usage = getattr(chunk, "usage_metadata", None) or usage
-                candidates = getattr(chunk, "candidates", None) or ()
-                if candidates:
-                    final_candidate = candidates[0]
-                delta = getattr(chunk, "text", "") or ""
-                if delta:
-                    parts.append(delta)
-                    yield StreamEvent("text_delta", text=delta)
-            yield StreamEvent("completed", result=GenerationResult(
-                "".join(parts), finish_reason=_enum_text(_get(final_candidate, "finish_reason", "unknown")),
-                usage=_usage(_get(usage, "prompt_token_count"),
-                             _get(usage, "candidates_token_count")),
-                model=request.model or self.model))
-        except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
-            raise _error("google", exc) from None
 
 class OpenAICompatibleProvider(OpenAIProvider):
     """OpenAI Chat Completions-compatible service with an explicit base URL."""
@@ -616,42 +502,6 @@ class OpenAICompatibleProvider(OpenAIProvider):
             _chat_usage(usage), _get(msg, "refusal"), _get(response, "_request_id"),
             _get(response, "model"), response)
 
-    def stream(self, request: GenerationRequest):
-        payload = {"model": request.model or self.model,
-                   "messages": _chat_messages(request.messages), "stream": True,
-                   # Ask for the terminal usage chunk so prompt/completion (including
-                   # reasoning) tokens are accounted instead of left unknown.
-                   "stream_options": {"include_usage": True}}
-        _apply_chat_sampling(payload, request)
-        self._apply_extensions(payload, request)
-        try:
-            parts: list[str] = []
-            finish_reason = "unknown"
-            usage = Usage(source="unknown")
-            model = None
-            for chunk in self._stream(request, lambda req: self.client.chat.completions.create(
-                    **payload, **_timeout(req))):
-                observed = getattr(chunk, "usage", None)
-                if observed is not None:
-                    usage = _chat_usage(observed)
-                model = _get(chunk, "model", None) or model
-                choices = _get(chunk, "choices", ()) or ()
-                if not choices:
-                    continue
-                choice = choices[0]
-                # `reasoning_content` deltas are deliberately not answer text;
-                # only the model's final `content` is streamed to the caller.
-                reason = _get(choice, "finish_reason", None)
-                if reason:
-                    finish_reason = reason
-                delta = _get(_get(choice, "delta"), "content", "") or ""
-                if delta:
-                    parts.append(delta)
-                    yield StreamEvent("text_delta", text=delta)
-            yield StreamEvent("completed", result=GenerationResult(
-                "".join(parts), finish_reason=finish_reason, usage=usage, model=model))
-        except Exception as exc:  # noqa: BLE001 - normalize SDK-specific errors
-            raise _error("openai-compatible", exc) from None
 
 def _reject_reasoning_effort(request: GenerationRequest, provider: str) -> None:
     if request.reasoning_effort is not None:
@@ -695,7 +545,6 @@ def _parse_args(raw: Any) -> Mapping[str, Any]:
 # 120 s). These bound the whole call; the short grace lets the SDK's own
 # timeout, which carries more detail, win when it fires on time.
 _DEADLINE_GRACE_SECONDS = 1.0
-_STREAM_END = object()
 
 
 def _bounded(request: GenerationRequest, call):
@@ -722,44 +571,6 @@ def _bounded(request: GenerationRequest, call):
     if "error" in outcome:
         raise outcome["error"]
     return outcome["value"]
-
-
-def _bounded_stream(request: GenerationRequest, open_stream):
-    """Iterate an SDK stream within the request's wall-clock timeout, closing it on exit."""
-    if request.timeout_seconds is None:
-        yield from open_stream()
-        return
-    deadline = time.monotonic() + request.timeout_seconds + _DEADLINE_GRACE_SECONDS
-    items: queue.Queue = queue.Queue()
-    opened: dict[str, Any] = {}
-
-    def run():
-        try:
-            opened["stream"] = open_stream()
-            for item in opened["stream"]:
-                items.put((None, item))
-            items.put((None, _STREAM_END))
-        except BaseException as exc:  # noqa: BLE001 - re-raised on the caller's thread
-            items.put((exc, None))
-
-    threading.Thread(target=run, name="provider-stream", daemon=True).start()
-    try:
-        while True:
-            try:
-                error, item = items.get(timeout=max(0.0, deadline - time.monotonic()))
-            except queue.Empty:
-                raise TimeoutError("provider stream exceeded its wall-clock deadline") from None
-            if error is not None:
-                raise error
-            if item is _STREAM_END:
-                return
-            yield item
-    finally:
-        close = getattr(opened.get("stream"), "close", None)
-        if callable(close):
-            # Aborts an abandoned stream instead of reading it to the end.
-            with contextlib.suppress(Exception):
-                close()
 
 
 def _timeout(request: GenerationRequest) -> dict[str, float]:

@@ -439,21 +439,10 @@ def run_audit(output_file: Path, start_idx: int = 0, count: int | None = None,
                 max_output_tokens=None,
                 timeout_seconds=timeout_seconds,
             )
-            chunks = []
-            final_res = None
-            first_token_time = None
-            for event in provider.stream(request):
-                if event.type == "text_delta":
-                    if first_token_time is None:
-                        first_token_time = time.time() - t0
-                        print(f" [First token: {first_token_time:.1f}s]", end="", flush=True)
-                    chunks.append(event.text)
-                elif event.type == "completed":
-                    final_res = event.result
-
+            final_res = provider.generate(request)
             elapsed = time.time() - t0
-            full_text = "".join(chunks)
-            finish_reason = final_res.finish_reason if final_res else "unknown"
+            full_text = final_res.text
+            finish_reason = final_res.finish_reason
 
             record = {
                 "id": case["id"],
@@ -464,7 +453,6 @@ def run_audit(output_file: Path, start_idx: int = 0, count: int | None = None,
                 "model": settings.llm_model_id,
                 "status": "success" if full_text.strip() else "empty",
                 "elapsed_seconds": round(elapsed, 2),
-                "first_token_seconds": round(first_token_time, 2) if first_token_time else None,
                 "response_text": full_text,
                 "finish_reason": finish_reason,
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

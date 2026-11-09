@@ -30,8 +30,7 @@ from app.llm.factory import get_provider
 
 @pytest.mark.parametrize("thinking, cache_key", [
     (None, False), ("enabled", False), ("disabled", False), (None, True), ("disabled", True)])
-@pytest.mark.parametrize("stream", [False, True])
-def test_compatible_extensions_are_explicit_and_factory_scoped(thinking, cache_key, stream):
+def test_compatible_extensions_are_explicit_and_factory_scoped(thinking, cache_key):
     payloads = []
 
     def handler(request):
@@ -41,11 +40,6 @@ def test_compatible_extensions_are_explicit_and_factory_scoped(thinking, cache_k
                     "message": {"role": "assistant", "content": "Answer"}}],
                 "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6,
                           "prompt_tokens_details": {"cached_tokens": 3}}}
-        if stream:
-            body["object"] = "chat.completion.chunk"
-            body["choices"][0]["delta"] = body["choices"][0].pop("message")
-            return httpx2.Response(200, content="data: " + json.dumps(body) + "\n\ndata: [DONE]\n\n",
-                headers={"content-type": "text/event-stream"}, request=request)
         return _openai_response(body, request=request)
 
     sdk = OpenAI(api_key="test", base_url="https://mock/v1",
@@ -54,10 +48,7 @@ def test_compatible_extensions_are_explicit_and_factory_scoped(thinking, cache_k
                        llm_compatible_thinking=thinking, llm_compatible_cache_key=cache_key)
     provider = get_provider(settings, client=sdk)
     request = GenerationRequest([{"role": "user", "content": "question"}], cache_key="plan-1-abc")
-    if stream:
-        result = next(e for e in provider.stream(request) if e.type == "completed").result
-    else:
-        result = provider.generate(request)
+    result = provider.generate(request)
     assert payloads[0].get("thinking") == ({"type": thinking} if thinking else None)
     # The routing key is sent only where enabled; a reported cache hit is kept either way.
     assert payloads[0].get("prompt_cache_key") == ("plan-1-abc" if cache_key else None)
@@ -124,94 +115,6 @@ def test_openai_actual_sdk_serializes_responses_schema_and_tool_call():
     sdk.close()
 
 
-def test_openai_actual_sdk_stream_reads_final_usage():
-    sse = ("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_stream\",\"object\":\"response\",\"created_at\":1,\"status\":\"in_progress\",\"model\":\"model-x\",\"output\":[]}}\n\n"
-           "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\",\"item_id\":\"msg_1\",\"output_index\":0,"+"\"content_index\":0}\n\n"
-           "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_stream\",\"object\":\"response\",\"created_at\":1,\"status\":\"completed\",\"model\":\"model-x\",\"output\":[],\"usage\":{\"input_tokens\":4,\"output_tokens\":1,\"total_tokens\":5}}}\n\n")
-    sdk = OpenAI(api_key="sk-test", base_url="https://mock/v1",
-                 http_client=httpx2.Client(transport=httpx2.MockTransport(
-                     lambda req: httpx2.Response(200, content=sse, headers={"content-type":"text/event-stream"}, request=req))))
-    events = list(OpenAIProvider(sdk, "model-x").stream(GenerationRequest(
-        [{"role":"user","content":"hi"}])))
-    assert events[0].text == "hello"
-    assert events[-1].result.usage == Usage(4, 1, 5, "provider")
-    sdk.close()
-
-
-def test_openai_stream_refuses_an_incomplete_terminal_response():
-    sse = (
-        "event: response.created\ndata: {\"type\":\"response.created\",\"response\":"
-        "{\"id\":\"resp_stream\",\"object\":\"response\",\"created_at\":1,"
-        "\"status\":\"in_progress\",\"model\":\"model-x\",\"output\":[]}}\n\n"
-        "event: response.incomplete\ndata: {\"type\":\"response.incomplete\","
-        "\"response\":{\"id\":\"resp_stream\",\"status\":\"incomplete\","
-        "\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"
-    )
-    sdk = OpenAI(api_key="sk-test", base_url="https://mock/v1",
-                 http_client=httpx2.Client(transport=httpx2.MockTransport(
-                     lambda req: httpx2.Response(200, content=sse,
-                                                 headers={"content-type": "text/event-stream"},
-                                                 request=req))))
-    with pytest.raises(ProviderError):
-        list(OpenAIProvider(sdk, "model-x").stream(GenerationRequest(
-            [{"role": "user", "content": "hi"}])))
-    sdk.close()
-
-
-def test_openai_compatible_stream_separates_reasoning_and_reports_usage():
-    def chunk(delta, finish=None, usage=None):
-        body = {"id": "c1", "object": "chat.completion.chunk", "created": 1,
-                "model": "longcat",
-                "choices": [] if usage is not None else
-                [{"index": 0, "delta": delta, "finish_reason": finish}]}
-        if usage is not None:
-            body["usage"] = usage
-        return "data: " + json.dumps(body) + "\n\n"
-
-    sse = (
-        chunk({"role": "assistant", "reasoning_content": "private chain of thought"})
-        + chunk({"content": "LONG "})
-        + chunk({"content": "CAT OK"})
-        + chunk({}, finish="stop")
-        + chunk({}, usage={"prompt_tokens": 7, "completion_tokens": 3, "total_tokens": 10})
-        + "data: [DONE]\n\n"
-    )
-    sdk = OpenAI(api_key="sk-test", base_url="https://mock/v1",
-                 http_client=httpx2.Client(transport=httpx2.MockTransport(
-                     lambda req: httpx2.Response(200, content=sse.encode(),
-                                                 headers={"content-type": "text/event-stream"},
-                                                 request=req))))
-    events = list(OpenAICompatibleProvider(sdk, "longcat").stream(GenerationRequest(
-        [{"role": "user", "content": "hi"}], max_output_tokens=128)))
-    # Reasoning deltas never become answer text.
-    assert [event.text for event in events if event.type == "text_delta"] == ["LONG ", "CAT OK"]
-    result = events[-1].result
-    assert result.text == "LONG CAT OK"
-    assert result.finish_reason == "stop"
-    assert result.usage == Usage(7, 3, 10, "provider")
-    sdk.close()
-
-
-def test_openai_compatible_stream_marks_a_truncated_answer():
-    def chunk(delta, finish=None):
-        return "data: " + json.dumps({
-            "id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "longcat",
-            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]}) + "\n\n"
-
-    sse = (chunk({"role": "assistant", "reasoning_content": "thinking..."})
-           + chunk({}, finish="length") + "data: [DONE]\n\n")
-    sdk = OpenAI(api_key="sk-test", base_url="https://mock/v1",
-                 http_client=httpx2.Client(transport=httpx2.MockTransport(
-                     lambda req: httpx2.Response(200, content=sse.encode(),
-                                                 headers={"content-type": "text/event-stream"},
-                                                 request=req))))
-    result = list(OpenAICompatibleProvider(sdk, "longcat").stream(
-        GenerationRequest([{"role": "user", "content": "hi"}], max_output_tokens=8)))[-1].result
-    assert result.text == ""
-    assert result.finish_reason == "length"
-    sdk.close()
-
-
 def test_anthropic_actual_sdk_serializes_tools_json_schema_and_refusal():
     requests = []
 
@@ -275,64 +178,6 @@ def test_google_actual_sdk_serializes_generation_config_and_usage():
     http.close()
 
 
-def test_anthropic_actual_sdk_stream_maps_usage_and_stop_reason():
-    events = [
-        {"type":"message_start","message":{"id":"msg_stream","type":"message","role":"assistant",
-            "model":"claude-test","content":[],"stop_reason":None,"stop_sequence":None,
-            "usage":{"input_tokens":3,"output_tokens":1}}},
-        {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}},
-        {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}},
-        {"type":"content_block_stop","index":0},
-        {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":None},
-         "usage":{"output_tokens":2}},
-        {"type":"message_stop"},
-    ]
-    sse = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
-    sent = []
-
-    def handler(req):
-        sent.append(json.loads(req.content))
-        return httpx.Response(
-            200, content=sse.encode(),
-            headers={"content-type": "text/event-stream"}, request=req)
-
-    sdk = Anthropic(api_key="sk-ant-test", base_url="https://mock",
-        http_client=httpx.Client(transport=httpx.MockTransport(handler)))
-    output = list(AnthropicProvider(sdk, "claude-test").stream(GenerationRequest(
-        [{"role":"user","content":"hi"}], temperature=0)))
-    assert sent[0]["temperature"] == 0
-    assert output[0].text == "hello"
-    assert output[-1].result.usage == Usage(3, 2, 5, "provider")
-    assert output[-1].result.finish_reason == "end_turn"
-    sdk.close()
-
-
-def test_google_actual_sdk_stream_maps_usage_and_finish_reason():
-    events = [
-        {"candidates":[{"content":{"role":"model","parts":[{"text":"hello"}]},
-            "finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":2,
-            "candidatesTokenCount":1,"totalTokenCount":3}},
-    ]
-    sse = "".join("data: " + json.dumps(event) + "\n\n" for event in events)
-    sent = []
-
-    def handler(req):
-        sent.append(json.loads(req.content))
-        return httpx.Response(
-            200, content=sse.encode(),
-            headers={"content-type": "text/event-stream"}, request=req)
-
-    http = httpx.Client(transport=httpx.MockTransport(handler))
-    sdk = genai.Client(api_key="google-test", http_options=types.HttpOptions(httpx_client=http))
-    output = list(GoogleProvider(sdk, "gemini-test").stream(GenerationRequest(
-        [{"role":"user","content":"hi"}], temperature=0)))
-    assert sent[0]["generationConfig"]["temperature"] == 0
-    assert output[0].text == "hello"
-    assert output[-1].result.usage == Usage(2, 1, 3, "provider")
-    assert output[-1].result.finish_reason == "stop"
-    http.close()
-
-
 def test_sdk_adapters_forward_request_timeouts_and_google_uses_milliseconds():
     observed = []
     def openai_handler(request):
@@ -377,25 +222,14 @@ def test_sdk_adapters_forward_request_timeouts_and_google_uses_milliseconds():
     google_http.close()
 
 
-@pytest.mark.parametrize("stream", [False, True])
-def test_a_call_kept_alive_past_its_timeout_fails_at_the_deadline(monkeypatch, stream):
+def test_a_call_kept_alive_past_its_timeout_fails_at_the_deadline(monkeypatch):
     """SDK timeouts bound each read, so keep-alive bytes could hold a call for 15 minutes."""
     import threading
 
     monkeypatch.setattr("app.llm.adapters._DEADLINE_GRACE_SECONDS", 0.0)
-    release, closed = threading.Event(), []
-
-    class KeptAlive:
-        def __iter__(self):
-            yield SimpleNamespace(usage=None, model="m", choices=[])
-            release.wait(10)
-
-        def close(self):
-            closed.append(True)
+    release = threading.Event()
 
     def create(**payload):
-        if payload.get("stream"):
-            return KeptAlive()
         release.wait(10)
 
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
@@ -403,13 +237,9 @@ def test_a_call_kept_alive_past_its_timeout_fails_at_the_deadline(monkeypatch, s
     request = GenerationRequest([{"role": "user", "content": "x"}], timeout_seconds=0.05)
     try:
         with pytest.raises(ProviderTimeoutError):
-            if stream:
-                list(provider.stream(request))
-            else:
-                provider.generate(request)
+            provider.generate(request)
     finally:
         release.set()
-    assert closed == ([True] if stream else [])
 
 
 def test_generation_request_rejects_invalid_budgets_and_maps_timeout_errors():

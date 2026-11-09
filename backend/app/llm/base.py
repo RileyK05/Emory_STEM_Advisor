@@ -146,14 +146,6 @@ class GenerationRequest:
 
 
 @dataclass(frozen=True)
-class StreamEvent:
-    type: Literal["text_delta", "tool_call_delta", "completed", "error"]
-    text: str = ""
-    result: GenerationResult | None = None
-    error: ProviderError | None = None
-
-
-@dataclass(frozen=True)
 class Usage:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
@@ -359,25 +351,4 @@ class ProviderUnavailableError(ProviderError):
 class Provider(Protocol):
     def generate(self, request: GenerationRequest) -> GenerationResult: ...
 
-    def stream(self, request: GenerationRequest) -> Iterator[StreamEvent]: ...
 
-
-def consume_stream(events, on_text) -> GenerationResult:
-    """Drain a provider stream: forward text deltas, return the completed result.
-
-    Anything but a well-formed stream ending in a completion is a provider error.
-    """
-    for event in iter(events):
-        if not isinstance(event, StreamEvent):
-            raise ProviderError("provider returned an invalid stream event", provider="unknown")
-        if event.type == "text_delta" and event.text:
-            on_text(event.text)
-        elif event.type == "error":
-            if event.error is not None:
-                raise event.error
-            raise ProviderError("provider stream failed", provider="unknown")
-        elif event.type == "completed":
-            if not isinstance(event.result, GenerationResult):
-                raise ProviderError("provider returned an invalid completion", provider="unknown")
-            return event.result  # Completion is terminal; preserve its measured usage.
-    raise ProviderError("provider stream ended without a completed result", provider="unknown")

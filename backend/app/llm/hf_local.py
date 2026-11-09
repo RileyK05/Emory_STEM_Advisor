@@ -11,7 +11,6 @@ the eval set should be reproducible, not creative.
 
 import threading
 import time
-from queue import Empty, Full, Queue
 from typing import NamedTuple
 
 import torch
@@ -20,7 +19,6 @@ from transformers import (
     AutoTokenizer,
     StoppingCriteria,
     StoppingCriteriaList,
-    TextIteratorStreamer,
 )
 
 from app.config import Settings
@@ -31,7 +29,6 @@ from app.llm.base import (
     Message,
     ProviderTimeoutError,
     ProviderUnavailableError,
-    StreamEvent,
     Usage,
     normalize_message,
 )
@@ -41,11 +38,6 @@ _models = {}
 _generation_slots = {}
 _load_lock = threading.Lock()
 _generation_slots_lock = threading.Lock()
-_STREAM_QUEUE_SIZE = 16
-_STREAM_POLL_SECONDS = 0.1
-_STREAM_BACKPRESSURE_SECONDS = 30.0
-_STREAM_JOIN_SECONDS = 0.25
-_STREAM_STOP_GRACE_SECONDS = 0.25
 
 
 def _load(settings: Settings):
@@ -87,22 +79,16 @@ def _generation_slot(settings):
         return _generation_slots.setdefault(key, threading.Lock())
 
 
-def _acquire_generation_slot(slot, *, deadline, cancel_requested=None):
+def _acquire_generation_slot(slot, *, deadline):
     """Wait only while the request remains live; release if it expires at acquire."""
     while True:
-        if cancel_requested is not None and cancel_requested.is_set():
-            return False
         remaining = None if deadline is None else deadline - time.monotonic()
         if remaining is not None and remaining <= 0:
             return False
-        timeout = _STREAM_POLL_SECONDS if cancel_requested is not None else remaining
-        if remaining is not None and timeout is not None:
-            timeout = min(timeout, remaining)
-        acquired = slot.acquire() if timeout is None else slot.acquire(timeout=timeout)
+        acquired = slot.acquire() if remaining is None else slot.acquire(timeout=remaining)
         if not acquired:
             continue
-        if ((cancel_requested is not None and cancel_requested.is_set())
-                or (deadline is not None and time.monotonic() >= deadline)):
+        if deadline is not None and time.monotonic() >= deadline:
             slot.release()
             return False
         return True
@@ -149,95 +135,6 @@ class HFLocalProvider:
     def chat(self, messages: list[Message], *, max_new_tokens: int | None = None) -> str:
         return self._complete(messages, max_new_tokens, timeout_seconds=self._timeout_seconds).text
 
-    def stream(self, request: GenerationRequest):
-        messages = self._validate_request(request)
-        tokenizer, model = _load(self._settings)
-        stop_token_ids = self._stop_token_ids(tokenizer, model)
-        inputs, prompt_tokens, output_limit = _prepare_inputs(
-            tokenizer, model, messages, request.max_output_tokens, self._settings
-        )
-        timeout_seconds = request.timeout_seconds or self._timeout_seconds
-        deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
-        cancel_requested = threading.Event()
-        criteria = _DeadlineStoppingCriteria(deadline, cancel_requested)
-        streamer = _BoundedTextIteratorStreamer(
-            tokenizer, cancel_requested, deadline=deadline,
-            queue_size=_STREAM_QUEUE_SIZE, poll_seconds=_STREAM_POLL_SECONDS,
-            backpressure_seconds=_STREAM_BACKPRESSURE_SECONDS,
-        )
-        generation = _StreamedGeneration(
-            model=model, inputs=inputs, prompt_tokens=prompt_tokens, output_limit=output_limit,
-            stop_token_ids=stop_token_ids, slot=_generation_slot(self._settings), deadline=deadline,
-            cancel_requested=cancel_requested, criteria=criteria, streamer=streamer,
-        )
-        pieces: list[str] = []
-        completed = False
-        generation.thread.start()
-        try:
-            while True:
-                try:
-                    chunk = streamer.text_queue.get(timeout=_STREAM_POLL_SECONDS)
-                except Empty:
-                    if generation.done.is_set() and streamer.text_queue.empty():
-                        break
-                    self._enforce_deadline(deadline, cancel_requested)
-                    continue
-                if chunk is streamer.stop_signal:
-                    break
-                if chunk:
-                    pieces.append(chunk)
-                    yield StreamEvent("text_delta", text=chunk)
-
-            while not generation.done.is_set():
-                self._enforce_deadline(deadline, cancel_requested)
-                generation.done.wait(_STREAM_POLL_SECONDS)
-            generation.thread.join(timeout=_STREAM_JOIN_SECONDS)
-            if generation.error is not None:
-                raise self._stream_error(generation.error) from None
-            if generation.thread.is_alive() or generation.generated is None:
-                self._raise_incomplete_timeout()
-            usage = Usage(prompt_tokens, generation.completion_tokens, source="provider")
-            if criteria.expired or (deadline is not None and time.monotonic() >= deadline):
-                error = ProviderTimeoutError("hf-local generation timed out", provider="hf-local")
-                error.usage = usage
-                raise error
-            result = GenerationResult(
-                text="".join(pieces).strip(),
-                finish_reason=_finish_reason(generation.generated, output_limit, stop_token_ids),
-                usage=usage,
-                model=request.model or self._settings.hf_model_id,
-            )
-            completed = True
-            yield StreamEvent("completed", result=result)
-        except GeneratorExit:
-            cancel_requested.set()
-            raise
-        finally:
-            if not completed:
-                cancel_requested.set()
-            generation.thread.join(timeout=_STREAM_JOIN_SECONDS)
-
-    def _enforce_deadline(self, deadline, cancel_requested: threading.Event) -> None:
-        """Past the deadline, ask the producer to stop; if it ignores that for the grace period, give up."""
-        if deadline is None or time.monotonic() < deadline:
-            return
-        cancel_requested.set()
-        if time.monotonic() >= deadline + _STREAM_STOP_GRACE_SECONDS:
-            self._raise_incomplete_timeout()
-
-    @staticmethod
-    def _stream_error(error: Exception) -> Exception:
-        """The provider error to surface for a failure on the producer thread."""
-        if isinstance(error, _StreamBackpressureTimeout):
-            mapped = ProviderTimeoutError(
-                "hf-local stream consumer exceeded the backpressure limit", provider="hf-local")
-        elif isinstance(error, ProviderTimeoutError):
-            mapped = error
-        else:
-            mapped = ProviderUnavailableError("hf-local generation failed", provider="hf-local")
-        mapped.usage = Usage(source="unknown")
-        return mapped
-
     def _validate_request(self, request: GenerationRequest) -> list[dict]:
         if request.model is not None and request.model != self._settings.hf_model_id:
             raise InvalidRequestError("request model differs from the loaded local model", provider="hf-local")
@@ -251,14 +148,6 @@ class HFLocalProvider:
             return [normalize_message(message) for message in request.messages]
         except (TypeError, ValueError):
             raise InvalidRequestError("hf-local messages are malformed", provider="hf-local") from None
-
-    @staticmethod
-    def _raise_incomplete_timeout() -> None:
-        error = ProviderTimeoutError("hf-local generation timed out", provider="hf-local")
-        # A live producer may still be inside a model forward pass. Observed
-        # streamer tokens are only a lower bound until generate() returns.
-        error.usage = Usage(source="unknown")
-        raise error
 
     def _complete(self, messages: list[Message], max_new_tokens: int | None,
                   *, timeout_seconds: float | None = None) -> _Completion:
@@ -295,115 +184,14 @@ class HFLocalProvider:
                            _finish_reason(generated, output_limit, stop_token_ids))
 
 
-class _StreamedGeneration:
-    """One `model.generate()` on a worker thread, feeding a bounded streamer."""
-
-    def __init__(self, *, model, inputs, prompt_tokens, output_limit, stop_token_ids, slot,
-                 deadline, cancel_requested, criteria, streamer):
-        self.model, self.inputs = model, inputs
-        self.prompt_tokens, self.output_limit = prompt_tokens, output_limit
-        self.stop_token_ids, self.slot = stop_token_ids, slot
-        self.deadline, self.cancel_requested = deadline, cancel_requested
-        self.criteria, self.streamer = criteria, streamer
-        self.done = threading.Event()
-        self.error: Exception | None = None
-        self.completion_tokens: int | None = None
-        self.generated = None  # set only when generate() returned
-        self.thread = threading.Thread(target=self._run, name="hf-local-generation", daemon=True)
-
-    def _past_deadline(self) -> bool:
-        return self.deadline is not None and time.monotonic() >= self.deadline
-
-    def _run(self) -> None:
-        acquired = False
-        try:
-            acquired = _acquire_generation_slot(
-                self.slot, deadline=self.deadline, cancel_requested=self.cancel_requested,
-            )
-            if not acquired or self.cancel_requested.is_set() or self._past_deadline():
-                if not self.cancel_requested.is_set():
-                    self.error = _slot_timeout_error()
-                return
-            with torch.no_grad():
-                output = self.model.generate(
-                    **self.inputs,
-                    max_new_tokens=self.output_limit,
-                    do_sample=False,
-                    stopping_criteria=StoppingCriteriaList([self.criteria]),
-                    streamer=self.streamer,
-                    **_eos_generation_kwargs(self.stop_token_ids),
-                )
-            generated = output[0][self.prompt_tokens:]
-            self.completion_tokens = int(generated.shape[0])
-            self.generated = generated
-        except Exception as exc:  # noqa: BLE001 - isolate model-runtime exceptions
-            self.error = exc
-            if isinstance(exc, _StreamBackpressureTimeout):
-                self.cancel_requested.set()
-        finally:
-            if acquired:
-                self.slot.release()
-            if not self.streamer.ended:
-                try:
-                    self.streamer.end()
-                except (Full, _StreamBackpressureTimeout):
-                    pass
-            self.done.set()
-
-
 class _DeadlineStoppingCriteria(StoppingCriteria):
-    def __init__(self, deadline: float | None, cancel_requested: threading.Event | None = None):
+    def __init__(self, deadline: float | None):
         self.deadline = deadline
-        self.cancel_requested = cancel_requested
         self.expired = False
 
     def __call__(self, input_ids, scores, **kwargs):
         self.expired = self.deadline is not None and time.monotonic() >= self.deadline
-        return self.expired or (
-            self.cancel_requested is not None and self.cancel_requested.is_set()
-        )
-
-
-class _StreamBackpressureTimeout(RuntimeError):
-    pass
-
-
-class _BoundedTextIteratorStreamer(TextIteratorStreamer):
-    """TextIteratorStreamer with bounded buffering and cancellable backpressure."""
-
-    def __init__(self, tokenizer, cancel_requested, *, deadline, queue_size,
-                 poll_seconds, backpressure_seconds):
-        super().__init__(
-            tokenizer, skip_prompt=True, timeout=poll_seconds,
-            skip_special_tokens=True,
-        )
-        self.text_queue = Queue(maxsize=queue_size)
-        self.cancel_requested = cancel_requested
-        self.deadline = deadline
-        self.poll_seconds = poll_seconds
-        self.backpressure_seconds = backpressure_seconds
-        self.ended = False
-
-    def on_finalized_text(self, text: str, stream_end: bool = False):
-        if self.cancel_requested.is_set():
-            return
-        if text:
-            self._put(text)
-        if stream_end:
-            self.ended = True
-            self._put(self.stop_signal)
-
-    def _put(self, value):
-        started = time.monotonic()
-        while not self.cancel_requested.is_set():
-            try:
-                self.text_queue.put(value, timeout=self.poll_seconds)
-                return
-            except Full:
-                if self.deadline is not None and time.monotonic() >= self.deadline:
-                    raise _StreamBackpressureTimeout("hf-local stream deadline elapsed")
-                if time.monotonic() - started >= self.backpressure_seconds:
-                    raise _StreamBackpressureTimeout("hf-local stream consumer is too slow")
+        return self.expired
 
 
 def _prepare_inputs(tokenizer, model, messages, max_new_tokens, settings):
