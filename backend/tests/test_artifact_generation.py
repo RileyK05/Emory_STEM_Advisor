@@ -22,7 +22,7 @@ from app.generation.native_tools import SECTION_TOOL
 from app.jobs.runtime import RunExecutor
 from app.jobs.store import JobStore
 from app.jobs.worker import run_once
-from app.llm.base import GenerationResult, Usage
+from app.llm.base import GenerationResult, TransientProviderError, Usage
 from app.programs.importer import import_programs
 from app.retrieval.trace import write_trace
 from tests.fakes import ArtifactStageProvider, FakeEmbedder
@@ -412,6 +412,33 @@ def test_a_truncated_section_is_reprompted_and_published(db, collection, tmp_pat
     assert any("Alpha facts." in block.get("text", "") for block in spec["blocks"])
     assert "output token limit" in message_text(provider.requests[-1].messages[-1])
     assert "degraded_sections" not in spec.get("provenance", {})
+
+
+def test_a_transient_provider_failure_is_retried(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+
+    class FlakyOnce(ArtifactStageProvider):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.failed = False
+
+        def generate(self, request):
+            if (not self.failed and request.tools
+                    and request.tools[0].name == SECTION_TOOL):
+                self.failed = True
+                self.requests.append(request)
+                raise TransientProviderError("connection dropped", provider="fake")
+            return super().generate(request)
+
+    provider = FlakyOnce(outline=outline(), sections={"s1": [section()]})
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "document",
+                       {"prompt": "Alpha", "sourceIds": [str(source)]}, "flaky-section")
+    finished = run_once(store, "flaky-section", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    assert any("Alpha facts." in block.get("text", "") for block in spec["blocks"])
 
 
 def test_a_blocked_course_goes_in_the_advisor_section(db, collection, tmp_path):

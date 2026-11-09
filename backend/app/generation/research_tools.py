@@ -1434,7 +1434,7 @@ class ResearchSession:
             ("audit_program", "Check a student's reported courses against a fully read program. Ask if unknown. reviewed_rules false gives only the lines naming them, never that a requirement is met.", AuditInput, self.audit, ("handle",)),
             ("suggest_courses", "Courses related to a goal, from the topic graph: suggestions, never requirements.", SuggestInput, self.suggest, ()),
             ("update_research", "Replace bounded comparison state, set active exact evidence and expected revision.", StateInput, self.update, ()),
-            ("finish", "Propose typed final answer. Must be the sole tool call. Cite active evidence IDs, never raw markers. Optional artifact requests a follow-on document/workbook/page only when the student asks to keep or export something; revise requires the exact referenced revision.", FinishInput, self.finish, ()),
+            ("finish", "Propose typed final answer. Must be the sole tool call. Cite active evidence IDs, never raw markers. Optional artifact requests a follow-on document (printable plan, checklist or report), workbook (spreadsheet) or html (web page) only when the student asks to keep or export something; revise requires the exact referenced revision.", FinishInput, self.finish, ()),
         ]
         if self.workspace is not None:
             entries[0:0] = [

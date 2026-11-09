@@ -74,15 +74,17 @@ class ToolConversationController:
     def __init__(self, *, max_tool_calls: int = 4, max_provider_calls: int = 8,
                  max_result_bytes: int = MAX_TOOL_RESULT_BYTES,
                  max_output_continuations: int = 0,
-                 max_repair_calls: int | None = None):
+                 max_repair_calls: int | None = None,
+                 max_transient_retries: int = 2):
         if max_tool_calls < 0 or max_provider_calls < 1 or max_result_bytes < 1:
             raise ValueError("tool conversation limits must be positive")
-        if max_output_continuations < 0:
-            raise ValueError("output continuations must not be negative")
+        if max_output_continuations < 0 or max_transient_retries < 0:
+            raise ValueError("output continuations and retries must not be negative")
         self.max_tool_calls = max_tool_calls
         self.max_provider_calls = max_provider_calls
         self.max_result_bytes = max_result_bytes
         self.max_output_continuations = max_output_continuations
+        self.max_transient_retries = max_transient_retries
         self.max_repair_calls = (max_provider_calls if max_repair_calls is None
                                  else max_repair_calls)
         if not 1 <= self.max_repair_calls <= max_provider_calls:
@@ -103,6 +105,7 @@ class ToolConversationController:
         executed: dict[str, tuple[str, str, str]] = {}
         usages: list[Usage] = []
         tool_count = provider_count = truncated_count = repair_calls = 0
+        transient_retries = 0
         continuing = False
         if ledger is not None and (operation_id is None or workspace_key is None):
             raise ValueError("durable tool execution requires operation and workspace IDs")
@@ -116,6 +119,11 @@ class ToolConversationController:
             if _is_cancelled(cancellation):
                 raise GenerationCancelled("generation was cancelled")
             active_request = replace(request_with_tools, messages=tuple(messages))
+            if not continuing:
+                repair_calls += 1
+                if repair_calls > self.max_repair_calls:
+                    raise ToolCallLimitExceeded(
+                        "the model did not return a final answer within the call limit")
             if provider_count == self.max_provider_calls - 1 and active_request.tools:
                 # The last allowed call must finish: answer from the results
                 # already gathered or call a terminal tool. Any other tool
@@ -126,14 +134,27 @@ class ToolConversationController:
                     tool for tool in active_request.tools if tool.name in terminal_tool_names))
             prepared = operation.prepare(active_request)
             provider_count += 1
-            if not continuing:
-                repair_calls += 1
-                if repair_calls > self.max_repair_calls:
-                    raise ToolCallLimitExceeded(
-                        "the model did not return a final answer within the call limit")
             continuing = False
-            result = _attempt(provider, prepared, operation, on_attempt=on_attempt,
-                              before_provider_call=before_provider_call)
+            try:
+                result = _attempt(provider, prepared, operation, on_attempt=on_attempt,
+                                  before_provider_call=before_provider_call)
+            except (RateLimitError, TransientProviderError) as exc:
+                # A dropped connection or rate limit is not a stage failure. Retry
+                # the same request within the operation fence before surfacing it.
+                if isinstance(exc, ProviderTimeoutError) and exc.request_sent:
+                    raise
+                transient_retries += 1
+                if (transient_retries > self.max_transient_retries
+                        or provider_count >= self.max_provider_calls):
+                    raise
+                retry_after = getattr(exc, "retry_after", None)
+                delay = (min(float(retry_after), 8.0)
+                         if retry_after is not None and retry_after > 0
+                         else min(2.0 ** (transient_retries - 1), 8.0))
+                time.sleep(delay)
+                continuing = True
+                continue
+            transient_retries = 0
             usages.append(result.usage)
             finish_reason = (result.finish_reason or "").lower()
             if result.refusal:
