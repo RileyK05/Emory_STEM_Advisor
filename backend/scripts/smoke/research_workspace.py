@@ -142,7 +142,7 @@ def main():
         try:
             settings = replace(settings, database_url=server.get_uri(), data_dir=scratch / "data",
                 db_pool_max_size=0, default_collection="workspace-fixture", routing_enabled=False,
-                tools_enabled=True, advising_research_enabled=True, embedding_model_id="workspace-fixture",
+                tools_enabled=True, embedding_model_id="workspace-fixture",
                 llm_timeout_seconds=args.timeout, llm_max_output_tokens=4096,
                 research_max_calls=min(10, args.max_calls), research_operation_timeout_seconds=300)
             config = load_retrieval_config()

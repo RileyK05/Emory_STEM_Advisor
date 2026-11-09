@@ -149,12 +149,6 @@ parameters. The important ones:
 | `POSTGRES_HA_MODE` | `Disabled` | Set `ZoneRedundant` for production |
 | `DATA_SHARE_QUOTA_GB` | `100` | Azure Files share for `DATA_DIR` |
 | `LLM_PROVIDER` | `openai-compatible` | OpenAI or an OpenAI-compatible gateway |
-| `LLM_CONTEXT_WINDOW_TOKENS` | `128000` | Drives auto-compaction at 50% |
-| `CONVERSATION_COMPACTION_ENABLED` | `true` | Cloud default; hf-local defaults off |
-| `CONVERSATION_COMPACTION_THRESHOLD` | `0.5` | Fraction of the context window |
-| `CONVERSATION_COMPACTION_KEEP_TURNS` | `4` | Raw recent turns kept verbatim |
-| `CONVERSATION_COMPACTION_MAX_OUTPUT_TOKENS` | `2048` | One handoff |
-| `CONVERSATION_TOKEN_ESTIMATE_BYTES` | `4` | Context accounting heuristic |
 | `ADMIN_BOOTSTRAP_EMAILS` | empty | First-login admin promotion only |
 | `ADMIN_BOOTSTRAP_SUBJECTS` | empty | First-login admin promotion only |
 | `ADMIN_PANEL_ENABLED` | `true` | Admin bundle/API; role still required |

@@ -810,7 +810,7 @@ def test_opening_many_courses_is_one_evidence_step(monkeypatch):
 ])
 def test_research_asks_only_a_supporting_provider_for_reasoning(
         provider, own_effort, research_effort, expected):
-    from app.api.research_service import research_sampling
+    from app.api.query_service import research_sampling
 
     fields = research_sampling(SimpleNamespace(
         llm_provider=provider, llm_reasoning_effort=own_effort,

@@ -722,7 +722,7 @@ def main() -> None:
     connect_fn = connector(settings)
     store = JobStore(connect_fn)
 
-    app = create_app(settings=replace(settings, tools_enabled=True, advising_research_enabled=True))
+    app = create_app(settings=replace(settings, tools_enabled=True))
     app.state.database_ready = True
     app.state.job_store = store
     app.state.conversation_job_store = store

@@ -458,8 +458,7 @@ def main() -> None:
                 print(f"  {case.family:<14} {case.question}")
             return
 
-        app = create_app(settings=replace(settings, database_url=dsn, tools_enabled=True,
-                                          advising_research_enabled=True))
+        app = create_app(settings=replace(settings, database_url=dsn, tools_enabled=True))
         app.state.database_ready = True
 
         def ask(case: Case) -> tuple[Case, Result, dict]:

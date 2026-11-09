@@ -129,10 +129,6 @@ class Settings:
     # a printable four-semester plan ran out at 4,096 tokens. At about 70 tokens a
     # second, 8,192 still fits a 120-second call.
     artifact_max_output_tokens: int = 8_192
-    # A reply cut off at the output limit is retried with a doubled allowance up
-    # to this ceiling: a reasoning model can spend its whole allowance before it
-    # writes anything, and a cut-off draft is withheld rather than published.
-    answer_truncation_max_output_tokens: int = 16_384
     routing_enabled: bool = False
     routing_eval_suite_hash: str | None = None
     admin_api_enabled: bool = False
@@ -145,26 +141,9 @@ class Settings:
     operation_timeout_seconds: float = 120.0
     operation_max_calls: int = 2
     operation_token_budget: int = 16_000
-    # The hard conversation context budget. `load_settings` derives a default
-    # from the model window when CONVERSATION_CONTEXT_MAX_BYTES is unset.
-    conversation_context_max_bytes: int = 12000
-    # Context window used for compaction accounting. Cloud providers have no
-    # portable way to report it, so it is explicit and defaults to 128k.
-    llm_context_window_tokens: int = 128_000
-    conversation_compaction_enabled: bool = True
-    # Compact when the rendered summary + recent history reaches this fraction
-    # of the model context window (0.5 = 50%).
-    conversation_compaction_threshold: float = 0.5
-    # Raw recent turns kept verbatim after a checkpoint, so the next turn still
-    # sees the immediate exchange without re-reading the whole transcript.
-    conversation_compaction_keep_turns: int = 4
-    conversation_compaction_max_output_tokens: int = 2048
-    conversation_compaction_timeout_seconds: float = 180.0
-    # 0 derives from the context window plus summary output and prompt overhead.
-    conversation_compaction_token_budget: int = 0
-    # Heuristic used for context accounting: UTF-8 bytes per token. It is an
-    # estimate because provider tokenizers are model-specific.
-    conversation_token_estimate_bytes: int = 4
+    # The hard budget for a turn's saved transcript plus referenced artifact
+    # revisions. Research itself reads at most 6,000 bytes of transcript.
+    conversation_context_max_bytes: int = 512_000
     # Optional visual feedback for HTML artifacts: render the draft, send the
     # screenshot to a vision-capable profile, and allow one bounded correction.
     visual_artifact_review_enabled: bool = False
@@ -196,31 +175,14 @@ class Settings:
     auth_session_ttl_seconds: int = 28800
     auth_transaction_ttl_seconds: int = 300
     tools_enabled: bool = True
-    answer_citation_repair_enabled: bool = True
     tool_max_calls: int = 4
-    # Opt-in: before retrieval, the answering connection reads the scoped catalog
-    # directory and proposes bounded searches (docs/architecture.md).
-    # The planning call gets its own call and reservation allowance inside the
-    # same operation; reservation units are serialized prompt bytes.
-    query_planning_enabled: bool = False
-    query_planning_token_budget: int = 300_000
-    # Opt-in research advising path (docs/architecture.md).
-    # Feature precedence is explicit: when enabled it replaces the one-shot
-    # query-planning route for that request. It requires a tools-capable
-    # permitted provider and TOOLS_ENABLED; an unavailable research provider is
-    # a clear feature-unavailable error, never a silent fallback to a materially
-    # different advising workflow.
-    advising_research_enabled: bool = True
-    # One research run gets exactly one operation with these limits; they
-    # replace the legacy answer limits for that operation rather than stacking
-    # on top of them. Reservation units are serialized prompt bytes, so the
-    # token budget is an accounting ceiling, not a promised token bill.
-    # Budgets are P2.1's p95 plus 25%, rounded (P5.1). Measured 2026-11-08 over
-    # 800 settled research-43 turns on minimax-m3.1-flash: model calls p50 4,
-    # p95 13 (19 turns hit the old cap of 14); tool calls p50 2, p95 11;
-    # tokens p50 44,354, p95 165,843 (max 195,952). A run that spends its
-    # budget still answers from what it read (salvage) or settles with P6.1's
-    # message.
+    # One research run gets exactly one operation with these limits.
+    # Reservation units are serialized prompt bytes, so the token budget is an
+    # accounting ceiling, not a promised token bill. The budgets are the p95 plus
+    # 25%, rounded, of 800 settled research-43 turns on minimax-m3.1-flash
+    # (2026-11-08): model calls p50 4, p95 13; tool calls p50 2, p95 11; tokens
+    # p50 44,354, p95 165,843. A run that spends its budget still answers from
+    # what it read, or settles with the fixed retry message.
     research_max_calls: int = 16
     research_max_tool_calls: int = 14
     # Effort a research round asks of a provider that supports it, unless the
@@ -323,24 +285,6 @@ class Settings:
             raise ValueError("QUOTA_SPEND_USD_PER_DAY must be finite and nonnegative")
         if not 1024 <= self.conversation_context_max_bytes <= 1_000_000:
             raise ValueError("CONVERSATION_CONTEXT_MAX_BYTES must be between 1024 and 1000000")
-        if not 1_000 <= self.llm_context_window_tokens <= 2_000_000:
-            raise ValueError("LLM_CONTEXT_WINDOW_TOKENS must be between 1000 and 2000000")
-        if type(self.conversation_compaction_enabled) is not bool:
-            raise ValueError("CONVERSATION_COMPACTION_ENABLED must be true or false")
-        if (not math.isfinite(self.conversation_compaction_threshold)
-                or not 0.05 <= self.conversation_compaction_threshold <= 0.95):
-            raise ValueError("CONVERSATION_COMPACTION_THRESHOLD must be between 0.05 and 0.95")
-        if not 1 <= self.conversation_compaction_keep_turns <= 50:
-            raise ValueError("CONVERSATION_COMPACTION_KEEP_TURNS must be between 1 and 50")
-        if not 128 <= self.conversation_compaction_max_output_tokens <= 8192:
-            raise ValueError("CONVERSATION_COMPACTION_MAX_OUTPUT_TOKENS must be between 128 and 8192")
-        if (not math.isfinite(self.conversation_compaction_timeout_seconds)
-                or self.conversation_compaction_timeout_seconds <= 0):
-            raise ValueError("CONVERSATION_COMPACTION_TIMEOUT_SECONDS must be positive and finite")
-        if not 0 <= self.conversation_compaction_token_budget <= 20_000_000:
-            raise ValueError("CONVERSATION_COMPACTION_TOKEN_BUDGET must be between 0 and 20000000")
-        if not 1 <= self.conversation_token_estimate_bytes <= 16:
-            raise ValueError("CONVERSATION_TOKEN_ESTIMATE_BYTES must be between 1 and 16")
         if self.llm_sampling_policy not in {"greedy", "model_default"}:
             raise ValueError("LLM_SAMPLING_POLICY must be greedy or model_default")
         if self.llm_reasoning_effort not in {None, "none", "minimal", "low", "medium", "high", "xhigh", "max"}:
@@ -355,8 +299,6 @@ class Settings:
         if self.llm_provider == "hf-local" and (self.llm_sampling_policy != "greedy"
                 or self.llm_reasoning_effort is not None):
             raise ValueError("hf-local requires greedy generation without reasoning effort")
-        if not 1_000 <= self.query_planning_token_budget <= 2_000_000:
-            raise ValueError("QUERY_PLANNING_TOKEN_BUDGET must be between 1000 and 2000000")
         if not 1 <= self.research_max_calls <= 100:
             raise ValueError("RESEARCH_MAX_CALLS must be between 1 and 100")
         if not 1 <= self.audit_max_search_states <= 1_000_000:
@@ -370,8 +312,6 @@ class Settings:
                 or self.research_max_output_tokens <= 0
                 or self.research_truncation_max_output_tokens < self.research_max_output_tokens):
             raise ValueError("research limits are invalid")
-        if self.advising_research_enabled and not self.tools_enabled:
-            raise ValueError("ADVISING_RESEARCH_ENABLED requires TOOLS_ENABLED=true")
         if not 1 <= self.tool_max_calls <= 100:
             raise ValueError("TOOL_MAX_CALLS must be between 1 and 100")
         if self.auth_mode not in {"development", "oidc"}:
@@ -416,9 +356,6 @@ class Settings:
             raise ValueError("generation limits must be positive")
         if type(self.llm_max_concurrency) is not int or not 1 <= self.llm_max_concurrency <= 1000:
             raise ValueError("LLM_MAX_CONCURRENCY must be between 1 and 1000")
-        if self.answer_truncation_max_output_tokens < self.llm_max_output_tokens:
-            raise ValueError(
-                "ANSWER_TRUNCATION_MAX_OUTPUT_TOKENS must be at least LLM_MAX_OUTPUT_TOKENS")
         if (not math.isfinite(self.operation_timeout_seconds)
                 or self.operation_timeout_seconds <= 0
                 or not 1 <= self.operation_max_calls <= 100
@@ -464,18 +401,6 @@ def load_settings() -> Settings:
         "gemini": "GEMINI_API_KEY",
     }.get(provider)
     hf_max_context = _int("HF_MAX_CONTEXT", 4096)
-    bytes_per_token = _int("CONVERSATION_TOKEN_ESTIMATE_BYTES", 4)
-    # A cloud model's window is not discoverable through the provider seam, so
-    # it is explicit. The local model already declares its own ceiling.
-    context_window = _int(
-        "LLM_CONTEXT_WINDOW_TOKENS",
-        hf_max_context if provider == "hf-local" else 128_000,
-    )
-    context_max_default = min(1_000_000, max(12_000, context_window * bytes_per_token))
-    compaction_output = _int("CONVERSATION_COMPACTION_MAX_OUTPUT_TOKENS", 2048)
-    compaction_budget = _int("CONVERSATION_COMPACTION_TOKEN_BUDGET", 0)
-    if compaction_budget == 0:
-        compaction_budget = min(20_000_000, context_window + compaction_output + 4096)
     return Settings(
         llm_provider=provider,
         hf_model_id=hf_model_id,
@@ -511,25 +436,13 @@ def load_settings() -> Settings:
         llm_max_concurrency=_int("LLM_MAX_CONCURRENCY", 8),
         llm_max_output_tokens=_int("LLM_MAX_OUTPUT_TOKENS", 1024),
         artifact_max_output_tokens=_int("ARTIFACT_MAX_OUTPUT_TOKENS", 8_192),
-        answer_truncation_max_output_tokens=_int("ANSWER_TRUNCATION_MAX_OUTPUT_TOKENS", 16_384),
         routing_enabled=_bool("ROUTING_ENABLED", False),
         routing_eval_suite_hash=_optional("ROUTING_EVAL_SUITE_HASH"),
         admin_api_enabled=_bool("ADMIN_API_ENABLED", False),
         operation_timeout_seconds=_float("OPERATION_TIMEOUT_SECONDS", 120),
         operation_max_calls=_int("OPERATION_MAX_CALLS", 2),
         operation_token_budget=_int("OPERATION_TOKEN_BUDGET", 16_000),
-        conversation_context_max_bytes=_int(
-            "CONVERSATION_CONTEXT_MAX_BYTES", context_max_default),
-        llm_context_window_tokens=context_window,
-        # The local 4k model cannot afford a handoff prompt by default; cloud
-        # deployments opt in (the Azure Bicep sets this true).
-        conversation_compaction_enabled=_bool("CONVERSATION_COMPACTION_ENABLED", provider != "hf-local"),
-        conversation_compaction_threshold=_float("CONVERSATION_COMPACTION_THRESHOLD", 0.5),
-        conversation_compaction_keep_turns=_int("CONVERSATION_COMPACTION_KEEP_TURNS", 4),
-        conversation_compaction_max_output_tokens=compaction_output,
-        conversation_compaction_timeout_seconds=_float("CONVERSATION_COMPACTION_TIMEOUT_SECONDS", 180),
-        conversation_compaction_token_budget=compaction_budget,
-        conversation_token_estimate_bytes=bytes_per_token,
+        conversation_context_max_bytes=_int("CONVERSATION_CONTEXT_MAX_BYTES", 512_000),
         visual_artifact_review_enabled=_bool("VISUAL_ARTIFACT_REVIEW_ENABLED", False),
         screenshot_renderer=os.environ.get("SCREENSHOT_RENDERER", "disabled"),
         screenshot_timeout_seconds=_int("SCREENSHOT_TIMEOUT_SECONDS", 30),
@@ -557,11 +470,7 @@ def load_settings() -> Settings:
         auth_session_ttl_seconds=_int("AUTH_SESSION_TTL_SECONDS", 28800),
         auth_transaction_ttl_seconds=_int("AUTH_TRANSACTION_TTL_SECONDS", 300),
         tools_enabled=_bool("TOOLS_ENABLED", True),
-        answer_citation_repair_enabled=_bool("ANSWER_CITATION_REPAIR_ENABLED", True),
         tool_max_calls=_int("TOOL_MAX_CALLS", 4),
-        query_planning_enabled=_bool("QUERY_PLANNING_ENABLED", False),
-        query_planning_token_budget=_int("QUERY_PLANNING_TOKEN_BUDGET", 300_000),
-        advising_research_enabled=_bool("ADVISING_RESEARCH_ENABLED", True),
         research_max_calls=_int("RESEARCH_MAX_CALLS", 16),
         research_max_tool_calls=_int("RESEARCH_MAX_TOOL_CALLS", 14),
         research_reasoning_effort=os.environ.get("RESEARCH_REASONING_EFFORT", "medium") or None,

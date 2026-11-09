@@ -24,11 +24,7 @@ def readiness(request: Request) -> JSONResponse:
         dsn=settings.database_url,
         auth_service=request.app.state.auth_service,
         auth_mode=settings.auth_mode,
-        advising_model_configured=(
-            not settings.advising_research_enabled
-            or not settings.tools_enabled
-            or tools_capable
-        ),
+        advising_model_configured=tools_capable,
     )
     return JSONResponse(
         result.as_dict(),

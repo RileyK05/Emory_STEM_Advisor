@@ -14,7 +14,6 @@ from app.conversations.store import (
     ConversationStore,
     history_prompt,
     research_history_prompt,
-    warm_citations,
 )
 from app.db import queries
 from app.db.connection import connect
@@ -45,8 +44,9 @@ def test_history_and_exact_citations_survive_reload_and_request_replay(db, colle
     assert answer["sequence"] == 2
     assert answer["claims"][0]["reviewStatus"] == "unreviewed"
     assert answer["claims"][0]["citationChunkIds"] == [answer["citations"][0]["chunkId"]]
+    calls = provider.calls
     assert client.post(path + "/turns", json=first).json() == answer
-    assert provider.calls == 1
+    assert provider.calls == calls, "a replay returns the saved answer without calling the model"
     assert client.post(path + "/turns", json={**first, "query": "different"}).status_code == 409
     saved = client.get(path).json()
     assert [t["sequence"] for t in saved["turns"]] == [1, 2]
@@ -54,13 +54,8 @@ def test_history_and_exact_citations_survive_reload_and_request_replay(db, colle
     assert exact == "Alpha is a documented course concept."
     db.execute("DELETE FROM sources")
     db.commit()
-    history = client.post(path + "/turns", json={"query": "show saved turns", "mode": "history",
-                           "requestId": str(uuid4()), "expectedSequence": 2}).json()
-    assert history["type"] == "history"
-    assert history["turnReferences"] == [1, 2]
-    assert "Alpha is documented [1]." in history["answer"]
     assert client.get(path).json()["turns"][1]["evidence"]["contextBlock"][0]["text"] == exact
-    assert provider.calls == 1
+    assert provider.calls == calls
     assert db.execute("SELECT count(*) AS n FROM claims WHERE review_status='unreviewed'").fetchone()["n"] == 1
 
 
@@ -76,69 +71,19 @@ def test_followup_uses_complete_history_and_inherits_explicit_empty_scope(db, co
     followup = client.post(path + "/turns", json={"query": "what does that mean?",
         "requestId": str(uuid4()), "expectedSequence": 2})
     assert followup.status_code == 200, followup.text
-    prompt = provider.last_messages[-1]["content"]
-    assert "Alpha is documented [1]." in prompt
-    assert "Alpha is a documented course concept." in prompt
-    assert "untrusted context; never institutional evidence" in prompt
-    assert followup.json()["trace"]["query"] == "alpha\nFollow-up: what does that mean?"
+    history = json.loads(provider.last_messages[1]["content"])["history_untrusted"]
+    assert "alpha" in history and "Alpha is documented." in history
+    assert client.get(path).json()["turns"][2]["evidence"]["effective"]["sourceIds"] == [str(source)]
     empty = client.post(path + "/turns", json={"query": "alpha", "sourceIds": [],
         "requestId": str(uuid4()), "expectedSequence": 4})
-    assert empty.status_code == 200 and empty.json()["type"] == "refusal"
-    assert client.post(path + "/turns", json={"query": "more about it", "requestId": str(uuid4()),
-        "expectedSequence": 6}).json()["type"] == "refusal"
-    assert provider.calls == 2
+    assert empty.status_code == 200
+    assert empty.json()["research"]["outcome"] == "insufficient_evidence"
+    inherited = client.post(path + "/turns", json={"query": "more about it",
+        "requestId": str(uuid4()), "expectedSequence": 6})
+    assert inherited.json()["research"]["outcome"] == "insufficient_evidence"
 
 
-@pytest.mark.parametrize(("answer", "expected"), [
-    ("CS 350 requires CS 253 and CS 255 [1]. CS 253 requires CS_OX 171 [2].",
-     "prereqs for CS 350?\nCourses discussed: CS 350, CS 253, CS 255, CS_OX 171\nFollow-up: what do those require?"),
-    ("No courses here [1].", "prereqs for CS 350?\nFollow-up: what do those require?"),
-])
-def test_followup_retrieval_carries_the_courses_the_last_answer_named(answer, expected):
-    from app.api.routes.conversations import ConversationQuery, _effective_scope
-
-    rows = [{"sequence": 1, "role": "user", "text": "prereqs for CS 350?", "evidence": {}},
-            {"sequence": 2, "role": "assistant", "text": answer, "evidence": {}}]
-    body = ConversationQuery(query="what do those require?", requestId=uuid4(), expectedSequence=2)
-    assert _effective_scope(rows, body)[2] == expected
-
-
-@pytest.mark.parametrize(("query", "rows", "expected"), [
-    ("My friend says 12 is automatic. Correct my friend using that policy.",
-     [{"role": "user", "text": "I completed CS 170. What next?", "evidence": {}},
-      {"role": "user", "text": "Switch topics: how many credits can a 4+1 program double-count?",
-       "evidence": {}},
-      {"role": "assistant", "text": "Ordinarily six credits [1].", "evidence": {}}],
-     ("Switch topics: how many credits can a 4+1 program double-count?\n"
-      "Follow-up: My friend says 12 is automatic. Correct my friend using that policy.")),
-    ("New topic: what is the S/U credit cap?",
-     [{"role": "user", "text": "Which CS courses?", "evidence": {}}],
-     "New topic: what is the S/U credit cap?"),
-    ("What about the major?",
-     [{"sequence": 1, "role": "user",
-       "text": "What are the requirements for the computer science minor?", "evidence": {}},
-      {"sequence": 2, "role": "assistant",
-       "text": "The minor requires MATH 111 and CS 170 [1].", "evidence": {}}],
-     ("What are the requirements for the computer science minor?\n"
-      "Courses discussed: MATH 111, CS 170\nFollow-up: What about the major?")),
-    ("Which of those require CS 253 first?",
-     [{"sequence": 1, "role": "user",
-       "text": "What are the requirements for the computer science minor?", "evidence": {}},
-      {"sequence": 2, "role": "assistant",
-       "text": "The minor requires MATH 111 and CS 170 [1].", "evidence": {}},
-      {"sequence": 3, "role": "user", "text": "What about the major?", "evidence": {}},
-      {"sequence": 4, "role": "assistant", "text": "The CS BS requires CS 253 [1].", "evidence": {}}],
-     ("What are the requirements for the computer science minor?\n"
-      "Courses discussed: CS 253\nFollow-up: Which of those require CS 253 first?")),
-])
-def test_followup_without_pronoun_folds_in_the_earlier_topic(query, rows, expected):
-    from app.api.routes.conversations import ConversationQuery, _effective_scope
-
-    body = ConversationQuery(query=query, requestId=uuid4(), expectedSequence=99)
-    assert _effective_scope(rows, body)[2] == expected
-
-
-def test_followup_without_pronouns_keeps_raw_query_and_null_resets_scope(db, collection, tmp_path):
+def test_an_explicit_null_scope_resets_to_the_whole_collection(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is a documented course concept.")
     provider = FakeProvider("Alpha is documented [1].")
     client = api_client(db, collection, provider=provider)
@@ -150,8 +95,6 @@ def test_followup_without_pronouns_keeps_raw_query_and_null_resets_scope(db, col
     plain = client.post(path + "/turns", json={"query": "alpha requirements", "sourceIds": [str(source)],
         "requestId": str(uuid4()), "expectedSequence": 2})
     assert plain.status_code == 200, plain.text
-    # A non-pronoun follow-up is not rewritten with prior question text.
-    assert plain.json()["trace"]["query"] == "alpha requirements"
     # An explicit null resets to the whole collection rather than inheriting [source].
     reset = client.post(path + "/turns", json={"query": "alpha", "sourceIds": None,
         "requestId": str(uuid4()), "expectedSequence": 4})
@@ -168,7 +111,7 @@ def test_private_conversation_cannot_be_listed_read_written_or_abandoned_by_othe
     owner[0] = "bob"
     assert client.get("/api/conversations").json() == []
     assert client.get(path).status_code == 404
-    assert client.post(path + "/turns", json={"query": "history", "mode": "history",
+    assert client.post(path + "/turns", json={"query": "alpha",
         "requestId": str(uuid4()), "expectedSequence": 0}).status_code == 404
     assert client.post(path + "/turns/" + str(uuid4()) + "/abandon").status_code == 404
 
@@ -197,26 +140,6 @@ def test_pending_unknown_request_blocks_resubmit_and_abandon_fences_late_complet
         assert store.turns(conversation)["turns"][-1]["status"] == "abandoned"
     finally:
         other.close()
-
-
-def test_context_overflow_keeps_every_saved_turn_and_never_calls_provider(db, collection):
-    provider = FakeProvider()
-    client = api_client(db, collection, provider=provider)
-    client.app.state.settings = replace(client.app.state.settings, conversation_context_max_bytes=1024)
-    made = client.post("/api/conversations", json={"title": "Large history"}).json()
-    conversation = UUID(made["conversationId"])
-    store = ConversationStore(db, "development")
-    request_id = uuid4()
-    store.begin(conversation, request_id, 0, {"query": "x" * 2000})
-    store.finish(conversation, request_id, {"type": "history", "answer": "saved"})
-    path = "/api/conversations/" + str(conversation)
-    response = client.post(path + "/turns", json={"query": "next", "expectedSequence": 2,
-                                                  "requestId": str(uuid4())})
-    assert response.status_code == 422
-    saved = client.get(path).json()
-    assert saved["lastSequence"] == 2 and saved["pendingRequestId"] is None
-    assert saved["turns"][0]["text"] == "x" * 2000
-    assert provider.calls == 0
 
 
 def test_history_carries_citation_labels_not_retrieved_passage_bodies(db, collection):
@@ -259,84 +182,6 @@ def test_history_carries_citation_labels_not_retrieved_passage_bodies(db, collec
     assert selected["omitted_turns"] == 2
 
 
-def test_warm_citations_keep_cited_bodies_newest_first():
-    rows = [
-        {"role": "assistant", "evidence": {
-            "citations": [{"chunkId": "c-old", "sourceName": "Handbook", "locatorLabel": "pay"}],
-            "contextBlock": [
-                {"chunkId": "c-old", "sourceId": "s-old", "sourceName": "Handbook",
-                 "locatorLabel": "pay", "text": "WARMTOKEN handbook body"},
-                {"chunkId": "c-unused", "sourceId": "s-old", "sourceName": "Handbook",
-                 "locatorLabel": "other", "text": "retrieved but never cited"},
-            ],
-        }},
-        {"role": "assistant", "evidence": {
-            "citations": [
-                {"chunkId": "c-new", "sourceName": "Atlas", "locatorLabel": "CS 170"},
-                {"chunkId": "c-old", "sourceName": "Handbook", "locatorLabel": "pay"},
-            ],
-            "contextBlock": [
-                {"chunkId": "c-new", "sourceId": "s-new", "sourceName": "Atlas",
-                 "locatorLabel": "CS 170", "text": "four credit hours"},
-                {"chunkId": "c-old", "sourceId": "s-old", "sourceName": "Handbook",
-                 "locatorLabel": "pay", "text": "WARMTOKEN handbook body"},
-            ],
-        }},
-    ]
-    warm = warm_citations(rows)
-    assert [item["chunkId"] for item in warm] == ["c-new", "c-old"]
-    assert "retrieved but never cited" not in json.dumps(warm)
-    assert [item["chunkId"] for item in warm_citations(rows, allowed_source_ids={"s-new"})] == ["c-new"]
-    huge = [{"role": "assistant", "evidence": {
-        "citations": [{"chunkId": "c-big"}],
-        "contextBlock": [{"chunkId": "c-big", "sourceId": "s", "sourceName": "s",
-                          "locatorLabel": "s", "text": "x" * 20_000}],
-    }}]
-    assert warm_citations(huge) == []
-
-
-def test_followup_keeps_a_cited_passage_when_retrieval_moves_on(db, collection, tmp_path, monkeypatch):
-    ingest_text(db, collection, tmp_path, "handbook.txt",
-                "WARMTOKEN handbook body about software developer pay.")
-    ingest_text(db, collection, tmp_path, "course.txt",
-                "CS 170 is four credit hours of programming.")
-    provider = FakeProvider("Noted [1].")
-    client = api_client(db, collection, provider=provider)
-    made = client.post("/api/conversations", json={"title": "Warm citations"}).json()
-    path = "/api/conversations/" + made["conversationId"]
-    name = collection_name(db, collection)
-    first = client.post(path + "/turns", json={
-        "query": "WARMTOKEN handbook", "collectionId": name,
-        "requestId": str(uuid4()), "expectedSequence": 0})
-    assert first.status_code == 200, first.text
-    assert "WARMTOKEN" in first.json()["trace"]["contextBlock"][0]["text"]
-
-    from app.api import query_service
-    real_retrieve = query_service.retrieve
-
-    def without_handbook(*args, **kwargs):
-        outcome = real_retrieve(*args, **kwargs)
-        chunks = getattr(outcome, "chunks", None)
-        if not chunks:
-            return outcome
-        kept = [chunk for chunk in chunks if "WARMTOKEN" not in chunk.text]
-        return replace(outcome, chunks=kept)
-
-    monkeypatch.setattr(query_service, "retrieve", without_handbook)
-    second = client.post(path + "/turns", json={
-        "query": "how many credit hours is CS 170", "collectionId": name,
-        "requestId": str(uuid4()), "expectedSequence": 2})
-    assert second.status_code == 200, second.text
-    prompt = provider.last_messages[-1]["content"]
-    assert "WARMTOKEN handbook body" in prompt
-    assert "four credit hours" in prompt
-    texts = [item["text"] for item in second.json()["trace"]["contextBlock"]]
-    assert any("WARMTOKEN" in text for text in texts)
-    assert any("four credit hours" in text for text in texts)
-    history = json.loads(history_prompt(client.get(path).json()["turns"]))
-    assert "WARMTOKEN handbook body" not in json.dumps(history)
-
-
 def test_artifact_context_binds_exact_revision_not_current_title_only(db, collection):
     client = api_client(db, collection)
     spec = {"kind": "document", "title": "Exact artifact", "blocks": [
@@ -352,7 +197,8 @@ def test_artifact_context_binds_exact_revision_not_current_title_only(db, collec
     store.revise(saved["artifact_id"], saved["revision_id"], DocumentSpec.model_validate(revised))
     made = client.post("/api/conversations", json={"title": "Artifact reference"}).json()
     path = "/api/conversations/" + made["conversationId"]
-    response = client.post(path + "/turns", json={"query": "show history", "mode": "history",
+    response = client.post(path + "/turns", json={"query": "summarize this plan",
+        "collectionId": collection_name(db, collection),
         "requestId": str(uuid4()), "expectedSequence": 0,
         "artifactReferences": [{"artifactId": original["artifactId"], "revisionId": original["revisionId"]}]})
     assert response.status_code == 200, response.text
@@ -367,7 +213,7 @@ def _admission_client(db, collection, provider, *, database_url=None, **override
     from app.config import load_settings
     from tests.fakes import FakeEmbedder
 
-    settings = replace(load_settings(), advising_research_enabled=False, **overrides)
+    settings = replace(load_settings(), **overrides)
     if database_url is not None:
         settings = replace(settings, database_url=database_url)
     app = create_app(settings=settings, allow_test_client=True,

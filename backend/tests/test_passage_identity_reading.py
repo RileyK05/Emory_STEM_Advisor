@@ -26,7 +26,6 @@ from __future__ import annotations
 import pytest
 
 from app.atlas.requisites import canonical_codes_in, parse_requisites
-from app.generation.answer import unsupported_course_codes
 from app.generation.research_final import DecisionRejected, validate_final
 from tests.test_course_identity_guard import (
     DecisionBlock,
@@ -144,37 +143,29 @@ def test_the_reader_finds_every_code_the_previous_reader_found():
     ("Math_OX 112 or Math_OX 112Z or Math 112 as prerequisites", "MATH_OX 112"),
     ("Econ_OX 101, Econ 101 as prerequisite", "ECON_OX 101"),
 ])
-def test_the_gate_accepts_an_answer_naming_a_code_the_passage_spells_oddly(
-        passage, code):
+def test_the_gate_accepts_an_answer_naming_a_code_the_passage_spells_oddly(passage, code):
     """A correct answer is not withheld because the passage spells it oddly.
 
     The passage really names the course; the answer names it the way the course
     master does. The gate must see that they are the same identity.
     """
-    answer = f"{code} is a prerequisite for this course."
-    assert unsupported_course_codes(answer, passage, subjects=_SUBJECTS) == ()
-
-
-def test_the_research_gate_accepts_the_same_answer():
-    """The research path reads the passage the same way the legacy path does."""
-    passage = "This course requires Psyc_ox 110, Psyc_ox 111 or equivalent."
     record = _evidence()[0]
     support = type(record)(
         **{**record.model_dump(),
            "exact_text": passage, "locator_label": "PSYC_OX 210"})
     decision = _decision([
         DecisionBlock(kind="fact",
-                      text="PSYC_OX 110 is a prerequisite for PSYC_OX 210.",
+                      text=f"{code} is a prerequisite for this course.",
                       evidence_ids=("e1",)),
     ])
     validate_final(decision, None, [support], {"e1"}, {})
 
 
-def test_the_gate_still_rejects_a_code_the_passage_does_not_name():
-    """Widening the rule must not weaken it."""
-    passage = "This course requires Psyc_ox 110, Psyc_ox 111 or equivalent."
-    answer = "MATH 221 is a prerequisite for this course."
-    assert unsupported_course_codes(answer, passage, subjects=_SUBJECTS) == ("MATH 221",)
+def _clause_against_cs170(clause):
+    record = _evidence()[0]
+    support = type(record)(**{**record.model_dump(), "exact_text": "CS 170 is required."})
+    decision = _decision([DecisionBlock(kind="fact", text=clause, evidence_ids=("e1",))])
+    validate_final(decision, None, [support], {"e1"}, {})
 
 
 @pytest.mark.parametrize("clause", [
@@ -195,25 +186,11 @@ def test_the_gate_still_rejects_a_code_the_passage_does_not_name():
 def test_an_absence_clause_may_name_the_absent_course(clause):
     """A clause that reports a course is absent may name it.
 
-    The identity gate asks whether the cited passage contains the course the
-    answer names. A clause that says the passage does not establish the course
-    is the one case where naming it is the point.
+    The identity gate asks whether the evidence contains the course a block
+    names. A clause that says the evidence does not establish the course is the
+    one case where naming it is the point.
     """
-    assert unsupported_course_codes(clause, "CS 170 is required.", subjects=_SUBJECTS) == ()
-
-
-def test_a_coverage_gap_may_not_name_courses_the_run_never_heard_of():
-    """Saying a course was not read does not license naming it.
-
-    Emory's catalog has no CS_OX 325. An answer that offers it as an example
-    of a group of unread courses tells a student a course exists.
-    """
-    clause = ("Coverage gaps: the Oxford-campus counterparts of the Group A "
-              "courses (for example CS_OX 325, CS_OX 428) were not read, so "
-              "whether any of them accepts CS_OX 253 is unverified here.")
-    missing = unsupported_course_codes(clause, "CS 170 is required.", subjects=_SUBJECTS)
-    assert "CS_OX 325" in missing
-    assert "CS_OX 428" in missing
+    _clause_against_cs170(clause)
 
 
 @pytest.mark.parametrize("clause", [
@@ -221,13 +198,9 @@ def test_a_coverage_gap_may_not_name_courses_the_run_never_heard_of():
     "MATH 231 is required for the Computer Science BS.",
 ])
 def test_a_requirement_claim_may_not_use_the_absence_escape(clause):
-    """"Not required" is a claim about a requirement, not about presence.
-
-    The escape hatch covers statements that a course is absent from a source.
-    A clause that denies a requirement asserts something the gate cannot let
-    through unchecked.
-    """
-    assert unsupported_course_codes(clause, "CS 170 is required.", subjects=_SUBJECTS) != ()
+    """"Not required" is a claim about a requirement, not about presence."""
+    with pytest.raises(DecisionRejected):
+        _clause_against_cs170(clause)
 
 
 def test_the_research_gate_still_rejects_a_code_the_evidence_does_not_name():

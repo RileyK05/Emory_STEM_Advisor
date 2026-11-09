@@ -32,7 +32,6 @@ from app.advising.research_types import (
     EvidenceRecord,
     FinalDecision,
 )
-from app.generation.answer import unsupported_course_codes
 from app.generation.research_final import DecisionRejected, validate_final
 
 _SUBJECTS = {"CS", "CS_OX", "MATH", "PHYS", "BIOL", "CHEM", "ENVS", "DATASCI"}
@@ -71,13 +70,6 @@ def _decision(blocks) -> FinalDecision:
         preparation_claims=(),
         unresolved_questions=(),
     )
-
-
-def test_the_legacy_gate_catches_a_code_the_evidence_does_not_contain():
-    """The narrower path's rule, applied everywhere, would have caught it."""
-    missing = unsupported_course_codes(_LIMITATION, _SUPPORT, subjects=_SUBJECTS)
-    assert "CS_OX 325" in missing
-    assert "CS_OX 428" in missing
 
 
 def test_a_fact_block_naming_an_absent_code_is_rejected():

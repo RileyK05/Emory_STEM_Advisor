@@ -502,7 +502,6 @@ class ResearchController:
                     "prompt_digest": json_digest({"system": prepared.messages[0].content, "user": user}),
                     "finish_required": finishing})
                 return prepared, _attempt(provider, prepared, operation, on_attempt=on_attempt,
-                                          on_provisional_text=None, on_provisional_reset=None,
                                           before_provider_call=before_provider_call)
             prepared, result = retry_transient(call, remaining_calls=status.remaining_calls,
                                                remaining_seconds=status.remaining_seconds,

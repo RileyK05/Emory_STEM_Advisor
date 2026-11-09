@@ -116,7 +116,7 @@ def test_two_verified_users_cannot_read_or_mutate_private_resources(db, collecti
     assert bob.get(conversation_path).status_code == 404
     from uuid import uuid4
     assert bob.post(conversation_path + "/turns", headers=headers, json={
-        "query": "show history", "mode": "history", "requestId": str(uuid4()),
+        "query": "alpha", "requestId": str(uuid4()),
         "expectedSequence": 0}).status_code == 404
     assert bob.post(conversation_path + "/turns/" + str(uuid4()) + "/abandon",
                     headers=headers).status_code == 404

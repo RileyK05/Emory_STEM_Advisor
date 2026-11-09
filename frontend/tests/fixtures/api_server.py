@@ -77,9 +77,8 @@ def main() -> None:
         from app.db import queries
         from app.db.bootstrap import prepare_database
         from app.db.connection import connect
-        from app.llm.base import StreamEvent, Usage
         from cryptography.fernet import Fernet
-        from fakes import FakeEmbedder, ScriptedProvider
+        from fakes import FakeEmbedder, FakeProvider
         from fastapi.staticfiles import StaticFiles
 
         class SwitchableFakeEmbedder(FakeEmbedder):
@@ -135,52 +134,34 @@ def main() -> None:
         finally:
             bootstrap_conn.close()
         embedder = SwitchableFakeEmbedder()
-        provider = ScriptedProvider(
-            "Students must complete the robotics lab orientation before using equipment. [1]",
-            model="offline-browser-fake",
-            usage=Usage(prompt_tokens=20, completion_tokens=12, source="provider"),
-        )
-        provider.calls = 0
+        # Speaks the research protocol: searches the question, reads what it
+        # found, and finishes with this sentence citing that passage.
+        provider = FakeProvider("Students must complete the safety requirement the passage states.")
         provider.fail_next = False
         original_generate = provider.generate
         provider_call_records = []
         provider_call_lock = threading.Lock()
         provider_call_context = threading.local()
-        provider_stream_control = {"slow_next": False, "started": threading.Event(),
-                                   "attempts": 0,
-                                   "release": threading.Event()}
+        slow_call = {"armed": False, "started": threading.Event(),
+                     "release": threading.Event()}
 
         def test_generate(request):
             with provider_call_lock:
                 provider_call_records.append({
                     "call": provider.calls + 1,
-                    "kind": ("conversation_stream" if getattr(
-                        provider_call_context, "conversation_stream", False
-                    ) else "other_chat"),
-                    "streamAttempt": getattr(provider_call_context, "stream_attempt", None),
                     "requestId": getattr(provider_call_context, "request_id", None),
                 })
             if provider.fail_next:
                 provider.fail_next = False
                 provider.calls += 1
                 raise RuntimeError("test-only provider failure")
-            provider.calls += 1
+            if slow_call["armed"]:
+                slow_call["armed"] = False
+                slow_call["started"].set()
+                slow_call["release"].wait(timeout=30)
             return original_generate(request)
 
         provider.generate = test_generate
-
-        def test_stream(request):
-            provider_stream_control["attempts"] += 1
-            provider_call_context.conversation_stream = True
-            provider_call_context.stream_attempt = provider_stream_control["attempts"]
-            yield StreamEvent("text_delta", text="Provisional, unverified answer text.")
-            if provider_stream_control["slow_next"]:
-                provider_stream_control["slow_next"] = False
-                provider_stream_control["started"].set()
-                provider_stream_control["release"].wait(timeout=30)
-            yield StreamEvent("completed", result=provider.generate(request))
-
-        provider.stream = test_stream
 
         app = create_app(settings=settings, embedder=embedder, provider=provider)
         app.state.database_ready = True
@@ -260,19 +241,18 @@ def main() -> None:
 
         @app.post("/__test/slow-next-provider")
         async def slow_next_provider_for_test():
-            provider_stream_control["slow_next"] = True
-            provider_stream_control["started"].clear()
-            provider_stream_control["release"].clear()
+            slow_call["armed"] = True
+            slow_call["started"].clear()
+            slow_call["release"].clear()
             return {"armed": True}
 
-        @app.get("/__test/provider-stream-started")
-        async def provider_stream_started_for_test():
-            return {"started": provider_stream_control["started"].is_set(),
-                    "attempts": provider_stream_control["attempts"]}
+        @app.get("/__test/provider-call-started")
+        async def provider_call_started_for_test():
+            return {"started": slow_call["started"].is_set(), "calls": provider.calls}
 
-        @app.post("/__test/release-provider-stream")
-        async def release_provider_stream_for_test():
-            provider_stream_control["release"].set()
+        @app.post("/__test/release-provider-call")
+        async def release_provider_call_for_test():
+            slow_call["release"].set()
             return {"released": True}
 
         @app.get("/__test/provider-calls")
@@ -281,7 +261,6 @@ def main() -> None:
                 with worker_execution_lock:
                     worker_records = list(worker_execution_records[-64:])
                 return {"calls": provider.calls, "records": list(provider_call_records[-64:]),
-                        "streamAttempts": provider_stream_control["attempts"],
                         "workerExecutions": worker_records}
 
         @app.get("/__test/conversation-job")

@@ -17,8 +17,8 @@ configured provider, so it measures the product rather than a stub.
 
 Usage::
 
-    python -m scripts.manual.advising_clarity_probe --mode both
-    python -m scripts.manual.advising_clarity_probe --mode legacy --out report.json
+    python -m scripts.manual.advising_clarity_probe
+    python -m scripts.manual.advising_clarity_probe --out report.json
 """
 
 from __future__ import annotations
@@ -355,15 +355,10 @@ def score(conn, result: Result) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=["legacy", "research", "both"], default="both")
     parser.add_argument("--out", type=Path, help="Write a JSON report here")
     parser.add_argument("--only", action="append", dest="probe_ids",
                         help="Run only these probe ids")
     parser.add_argument("--timeout", type=float, default=60)
-    parser.add_argument("--tools", action="store_true",
-                        help="Run the legacy path with the advisor's scoped tools enabled. "
-                             "The development .env turns them on, so this is the "
-                             "configuration the product actually runs.")
     args = parser.parse_args()
 
     settings = load_settings()
@@ -371,7 +366,6 @@ def main() -> None:
         parser.error("configure a real cloud provider and key locally")
 
     selected = [p for p in PROBES if not args.probe_ids or p.probe_id in args.probe_ids]
-    modes = ["legacy", "research"] if args.mode == "both" else [args.mode]
 
     report = {"started_at": datetime.now(UTC).isoformat(),
               "provider": settings.llm_provider, "model": settings.llm_model_id,
@@ -389,50 +383,40 @@ def main() -> None:
                 "select name from collections order by created_at limit 1").fetchone()
         collection_name = row["name"]
 
-        for mode in modes:
-            run_settings = replace(settings, database_url=dsn)
-            if mode == "research":
-                run_settings = replace(run_settings, advising_research_enabled=True,
-                                       tools_enabled=True)
-            else:
-                # The development .env turns research on; the legacy path has to
-                # be selected explicitly or "legacy" silently measures research.
-                run_settings = replace(run_settings, advising_research_enabled=False,
-                                       tools_enabled=args.tools)
-            app = create_app(settings=run_settings)
-            app.state.database_ready = True
-            with TestClient(app, base_url="http://127.0.0.1",
-                            client=("127.0.0.1", 50000),
-                            raise_server_exceptions=False) as client:
-                for probe in selected:
-                    started = time.perf_counter()
-                    try:
-                        response = client.post("/api/query", json={
-                            "query": probe.question, "collectionId": collection_name})
-                        payload = response.json()
-                    except (RuntimeError, ValueError, KeyError) as exc:
-                        print(f"  {probe.probe_id}: ERROR {exc}", flush=True)
-                        continue
-                    result = Result(probe=probe, http=response.status_code,
-                                    seconds=round(time.perf_counter() - started, 2),
-                                    answer=payload.get("answer") or "",
-                                    reason=payload.get("reason"),
-                                    citations=payload.get("citations") or [])
-                    result.cited_text = [chunk_text.get(c.get("chunkId"), "")
-                                         for c in result.citations]
-                    score(conn, result)
-                    report["results"].append({
-                        "mode": mode, "probe": probe.probe_id, "kind": probe.kind,
-                        "http": response.status_code, "seconds": result.seconds,
-                        "type": payload.get("type"), "answer": result.answer,
-                        "reason": result.reason, "citations": result.citations,
-                        "checks": result.checks})
-                    failed = result.failed
-                    print(f"  [{mode}] {probe.probe_id:<22} {response.status_code} "
-                          f"{result.seconds:>6.1f}s "
-                          f"{len(result.checks) - len(failed)}/{len(result.checks)}"
-                          + (f"  FAILED {[c['check'] for c in failed]}" if failed else ""),
-                          flush=True)
+        app = create_app(settings=replace(settings, database_url=dsn))
+        app.state.database_ready = True
+        with TestClient(app, base_url="http://127.0.0.1",
+                        client=("127.0.0.1", 50000),
+                        raise_server_exceptions=False) as client:
+            for probe in selected:
+                started = time.perf_counter()
+                try:
+                    response = client.post("/api/query", json={
+                        "query": probe.question, "collectionId": collection_name})
+                    payload = response.json()
+                except (RuntimeError, ValueError, KeyError) as exc:
+                    print(f"  {probe.probe_id}: ERROR {exc}", flush=True)
+                    continue
+                result = Result(probe=probe, http=response.status_code,
+                                seconds=round(time.perf_counter() - started, 2),
+                                answer=payload.get("answer") or "",
+                                reason=payload.get("reason"),
+                                citations=payload.get("citations") or [])
+                result.cited_text = [chunk_text.get(c.get("chunkId"), "")
+                                     for c in result.citations]
+                score(conn, result)
+                report["results"].append({
+                    "probe": probe.probe_id, "kind": probe.kind,
+                    "http": response.status_code, "seconds": result.seconds,
+                    "type": payload.get("type"), "answer": result.answer,
+                    "reason": result.reason, "citations": result.citations,
+                    "checks": result.checks})
+                failed = result.failed
+                print(f"  {probe.probe_id:<22} {response.status_code} "
+                      f"{result.seconds:>6.1f}s "
+                      f"{len(result.checks) - len(failed)}/{len(result.checks)}"
+                      + (f"  FAILED {[c['check'] for c in failed]}" if failed else ""),
+                      flush=True)
 
     passed = sum(1 for r in report["results"] for c in r["checks"] if c["ok"])
     total = sum(len(r["checks"]) for r in report["results"])
@@ -447,7 +431,7 @@ def main() -> None:
     for r in report["results"]:
         failed = [c for c in r["checks"] if not c["ok"]]
         if failed:
-            print(f"  FAIL [{r['mode']}] {r['probe']}: "
+            print(f"  FAIL {r['probe']}: "
                   + "; ".join(f"{c['check']}: {c.get('detail', '')}" for c in failed))
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -11,7 +11,7 @@ from uuid import UUID
 from app.connections.models import ConnectionUnavailable, StoredProfile
 from app.connections.registry import ConnectionRuntime
 from app.connections.repository import ConnectionProfiles
-from app.llm.routing import RoutingConfig, choose_route, quality_fallback
+from app.llm.routing import RoutingConfig, choose_route
 
 _ROUTING_PATH = Path(__file__).resolve().parents[2] / "configs" / "routing.toml"
 _ROLES = frozenset({"standard", "complex", "fast_generation"})
@@ -126,66 +126,3 @@ def resolve(settings, conn, query: str, *, job_kind: str | None = None,
         role=decision.role, profile_id=selected.profile_id,
         profile_revision=selected.revision, reason=decision.reason,
         profile=selected, _profiles=repository)
-
-
-def resolve_quality_fallback(settings, conn, query: str, *, chosen: ResolvedConnection,
-                             data_scope: str, required_capabilities=frozenset(),
-                             required_data_scopes=None,
-                             profiles: ConnectionProfiles | None = None,
-                             runtime: ConnectionRuntime | None = None,
-                             config_path: str | Path | None = None) -> ResolvedConnection | None:
-    """Resolve one distinct, eval-approved complex route under the same scope gate."""
-    routing = _routing_config(config_path)
-    if routing.max_quality_escalations == 0 or chosen.role != "standard":
-        return None
-    suite_hash = getattr(settings, "routing_eval_suite_hash", None)
-    if not suite_hash:
-        return None
-    required = frozenset(required_capabilities)
-    required_scopes = (frozenset(required_data_scopes) if required_data_scopes is not None
-                       else frozenset({data_scope}))
-    repository = profiles or chosen._profiles
-    ordered_profiles = repository.list_routes(conn, suite_hash=suite_hash)
-    conn.commit()
-    candidates = ConnectionRuntime.candidates(ordered_profiles)
-    chosen_candidate = next((candidate for candidate in candidates
-                             if candidate.profile_id == str(chosen.profile_id)
-                             and candidate.role == chosen.role), None)
-    if chosen_candidate is None:
-        return None
-    candidates = tuple(candidate for candidate in candidates
-                       if candidate.profile_id != str(chosen.profile_id))
-    fallback = quality_fallback(
-        routing, chosen_candidate, candidates,
-        required_capabilities=required, data_scope=data_scope,
-        required_data_scopes=required_scopes,
-    )
-    if fallback is None:
-        return None
-    selected = next((profile for profile in ordered_profiles
-                     if str(profile.profile_id) == fallback.profile_id), None)
-    if selected is None:
-        return None
-    selected_runtime = runtime or ConnectionRuntime(settings, repository)
-    provider = selected_runtime.generation_provider(
-        selected, role="complex", data_scope=data_scope,
-        required_capabilities=required,
-    )
-    values = {
-        "llm_provider": selected.provider,
-        "llm_model_id": selected.model_id,
-        "llm_sampling_policy": selected.provider_options.get("sampling_policy", "greedy"),
-        "llm_reasoning_effort": selected.provider_options.get("reasoning_effort"),
-    }
-    try:
-        selected_settings = replace(settings, **values)
-    except TypeError:
-        settings_values = vars(settings).copy()
-        settings_values.update(values)
-        selected_settings = type("ResolvedSettings", (), settings_values)()
-    return ResolvedConnection(
-        provider=provider, settings=selected_settings, role="complex",
-        profile_id=selected.profile_id, profile_revision=selected.revision,
-        reason="one bounded quality escalation after output-integrity rejection",
-        profile=selected, _profiles=repository,
-    )

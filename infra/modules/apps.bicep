@@ -27,12 +27,6 @@ param publicBaseUrl string = ''
 param llmProvider string
 param llmModelId string
 param llmBaseUrl string = ''
-param llmContextWindowTokens int
-param conversationCompactionEnabled bool
-param conversationCompactionThreshold string
-param conversationCompactionKeepTurns int
-param conversationCompactionMaxOutputTokens int
-param conversationTokenEstimateBytes int
 param embeddingModelId string
 
 param authMode string
@@ -125,34 +119,6 @@ var commonEnv = [
     secretRef: 'llm-api-key'
   }
   {
-    name: 'LLM_CONTEXT_WINDOW_TOKENS'
-    value: string(llmContextWindowTokens)
-  }
-  {
-    name: 'CONVERSATION_COMPACTION_ENABLED'
-    value: string(conversationCompactionEnabled)
-  }
-  {
-    name: 'CONVERSATION_COMPACTION_THRESHOLD'
-    value: conversationCompactionThreshold
-  }
-  {
-    name: 'CONVERSATION_COMPACTION_KEEP_TURNS'
-    value: string(conversationCompactionKeepTurns)
-  }
-  {
-    name: 'CONVERSATION_COMPACTION_MAX_OUTPUT_TOKENS'
-    value: string(conversationCompactionMaxOutputTokens)
-  }
-  {
-    name: 'CONVERSATION_COMPACTION_TOKEN_BUDGET'
-    value: '0'
-  }
-  {
-    name: 'CONVERSATION_TOKEN_ESTIMATE_BYTES'
-    value: string(conversationTokenEstimateBytes)
-  }
-  {
     name: 'EMBEDDING_PROVIDER'
     value: 'granite'
   }
@@ -238,14 +204,6 @@ var commonEnv = [
   }
   {
     name: 'TOOLS_ENABLED'
-    value: 'true'
-  }
-  {
-    name: 'QUERY_PLANNING_ENABLED'
-    value: 'false'
-  }
-  {
-    name: 'ADVISING_RESEARCH_ENABLED'
     value: 'true'
   }
 ]

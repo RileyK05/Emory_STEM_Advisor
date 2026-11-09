@@ -94,32 +94,6 @@ param llmModelId string
 @description('Optional provider base URL (Azure OpenAI endpoint / gateway).')
 param llmBaseUrl string = ''
 
-@description('Model context window used for conversation compaction accounting.')
-@minValue(1000)
-@maxValue(2000000)
-param llmContextWindowTokens int = 128000
-
-@description('Automatically compact conversation history at the threshold below.')
-param conversationCompactionEnabled bool = true
-
-@description('Fraction of the model context window that triggers compaction (0.05-0.95).')
-param conversationCompactionThreshold string = '0.5'
-
-@description('Raw recent turns kept verbatim after a checkpoint.')
-@minValue(1)
-@maxValue(50)
-param conversationCompactionKeepTurns int = 4
-
-@description('Maximum tokens for one compaction handoff.')
-@minValue(128)
-@maxValue(8192)
-param conversationCompactionMaxOutputTokens int = 2048
-
-@description('UTF-8 bytes-per-token estimate used for context accounting.')
-@minValue(1)
-@maxValue(16)
-param conversationTokenEstimateBytes int = 4
-
 @description('Embedding model id. The production image preloads the default Granite model.')
 param embeddingModelId string = 'ibm-granite/granite-embedding-125m-english'
 
@@ -767,12 +741,6 @@ module apps 'modules/apps.bicep' = if (deployApps) {
     llmProvider: llmProvider
     llmModelId: llmModelId
     llmBaseUrl: llmBaseUrl
-    llmContextWindowTokens: llmContextWindowTokens
-    conversationCompactionEnabled: conversationCompactionEnabled
-    conversationCompactionThreshold: conversationCompactionThreshold
-    conversationCompactionKeepTurns: conversationCompactionKeepTurns
-    conversationCompactionMaxOutputTokens: conversationCompactionMaxOutputTokens
-    conversationTokenEstimateBytes: conversationTokenEstimateBytes
     embeddingModelId: embeddingModelId
     authMode: authMode
     adminBootstrapEmails: adminBootstrapEmails

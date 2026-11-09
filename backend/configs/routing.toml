@@ -3,7 +3,6 @@ version = 2
 # Routing policy only. Profiles, models, credentials, and measured quality belong in server settings.
 default_role = "standard"
 uncertain_role = "complex"
-max_quality_escalations = 1
 
 [signals]
 complex_terms = ["compare", "evaluate", "synthesize", "multi-step", "why", "trade-off"]

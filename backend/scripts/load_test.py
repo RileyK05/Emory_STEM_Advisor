@@ -138,8 +138,9 @@ class LatencyProvider:
                 return _sample_lognormal(self._rng, self.p50_seconds, self.p95_seconds)
             return self.delay_seconds
 
-    def _result(self):
+    def _result(self, request):
         from app.llm.base import GenerationResult, Usage
+        from tests.fakes import research_context, research_step
 
         with self._lock:
             self.calls += 1
@@ -148,12 +149,14 @@ class LatencyProvider:
             ))
         total = max(2, total)
         completion = max(1, min(total // 2, 256))
-        return GenerationResult(
-            text=self.text,
-            finish_reason="stop",
-            usage=Usage(prompt_tokens=total - completion, completion_tokens=completion,
-                        source="provider"),
-        )
+        usage = Usage(prompt_tokens=total - completion, completion_tokens=completion,
+                      source="provider")
+        context = research_context(request)
+        if context is not None:
+            return GenerationResult(tool_calls=(research_step(context, self.text, self.calls,
+                                                              request.tools),),
+                                    finish_reason="tool_calls", usage=usage)
+        return GenerationResult(text=self.text, finish_reason="stop", usage=usage)
 
     def _maybe_rate_limit(self) -> None:
         if self.rate_limit_fraction <= 0:
@@ -173,28 +176,15 @@ class LatencyProvider:
     def generate(self, request):
         self._maybe_rate_limit()
         time.sleep(self._delay())
-        return self._result()
-
-    def stream(self, request):
-        from app.llm.base import StreamEvent
-
-        self._maybe_rate_limit()
-        first, _, last = self.text.partition(" ")
-        yield StreamEvent(type="text_delta", text=first + " ")
-        time.sleep(self._delay())
-        yield StreamEvent(
-            type="text_delta", text=last
-        )
-        yield StreamEvent(type="completed", result=self._result())
+        return self._result(request)
 
     def chat(self, messages, *, max_new_tokens: int | None = None) -> str:
         time.sleep(self.delay_seconds)
-        self._result()
         return self.text
 
 
 class GatedProvider:
-    """Apply the P5.3 per-provider concurrency cap around the fake provider."""
+    """Apply the per-provider concurrency cap (LLM_MAX_CONCURRENCY) around the fake provider."""
 
     def __init__(self, provider, limit: int):
         from app.llm.base import ProviderGate
@@ -213,10 +203,6 @@ class GatedProvider:
     def generate(self, request):
         with self.gate.acquire(request) as active:
             return self.provider.generate(active)
-
-    def stream(self, request):
-        with self.gate.acquire(request) as active:
-            yield from self.provider.stream(active)
 
 
 def _lenient_config(settings: Settings):
@@ -594,7 +580,7 @@ def main() -> None:
                         help="fraction of provider calls that get a 429 burst")
     parser.add_argument("--rate-limit-retry-after", type=float, default=1.0)
     parser.add_argument("--max-concurrency", type=int, default=8,
-                        help="P5.3 per-provider call cap")
+                        help="per-provider call cap, as LLM_MAX_CONCURRENCY")
     parser.add_argument("--embed-latency-ms", type=int, default=30)
     parser.add_argument("--poll-ms", type=int, default=250)
     parser.add_argument("--pool-size", type=int, default=20)
@@ -627,8 +613,6 @@ def main() -> None:
         settings = replace(
             load_settings(), database_url=dsn, data_dir=root,
             db_pool_max_size=args.pool_size, auth_mode="development",
-            tools_enabled=False, query_planning_enabled=False,
-            advising_research_enabled=False,
             http_threadpool_tokens=max(64, args.concurrency),
             llm_max_concurrency=args.max_concurrency,
             operation_max_calls=4,

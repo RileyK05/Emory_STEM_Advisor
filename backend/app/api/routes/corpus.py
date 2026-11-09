@@ -15,7 +15,6 @@ from app.api.schemas import (
     AnswerResponse,
     CollectionDoc,
     QueryRequest,
-    RefusalResponse,
     SourceDoc,
 )
 from app.api.serialize import public_payload
@@ -107,13 +106,13 @@ def list_sources(
     return [_source_doc(row, can_reindex=row["workspace_key"] == workspace) for row in rows]
 
 
-@router.post("/api/query", response_model=AnswerResponse | RefusalResponse)
+@router.post("/api/query", response_model=AnswerResponse)
 def query(
     body: QueryRequest, request: Request, conn: Conn, settings: SettingsDep, config: ConfigDep,
     embedder: EmbedderDep, provider: ProviderDep, workspace: WorkspaceDep,
     debug: Annotated[AppliedDebug | None, Depends(get_debug)],
     principal: Annotated[Principal, Depends(get_principal)],
-) -> AnswerResponse | RefusalResponse:
+) -> AnswerResponse:
     from app.api.query_service import query_response
     from app.quotas.service import QuotaService
 
@@ -124,8 +123,7 @@ def query(
     response = query_response(body, conn, effective_settings, effective_config, embedder, provider,
                           workspace_key=workspace,
                           connection_profiles=request.app.state.connection_profiles,
-                          connection_runtime=request.app.state.connection_runtime,
-                          system_prompt=debug.system_prompt if debug is not None else None)
+                          connection_runtime=request.app.state.connection_runtime)
     return type(response).model_validate(public_payload(response.model_dump(mode="json"), principal))
 
 

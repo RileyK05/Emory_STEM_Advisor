@@ -67,15 +67,6 @@ CASES = [
     ("course-micro-macro", "lookup", "Compare ECON 101 and ECON 112 using only their catalog descriptions and prerequisite text."),
 ]
 
-FORMAT_GUIDANCE = (
-    "\nFor this diagnostic run, use plain paragraphs or bullet items. Every paragraph, "
-    "including introductions, caveats, and any refusal, must contain a supporting "
-    "numbered citation from the context. Omit headings, unsupported claims, and "
-    "follow-up questions. A citation does not authorize a claim absent from its text. "
-    "If evidence is insufficient, briefly state the limitation without inventing facts."
-)
-
-
 class RecordingProvider:
     """Record seam-level attempts and enforce a run-wide call/token ceiling."""
 
@@ -139,7 +130,6 @@ class RecordingProvider:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, help="Optional JSON capture; otherwise print answers")
-    parser.add_argument("--mode", choices=["current", "tools", "both", "research"], default="current")
     parser.add_argument("--limit", type=int, default=24)
     parser.add_argument("--case", action="append", dest="case_ids")
     parser.add_argument("--max-calls", type=int, default=48)
@@ -150,8 +140,6 @@ def main() -> None:
     parser.add_argument("--collection", help="Process-local collection override")
     parser.add_argument("--timeout", type=float, default=60)
     parser.add_argument("--max-output-tokens", type=int, default=4096)
-    parser.add_argument("--format-guidance", action="store_true",
-                        help="Diagnostic prompt guidance; leaves the application's prompt unchanged")
     parser.add_argument("--research-system-file", type=Path,
                         help="Process-local research system-prompt override; does not edit the app")
     parser.add_argument("--recommendations", action="store_true",
@@ -160,10 +148,6 @@ def main() -> None:
                         help="Graph/embedding checks only; makes zero LLM calls")
     parser.add_argument("--verbose-tools", action="store_true", help="Print tool names and finish reasons")
     args = parser.parse_args()
-    if args.mode == "research" and args.format_guidance:
-        parser.error("research uses its typed fact/judgment contract, not legacy citation guidance")
-    if args.research_system_file and args.mode != "research":
-        parser.error("--research-system-file requires --mode research")
     research_prompt = None
     if args.research_system_file:
         path = args.research_system_file.resolve()
@@ -209,27 +193,16 @@ def main() -> None:
         collections = conn.execute(queries.get("list_collections")).fetchall()
     if not migrations or max(row["version"] for row in migrations) < 33:
         parser.error("existing database must already have the department graph schema")
-    if args.mode == "research" and max(row["version"] for row in migrations) < 39:
-        parser.error("apply research migration 039 before running research checks")
     if settings.default_collection not in {row["name"] for row in collections}:
         parser.error("configured collection is missing")
     recording = RecordingProvider(get_provider(settings), max_calls=args.max_calls,
                                   token_budget=args.token_budget)
     recording.verbose_tools = args.verbose_tools
-    if args.format_guidance:
-        from app.generation import answer as answer_module
-
-        # Process-local variant, applied before reservations and audit so the
-        # persisted prompt, operation budget, and evidence all describe it.
-        answer_module.SYSTEM_PROMPT += FORMAT_GUIDANCE
-        answer_module.PROMPT_VERSION += "-smoke-format"
     report = {"started_at": datetime.now(UTC).isoformat(),
               "provider": settings.llm_provider, "model": settings.llm_model_id,
               "base_url": settings.llm_base_url, "collection": settings.default_collection,
               "configured_tools_enabled": settings.tools_enabled,
-              "citation_repair_enabled": settings.answer_citation_repair_enabled,
               "compatible_thinking": settings.llm_compatible_thinking,
-              "diagnostic_format_guidance": args.format_guidance,
               "diagnostic_research_prompt": ({
                   "path": str(args.research_system_file.resolve()),
                   "sha256": hashlib.sha256(research_prompt.encode("utf-8")).hexdigest(),
@@ -241,84 +214,70 @@ def main() -> None:
               "retrieval_config_sha256": hashlib.sha256(
                   (ROOT / "backend/configs/retrieval.toml").read_bytes()).hexdigest(),
               "review_status": "unreviewed; citation acceptance is not semantic correctness",
-              "results": [], "provider_calls": recording.calls, "mode_settings": {}}
+              "results": [], "provider_calls": recording.calls}
     if output:
         output.parent.mkdir(parents=True, exist_ok=True)
 
     def save():
         report["accounted_tokens"] = recording.tokens
         report["summary"] = dict(Counter(
-            f"{row['mode']}:{row.get('response', {}).get('type', row.get('status_code', 'error'))}"
+            row.get("response", {}).get("type", row.get("status_code", "error"))
             for row in report["results"]))
         if output:
             output.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str),
                               encoding="utf-8")
 
     recording.on_update = save
-    modes = ["current", "tools"] if args.mode == "both" else [args.mode]
     try:
-        for mode in modes:
-            run_settings = replace(settings, advising_research_enabled=True, tools_enabled=True) if (
-                mode == "research") else settings if mode == "current" else replace(
-                settings, tools_enabled=True, operation_max_calls=4,
-                operation_token_budget=64000, operation_timeout_seconds=240)
-            report["mode_settings"][mode] = {
-                "tools_enabled": run_settings.tools_enabled,
-                "operation_max_calls": run_settings.operation_max_calls,
-                "operation_token_budget": run_settings.operation_token_budget,
-                "operation_timeout_seconds": run_settings.operation_timeout_seconds,
-                "llm_timeout_seconds": run_settings.llm_timeout_seconds,
-                "llm_sampling_policy": run_settings.llm_sampling_policy,
-            }
-            app = create_app(settings=run_settings, provider=recording)
-            # Read-only schema preflight above replaces API bootstrap here.
-            app.state.database_ready = True
-            with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000),
-                            raise_server_exceptions=False) as client:
-                for case_id, category, question in selected:
-                    recording.case_id = f"{mode}:{case_id}"
-                    started = time.perf_counter()
-                    graph_response = None
-                    if args.recommendations or args.graph_only:
-                        graph_response = client.get("/api/recommendations", params={"query": question})
-                    response = graph_response if args.graph_only else client.post(
-                        "/api/query", json={"query": question})
-                    try:
-                        payload = response.json()
-                    except ValueError:
-                        payload = {"type": "non_json_error"}
-                    if recording.exhausted:
-                        payload = {"type": "diagnostic_budget_exhausted",
-                                   "reason": "Manual smoke run budget reached; not a provider or answer-quality result."}
-                    if args.graph_only:
-                        payload = {"type": "recommendations", "groups": payload}
-                    row = {"case_id": case_id, "category": category, "mode": mode,
-                           "query": question, "status_code": response.status_code,
-                           "latency_seconds": round(time.perf_counter() - started, 3),
-                           "response": payload}
-                    if args.recommendations and not args.graph_only:
-                        row["recommendations_status"] = graph_response.status_code
-                        row["recommendations"] = graph_response.json()
-                    report["results"].append(row)
-                    save()
-                    print(json.dumps({"case": recording.case_id, "http": response.status_code,
-                                      "type": payload.get("type"), "seconds": row["latency_seconds"],
-                                      "calls_so_far": len(recording.calls), "tokens": recording.tokens,
-                                      "answer": payload.get("answer"),
-                                      "reason": payload.get("reason", payload.get("detail")),
-                                      "citations": payload.get("citations"),
-                                      "research": {key: value for key, value in
-                                          (payload.get("research") or {}).items() if key != "blocks"},
-                                      "block_kinds": [block["kind"] for block in
-                                          (payload.get("research") or {}).get("blocks", [])]}),
-                          flush=True)
-                    if response.status_code >= 500:
-                        report["stopped_reason"] = ("run budget reached" if recording.exhausted else
-                            "server/provider failure; inspect before spending more")
-                        return
-                    if len(recording.calls) >= args.max_calls or recording.tokens >= args.token_budget:
-                        report["stopped_reason"] = "run budget reached"
-                        return
+        app = create_app(settings=settings, provider=recording)
+        # Read-only schema preflight above replaces API bootstrap here.
+        app.state.database_ready = True
+        with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000),
+                        raise_server_exceptions=False) as client:
+            for case_id, category, question in selected:
+                recording.case_id = case_id
+                started = time.perf_counter()
+                graph_response = None
+                if args.recommendations or args.graph_only:
+                    graph_response = client.get("/api/recommendations", params={"query": question})
+                response = graph_response if args.graph_only else client.post(
+                    "/api/query", json={"query": question})
+                try:
+                    payload = response.json()
+                except ValueError:
+                    payload = {"type": "non_json_error"}
+                if recording.exhausted:
+                    payload = {"type": "diagnostic_budget_exhausted",
+                               "reason": "Manual smoke run budget reached; not a provider or answer-quality result."}
+                if args.graph_only:
+                    payload = {"type": "recommendations", "groups": payload}
+                row = {"case_id": case_id, "category": category,
+                       "query": question, "status_code": response.status_code,
+                       "latency_seconds": round(time.perf_counter() - started, 3),
+                       "response": payload}
+                if args.recommendations and not args.graph_only:
+                    row["recommendations_status"] = graph_response.status_code
+                    row["recommendations"] = graph_response.json()
+                report["results"].append(row)
+                save()
+                print(json.dumps({"case": recording.case_id, "http": response.status_code,
+                                  "type": payload.get("type"), "seconds": row["latency_seconds"],
+                                  "calls_so_far": len(recording.calls), "tokens": recording.tokens,
+                                  "answer": payload.get("answer"),
+                                  "reason": payload.get("reason", payload.get("detail")),
+                                  "citations": payload.get("citations"),
+                                  "research": {key: value for key, value in
+                                      (payload.get("research") or {}).items() if key != "blocks"},
+                                  "block_kinds": [block["kind"] for block in
+                                      (payload.get("research") or {}).get("blocks", [])]}),
+                      flush=True)
+                if response.status_code >= 500:
+                    report["stopped_reason"] = ("run budget reached" if recording.exhausted else
+                        "server/provider failure; inspect before spending more")
+                    return
+                if len(recording.calls) >= args.max_calls or recording.tokens >= args.token_budget:
+                    report["stopped_reason"] = "run budget reached"
+                    return
     finally:
         report["finished_at"] = datetime.now(UTC).isoformat()
         save()

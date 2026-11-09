@@ -52,12 +52,11 @@ Ctrl-C stops all three and shuts Postgres down cleanly.
 
 The image is intended to install CPU-only PyTorch without downloading model weights during build; the first model-backed request may download them. Configure provider settings through a root `.env` copied from [.env.example](.env.example). Never commit keys or credentials.
 
-With `ADVISING_RESEARCH_ENABLED=true`, `TOOLS_ENABLED=true`, and a permitted
-tools-capable connection, the advisor can maintain a private plan and notebook,
-revisit earlier passages, and search older conversation turns. Published work
-carries between turns in the same chat; source selection and fresh citation checks
-still apply. Long research chats use paged history instead of the legacy 12 KB
-transcript limit. API and worker processes must both load the same configuration;
+Every question is answered by research, which needs a permitted tools-capable
+connection. The advisor keeps a private plan and notebook, revisits earlier
+passages, and searches older conversation turns. Published work carries between
+turns in the same chat; source selection and fresh citation checks still apply.
+Long chats use paged history. API and worker processes must both load the same configuration;
 restart them after changing it. See the [working-space contract](docs/architecture.md).
 
 ## Run backend checks against real Postgres

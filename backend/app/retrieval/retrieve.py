@@ -21,7 +21,6 @@ from app.retrieval.seams.prereq import (
 )
 from app.retrieval.trace import normalize_query, write_trace
 from app.retrieval.types import (
-    Candidate,
     CitedChunk,
     Refusal,
     RetrievalTrace,
@@ -196,142 +195,6 @@ def _alias_labels(conn, collection_id, cited: list[CitedChunk],
     return relabelled
 
 
-def _merge_seams(runs: list[SeamResult]) -> list[SeamResult]:
-    """One trace row per seam name: the union of that seam's runs in a planned query."""
-    merged: dict[str, SeamResult] = {}
-    for run in runs:
-        prior = merged.get(run.name)
-        if prior is None:
-            merged[run.name] = run
-            continue
-        seen = {c.chunk_id for c in prior.candidates}
-        candidates = prior.candidates + [c for c in run.candidates if c.chunk_id not in seen]
-        states = {prior.state, run.state}
-        state = next(s for s in ("active", "failed", "dormant", "disabled") if s in states)
-        merged[run.name] = SeamResult(
-            name=run.name, enabled=prior.enabled or run.enabled, state=state,
-            candidates=candidates, reason=prior.reason if state == prior.state else run.reason)
-    return list(merged.values())
-
-
-def _planned(conn, collection_id, query, plan, embed_model, config: RetrievalConfig, source_ids,
-             workspace_key, embedder,
-             timings: dict[str, int] | None = None) -> tuple[list[SeamResult], list[FusedChunk]]:
-    """Evidence chosen by a validated plan, in context order, before deduplication.
-
-    The question keeps its semantic and exact-code searches; the raw prompt's
-    OR-matched keywords (where generic words such as "major" and "courses" pull in
-    unrelated documents) are replaced by the plan's focused searches. Planned
-    course descriptions are read directly so a relevant course cannot be ranked
-    away by an unrelated document's score range. Planned documents contribute
-    their passages that best match the question, not their opening pages.
-    """
-    limits = config.planning
-
-    def top(results, size):
-        if is_reverse_query(query):
-            size = max(size, REVERSE_CITED_SET_SIZE)
-        return fuse(results, cited_set_size=size, embed_only_quota=config.seams.embed.only_quota,
-                    min_score=config.fusion.min_score,
-                    program_reserve_cap=program_reserve_cap(query, size))
-
-    def seams(text, scope, keyword_off=None):
-        return _run_seams(conn, collection_id, text, embed_model, config, scope, workspace_key,
-                          embedder, keyword_off=keyword_off, timings=timings)
-
-    question_runs = seams(query, source_ids, "replaced by planned searches")
-    runs = list(question_runs)
-    sections: list[list[tuple[FusedChunk, bool]]] = [
-        [(item, False) for item in top(question_runs, limits.question_slots)]]
-    # A planner's per-search/page quota must not split the exact program the
-    # question names. Keep only its bound evidence from the raw keyword run;
-    # generic raw-prompt keyword hits remain replaced by the planned searches.
-    named = _run(conn, "keyword", lambda: keyword_seam(
-        conn, collection_id, query, config.seams.keyword,
-        source_ids=source_ids, workspace_key=workspace_key))
-    exact = [candidate for candidate in named.candidates if candidate.program_evidence]
-    if exact:
-        runs.append(replace(named, candidates=exact))
-        sections.insert(0, [(FusedChunk(c.chunk_id, c.source_id, c.chunk_index,
-                                       ("keyword",), 1., 0, 0), False) for c in exact])
-
-    planned_courses: list[Candidate] = []
-    for code in plan.course_codes:
-        found = _run(conn, "plan", lambda code=code: SeamResult(
-            name="plan", enabled=True, state="active", candidates=[
-                Candidate(row["chunk_id"], row["source_id"], row["chunk_index"], "plan", 1.0)
-                for row in conn.execute(queries.get("prereq_self_chunks"), {
-                    "collection_id": collection_id, "code": code, "source_ids": source_ids,
-                    "workspace_key": workspace_key}).fetchall()]))
-        planned_courses.extend(found.candidates)
-    sections.append([(FusedChunk(c.chunk_id, c.source_id, c.chunk_index, ("plan",), 1.0, 0, 0),
-                      True) for c in planned_courses])
-
-    documents = [source for source in plan.document_sources
-                 if source_ids is None or source in source_ids]
-    if documents:
-        document_runs = seams(query, documents)[:2]
-        runs.extend(document_runs)
-        sections.append([(item, True) for item in
-                         top(document_runs, limits.document_chunks * len(documents))])
-
-    per_query = []
-    for text in plan.search_queries:
-        search_runs = seams(text, source_ids)[:2]
-        runs.extend(search_runs)
-        per_query.append(top(search_runs, limits.search_slots))
-    # Round-robin, so the last planned search is not the first one cut.
-    sections.append([(hits[rank], True) for rank in range(limits.search_slots)
-                     for hits in per_query if rank < len(hits)])
-
-    plan_candidates = list(planned_courses)
-    seen_plan = {candidate.chunk_id for candidate in plan_candidates}
-    for section in sections[1:]:
-        for item, from_plan in section:
-            if from_plan and item.chunk_id not in seen_plan:
-                seen_plan.add(item.chunk_id)
-                plan_candidates.append(Candidate(item.chunk_id, item.source_id,
-                                                 item.chunk_index, "plan", 1.0))
-    runs.append(SeamResult(
-        name="plan", enabled=True,
-        state="active" if plan_candidates else "dormant",
-        candidates=plan_candidates, reason=plan.summary()))
-    ordered: dict[UUID, FusedChunk] = {}
-    for section in sections:
-        for item, from_plan in section:
-            prior = ordered.get(item.chunk_id)
-            tags = set(item.seams) | ({"plan"} if from_plan else set())
-            if prior is None:
-                ordered[item.chunk_id] = replace(item, seams=tuple(sorted(tags)))
-            else:
-                ordered[item.chunk_id] = replace(
-                    prior, seams=tuple(sorted(tags | set(prior.seams))),
-                    normalized_score=max(item.normalized_score, prior.normalized_score))
-    return _merge_seams(runs), list(ordered.values())
-
-
-def _limit_planned(fused: list[FusedChunk], details, size: int) -> list[FusedChunk]:
-    """Drop repeated passages and cross-listed aliases, cap, and number sources."""
-    kept: list[FusedChunk] = []
-    seen_text: set[str] = set()
-    seen_canonical: set[str] = set()
-    slots: dict[UUID, int] = {}
-    for item in fused:
-        row = details.get(item.chunk_id)
-        if row is not None:
-            fingerprint, canonical = row["text"].strip(), row.get("canonical_code")
-            if fingerprint in seen_text or (canonical and canonical in seen_canonical):
-                continue
-            seen_text.add(fingerprint)
-            if canonical:
-                seen_canonical.add(canonical)
-        slots.setdefault(item.source_id, len(slots) + 1)
-        kept.append(replace(item, source_slot=slots[item.source_id], rank=len(kept) + 1))
-        if len(kept) == size:
-            break
-    return kept
-
-
 def retrieve(
     conn: Connection,
     *,
@@ -342,33 +205,13 @@ def retrieve(
     config: RetrievalConfig,
     source_ids: list[UUID] | None = None,
     workspace_key: str | None = None,
-    plan=None,
     trace_id: UUID | None = None,
 ) -> Retrieved | Refusal:
-    """Retrieve cited context. `plan` is a validated `QueryPlan` from the query
-    planner; `trace_id` lets a planned query share its operation's identity."""
+    """Retrieve cited context; `trace_id` lets a caller share its operation's identity."""
     if workspace_key is not None and not is_valid_workspace_key(workspace_key):
         raise ValueError("workspace_key must contain 1-200 characters")
     started = time.perf_counter()
     timings: dict[str, int] = {}
-    if plan is not None and not plan.empty:
-        planned_started = time.perf_counter()
-        results, planned = _planned(conn, collection_id, query, plan, embed_model, config,
-                                    source_ids, workspace_key, embedder, timings=timings)
-        _add_timing(timings, "planned_ms", planned_started)
-        details_started = time.perf_counter()
-        details = {
-            row["chunk_id"]: row
-            for row in conn.execute(queries.get("cited_chunk_details_many"), {
-                "chunk_ids": [item.chunk_id for item in planned], "workspace_key": workspace_key,
-            }).fetchall()
-        } if planned else {}
-        _add_timing(timings, "details_ms", details_started)
-        limit_started = time.perf_counter()
-        fused = _limit_planned(planned, details, config.planning.context_size)
-        _add_timing(timings, "limit_ms", limit_started)
-        return _finish(conn, collection_id, query, embed_model, config, source_ids, workspace_key,
-                       results, fused, details, trace_id, timings, started)
     seams_started = time.perf_counter()
     results = _run_seams(conn, collection_id, query, embed_model, config, source_ids,
                          workspace_key, embedder, timings=timings)

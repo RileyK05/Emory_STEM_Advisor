@@ -170,7 +170,7 @@ test('real browser retrieves a cited passage, then reopens and exports a Postgre
     assert.equal(uploaded.status, 'indexed', `Source was not indexed: ${serverDiagnostics()}`);
 
     await send(page, 'What is required before using the robotics equipment?');
-    try { await page.getByText('Students must complete the robotics lab orientation before using equipment.', { exact: false }).waitFor({ timeout: 10_000 }); }
+    try { await page.getByText('Students must complete the safety requirement the passage states.', { exact: false }).waitFor({ timeout: 10_000 }); }
     catch (error) { throw new Error(`Grounded answer failed. Page: ${await page.locator('body').innerText()} Server: ${serverDiagnostics()}`, { cause: error }); }
     const citation = page.locator('.source-chip').filter({ hasText: 'robotics-intro.txt' });
     await citation.waitFor(); await citation.click();
@@ -310,7 +310,7 @@ test('real saved conversations retain citation snapshots, sequence follow-ups, a
     await openSidebar(page, 'New chat');
     await page.evaluate(async () => {
       const response = await fetch('/__test/slow-next-provider', { method: 'POST' });
-      if (!response.ok) throw new Error('Could not arm the test-only slow provider stream.');
+      if (!response.ok) throw new Error('Could not arm the test-only slow provider call.');
     });
     await send(page, 'What must students complete before opening the observatory dome?');
     await page.locator('.message-user').filter({ hasText: 'What must students complete before opening the observatory dome?' }).waitFor();
@@ -318,22 +318,22 @@ test('real saved conversations retain citation snapshots, sequence follow-ups, a
     assert.equal(turnRequests[0].expectedSequence, 0);
     assert.match(turnRequests[0].requestId, /^[0-9a-f-]{36}$/i);
     assert.equal(Object.hasOwn(turnRequests[0], 'sourceIds'), false);
-    // The attempt counter spans the whole server run; earlier tests' chats stream too.
-    const streamStarted = await waitForJson(page, '/__test/provider-stream-started', (state) => state?.started);
-    await page.getByLabel('Unverified provisional answer').getByText('Provisional, unverified answer text.').waitFor();
+    // The call counter spans the whole server run; earlier tests' chats call the model too.
+    const callStarted = await waitForJson(page, '/__test/provider-call-started', (state) => state?.started);
+    await page.locator('.message-pending').waitFor();
     assert.equal(failedFirstEventRead, true, 'event polling recovers after a GET failure');
     assert.equal(await message(page).inputValue(),
       'What must students complete before opening the observatory dome?',
       'the sent draft remains until the turn reaches a saved terminal state');
     await page.reload();
-    await page.getByLabel('Unverified provisional answer').getByText('Provisional, unverified answer text.').waitFor();
+    await page.locator('.message-pending').waitFor();
     await message(page).fill('A new draft while generation is pending.');
     assert.equal(turnRequests.length, 1, 'reopening reads stored events without resubmitting the turn');
-    assert.equal((await page.evaluate(async () => (await (await fetch('/__test/provider-stream-started')).json()).attempts)),
-      streamStarted.attempts, 'reopening does not start a second provider attempt');
+    assert.equal((await page.evaluate(async () => (await (await fetch('/__test/provider-call-started')).json()).calls)),
+      callStarted.calls, 'reopening does not start a second provider call');
     await page.evaluate(async () => {
-      const response = await fetch('/__test/release-provider-stream', { method: 'POST' });
-      if (!response.ok) throw new Error('Could not release the test-only provider stream.');
+      const response = await fetch('/__test/release-provider-call', { method: 'POST' });
+      if (!response.ok) throw new Error('Could not release the test-only provider call.');
     });
     const answered = page.locator('.message-assistant:not(.message-pending)');
     await answered.locator('.source-chip').first().waitFor();
@@ -380,8 +380,9 @@ test('real saved conversations retain citation snapshots, sequence follow-ups, a
     await page.getByRole('button', { name: 'Stop answering' }).waitFor();
     const providerStateAfterFailure = await page.evaluate(async () => (await (await fetch('/__test/provider-calls')).json()));
     const callsAfterFailure = providerStateAfterFailure.calls;
-    assert.ok(callsAfterFailure <= callsBeforeFollowUp + 2,
-      'the follow-up and the unknown turn make at most one provider attempt each');
+    // The follow-up's research searches, reads and finishes; the failed turn stops at its first call.
+    assert.ok(callsAfterFailure <= callsBeforeFollowUp + 4,
+      'the follow-up researches once and the failed turn makes one provider attempt');
     await page.waitForTimeout(300);
     const providerStateAfterSettle = await page.evaluate(async () => (await (await fetch('/__test/provider-calls')).json()));
     assert.equal(providerStateAfterSettle.calls, callsAfterFailure,
@@ -390,11 +391,9 @@ test('real saved conversations retain citation snapshots, sequence follow-ups, a
       `afterSettle=${JSON.stringify(providerStateAfterSettle)}; ` +
       `failedJob=${JSON.stringify(failedJobSnapshot)}; ` +
       `failedEvents=${JSON.stringify(failedEventSnapshot)}; ` +
-      `postIds=${JSON.stringify(turnRequests.map(({ requestId, mode }) => ({ requestId, mode })))}; ` +
+      `postIds=${JSON.stringify(turnRequests.map(({ requestId }) => requestId))}; ` +
       `posts=${turnRequests.length}; ` +
       `server=${serverDiagnostics()}`);
-    assert.equal(providerStateAfterSettle.streamAttempts, providerStateAfterFailure.streamAttempts,
-      `no additional conversation stream starts after terminal unknown outcome; posts=${turnRequests.length}`);
   } finally { await context.close(); }
 });
 
@@ -418,19 +417,17 @@ test('real gap capture is resolved only by a current same-collection attestation
     }, { name: filename, passage, collection: collectionName });
     assert.ok(source?.id, `uploaded source missing: ${JSON.stringify(source)}`);
 
-    const beforeCalls = await page.evaluate(async () => (await (await fetch('/__test/provider-calls')).json()).calls);
-    const refused = await page.evaluate(async ({ query, sourceId, collection }) => {
+    const unanswered = await page.evaluate(async ({ query, sourceId, collection }) => {
       const response = await fetch('/api/query', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, sourceIds: [sourceId], collectionId: collection }) });
       if (!response.ok) throw new Error(await response.text());
       return response.json();
     }, { query, sourceId: source.id, collection: collectionName });
-    assert.equal(refused.type, 'refusal', `test query was expected to create a real refusal: ${JSON.stringify(refused)}`);
-    const afterCalls = await page.evaluate(async () => (await (await fetch('/__test/provider-calls')).json()).calls);
-    assert.equal(afterCalls, beforeCalls, 'zero-candidate refusal must not call the model');
+    assert.equal(unanswered.research?.outcome, 'insufficient_evidence',
+      `test query was expected to find no evidence: ${JSON.stringify(unanswered)}`);
 
     const gap = await page.evaluate(async (query) => (await (await fetch('/api/gaps')).json()).gaps.find((item) => item.query === query), query);
-    assert.ok(gap?.gapId, 'real refusal was recorded in the private gap queue');
+    assert.ok(gap?.gapId, 'the unanswered question was recorded in the private gap queue');
     assert.equal(gap.state, 'open');
     assert.deepEqual(gap.sourceIds, [source.id]);
     const resolvedCollectionName = await page.evaluate(async (collectionId) => (await (await fetch('/api/collections')).json()).find((item) => item.id === collectionId)?.name, gap.collectionId);
@@ -439,7 +436,7 @@ test('real gap capture is resolved only by a current same-collection attestation
     assert.ok(gapSources.some((item) => item.id === source.id && item.status === 'indexed'), `gap source should be eligible: ${JSON.stringify(gapSources)}`);
 
     // Resolve once through the real API,
-    // then repeat the exact refused query to reopen the same gap at a new revision.
+    // then repeat the exact unanswered query to reopen the same gap at a new revision.
     const reopened = await page.evaluate(async ({ gapId, revision, sourceId, query, collection }) => {
       const resolution = await fetch(`/api/gaps/${gapId}/resolve`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedRevision: revision, sourceIds: [sourceId], note: 'Test-only competing attestation.' }) });
@@ -447,7 +444,7 @@ test('real gap capture is resolved only by a current same-collection attestation
       const response = await fetch('/api/query', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query, sourceIds: [sourceId], collectionId: collection }) });
       const result = await response.json();
-      if (!response.ok || result.type !== 'refusal') throw new Error('Could not reopen the same structural gap: ' + JSON.stringify(result));
+      if (!response.ok || result.research?.outcome !== 'insufficient_evidence') throw new Error('Could not reopen the same structural gap: ' + JSON.stringify(result));
       return (await (await fetch('/api/gaps')).json()).gaps.find((item) => item.gapId === gapId);
     }, { gapId: gap.gapId, revision: gap.revision, sourceId: source.id, query, collection: collectionName });
     assert.equal(reopened.state, 'open');

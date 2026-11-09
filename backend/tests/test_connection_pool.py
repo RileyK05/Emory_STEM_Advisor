@@ -17,7 +17,7 @@ from app.db.connection import (
     connector,
     pooled_connect,
 )
-from app.llm.base import GenerationResult, ToolCall, Usage
+from tests.fakes import FakeProvider
 from tests.helpers import collection_name, ingest_text, lenient_config, start_run
 
 
@@ -244,7 +244,6 @@ def test_run_routes_do_not_hold_bootstrap_connection_while_job_store_borrows(dsn
 
 
 def test_run_creation_honors_workspace_admission_cap(dsn, db, collection):
-    from tests.fakes import FakeProvider
 
     client = _pooled_client(dsn, provider=FakeProvider(),
                             admission_max_pending_workspace=1)
@@ -289,8 +288,7 @@ def _pooled_client(dsn, *, provider=None, **overrides):
     from tests.fakes import FakeEmbedder
 
     settings = replace(load_settings(), database_url=dsn, db_pool_max_size=1,
-                       db_pool_timeout_seconds=1.0, advising_research_enabled=False,
-                       **overrides)
+                       db_pool_timeout_seconds=1.0, **overrides)
     app = create_app(settings=settings, allow_test_client=True, config=lenient_config(),
                      embedder=FakeEmbedder(dim=8), provider=provider)
     return TestClient(app)
@@ -299,7 +297,6 @@ def _pooled_client(dsn, *, provider=None, **overrides):
 def test_conversation_abandon_releases_the_request_borrow_before_job_cancel(dsn, db, collection):
     # RT-01: with a one-slot pool the abandon handler used to hold the request
     # connection while JobStore.cancel borrowed the same pool and self-waited.
-    from tests.fakes import FakeProvider
 
     client = _pooled_client(dsn, provider=FakeProvider("unused"))
     made = client.post("/api/conversations", json={"title": "Abandon"}).json()
@@ -321,28 +318,14 @@ def test_conversation_abandon_releases_the_request_borrow_before_job_cancel(dsn,
     assert stats["pool_available"] == stats["pool_size"]
 
 
-class _OneToolProvider:
-    """One calculator tool call, then a cited final answer."""
-
-    def __init__(self):
-        self.calls = 0
-
-    def generate(self, request):
-        self.calls += 1
-        if self.calls == 1:
-            return GenerationResult(tool_calls=(ToolCall(
-                "pool-calc", "advisor_calculate", {"expression": "1+1"}),),
-                finish_reason="tool_calls", usage=Usage(20, 5, source="provider"))
-        return GenerationResult(text="The result is 2 [1].", finish_reason="stop",
-                                usage=Usage(30, 8, source="provider"))
 
 
 class _BorrowingProvider:
     """Borrows from the same one-slot pool while the answer is generating."""
 
-    def __init__(self, settings, text="An answer citing [1]."):
+    def __init__(self, settings):
         self.connect = connector(settings)
-        self.text = text
+        self.research = FakeProvider("Alpha has value 2.")
 
     def generate(self, request):
         conn = self.connect()  # PoolTimeout if the request still holds the slot.
@@ -350,8 +333,7 @@ class _BorrowingProvider:
             assert conn.execute("SELECT 1 AS one").fetchone()["one"] == 1
         finally:
             conn.close()
-        return GenerationResult(text=self.text, finish_reason="stop",
-                                usage=Usage(10, 5, source="provider"))
+        return self.research.generate(request)
 
 
 def test_generation_releases_the_request_borrow_before_provider_io(
@@ -367,7 +349,7 @@ def test_generation_releases_the_request_borrow_before_provider_io(
         "query": "alpha", "collectionId": collection_name(db, collection),
     })
     assert response.status_code == 200, response.text
-    assert response.json()["answer"] == "An answer citing [1]."
+    assert response.json()["answer"] == "Alpha has value 2. [1]"
 
 
 def test_tool_query_does_not_self_starve_a_one_slot_pool(dsn, db, collection, tmp_path):
@@ -375,14 +357,13 @@ def test_tool_query_does_not_self_starve_a_one_slot_pool(dsn, db, collection, tm
     # held. A dedicated ledger role lets the tool call complete.
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha has value 2.\n")
     db.commit()
-    provider = _OneToolProvider()
+    provider = FakeProvider("Alpha has value 2.")
     client = _pooled_client(connection_dsn(db), tools_enabled=True, llm_provider="openai",
                             llm_model_id="mock-tools", provider=provider)
     response = client.post("/api/query", json={
         "query": "alpha", "collectionId": collection_name(db, collection),
     })
     assert response.status_code == 200, response.text
-    assert response.json()["answer"] == "The result is 2 [1]."
-    assert provider.calls == 2
-    tool = db.execute("SELECT status FROM tool_executions").fetchone()
-    assert tool["status"] == "completed"
+    assert response.json()["answer"] == "Alpha has value 2. [1]"
+    tools = db.execute("SELECT status FROM tool_executions").fetchall()
+    assert tools and all(tool["status"] == "completed" for tool in tools)

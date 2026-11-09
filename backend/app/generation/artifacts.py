@@ -230,9 +230,7 @@ class ArtifactHandler:
             conn, settings, self.config, self.embedder, job.scope_key, collection_id, inputs)
         context.check_cancelled()
         provider, active, selection = self._select_connection(conn, job, inputs)
-        cap = active.artifact_max_output_tokens
-        active = replace(active, llm_max_output_tokens=cap, answer_truncation_max_output_tokens=max(
-            active.answer_truncation_max_output_tokens, cap))
+        active = replace(active, llm_max_output_tokens=active.artifact_max_output_tokens)
         messages = artifact_messages(kind, inputs, chunks, prior, active, with_tools=active.tools_enabled)
         context.progress({"stage": "generating"})
         operation = GenerationOperation(conn, active, job.job_id, job.scope_key)

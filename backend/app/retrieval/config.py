@@ -72,21 +72,6 @@ class FusionConfig:
 
 
 @dataclass(frozen=True)
-class PlanningConfig:
-    # Bounds on a model-proposed search plan. The plan only chooses what to
-    # look up; application code runs every search inside the query's scope.
-    max_search_queries: int = 5
-    max_course_codes: int = 12
-    max_documents: int = 3
-    # Context assembled from a plan: hits for the question itself, the best
-    # passages inside planned documents, and per planned search query.
-    question_slots: int = 4
-    document_chunks: int = 2
-    search_slots: int = 2
-    context_size: int = 28
-
-
-@dataclass(frozen=True)
 class ResearchConfig:
     # Bounds on the research advising working state (docs/architecture.md).
     # These cap the model's own comparison, not the evidence it may read: the
@@ -120,7 +105,6 @@ class RetrievalConfig:
     seams: SeamsConfig
     fusion: FusionConfig
     simgraph: SimgraphConfig
-    planning: PlanningConfig = PlanningConfig()
     research: ResearchConfig = ResearchConfig()
 
 
@@ -242,17 +226,6 @@ def _parse_fusion(raw: dict) -> FusionConfig:
     return fusion
 
 
-def _parse_planning(raw: dict) -> PlanningConfig:
-    keys = set(PlanningConfig.__dataclass_fields__)
-    section = _section(raw, "planning", keys)
-    planning = PlanningConfig(**{key: int(_require(section, key, "planning")) for key in keys})
-    if any(value <= 0 for value in vars(planning).values()):
-        raise ConfigError("planning limits must be positive")
-    if planning.max_search_queries > 8 or planning.max_course_codes > 20 or planning.max_documents > 6:
-        raise ConfigError("planning limits exceed the bounded plan size")
-    return planning
-
-
 def _parse_research(raw: dict) -> ResearchConfig:
     keys = set(ResearchConfig.__dataclass_fields__)
     section = _section(raw, "research", keys)
@@ -311,7 +284,7 @@ def load_retrieval_config(
         raw = tomllib.load(handle)
 
     _reject_unknown(
-        raw, {"version", "chunking", "seams", "fusion", "simgraph", "planning", "research"}, "root"
+        raw, {"version", "chunking", "seams", "fusion", "simgraph", "research"}, "root"
     )
     version = _require(raw, "version", "root")
     chunking = _parse_chunking(raw)
@@ -324,10 +297,9 @@ def load_retrieval_config(
     )
     fusion = _parse_fusion(raw)
     simgraph = _parse_simgraph(raw)
-    planning = _parse_planning(raw)
     research = _parse_research(raw)
     _check_budget(chunking, fusion.cited_set_size, settings)
     return RetrievalConfig(
         version=int(version), chunking=chunking, seams=seams, fusion=fusion, simgraph=simgraph,
-        planning=planning, research=research,
+        research=research,
     )

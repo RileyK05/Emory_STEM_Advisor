@@ -459,7 +459,6 @@ export interface ConversationTurnRequest {
   sourceIds?: string[] | null;
   requestId: string;
   expectedSequence: number;
-  mode?: 'advising' | 'history';
   artifactReferences?: ArtifactRevisionReference[];
   studentCohort?: string | null;
 }

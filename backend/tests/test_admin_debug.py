@@ -3,8 +3,6 @@
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
-import pytest
-from fastapi import HTTPException
 from psycopg.types.json import Jsonb
 
 from app.auth.dependencies import get_principal
@@ -28,97 +26,6 @@ def _app_user(db, *, email="target@emory.edu", role="student", status="active") 
         })
     db.commit()
     return user_id
-
-
-def test_prompt_promotion_requires_review_and_a_fixture(db, collection):
-    from app.admin.prompt_registry import PromptRegistry
-
-    reviewer = Principal(
-        workspace_key="development", issuer=None, subject="development",
-        role="admin", mode="development",
-    )
-    student = Principal(
-        workspace_key="development", issuer=None, subject="student", role="student",
-    )
-    calls = db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"]
-    with pytest.raises(HTTPException) as denied:
-        PromptRegistry.register(db, student, name="answer", template_text="Cite the catalog.")
-    assert denied.value.status_code == 403
-    first = PromptRegistry.register(db, reviewer, name="answer", template_text="Cite the catalog.")
-    same = PromptRegistry.register(db, reviewer, name="answer", template_text="Cite the catalog.")
-    assert same["version_id"] == first["version_id"]
-    second = PromptRegistry.register(
-        db, reviewer, name="answer", template_text="Cite a different line.",
-    )
-    assert second["version_id"] != first["version_id"]
-    with pytest.raises(HTTPException) as reused:
-        PromptRegistry.register(
-            db, reviewer, name="answer", template_text="Cite a different line.",
-            version_id=first["version_id"],
-        )
-    assert reused.value.status_code == 409
-    unchanged = db.execute(
-        "SELECT template_text FROM prompt_versions WHERE version_id = %s",
-        (first["version_id"],),
-    ).fetchone()
-    assert unchanged["template_text"] == "Cite the catalog."
-    with pytest.raises(HTTPException) as unreviewed:
-        PromptRegistry.promote(db, reviewer, version_id=first["version_id"], suite_name="catalog")
-    assert unreviewed.value.status_code == 409
-    assert PromptRegistry.approve(db, reviewer, first["version_id"])["review_state"] == "approved"
-    with pytest.raises(HTTPException) as missing_fixture:
-        PromptRegistry.promote(db, reviewer, version_id=first["version_id"], suite_name="catalog")
-    assert missing_fixture.value.status_code == 409
-    assert db.execute("SELECT count(*) AS n FROM prompt_promotions").fetchone()["n"] == 0
-    PromptRegistry.put_fixture(db, reviewer, suite_name="catalog", fixture_text="CS 170 is listed.")
-    promoted = PromptRegistry.promote(
-        db, reviewer, version_id=first["version_id"], suite_name="catalog",
-    )
-    assert promoted["status"] == "published"
-    again = PromptRegistry.promote(
-        db, reviewer, version_id=first["version_id"], suite_name="catalog",
-    )
-    assert again["promotion_id"] == promoted["promotion_id"]
-    assert db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"] == calls
-    client = api_client(db, collection)
-    blocked = client.post(
-        f"/api/admin/prompts/{second['version_id']}/promote",
-        json={"suiteName": "catalog"},
-    )
-    assert blocked.status_code == 409, blocked.text
-
-
-def test_promoted_answer_prompt_drives_grounded_answers(db, collection, tmp_path):
-    from app.admin.prompt_registry import PromptRegistry
-    from app.generation.answer import ANSWER_PROMPT_NAME, PROMPT_VERSION, SYSTEM_PROMPT
-
-    reviewer = Principal(
-        workspace_key="development", issuer=None, subject="development",
-        role="admin", mode="development",
-    )
-    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma")
-    provider = FakeProvider(text="The answer is alpha [1].")
-    client = api_client(db, collection, provider=provider)
-    query = {"query": "alpha", "collectionId": collection_name(db, collection)}
-
-    def answered():
-        response = client.post("/api/query", json=query)
-        assert response.status_code == 200, response.text
-        return db.execute(
-            "SELECT prompt_version FROM responses WHERE trace_id = %s",
-            (response.json()["trace"]["traceId"],),
-        ).fetchone()["prompt_version"], provider.last_messages[0]["content"]
-
-    assert answered() == (PROMPT_VERSION, SYSTEM_PROMPT)
-    text = SYSTEM_PROMPT + " Prefer the newest catalog edition."
-    version = PromptRegistry.register(db, reviewer, name=ANSWER_PROMPT_NAME, template_text=text)
-    PromptRegistry.approve(db, reviewer, version["version_id"])
-    PromptRegistry.put_fixture(db, reviewer, suite_name="answers", fixture_text="alpha")
-    PromptRegistry.promote(db, reviewer, version_id=version["version_id"], suite_name="answers")
-    db.commit()
-    recorded, used = answered()
-    assert used == text
-    assert recorded == "registry-" + version["content_digest"][:16]
 
 
 def test_admin_lists_and_updates_users_with_an_audit_trail(db, collection):
@@ -159,7 +66,7 @@ def test_non_admin_is_rejected_from_admin_and_debug_surfaces(db, collection, mon
         client.app.dependency_overrides.pop(get_principal, None)
 
 
-def test_debug_session_applies_prompt_and_settings_only_with_its_token(db, collection, tmp_path):
+def test_debug_session_stores_prompt_and_settings_only_with_its_token(db, collection, tmp_path):
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is documented.")
     provider = FakeProvider("Alpha is documented [1].")
     client = api_client(db, collection, provider=provider)
@@ -167,12 +74,12 @@ def test_debug_session_applies_prompt_and_settings_only_with_its_token(db, colle
     registry = client.get("/api/debug/settings")
     assert registry.status_code == 200, registry.text
     names = {item["name"] for item in registry.json()["settings"]}
-    assert "conversation_compaction_threshold" in names
-    assert "llm_context_window_tokens" in names
+    assert "research_max_calls" in names
+    assert "conversation_context_max_bytes" in names
 
     created = client.post("/api/debug/sessions", json={
         "overrides": {
-            "settings": {"conversation_compaction_threshold": 0.25},
+            "settings": {"research_max_calls": 10},
             "retrieval": {"fusion.cited_set_size": 3},
         },
         "systemPrompt": "Debug prompt for this session.",
@@ -184,10 +91,10 @@ def test_debug_session_applies_prompt_and_settings_only_with_its_token(db, colle
     current = client.get("/api/debug/session", headers=headers)
     assert current.status_code == 200, current.text
     assert current.json()["systemPrompt"] == "Debug prompt for this session."
-    assert current.json()["overrides"]["settings"]["conversation_compaction_threshold"] == 0.25
+    assert current.json()["overrides"]["settings"]["research_max_calls"] == 10
 
     changed = client.patch("/api/debug/session", headers=headers, json={
-        "overrides": {"settings": {"conversation_compaction_threshold": 0.3}},
+        "overrides": {"settings": {"research_max_calls": 12}},
         "systemPrompt": "Changed prompt for this session.",
     })
     assert changed.status_code == 200, changed.text
@@ -197,9 +104,6 @@ def test_debug_session_applies_prompt_and_settings_only_with_its_token(db, colle
         "query": "alpha", "collectionId": collection_name(db, collection),
     }, headers=headers)
     assert answer.status_code == 200, answer.text
-    assert provider.last_messages[0] == {
-        "role": "system", "content": "Changed prompt for this session.",
-    }
 
     made = client.post("/api/conversations", json={"title": "Debug chat"}).json()
     started = client.post(
@@ -214,7 +118,7 @@ def test_debug_session_applies_prompt_and_settings_only_with_its_token(db, colle
         "request_id": UUID(started.json()["requestId"]),
     }).fetchone()
     snapshot = row["input_snapshot"]
-    assert snapshot["debug"]["settings"]["conversation_compaction_threshold"] == 0.3
+    assert snapshot["debug"]["settings"]["research_max_calls"] == 12
     assert snapshot["debug"]["systemPrompt"] == "Changed prompt for this session."
 
     assert client.delete("/api/debug/session", headers=headers).status_code == 204
@@ -228,7 +132,7 @@ def test_debug_rejects_unknown_or_out_of_bounds_overrides(db, collection):
     })
     assert unknown.status_code == 422
     out_of_bounds = client.post("/api/debug/sessions", json={
-        "overrides": {"settings": {"conversation_compaction_threshold": 2.0}},
+        "overrides": {"settings": {"research_max_calls": 1000}},
     })
     assert out_of_bounds.status_code == 422
 

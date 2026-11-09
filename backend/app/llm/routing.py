@@ -16,7 +16,6 @@ class RoutingConfig:
     version: int
     default_role: str
     uncertain_role: str
-    max_quality_escalations: int
     complex_terms: tuple[str, ...]
     fast_job_kinds: tuple[str, ...]
     complex_token_threshold: int
@@ -26,7 +25,7 @@ class RoutingConfig:
     @classmethod
     def load(cls, path: str | Path) -> RoutingConfig:
         data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
-        allowed = {"version", "default_role", "uncertain_role", "max_quality_escalations", "signals"}
+        allowed = {"version", "default_role", "uncertain_role", "signals"}
         unknown = set(data) - allowed
         if unknown:
             raise ValueError(f"unknown routing keys: {sorted(unknown)}")
@@ -38,9 +37,6 @@ class RoutingConfig:
             raise ValueError(f"unknown routing signal keys: {sorted(set(signals) - signal_keys)}")
         if type(data.get("version")) is not int or data.get("version") not in {1, 2}:
             raise ValueError("unsupported routing config version")
-        escalations = data.get("max_quality_escalations", 1)
-        if type(escalations) is not int or escalations not in (0, 1):
-            raise ValueError("max_quality_escalations must be 0 or 1")
         default_role = data.get("default_role", "standard")
         uncertain_role = data.get("uncertain_role", "complex")
         if default_role not in GENERATION_ROLES:
@@ -68,7 +64,7 @@ class RoutingConfig:
         if type(simple_max_words) is not int or not 1 <= simple_max_words <= 20:
             raise ValueError("simple_lookup_max_words must be between 1 and 20")
         return cls(data.get("version"), data.get("default_role", "standard"),
-            data.get("uncertain_role", "complex"), escalations,
+            data.get("uncertain_role", "complex"),
             tuple(signals.get("complex_terms", ())), tuple(signals.get("fast_job_kinds", ())),
             threshold, tuple(patterns), simple_max_words)
 
@@ -143,14 +139,3 @@ def choose_route(config: RoutingConfig, candidates: Sequence[Candidate], *, quer
     if not eligible:
         raise LookupError(f"no eval-approved candidate for route role {role!r}")
     return RouteDecision(role, eligible[0], reason)
-
-
-def quality_fallback(config: RoutingConfig, chosen: Candidate, candidates: Sequence[Candidate], *,
-                     required_capabilities: frozenset[str] = frozenset(),
-                     data_scope: str | None = None,
-                     required_data_scopes: frozenset[str] = frozenset()) -> Candidate | None:
-    """Return at most one stronger eval-approved candidate for bounded escalation."""
-    if config.max_quality_escalations == 0 or chosen.role == "complex":
-        return None
-    return next((c for c in candidates if c.eval_passed and c.serves(
-        "complex", required_capabilities, data_scope, required_data_scopes)), None)

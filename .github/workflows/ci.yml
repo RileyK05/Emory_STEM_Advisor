@@ -103,10 +103,8 @@ jobs:
       - run: npm test
 
   frontend-integration:
-    name: frontend integration (experimental)
-    # Real API + Postgres + offline fake models. Kept separate and allowed to
-    # fail until Chromium/Postgres wiring on CI is settled.
-    continue-on-error: true
+    name: frontend integration
+    # Real API, embedded Postgres and Chromium with an offline fake model.
     runs-on: ubuntu-latest
     defaults:
       run:

@@ -352,7 +352,6 @@ export function useSavedChat(): ChatController {
       query,
       requestId,
       expectedSequence: record.lastSequence,
-      mode: 'advising',
       // A first question over all sources needs no explicit scope; a follow-up with an unchanged
       // scope omits it so the server inherits the conversation's saved scope.
       ...(scopeChanged.current && !(record.lastSequence === 0 && scope === null) ? { sourceIds: scope } : {}),

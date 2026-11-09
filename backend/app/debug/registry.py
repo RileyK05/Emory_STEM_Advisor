@@ -6,9 +6,11 @@ import math
 from dataclasses import replace
 
 from app.config import Settings
-from app.generation.answer import SYSTEM_PROMPT
+from app.generation.research_controller import SYSTEM as SYSTEM_PROMPT
 from app.retrieval.config import RetrievalConfig
 
+# Research reads its own prompt; a debug session's prompt override is recorded
+# but not applied (the debug backend's future is the user's decision, P1.9).
 DEFAULT_SYSTEM_PROMPT = SYSTEM_PROMPT
 
 
@@ -36,36 +38,10 @@ SETTINGS_FIELDS = (
                                                     "medium", "high", "xhigh", "max")),
     _field("tools_enabled", "Typed tools", "Generation", "bool",
            "Allow the answer path to use typed tools."),
-    _field("answer_citation_repair_enabled", "Citation repair", "Generation", "bool",
-           "Retry a draft whose citations do not validate."),
     _field("tool_max_calls", "Max tool calls", "Generation", "int",
            "Per-operation typed tool call cap.", minimum=1, maximum=100),
-    _field("llm_context_window_tokens", "Context window", "Compaction", "int",
-           "Model window used for compaction accounting.", minimum=1000, maximum=2000000),
     _field("conversation_context_max_bytes", "Context hard cap (bytes)", "Compaction", "int",
            "Rendered history plus artifact context ceiling.", minimum=1024, maximum=1000000),
-    _field("conversation_compaction_enabled", "Auto compaction", "Compaction", "bool",
-           "Summarize older turns at the threshold."),
-    _field("conversation_compaction_threshold", "Compaction threshold", "Compaction", "float",
-           "Fraction of the context window that triggers a checkpoint.", minimum=0.05,
-           maximum=0.95),
-    _field("conversation_compaction_keep_turns", "Kept raw turns", "Compaction", "int",
-           "Recent turns kept verbatim after a checkpoint.", minimum=1, maximum=50),
-    _field("conversation_compaction_max_output_tokens", "Handoff output cap", "Compaction", "int",
-           "Maximum tokens for one compacted memory.", minimum=128, maximum=8192),
-    _field("conversation_compaction_timeout_seconds", "Handoff timeout (s)", "Compaction",
-           "float", "One checkpoint provider call's timeout.", minimum=1, maximum=1800),
-    _field("conversation_compaction_token_budget", "Handoff token budget", "Compaction", "int",
-           "Accounting ceiling for one checkpoint; 0 derives from the window.",
-           minimum=0, maximum=20000000),
-    _field("conversation_token_estimate_bytes", "Bytes per token", "Compaction", "int",
-           "Heuristic used for context accounting.", minimum=1, maximum=16),
-    _field("query_planning_enabled", "Query planning", "Retrieval", "bool",
-           "Read the catalog directory before retrieval."),
-    _field("query_planning_token_budget", "Planning token budget", "Retrieval", "int",
-           "Accounting ceiling for the planning call.", minimum=1000, maximum=2000000),
-    _field("advising_research_enabled", "Research advising", "Retrieval", "bool",
-           "Use the multi-step research advisor; requires tools."),
     _field("research_max_calls", "Research model calls", "Research", "int",
            "Model calls per research run.", minimum=1, maximum=100),
     _field("research_max_tool_calls", "Research tool calls", "Research", "int",
@@ -84,8 +60,6 @@ SETTINGS_FIELDS = (
            "Model calls per answer operation.", minimum=1, maximum=100),
     _field("operation_token_budget", "Operation token budget", "Operations", "int",
            "Accounting ceiling per answer operation.", minimum=1, maximum=20000000),
-    _field("answer_truncation_max_output_tokens", "Truncation retry cap", "Operations", "int",
-           "Largest output allowance a cut-off reply is retried with.", minimum=16, maximum=65536),
     _field("admission_max_pending_workspace", "Pending per workspace", "Admission", "int",
            "Outstanding turn cap per workspace; 0 disables.", minimum=0, maximum=100000),
     _field("admission_max_pending_global", "Pending global", "Admission", "int",
@@ -113,20 +87,6 @@ RETRIEVAL_FIELDS = (
            "Drop fused candidates below this score.", minimum=0, maximum=1),
     _field("fusion.dedupe", "Dedupe cited text", "Fusion", "bool",
            "Collapse identical cited passages."),
-    _field("planning.max_search_queries", "Planning searches", "Planning", "int",
-           "Model-proposed searches per plan.", minimum=1, maximum=20),
-    _field("planning.max_course_codes", "Planning course codes", "Planning", "int",
-           "Course codes per plan.", minimum=1, maximum=50),
-    _field("planning.max_documents", "Planning documents", "Planning", "int",
-           "Documents per plan.", minimum=1, maximum=20),
-    _field("planning.question_slots", "Question slots", "Planning", "int",
-           "Question hits in planned context.", minimum=1, maximum=50),
-    _field("planning.document_chunks", "Document chunks", "Planning", "int",
-           "Passages per planned document.", minimum=1, maximum=20),
-    _field("planning.search_slots", "Search slots", "Planning", "int",
-           "Hits per planned search.", minimum=1, maximum=20),
-    _field("planning.context_size", "Planned context size", "Planning", "int",
-           "Passages in a planned context.", minimum=1, maximum=200),
     _field("research.max_candidates", "Research candidates", "Research", "int",
            "Programs considered in one comparison.", minimum=1, maximum=50),
     _field("research.max_evidence_items", "Research evidence items", "Research", "int",

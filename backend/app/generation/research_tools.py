@@ -7,10 +7,10 @@ from dataclasses import asdict, replace
 from functools import lru_cache
 from itertools import zip_longest
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid5
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import AfterValidator, Field, ValidationError, field_validator
 
 from app.advising.audit_engine import audit_reported_courses
 from app.advising.catalog import load_advising_context, load_campus_equivalents
@@ -43,7 +43,6 @@ from app.atlas.equivalence import is_oxford
 from app.atlas.records import SUBJECT_RENAMES, normalize_code
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
-from app.generation.advising_tools import CourseCode
 from app.generation.research_final import DecisionRejected, declined_decision, validate_final
 from app.programs.rules import RuleValidationError
 from app.retrieval.retrieve import retrieve
@@ -65,6 +64,16 @@ from app.tools.registry import (
 from app.util.digest import json_digest
 
 RESEARCH_TOOLS_VERSION = "25"
+
+
+def _course_code(value: str) -> str:
+    code = normalize_code(value)
+    if code is None:
+        raise ValueError("invalid atlas course code")
+    return code
+
+
+CourseCode = Annotated[str, Field(min_length=1, max_length=32), AfterValidator(_course_code)]
 
 
 _CONFLICTS_PATH = Path(__file__).resolve().parents[2] / "configs" / "source_conflicts.toml"

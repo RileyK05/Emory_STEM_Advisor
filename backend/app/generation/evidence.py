@@ -4,11 +4,11 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 
 from app.db import queries
-from app.generation.answer import PROMPT_VERSION, GeneratedAnswer
+from app.generation.answer import GeneratedAnswer
 from app.generation.claims import review_units
 from app.llm.base import GenerationResult, Usage
 from app.pricing import PricingService
-from app.retrieval.types import Refusal, Retrieved
+from app.retrieval.types import Retrieved
 
 
 def record_attempt(conn, trace_id, settings, result: GenerationResult | None,
@@ -35,8 +35,8 @@ def record_attempt(conn, trace_id, settings, result: GenerationResult | None,
         )
 
 
-def persist_response(conn, retrieved: Retrieved | Refusal, *, status: str, reason: str | None = None,
-                     answer: GeneratedAnswer | None = None, prompt_version: str | None = None,
+def persist_response(conn, retrieved: Retrieved, *, status: str, prompt_version: str,
+                     answer: GeneratedAnswer | None = None, reason: str | None = None,
                      claim_units: list[dict] | None = None):
     response_id = uuid4()
     chunks = getattr(retrieved, "chunks", [])
@@ -51,7 +51,7 @@ def persist_response(conn, retrieved: Retrieved | Refusal, *, status: str, reaso
             "response_id": response_id, "trace_id": retrieved.trace.trace_id,
             "status": status, "text": answer.text if answer and status == "answer" else "",
             "reason": reason,
-            "prompt_version": prompt_version or (answer.prompt_version if answer else PROMPT_VERSION),
+            "prompt_version": prompt_version,
             "context_snapshot": Jsonb(snapshots),
         })
         for ordinal, citation in enumerate(answer.citations if answer and status == "answer" else ()):

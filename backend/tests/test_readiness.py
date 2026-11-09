@@ -217,8 +217,8 @@ def test_ready_route_is_public_and_returns_minimal_stable_json():
     conn = FakeConnection()
     settings = replace(load_settings(), database_url="postgresql://safe/db",
                        auth_mode="development", readiness_timeout_seconds=2,
-                       office_enabled=False, tools_enabled=False,
-                       advising_research_enabled=False, routing_enabled=False)
+                       office_enabled=False, llm_provider="openai",
+                       routing_enabled=False)
     app = create_app(
         settings=settings, config=load_retrieval_config(settings=settings),
         embedder=object(), provider=object(), auth_service=SimpleNamespace(mode="development"),
@@ -236,8 +236,8 @@ def test_ready_route_returns_503_with_only_bounded_reason_codes():
     from app.retrieval.config import load_retrieval_config
 
     settings = replace(load_settings(), database_url=None, auth_mode="development",
-                       office_enabled=False, tools_enabled=False,
-                       advising_research_enabled=False, routing_enabled=False)
+                       office_enabled=False, llm_provider="openai",
+                       routing_enabled=False)
     calls = []
     app = create_app(
         settings=settings, config=load_retrieval_config(settings=settings),

@@ -25,7 +25,6 @@ from app.llm.base import (
     ToolResultMessage,
     TransientProviderError,
     Usage,
-    consume_stream,
 )
 from app.tools.executions import (
     ToolCallChanged,
@@ -81,21 +80,14 @@ class ToolConversationController:
             terminal_tool_names: frozenset[str] = frozenset(),
             cancellation: threading.Event | Callable[[], bool] | None = None,
             on_progress: Callable[[str, Mapping[str, Any]], None] | None = None,
-            on_provisional_text: Callable[[str], None] | None = None,
-            on_provisional_reset: Callable[[], None] | None = None,
-            final_repair: Callable[[GenerationResult], str | None] | None = None,
-            required_tool_names: frozenset[str] = frozenset(),
             on_attempt: Callable[[GenerationRequest, GenerationResult | None, Exception | None], None] | None = None,
             before_provider_call: Callable[[], None] | None = None,
             ) -> GenerationResult:
         messages: list[Message] = list(request.messages)
         request_with_tools = replace(request, tools=registry.definitions)
-        if not required_tool_names <= {tool.name for tool in registry.definitions}:
-            raise ToolConversationError("required deterministic tool is unavailable in this scope")
         executed: dict[str, tuple[str, str, str]] = {}
         usages: list[Usage] = []
         tool_count = provider_count = 0
-        repaired = False
         if ledger is not None and (operation_id is None or workspace_key is None):
             raise ValueError("durable tool execution requires operation and workspace IDs")
         if ledger is not None and scope.principal_id != workspace_key:
@@ -107,13 +99,8 @@ class ToolConversationController:
         while provider_count < self.max_provider_calls:
             if _is_cancelled(cancellation):
                 raise GenerationCancelled("generation was cancelled")
-            pending = required_tool_names - {name for name, _args, _output in executed.values()}
             active_request = replace(request_with_tools, messages=tuple(messages))
-            if pending:
-                active_request = replace(active_request, tool_choice="required",
-                    tools=tuple(tool for tool in registry.definitions
-                                if provider_count == 0 or tool.name in pending))
-            elif provider_count == self.max_provider_calls - 1 and active_request.tools:
+            if provider_count == self.max_provider_calls - 1 and active_request.tools:
                 # The last allowed call must finish: answer from the results
                 # already gathered or call a terminal tool. Any other tool
                 # request could never be followed up.
@@ -124,44 +111,19 @@ class ToolConversationController:
             prepared = operation.prepare(active_request)
             provider_count += 1
             result = _attempt(provider, prepared, operation, on_attempt=on_attempt,
-                              on_provisional_text=on_provisional_text,
-                              on_provisional_reset=on_provisional_reset,
                               before_provider_call=before_provider_call)
             usages.append(result.usage)
-            if repaired and result.tool_calls:
-                raise ToolConversationError("answer rewrite requested an unexecuted tool")
             if result.tool_calls and (result.finish_reason or "").lower() in {
                 "length", "max_tokens", "content_filter", "error", "incomplete", "failed",
             }:
                 raise ToolConversationError("provider did not complete the tool request")
             if result.refusal or not result.tool_calls:
-                if pending and not result.refusal:
-                    if on_provisional_reset is not None:
-                        on_provisional_reset()
-                    messages.extend([TextMessage("assistant", result.text), TextMessage("user",
-                        "No deterministic sequence result has been executed. Invoke the required "
-                        "scoped planner before answering. Do not infer or claim a sequence yourself.")])
-                    continue
-                hint = final_repair(result) if final_repair and not repaired else None
-                if hint and provider_count < self.max_provider_calls:
-                    repaired = True
-                    if on_provisional_reset is not None:
-                        on_provisional_reset()
-                    messages.extend([TextMessage("assistant", result.text), TextMessage("user", hint)])
-                    # Retain executed tool messages, but the rewrite may not execute more tools.
-                    request_with_tools = replace(request_with_tools, tools=())
-                    continue
                 return replace(result, usage=_aggregate_usage(usages))
             if tool_count + len(result.tool_calls) > self.max_tool_calls:
                 # The operation's tool budget is spent. The fence holds: none of
                 # these calls run. The model is told so and asked to answer from
                 # the context and the tool results it already has, the same way
-                # the last allowed provider call is handled. A required
-                # deterministic tool that did not run is still required: the
-                # answer cannot be published without it.
-                if pending:
-                    raise ToolCallLimitExceeded(
-                        "the model requested more tools than this operation allows")
+                # the last allowed provider call is handled.
                 messages.append(AssistantToolMessage(result.tool_calls, result.text))
                 for call in result.tool_calls:
                     _validate_call(call)
@@ -244,19 +206,6 @@ class ToolConversationController:
         return output, True
 
 
-def _generate(provider, prepared: GenerationRequest, on_provisional_text) -> GenerationResult:
-    """One provider call, streamed when the caller wants provisional text and the provider can."""
-    stream = getattr(provider, "stream", None) if on_provisional_text is not None else None
-    if prepared.tools and not getattr(provider, "stream_supports_tools", True):
-        result = provider.generate(prepared)
-        if on_provisional_text is not None and result.text and not result.tool_calls:
-            on_provisional_text(result.text)
-        return result
-    if not callable(stream):
-        return provider.generate(prepared)
-    return consume_stream(stream(prepared), on_provisional_text)
-
-
 _DEFAULT_RETRY_DELAY_SECONDS = 1.0
 _MAX_RETRY_DELAY_SECONDS = 30.0
 _RETRY_JITTER_FRACTION = 0.25
@@ -307,14 +256,14 @@ def retry_transient(call, *, remaining_calls: int, remaining_seconds: float, che
             spent = max(spent + delay, now() - started)
 
 
-def _attempt(provider, prepared: GenerationRequest, operation, *, on_attempt, on_provisional_text,
-             on_provisional_reset, before_provider_call=None) -> GenerationResult:
+def _attempt(provider, prepared: GenerationRequest, operation, *, on_attempt,
+             before_provider_call=None) -> GenerationResult:
     """Call the provider and always account and audit the attempt before surfacing any failure."""
     result = error = None
     try:
         if before_provider_call is not None:
             before_provider_call()
-        result = _generate(provider, prepared, on_provisional_text)
+        result = provider.generate(prepared)
     except Exception as exc:  # noqa: BLE001
         error = exc
     callback_error = None
@@ -323,11 +272,7 @@ def _attempt(provider, prepared: GenerationRequest, operation, *, on_attempt, on
             on_attempt(prepared, result, error)
         except Exception as exc:  # noqa: BLE001
             callback_error = exc
-    try:
-        operation.account(result, error)
-    finally:
-        if result is not None and result.tool_calls and on_provisional_reset is not None:
-            on_provisional_reset()
+    operation.account(result, error)
     if callback_error is not None:
         raise callback_error
     if error is not None:

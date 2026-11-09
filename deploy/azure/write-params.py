@@ -37,15 +37,6 @@ def _params(mode: str) -> dict[str, object]:
         "llmProvider": os.environ.get("LLM_PROVIDER", "openai-compatible"),
         "llmModelId": os.environ["LLM_MODEL_ID"],
         "llmBaseUrl": os.environ.get("LLM_BASE_URL", ""),
-        "llmContextWindowTokens": _int("LLM_CONTEXT_WINDOW_TOKENS", 128_000),
-        "conversationCompactionEnabled": (
-            os.environ.get("CONVERSATION_COMPACTION_ENABLED", "true").lower() == "true"),
-        "conversationCompactionThreshold": os.environ.get(
-            "CONVERSATION_COMPACTION_THRESHOLD", "0.5"),
-        "conversationCompactionKeepTurns": _int("CONVERSATION_COMPACTION_KEEP_TURNS", 4),
-        "conversationCompactionMaxOutputTokens": _int(
-            "CONVERSATION_COMPACTION_MAX_OUTPUT_TOKENS", 2048),
-        "conversationTokenEstimateBytes": _int("CONVERSATION_TOKEN_ESTIMATE_BYTES", 4),
         "embeddingModelId": os.environ.get(
             "EMBEDDING_MODEL_ID", "ibm-granite/granite-embedding-125m-english"),
         "authMode": os.environ.get("AUTH_MODE", "oidc"),

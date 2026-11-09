@@ -1,7 +1,6 @@
-"""Shared grounded query workflow for HTTP and durable workers."""
+"""The one answering path: research, shared by HTTP queries and saved turns."""
 
 import logging
-import re
 import time
 from collections.abc import Callable
 from dataclasses import replace
@@ -11,11 +10,18 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 from psycopg import Error as DatabaseError
 
-from app.admin.prompt_registry import PromptRegistry
-from app.advising.catalog import load_advising_context, load_campus_equivalents
+from app.advising.research_repository import ScopeChanged, build_scope, verify_manifest
+from app.advising.research_store import ResearchStore, RunClosed
 from app.api import deps
-from app.api.schemas import AnswerResponse, QueryRequest, RefusalResponse
-from app.api.serialize import answer_response, provider_failure_detail, refusal_response
+from app.api.schemas import (
+    AnswerResponse,
+    ArtifactRequestInfo,
+    ArtifactRevisesInfo,
+    ClaimReviewUnit,
+    QueryRequest,
+    ResearchDecisionInfo,
+)
+from app.api.serialize import answer_response, provider_failure_detail
 from app.config import Settings
 from app.connections.models import (
     ConnectionUnavailable,
@@ -23,62 +29,45 @@ from app.connections.models import (
     MissingCredential,
     required_data_scopes,
 )
-from app.connections.selection import StaleProfileSelection, resolve, resolve_quality_fallback
+from app.connections.selection import StaleProfileSelection, resolve
 from app.db import queries
 from app.db.connection import connector, release_borrow, resolved_database_url
 from app.embeddings.base import Embedder
 from app.gaps.store import GapError, GapStore
-from app.generation.answer import (
-    ANSWER_PROMPT_NAME,
-    PROMPT_VERSION,
-    TRUNCATION_RETRIES,
-    GenerationRejected,
-    answer_from_context,
-    citation_repair_hint,
-)
-from app.generation.answer_tools import ToolAnswerProvider, answer_tool_context
-from app.generation.controller import (
-    ToolConversationController,
-    ToolConversationError,
-    retry_transient,
-)
+from app.generation.controller import GenerationCancelled, ToolConversationError
 from app.generation.evidence import persist_response, record_attempt
 from app.generation.operation import GenerationOperation
-from app.generation.query_plan import PlanRejected, parse_plan, planning_request
+from app.generation.research_controller import ResearchController
+from app.generation.research_final import (
+    RESEARCH_PROMPT_VERSION,
+    RESEARCH_RENDER_VERSION,
+    render_final,
+)
+from app.generation.research_tools import ResearchSession
+from app.jobs.store import JobCancelled, LeaseLost
 from app.llm.base import Provider, ProviderError
 from app.operations.budget import OperationBudgetError, OperationLimits
 from app.retrieval.config import RetrievalConfig
-from app.retrieval.directory import load_directory
-from app.retrieval.retrieve import retrieve
-from app.retrieval.types import CitedChunk, Refusal, Retrieved
+from app.retrieval.trace import normalize_query, write_trace
+from app.retrieval.types import RetrievalTrace, Retrieved
 from app.tools.executions import ToolExecutionLedger, ToolLedgerError
+
+logger = logging.getLogger(__name__)
+
+FAILED_ANSWER = "The advisor couldn't answer that. Try again."
 
 
 def _noop(*args):
     pass
 
 
-logger = logging.getLogger(__name__)
-
-
-def _answer_operation_limits(settings: Settings) -> OperationLimits:
-    """Limits for one query's operation.
-
-    The per-call output cap admits the larger allowance a reply that ran out of
-    room is retried with (generation.answer), the way the research path's cap
-    admits the research allowance. One call beyond the configured maximum is
-    reserved for that retry: the answer, the citation repair and the
-    truncated-reply retry are three legitimate uses of one operation.
-    """
-    # Config admits 100; the +1 retry reservation must still fit the ledger.
-    return OperationLimits(
-        active_budget_seconds=settings.operation_timeout_seconds,
-        max_calls=min(100, settings.operation_max_calls + 1),
-        total_token_budget=settings.operation_token_budget,
-        per_call_output_cap=max(settings.llm_max_output_tokens,
-                                settings.answer_truncation_max_output_tokens),
-        per_call_timeout_seconds=settings.llm_timeout_seconds,
-    )
+def research_sampling(settings) -> dict[str, str]:
+    """The sampling fields research sets, leaving a connection's own choice alone."""
+    if (settings.research_reasoning_effort is None or settings.llm_reasoning_effort is not None
+            or settings.llm_provider not in {"openai", "openai-compatible"}):
+        return {}
+    return {"llm_sampling_policy": "model_default",
+            "llm_reasoning_effort": settings.research_reasoning_effort}
 
 
 def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) -> None:
@@ -90,63 +79,37 @@ def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) ->
     from app.pricing.service import PricingService
     from app.quotas.service import QuotaService
 
-    prompt = answer.prompt_tokens or 0
-    completion = answer.completion_tokens or 0
-    total = prompt + completion
+    total = (answer.prompt_tokens or 0) + (answer.completion_tokens or 0)
     try:
         if total > 0:
             QuotaService.settle_generation(
-                conn,
-                workspace_key=workspace_key,
-                request_id=trace_id,
-                bucket_type="tokens",
-                delta_count=total,
-                enforce=False,
-                settings=settings,
-            )
+                conn, workspace_key=workspace_key, request_id=trace_id,
+                bucket_type="tokens", delta_count=total, enforce=False, settings=settings)
         _, cost, _ = PricingService.compute_call_cost(
-            conn,
-            provider=settings.llm_provider,
+            conn, provider=settings.llm_provider,
             model_id=answer.model_id or settings.llm_model_id or settings.hf_model_id,
-            created_at=datetime.now(UTC),
-            prompt_tokens=answer.prompt_tokens,
+            created_at=datetime.now(UTC), prompt_tokens=answer.prompt_tokens,
             completion_tokens=answer.completion_tokens,
-            cached_prompt_tokens=answer.cached_prompt_tokens,
-            usage_source=answer.usage_source,
-        )
+            cached_prompt_tokens=answer.cached_prompt_tokens, usage_source=answer.usage_source)
         if cost is not None:
             QuotaService.settle_generation(
-                conn,
-                workspace_key=workspace_key,
-                request_id=trace_id,
-                bucket_type="cost_usd",
-                delta_count=0,
-                delta_amount=float(cost),
-                enforce=False,
-                settings=settings,
-            )
+                conn, workspace_key=workspace_key, request_id=trace_id,
+                bucket_type="cost_usd", delta_count=0, delta_amount=float(cost),
+                enforce=False, settings=settings)
     except Exception:
         logger.exception("post-call quota settlement failed for %s", workspace_key)
 
 
-def _requests_course_sequence(query: str) -> bool:
-    # "DNA sequence analysis" is a topic query, not a request for course ordering.
-    return bool(re.search(
-        r"\b(?:courses?\s+sequence|sequence\s+tool|dependency\s+stages?|"
-        r"prerequisite\s+order|sequence\s+(?:should|do|to)\s+(?:i\s+)?take)\b",
-        query, re.IGNORECASE))
-
-
-def _observe_gap(conn, workspace_key, collection_id, body, outcome, event_kind):
-    """Track the final retrieval observation without undoing a published answer."""
+def _observe_gap(conn, workspace_key, collection_id, body, trace, event_kind):
+    """Track the question for the unanswered-questions list without undoing a published answer."""
     try:
         GapStore(conn, workspace_key).observe(
             collection_id=collection_id, query=body.query, source_ids=body.sourceIds,
-            trace_id=outcome.trace.trace_id, event_kind=event_kind,
+            trace_id=trace.trace_id, event_kind=event_kind,
         )
     except (GapError, DatabaseError):
         conn.rollback()
-        outcome.trace.warnings.append("Gap tracking is temporarily unavailable.")
+        trace.warnings.append("Gap tracking is temporarily unavailable.")
 
 
 def _fence_sources(conn, workspace_key, collection_id, body, source_snapshot):
@@ -177,9 +140,6 @@ class _AttemptAudit:
         self.settings, self.selection = settings, selection
         self._started = time.perf_counter()
 
-    def switch_to(self, settings, selection) -> None:
-        self.settings, self.selection = settings, selection
-
     def record(self, result, error, request) -> None:
         record_attempt(self.conn, self.outcome.trace.trace_id, self.settings, result, error,
                        int((time.perf_counter() - self._started) * 1000),
@@ -189,189 +149,19 @@ class _AttemptAudit:
         self._started = time.perf_counter()
 
 
-class _SelectionFailed(Exception):
-    """No connection may serve this query; persisted once a retrieval trace exists."""
-
-    def __init__(self, reason: str, detail: str):
-        super().__init__(detail)
-        self.reason, self.detail = reason, detail
-
-
-def _select_connection(conn, settings, body, workspace_key, required_scopes,
-                       required_capabilities, profiles, runtime):
-    """The evaluated connection that serves this query, or None for the default provider."""
+def _select_connection(conn, settings, body, workspace_key, profiles, runtime):
+    """The evaluated tools-capable connection that serves this query, or None for the default provider."""
     if not settings.routing_enabled:
         if workspace_key != "development":
-            raise _SelectionFailed("private_routing_required",
-                                   "private generation requires an evaluated, authorized connection")
+            raise HTTPException(503, "Research advising has no authorized tools-capable connection.")
         return None
     try:
         return resolve(settings, conn, body.query, data_scope="institutional_corpus",
-                       required_data_scopes=required_scopes,
-                       required_capabilities=required_capabilities,
+                       required_data_scopes=required_data_scopes(workspace_key),
+                       required_capabilities=frozenset({"tools"}),
                        profiles=profiles, runtime=runtime)
     except (ConnectionUnavailable, CredentialUnreadable, MissingCredential) as exc:
-        raise _SelectionFailed(type(exc).__name__,
-                               "no evaluated model connection can serve this request") from exc
-
-
-def _fail_selection(conn, outcome, failure: _SelectionFailed):
-    persist_response(conn, outcome, status="failed", reason=failure.reason)
-    raise HTTPException(503, detail=failure.detail) from failure.__cause__
-
-
-def _plan_query(conn, settings, provider, selection, operation, config, question, *,
-                collection_id, source_ids, workspace_key, check_cancelled):
-    """A validated search plan, or (None, reason) for the unplanned fallback.
-
-    The planning call is reserved and accounted in the query's operation like any
-    other call, including when it fails. A plan that cannot be used falls back to
-    the scoped unplanned retrieval, including when accounting the call exhausts
-    the operation budget.
-    """
-    if settings.llm_provider == "hf-local":
-        return None, "local model context is too small for the catalog directory"
-    if not callable(getattr(provider, "generate", None)):
-        return None, "provider has no typed generation seam"
-    directory = load_directory(conn, collection_id=collection_id, workspace_key=workspace_key,
-                               source_ids=source_ids)
-    conn.commit()  # Release the read before provider I/O.
-    release_borrow(conn)
-    if directory.empty:
-        return None, "no catalog entries in scope"
-    check_cancelled()
-    try:
-        request = operation.prepare(planning_request(
-            directory, question, config.planning, timeout_seconds=settings.llm_timeout_seconds,
-            temperature=0 if settings.llm_sampling_policy == "greedy" else None))
-    except OperationBudgetError as exc:
-        return None, f"planning call exceeds the operation budget ({exc.code})"
-    started = time.perf_counter()
-    try:
-        result = provider.generate(request)
-    except Exception as exc:
-        record_attempt(conn, None, settings, None, exc, int((time.perf_counter() - started) * 1000),
-                       operation_id=operation.operation_id, request=request, selection=selection)
-        conn.commit()
-        operation.account(None, exc)
-        if isinstance(exc, ProviderError):
-            return None, f"planning call failed ({type(exc).__name__})"
-        raise
-    record_attempt(conn, None, settings, result, None, int((time.perf_counter() - started) * 1000),
-                   operation_id=operation.operation_id, request=request, selection=selection)
-    conn.commit()
-    try:
-        operation.account(result, None)
-    except OperationBudgetError as exc:
-        # Same as prepare: fall back to unplanned retrieval instead of a 500.
-        return None, f"planning call exceeds the operation budget ({exc.code})"
-    try:
-        plan = parse_plan(result.text, directory, config.planning)
-    except PlanRejected as exc:
-        return None, f"planning output rejected: {exc}"
-    return plan, None
-
-
-def _tool_answer_provider(conn, body, outcome, operation, settings, provider, selection, audit,
-                          check_cancelled, on_progress, on_provisional_text, on_provisional_reset,
-                          history_context, workspace_key):
-    advising_context = load_advising_context(
-        conn, collection_id=outcome.trace.collection_id, chunks=outcome.chunks,
-    )
-    campus_equivalents = load_campus_equivalents(
-        conn, collection_id=outcome.trace.collection_id,
-    )
-    conn.commit()  # Snapshot is read-only; release the transaction before model I/O.
-    registry, scope, fingerprint = answer_tool_context(
-        query=body.query, chunks=outcome.chunks, workspace_key=workspace_key,
-        settings=settings, selection=selection, check_cancelled=check_cancelled,
-        history_context=history_context,
-        advising_context=advising_context,
-        campus_equivalents=campus_equivalents,
-    )
-    return ToolAnswerProvider(
-        provider,
-        controller=ToolConversationController(
-            max_tool_calls=settings.tool_max_calls,
-            # The tool turns and the answer share the operation's calls, and one
-            # call is reserved for the answer's own retry: a reply that ran out
-            # of output allowance is asked again with a larger allowance, and
-            # that retry needs a call to make. Two calls are the floor the
-            # tools path needs - the tools in one turn, then the answer.
-            max_provider_calls=max(2, settings.operation_max_calls - 1),
-        ),
-        registry=registry, scope=scope, operation=operation,
-        # The ledger's short transitions use a dedicated pool role, never the
-        # pool held by this HTTP request or worker execution (RT-02): a nested
-        # same-pool borrow can self-wait under a small pool.
-        ledger=ToolExecutionLedger(connector(settings, resolved_database_url(settings, conn), pool_name="tool_execution"),
-                                   max_tool_calls=settings.tool_max_calls),
-        operation_id=operation.operation_id, workspace_key=workspace_key,
-        scope_fingerprint=fingerprint,
-        on_attempt=lambda prepared, result, error: audit.record(result, error, prepared),
-        cancellation=check_cancelled,
-        on_progress=lambda event, payload: on_progress({"stage": event, **payload}),
-        on_provisional_text=on_provisional_text,
-        on_provisional_reset=on_provisional_reset,
-        final_repair=(lambda result: citation_repair_hint(
-            result, outcome.chunks, query=body.query,
-            history_context=history_context, identity_only=True,
-            campus_equivalents=campus_equivalents))
-        if settings.answer_citation_repair_enabled else None,
-        required_tool_names=frozenset({"advisor_plan_course_sequence"})
-        if _requests_course_sequence(body.query) else frozenset(),
-        before_provider_call=lambda: release_borrow(conn),
-    )
-
-
-def _publish_answer(conn, outcome, operation, attempt_selections, answer) -> None:
-    """Persist the answer only if every connection used is still current and the operation is in budget."""
-    try:
-        with conn.transaction():
-            for used in sorted(
-                {(used.profile_id, used.profile_revision): used for used in attempt_selections}.values(),
-                key=lambda used: (str(used.profile_id), used.profile_revision),
-            ):
-                used.assert_current(conn, lock=True, commit=False)
-            operation.assert_publishable()
-            persist_response(conn, outcome, status="answer", answer=answer)
-            operation.assert_publishable()
-    except StaleProfileSelection as exc:
-        persist_response(conn, outcome, status="failed", reason="stale_connection")
-        raise HTTPException(409, detail="model connection changed; retry this request") from exc
-    except OperationBudgetError as exc:
-        persist_response(conn, outcome, status="failed", reason=exc.code)
-        raise HTTPException(422, detail=str(exc)) from exc
-
-
-def _append_warm_citations(chunks: list[CitedChunk], warm) -> list[CitedChunk]:
-    """Add previously cited passages that this retrieval did not already return."""
-    if not warm:
-        return list(chunks)
-    present = {str(chunk.chunk_id) for chunk in chunks}
-    merged = list(chunks)
-    for item in warm:
-        if not isinstance(item, dict):
-            continue
-        chunk_id = str(item.get("chunkId") or "")
-        if not chunk_id or chunk_id in present:
-            continue
-        text = item.get("text")
-        if not isinstance(text, str) or not text:
-            continue
-        try:
-            parsed_chunk = UUID(chunk_id)
-            parsed_source = UUID(str(item.get("sourceId") or ""))
-        except ValueError:
-            continue
-        merged.append(CitedChunk(
-            chunk_id=parsed_chunk, source_id=parsed_source, chunk_index=0,
-            source_name=str(item.get("sourceName") or ""),
-            locator_label=str(item.get("locatorLabel") or ""), text=text, seams=(),
-            normalized_score=0.0, source_slot=0, rank=len(merged) + 1,
-        ))
-        present.add(chunk_id)
-    return merged
+        raise HTTPException(503, "Research advising has no authorized tools-capable connection.") from exc
 
 
 def query_response(
@@ -379,21 +169,16 @@ def query_response(
     embedder: Embedder, provider: Provider, *,
     check_cancelled: Callable[[], None] = _noop,
     on_progress: Callable[[dict], None] = _noop,
-    on_provisional_text: Callable[[str], None] | None = None,
-    on_provisional_reset: Callable[[], None] | None = None,
     on_profile_selection: Callable[[object], None] | None = None,
     on_operation_created: Callable[[UUID], None] | None = None,
     source_snapshot: dict[str, int] | None = None,
     workspace_key: str = "development",
     connection_profiles=None,
     connection_runtime=None,
-    retrieval_query: str | None = None,
     history_context: str | None = None,
-    warm_citations: list | None = None,
     conversation_id: UUID | None = None,
     conversation_request_id: UUID | None = None,
-    system_prompt: str | None = None,
-) -> AnswerResponse | RefusalResponse:
+) -> AnswerResponse:
     from app.auth.capabilities import EXECUTION_SETTINGS, execution_settings
 
     settings = execution_settings(conn, settings, workspace_key)
@@ -412,252 +197,153 @@ def query_response(
     check_cancelled()
     on_progress({"stage": "retrieving"})
     collection_id, _ = deps.resolve_collection(conn, settings, body.collectionId)
-    effective_source_ids = _fence_sources(conn, workspace_key, collection_id, body, source_snapshot)
+    source_ids = _fence_sources(conn, workspace_key, collection_id, body, source_snapshot)
     conn.commit()  # No read transaction across query embedding or generation.
-    if settings.advising_research_enabled and getattr(body, "mode", "advising") == "advising":
-        from app.api.research_service import research_response
 
-        return research_response(
-            body, conn, settings, config, embedder, provider,
-            collection_id=collection_id, source_ids=effective_source_ids,
-            source_snapshot=source_snapshot, workspace_key=workspace_key,
-            connection_profiles=connection_profiles, connection_runtime=connection_runtime,
-            check_cancelled=check_cancelled, on_progress=on_progress,
-            on_profile_selection=on_profile_selection, on_operation_created=on_operation_created,
-            history_context=history_context, conversation_id=conversation_id,
-            conversation_request_id=conversation_request_id)
     started = time.perf_counter()
-
-    def latency_ms() -> int:
-        return int((time.perf_counter() - started) * 1000)
-
-    required_scopes = required_data_scopes(workspace_key)
-    required_capabilities = frozenset({"tools"}) if settings.tools_enabled else frozenset()
-    selection = selection_failure = operation = plan = None
-    plan_warning = None
-    if settings.query_planning_enabled:
-        # Planning is the operation's first model call, so the connection and the
-        # persisted budget exist before retrieval. The operation id becomes the
-        # trace id, as it is for unplanned queries.
-        try:
-            selection = _select_connection(conn, settings, body, workspace_key, required_scopes,
-                                           required_capabilities, connection_profiles,
-                                           connection_runtime)
-        except _SelectionFailed as failure:
-            selection_failure = failure
-        else:
-            plan_settings, plan_provider = ((selection.settings, selection.provider)
-                                            if selection is not None else (settings, provider))
-            if plan_provider is not None:
-                on_progress({"stage": "planning"})
-                plan_settings = replace(
-                    plan_settings, operation_max_calls=plan_settings.operation_max_calls + 1,
-                    operation_token_budget=(plan_settings.operation_token_budget
-                                            + plan_settings.query_planning_token_budget),
-                )
-                operation = GenerationOperation(conn, plan_settings, uuid4(), workspace_key,
-                                                limits=_answer_operation_limits(plan_settings))
-                if on_operation_created is not None:
-                    on_operation_created(operation.operation_id)
-                plan, plan_warning = _plan_query(
-                    conn, plan_settings, plan_provider, selection, operation, config,
-                    retrieval_query or body.query, collection_id=collection_id,
-                    source_ids=effective_source_ids, workspace_key=workspace_key,
-                    check_cancelled=check_cancelled)
-                check_cancelled()
-                on_progress({"stage": "retrieving"})
-
-    outcome = retrieve(
-        conn, collection_id=collection_id, query=retrieval_query or body.query, embedder=embedder,
-        embed_model=settings.embedding_model_id, config=config, source_ids=effective_source_ids,
-        workspace_key=workspace_key, plan=plan,
-        trace_id=operation.operation_id if operation is not None else None,
-    )
-    conn.commit()
-    if operation is not None:
-        conn.execute(queries.get("attach_operation_model_calls_to_trace"), {
-            "trace_id": outcome.trace.trace_id, "operation_id": operation.operation_id})
-        conn.commit()
-    if plan_warning:
-        outcome.trace.warnings.append("query planning skipped: " + plan_warning)
-    check_cancelled()
-    kept = _append_warm_citations(
-        [] if isinstance(outcome, Refusal) else outcome.chunks, warm_citations)
-    if isinstance(outcome, Refusal):
-        if not kept:
-            persist_response(conn, outcome, status="refusal", reason=outcome.reason)
-            _observe_gap(conn, workspace_key, collection_id, body, outcome, "retrieval_refusal")
-            return refusal_response(outcome, settings=settings, latency_ms=latency_ms())
-        outcome = Retrieved(chunks=kept, trace=outcome.trace)
-        outcome.trace.warnings.append(
-            "Previously cited passages were kept in the numbered context.")
-    elif len(kept) != len(outcome.chunks):
-        outcome = replace(outcome, chunks=kept)
-        outcome.trace.warnings.append(
-            "Previously cited passages were kept in the numbered context.")
-
-    if selection_failure is not None:
-        _fail_selection(conn, outcome, selection_failure)
-    if not settings.query_planning_enabled:
-        try:
-            selection = _select_connection(conn, settings, body, workspace_key, required_scopes,
-                                           required_capabilities, connection_profiles,
-                                           connection_runtime)
-        except _SelectionFailed as failure:
-            _fail_selection(conn, outcome, failure)
-    attempt_selections = []
+    selection = _select_connection(conn, settings, body, workspace_key,
+                                   connection_profiles, connection_runtime)
     if selection is not None:
         settings, provider = selection.settings, selection.provider
-        attempt_selections.append(selection)
-        if on_profile_selection is not None:
+        if on_profile_selection:
             on_profile_selection(selection)
-    if provider is None:
-        persist_response(conn, outcome, status="failed", reason="provider_unavailable")
-        raise HTTPException(503, detail="selected model connection is unavailable")
-
-    on_progress({"stage": "generating"})
-    if operation is None:
-        operation = GenerationOperation(conn, settings, outcome.trace.trace_id, workspace_key,
-                                        limits=_answer_operation_limits(settings))
-        if on_operation_created is not None:
-            on_operation_created(operation.operation_id)
-
-    audit = _AttemptAudit(conn, outcome, operation, settings, selection)
-    if settings.tools_enabled:
-        answer_provider = _tool_answer_provider(
-            conn, body, outcome, operation, settings, provider, selection, audit, check_cancelled,
-            on_progress, on_provisional_text, on_provisional_reset, history_context, workspace_key)
-    else:
-        answer_provider = provider
-
-    def account(result, error):
-        audit.record(result, error, operation.last_request)
-        operation.account(result, error)
-
-    def prepare(request):
-        check_cancelled()
-        return operation.prepare(request)
-
-    if system_prompt is not None:
-        prompt_version = "debug-override"
-    else:
-        promoted = PromptRegistry.promoted(conn, ANSWER_PROMPT_NAME)
-        conn.commit()
-        system_prompt, prompt_version = promoted or (None, PROMPT_VERSION)
-
-    course_subjects = {row["subject"] for row in conn.execute(
-        queries.get("list_advising_course_subjects"), {"collection_id": collection_id},
-    ).fetchall()}
-    campus_equivalents = load_campus_equivalents(conn, collection_id=collection_id)
+    if provider is None or not callable(getattr(provider, "generate", None)):
+        raise HTTPException(503, "Research advising requires an available tools-capable connection.")
+    settings = replace(settings, operation_max_calls=settings.research_max_calls,
+        operation_timeout_seconds=settings.research_operation_timeout_seconds,
+        operation_token_budget=settings.research_operation_token_budget,
+        llm_max_output_tokens=settings.research_max_output_tokens,
+        **research_sampling(settings))
+    scope = build_scope(conn, collection_id=collection_id, workspace_key=workspace_key,
+                        source_ids=source_ids, frozen_snapshot=source_snapshot)
     conn.commit()
-
-    operation_status = operation.controller.get(operation.conn, operation.operation_id)
-    # A reply that ran out of output allowance is asked again with a larger
-    # allowance. One call is left for the citation repair or the escalation
-    # that follows, so the retry only gets what is left over.
-    reserved = 1 if (settings.answer_citation_repair_enabled
-                     and not settings.tools_enabled) else 0
-    truncation_retries = max(0, min(TRUNCATION_RETRIES,
-                                    operation_status.remaining_calls - 1 - reserved))
-
-    def generate_answer():
-        return answer_from_context(
-            outcome.chunks, retrieval_query or body.query, provider=answer_provider,
-            max_new_tokens=(settings.hf_max_new_tokens if settings.llm_provider == "hf-local"
-                            else settings.llm_max_output_tokens),
-            timeout_seconds=settings.llm_timeout_seconds,
-            sampling_policy=settings.llm_sampling_policy,
-            reasoning_effort=settings.llm_reasoning_effort,
-            history_context=history_context,
-            include_resource_ids=settings.tools_enabled,
-            prepare_request=None if settings.tools_enabled else prepare,
-            on_attempt=None if settings.tools_enabled else account,
-            on_provisional_text=(on_provisional_text if not settings.tools_enabled else None),
-            repair_citations=settings.answer_citation_repair_enabled and not settings.tools_enabled,
-            repair_identity_only=True,
-            on_provisional_reset=on_provisional_reset,
-            before_provider_call=lambda: release_borrow(conn),
-            system_prompt=system_prompt,
-            prompt_version=prompt_version,
-            course_subjects=course_subjects,
-            campus_equivalents=campus_equivalents,
-            truncation_retries=truncation_retries,
-            truncation_ceiling=settings.answer_truncation_max_output_tokens,
-        )
-
-    try:
-        try:
-            answer = retry_transient(
-                generate_answer,
-                remaining_calls=operation_status.remaining_calls,
-                remaining_seconds=operation_status.remaining_seconds,
-                check_cancelled=check_cancelled,
-            )
-        except GenerationRejected as first_rejection:
-            if first_rejection.recoverable_integrity and on_provisional_reset is not None:
-                on_provisional_reset()
-            if (not first_rejection.recoverable_integrity or settings.tools_enabled
-                    or selection is None or selection.role != "standard"):
-                raise
-            try:
-                fallback = resolve_quality_fallback(
-                    settings, conn, body.query, chosen=selection,
-                    data_scope="institutional_corpus",
-                    required_data_scopes=required_scopes,
-                    required_capabilities=required_capabilities,
-                    profiles=connection_profiles, runtime=connection_runtime,
-                )
-            except (ConnectionUnavailable, CredentialUnreadable, MissingCredential):
-                raise first_rejection
-            if fallback is None:
-                raise
-            selection = fallback
-            attempt_selections.append(fallback)
-            settings, provider = fallback.settings, fallback.provider
-            answer_provider = provider
-            audit.switch_to(settings, selection)
-            if on_profile_selection is not None:
-                on_profile_selection(fallback)
-            answer = generate_answer()
-        check_cancelled()
-    except GenerationRejected as exc:
-        persist_response(conn, outcome, status="refusal", reason=str(exc))
-        _observe_gap(conn, workspace_key, collection_id, body, outcome, "generation_withheld")
-        _settle_usage(conn, workspace_key, outcome.trace.trace_id, exc.answer, settings)
-        trace = answer_response(
-            outcome, exc.answer, settings=settings, trace_id=outcome.trace.trace_id,
-            latency_ms=latency_ms(),
-        ).trace
-        trace.warnings.append("generated answer withheld: " + str(exc))
-        return RefusalResponse(reason="Unable to produce a validated grounded answer.", trace=trace)
-    except OperationBudgetError as exc:
-        persist_response(conn, outcome, status="failed", reason=exc.code)
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except ProviderError as exc:
-        persist_response(conn, outcome, status="failed", reason=type(exc).__name__)
-        raise HTTPException(status_code=503, detail=provider_failure_detail(exc, "The model")) from exc
-    except (ToolConversationError, ToolLedgerError) as exc:
-        persist_response(conn, outcome, status="failed", reason=type(exc).__name__)
-        raise HTTPException(status_code=422, detail="native tool execution could not be completed safely") from exc
-    on_progress({"stage": "validated"})
-    check_cancelled()
-    _publish_answer(conn, outcome, operation, attempt_selections, answer)
-    _settle_usage(conn, workspace_key, outcome.trace.trace_id, answer, settings)
-    _observe_gap(conn, workspace_key, collection_id, body, outcome, "retrieval_success")
-    cited_source_ids = sorted({
-        UUID(str(item.source_id)) for item in answer.citations if item.source_id
-    })
-    applicability = None
-    if cited_source_ids:
-        from app.advising.applicability import evaluate_sources_applicability
-
-        applicability = evaluate_sources_applicability(
-            conn,
-            cited_source_ids,
-            declared_cohort=getattr(body, "studentCohort", None),
-            query=body.query,
-        )
-    return answer_response(
-        outcome, answer, settings=settings, trace_id=outcome.trace.trace_id,
-        latency_ms=latency_ms(), applicability=applicability,
+    trace_id = write_trace(conn, collection_id=collection_id, query=body.query,
+                           config_version=config.version, embed_model=settings.embedding_model_id,
+                           refused=False, seams=[], contributions=[],
+                           workspace_key=workspace_key)
+    conn.commit()
+    conn.execute(queries.get("mark_research_trace"), {"trace_id": trace_id})
+    conn.commit()
+    # Rounds request the ordinary allowance; the per-call cap admits the larger
+    # allowance a truncated round retries with (research_controller).
+    operation = GenerationOperation(conn, settings, trace_id, workspace_key, limits=OperationLimits(
+        active_budget_seconds=settings.operation_timeout_seconds,
+        max_calls=settings.operation_max_calls,
+        total_token_budget=settings.operation_token_budget,
+        per_call_output_cap=max(settings.llm_max_output_tokens,
+                                settings.research_truncation_max_output_tokens),
+        per_call_timeout_seconds=settings.llm_timeout_seconds,
+    ))
+    if on_operation_created:
+        on_operation_created(operation.operation_id)
+    store = ResearchStore(conn, workspace_key)
+    run, created = store.start(scope, run_id=uuid4(), operation_id=operation.operation_id,
+        root_trace_id=trace_id, prompt_version=RESEARCH_PROMPT_VERSION,
+        config_version=str(config.version), conversation_id=conversation_id,
+        request_id=conversation_request_id)
+    if not created:
+        raise HTTPException(409, "This conversation request already owns a research run; reconnect to it.")
+    session = ResearchSession(
+        conn, scope, store, run, settings=settings, config=config, embedder=embedder,
+        artifact_references=getattr(body, "artifactReferences", ()),
     )
+    outcome = Retrieved([], RetrievalTrace(trace_id, collection_id, body.query,
+                        normalize_query(body.query), config.version, settings.embedding_model_id,
+                        False, ()))
+    audit = _AttemptAudit(conn, outcome, operation, settings, selection)
+    def guard():
+        check_cancelled()
+        if selection:
+            selection.assert_current(conn)
+    ledger = ToolExecutionLedger(connector(settings, resolved_database_url(settings, conn), pool_name="tool_execution"),
+                                 max_tool_calls=settings.research_max_tool_calls)
+    try:
+        guard()
+        session.open_workspace(conversation_id)
+        decision, usage, system, user, model = ResearchController().run(
+            session, provider, operation, ledger=ledger, check_cancelled=guard,
+            on_progress=on_progress, question=body.query, history_context=history_context,
+            selection_identity={"profile": str(selection.profile_id), "revision": selection.profile_revision}
+            if selection else {"provider": settings.llm_provider, "model": settings.llm_model_id},
+            on_attempt=lambda prepared, result, error: audit.record(result, error, prepared),
+            before_provider_call=lambda: release_borrow(conn))
+        rendered = render_final(decision, store.evidence(run.run_id), system_prompt=system,
+                                user_prompt=user, usage=usage, model_id=model)
+        outcome = replace(outcome, chunks=rendered.chunks)
+        claims = [{"text": b["text"], "citation_numbers": b["citationNumbers"]}
+                  for b in rendered.blocks if b["kind"] == "fact"]
+        guard()
+        conn.commit()
+        on_progress({"stage": "validating"})
+        with conn.transaction():
+            verify_manifest(conn, scope.manifest())
+            if selection:
+                selection.assert_current(conn, lock=True, commit=False)
+            operation.assert_publishable()
+            response_id = persist_response(conn, outcome, status="answer", answer=rendered.answer,
+                                            prompt_version=RESEARCH_PROMPT_VERSION, claim_units=claims)
+            store.record_decision(run.run_id, decision, render_version=RESEARCH_RENDER_VERSION,
+                                  response_id=response_id, supplied=session.supplied, commit=False)
+            # Saved-turn audit settles atomically with its assistant turn in the worker.
+            if conversation_id is None:
+                status = (decision.outcome if decision.outcome in {"clarification", "insufficient_evidence"}
+                          else "partial" if decision.completeness == "partial" else "completed")
+                store.finish(run.run_id, status, "advisor_finish", commit=False)
+            operation.assert_publishable()
+        _settle_usage(conn, workspace_key, trace_id, rendered.answer, settings)
+        _observe_gap(conn, workspace_key, collection_id, body, outcome.trace,
+                     "generation_withheld" if decision.outcome == "insufficient_evidence"
+                     else "retrieval_success")
+        response = answer_response(outcome, rendered.answer, settings=settings, trace_id=trace_id,
+                                   latency_ms=int((time.perf_counter() - started) * 1000))
+        response.claims = [ClaimReviewUnit(text=c["text"], citationChunkIds=[
+            str(rendered.chunks[n - 1].chunk_id) for n in c["citation_numbers"]]) for c in claims]
+        artifact = None
+        if decision.artifact is not None:
+            request = decision.artifact
+            artifact = ArtifactRequestInfo(
+                kind=request.kind, title=request.title, brief=request.brief,
+                purpose=request.purpose,
+                revises=ArtifactRevisesInfo(
+                    artifactId=str(request.revises.artifact_id),
+                    revisionId=str(request.revises.revision_id),
+                ) if request.revises else None,
+            )
+        response.research = ResearchDecisionInfo(runId=str(run.run_id), outcome=decision.outcome,
+            completeness=decision.completeness, blocks=rendered.blocks, artifact=artifact,
+            unresolvedQuestions=list(decision.unresolved_questions))
+        cited_source_ids = sorted({
+            UUID(str(item.source_id)) for item in rendered.answer.citations if item.source_id
+        })
+        if cited_source_ids:
+            from app.advising.applicability import evaluate_sources_applicability
+
+            response.applicability = evaluate_sources_applicability(
+                conn,
+                cited_source_ids,
+                declared_cohort=getattr(body, "studentCohort", None),
+                query=body.query,
+            )
+        on_progress({"stage": "validated"})
+        return response
+    except Exception as exc:
+        conn.rollback()
+        interrupted = not isinstance(exc, (ScopeChanged, StaleProfileSelection, OperationBudgetError,
+                                           ProviderError, ToolConversationError, ToolLedgerError))
+        reason = str(exc) if isinstance(exc, (ToolConversationError, OperationBudgetError)) else type(exc).__name__
+        status = "cancelled" if isinstance(exc, (GenerationCancelled, JobCancelled)) else (
+            "interrupted" if interrupted or isinstance(exc, LeaseLost) else "failed")
+        try:
+            store.finish(run.run_id, status, reason)
+        except RunClosed:
+            pass  # Concurrent abandonment already settled the run; preserve the original error.
+        if isinstance(exc, (GenerationCancelled, JobCancelled, LeaseLost)):
+            raise
+        if isinstance(exc, (ScopeChanged, StaleProfileSelection)):
+            raise HTTPException(409, "Research sources or model connection changed; refresh and retry.") from exc
+        if isinstance(exc, ProviderError):
+            raise HTTPException(503, provider_failure_detail(exc, "Research model")) from exc
+        if isinstance(exc, (OperationBudgetError, ToolConversationError, ToolLedgerError)):
+            detail = str(exc) if str(exc) == FAILED_ANSWER else "Research could not finish safely: " + str(exc)
+            raise HTTPException(422, detail) from exc
+        raise

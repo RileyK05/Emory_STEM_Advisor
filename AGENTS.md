@@ -33,9 +33,10 @@ plans and `docs/audit/` the review status.
     program audit engine, comparisons, research advisor data layer),
     `simgraph/` (fixed departments → learned topics → courses; no lateral
     course links). None of these call a model.
-  - Generation: `retrieval/` (seams, fusion, traces, eval runner, catalog
-    directory), `generation/` (grounded answers and citation mapping, the
-    research loop, query planning), `tools/`, `operations/`
+  - Generation: `retrieval/` (seams, fusion, traces, eval runner),
+    `generation/` (the research loop, the only answering path, its final
+    rendering and citation mapping, and the tool controller artifacts share;
+    `api/query_service.py` is its entry), `tools/`, `operations/`
     (shared token/call/time budgets), `jobs/` (job store, worker runtime), `conversations/`, `artifacts/`,
     `sandbox/` (isolated Office/HTML execution on a separate worker).
   - Accounts and governance: `auth/` (`get_principal` is the one authentication
@@ -54,9 +55,8 @@ plans and `docs/audit/` the review status.
   `requirement_gold.toml` (hand-checked expected requirement trees, checked by
   `scripts.manual.data_audit`; an entry is ground truth only once `reviewed`),
   `career_occupations.toml` (hand-written SOC codes for federal pay data),
-  `source_conflicts.toml` (hand-written disagreements between Emory sources that answers
-  must disclose), and
-  `catalog-directory.md` (planning directory; not citable evidence).
+  and `source_conflicts.toml` (hand-written disagreements between Emory sources that
+  answers must disclose).
 - `backend/scripts/` — run as `python -m scripts.<name>` from `backend/`; they
   use `DATABASE_URL`, or an embedded `pgserver` under `DATA_DIR/pgserver`.
   `scripts/smoke/` (real models/services) and `scripts/manual/` (reusable

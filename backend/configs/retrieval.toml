@@ -33,19 +33,6 @@ min_score = 0.15
 # Collapse identical cited passages into one citation.
 dedupe = true
 
-[planning]
-# Query planning (QUERY_PLANNING_ENABLED). A model reads the scoped catalog
-# directory and proposes searches; these bound what it may propose and how
-# much evidence the plan can put in front of the answer. Starting values;
-# compare answers with planning off/on before changing them.
-max_search_queries = 5
-max_course_codes = 12
-max_documents = 3
-question_slots = 4
-document_chunks = 2
-search_slots = 2
-context_size = 28
-
 [research]
 # Research advising (ADVISING_RESEARCH_ENABLED). These bound the model's own
 # working comparison; the durable evidence register is separate and larger.

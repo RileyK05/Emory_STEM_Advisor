@@ -161,8 +161,7 @@ def check_workspace_access(
     return False
 
 
-EXECUTION_SETTINGS = ("query_planning_enabled", "advising_research_enabled", "tools_enabled",
-                      "answer_citation_repair_enabled", "conversation_compaction_enabled")
+EXECUTION_SETTINGS = ("tools_enabled",)
 
 
 def execution_settings(conn, settings, workspace_key: str, *, ceilings=None):
@@ -175,5 +174,4 @@ def execution_settings(conn, settings, workspace_key: str, *, ceilings=None):
     ceiling = ceilings or settings
     values = {attr: bool(getattr(settings, attr) and getattr(ceiling, attr))
               for attr in EXECUTION_SETTINGS}
-    values["advising_research_enabled"] &= values["tools_enabled"]
     return replace(settings, **values)

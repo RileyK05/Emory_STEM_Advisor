@@ -8,6 +8,7 @@ import pytest
 
 from app.connections.models import ConnectionUnavailable, StoredProfile
 from app.connections.selection import StaleProfileSelection, resolve
+from app.llm.routing import Candidate, RoutingConfig, choose_route, classify_role
 
 
 def _profile(**changes):
@@ -56,7 +57,7 @@ def _routing_file(tmp_path: Path):
     path = tmp_path / "routing.toml"
     path.write_text(
         'version = 1\ndefault_role = "standard"\nuncertain_role = "complex"\n'
-        'max_quality_escalations = 1\n[signals]\ncomplex_terms = ["compare"]\n'
+        '[signals]\ncomplex_terms = ["compare"]\n'
         'fast_job_kinds = ["batch_generation"]\n'
         'complex_token_threshold = 100\n', encoding="utf-8")
     return path
@@ -126,3 +127,40 @@ def test_selected_profile_revision_is_rechecked_before_publication(tmp_path):
     repo.profile = replace(profile, revision=5)
     with pytest.raises(StaleProfileSelection, match="changed during generation"):
         selected.assert_current(conn)
+
+
+def _route_config():
+    return RoutingConfig.load(Path(__file__).parents[1] / "configs" / "routing.toml")
+
+
+def test_explicit_course_lookup_patterns_route_simple_and_leave_uncertainty_complex():
+    config = _route_config()
+    assert classify_role(config, query="What are the prerequisites for MATH 111?")[0] == "standard"
+    assert classify_role(config, query="MATH 111")[0] == "standard"
+    assert classify_role(config, query="Compare MATH 111 and MATH 112")[0] == "complex"
+    assert classify_role(config, query="What are prerequisites for a math major?")[0] == "complex"
+    assert classify_role(config, query="What is MATH 111 and how does it compare to MATH 112?")[0] == "complex"
+    assert classify_role(config, query="x", job_kind="batch_generation")[0] == "fast_generation"
+
+
+def test_router_requires_eval_passed_profile_and_defaults_uncertain_to_complex():
+    config = RoutingConfig.load(Path(__file__).resolve().parents[1] / "configs" / "routing.toml")
+    candidates = [Candidate("cheap", "standard", "openai", "small", eval_passed=True),
+                 Candidate("strong", "complex", "anthropic", "large", eval_passed=True)]
+    decision = choose_route(config, candidates, query="what is this?")
+    assert decision.candidate.profile_id == "strong"
+
+
+def test_router_cannot_select_nonpassing_or_wrong_scope_profile():
+    config = RoutingConfig.load(Path(__file__).resolve().parents[1] / "configs" / "routing.toml")
+    candidates = [Candidate("unsafe", "complex", "x", "m", data_scopes=frozenset({"internal"}), eval_passed=True),
+                 Candidate("untested", "complex", "x", "m", data_scopes=frozenset({"user"}), eval_passed=False)]
+    with pytest.raises(LookupError):
+        choose_route(config, candidates, query="uncertain", data_scope="user")
+
+
+def test_router_config_rejects_unknown_keys(tmp_path):
+    path = tmp_path / "routing.toml"
+    path.write_text("version=1\nsurprise=true\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="unknown routing keys"):
+        RoutingConfig.load(path)

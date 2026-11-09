@@ -27,18 +27,10 @@ Courses may be taken S/U up to the published credit limit.
 
 
 class _CitingProvider(FakeProvider):
-    """Answer with a bracketed citation of the passage that names CS 171."""
+    """Research the question and answer citing the passage that names CS 171."""
 
     def __init__(self):
-        super().__init__("CS 253 requires CS 171 or CS_OX 171. [1]")
-
-    def generate(self, request):
-        self.last_messages = [dict(m) for m in request.messages]
-        self.calls += 1
-        from app.llm.base import GenerationResult, Usage
-
-        return GenerationResult(text=self.text, finish_reason="stop",
-                                usage=Usage(20, 8, source="provider"))
+        super().__init__("CS 253 requires CS 171 or CS_OX 171.")
 
 
 def _ask(db, collection, question="What does CS 253 require?"):

@@ -99,7 +99,6 @@ def main():
     app.state.database_ready = True
     metadata = {"started_at": datetime.now(UTC).isoformat(), "provider": settings.llm_provider,
                 "model": settings.llm_model_id, "tools": settings.tools_enabled,
-                "research": settings.advising_research_enabled, "planning": settings.query_planning_enabled,
                 "collection": settings.default_collection, "schema": version, "courses": inventory,
                 "research_prompt_version": RESEARCH_PROMPT_VERSION,
                 "research_tools_version": RESEARCH_TOOLS_VERSION,

@@ -16,7 +16,7 @@ from app.advising.research_types import (
 )
 from app.atlas.records import normalize_code
 from app.atlas.requisites import canonical_codes_in
-from app.generation.answer import _NONSUPPORT_RE, Citation, GeneratedAnswer
+from app.generation.answer import NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
@@ -147,7 +147,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
         missing = set()
         for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
             named = set(canonical_codes_in(clause)) - established
-            if not named or _NONSUPPORT_RE.search(clause):
+            if not named or NONSUPPORT_RE.search(clause):
                 # A clause that says the evidence does not support the claim
                 # may name the absent code; that is the point of the clause.
                 continue
@@ -170,7 +170,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
         missing = set()
         for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
             named = set(canonical_codes_in(clause)) - present
-            if not named or _NONSUPPORT_RE.search(clause):
+            if not named or NONSUPPORT_RE.search(clause):
                 continue
             missing.update(named)
         if missing:

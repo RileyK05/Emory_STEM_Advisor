@@ -1,7 +1,6 @@
 """HTTP API tests. Fake provider/embedder; real Postgres. No models load."""
 
 
-
 from uuid import uuid4
 
 import pytest
@@ -17,9 +16,10 @@ from app.config import load_settings
 from app.db import queries
 from app.db.bootstrap import prepare_database
 from app.db.collections import UnknownCollection, resolve_collection
+from app.llm.base import ToolCall
 from app.retrieval.config import KeywordSeamConfig
 from app.retrieval.seams.keyword import keyword_seam
-from tests.fakes import FakeProvider
+from tests.fakes import FakeProvider, ScriptedProvider
 from tests.helpers import api_client, collection_name, ingest_text
 
 
@@ -74,9 +74,9 @@ def test_query_returns_grounded_answer(db, collection, tmp_path, mode, role):
     assert resp.status_code == 200
     body = resp.json()
     assert body["type"] == "answer"
-    assert body["answer"] == "The answer is alpha [1]."
+    assert body["answer"] == "The answer is alpha. [1]"
     assert body["citations"][0]["sourceName"] == "a.txt"
-    assert provider.calls == 1
+    assert provider.calls == 3  # search, read, finish
     # The prompt fences the context as untrusted data.
     if mode == "oidc" and role == "student":
         assert body["trace"]["prompt"] == {"system": "", "user": ""}
@@ -88,7 +88,7 @@ def test_query_returns_grounded_answer(db, collection, tmp_path, mode, role):
     assert body["trace"]["contextBlock"][0]["text"] == "alpha beta gamma"
 
 
-def test_query_refusal_does_not_call_model(db, collection, tmp_path):
+def test_a_question_no_source_covers_is_recorded_as_a_gap(db, collection, tmp_path):
     ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
     provider = FakeProvider()
     client = api_client(db, collection, provider=provider)
@@ -98,8 +98,7 @@ def test_query_refusal_does_not_call_model(db, collection, tmp_path):
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["type"] == "refusal"
-    assert provider.calls == 0
+    assert body["research"]["outcome"] == "insufficient_evidence"
     gaps = client.get("/api/gaps").json()["gaps"]
     assert len(gaps) == 1 and gaps[0]["query"] == "zzzzz qqqqq nothing"
     assert gaps[0]["occurrenceCount"] == 1 and gaps[0]["sourceIds"] is None
@@ -109,10 +108,15 @@ def test_generation_gap_recurrence_and_provider_outage_are_distinct(db, collecti
     from app.llm.base import ProviderTimeoutError
 
     ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
-    client = api_client(db, collection, provider=FakeProvider("Uncited assertion."))
+    gives_up = ScriptedProvider(tool_calls=(ToolCall("finish", "advisor_finish", {"decision": {
+        "outcome": "insufficient_evidence", "completeness": "partial",
+        "blocks": [{"kind": "limitation", "text": "The sources do not say."}]}}),),
+        finish_reason="tool_calls")
+    client = api_client(db, collection, provider=gives_up)
     request = {"query": "alpha", "collectionId": collection_name(db, collection)}
     withheld = client.post("/api/query", json=request)
-    assert withheld.status_code == 200 and withheld.json()["type"] == "refusal"
+    assert withheld.status_code == 200
+    assert withheld.json()["research"]["outcome"] == "insufficient_evidence"
     gap = client.get("/api/gaps").json()["gaps"][0]
     assert gap["state"] == "open" and gap["occurrenceCount"] == 1
 
@@ -303,18 +307,6 @@ def test_saved_turn_evidence_hides_uncited_passages_from_students():
     admin = public_payload(value, SimpleNamespace(mode="oidc", role="admin"))
     assert admin["turns"][0]["evidence"]["contextBlock"][1]["text"] == "UNCITED"
 
-def test_answer_operation_limits_fit_inside_the_ledger_ceiling():
-    """OPERATION_MAX_CALLS=100 must not crash when a retry call is reserved."""
-    from dataclasses import replace
-
-    from app.api.query_service import _answer_operation_limits
-    from app.config import load_settings
-
-    settings = replace(load_settings(), operation_max_calls=100)
-    limits = _answer_operation_limits(settings)
-    assert limits.max_calls == 100
-
-
 def test_selected_source_filters_before_keyword_limit(db, collection, tmp_path):
     wanted = ingest_text(db, collection, tmp_path, "wanted.txt", "alpha lower-ranked target")
     other = ingest_text(db, collection, tmp_path, "other.txt", "alpha alpha alpha alpha unrelated")
@@ -331,14 +323,14 @@ def test_numeric_reference_matches_exact_table(db, collection, tmp_path):
     assert [c.source_id for c in result.candidates] == [wanted]
 
 
-def test_explicit_empty_scope_never_calls_model(db, collection, tmp_path):
+def test_an_explicit_empty_scope_reads_no_source(db, collection, tmp_path):
     ingest_text(db, collection, tmp_path, "a.txt", "alpha beta")
     provider = FakeProvider()
     resp = api_client(db, collection, provider=provider).post("/api/query", json={
         "query": "alpha", "collectionId": collection_name(db, collection), "sourceIds": [],
     })
-    assert resp.json()["type"] == "refusal"
-    assert provider.calls == 0
+    assert resp.json()["research"]["outcome"] == "insufficient_evidence"
+    assert resp.json()["citations"] == []
 
 
 def test_invalid_source_scope_is_not_widened(db, collection):
@@ -347,17 +339,6 @@ def test_invalid_source_scope_is_not_widened(db, collection):
         "sourceIds": [str(uuid4())],
     })
     assert resp.status_code == 404
-
-
-def test_invalid_output_accounted_and_withheld(db, collection, tmp_path):
-    ingest_text(db, collection, tmp_path, "a.txt", "alpha beta")
-    resp = api_client(db, collection, provider=FakeProvider("Uncited answer")).post("/api/query", json={
-        "query": "alpha", "collectionId": collection_name(db, collection),
-    })
-    assert resp.json()["type"] == "refusal"
-    assert db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"] == 1
-    assert db.execute("SELECT status FROM responses").fetchone()["status"] == "refusal"
-    assert db.execute("SELECT count(*) AS n FROM citations").fetchone()["n"] == 0
 
 
 def test_saved_citation_snapshot_survives_source_deletion(db, collection, tmp_path):

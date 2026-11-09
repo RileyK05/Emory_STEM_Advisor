@@ -78,7 +78,7 @@ def main():
     metadata = {"started_at": datetime.now(UTC).isoformat(), "model": settings.llm_model_id,
         "provider": settings.llm_provider, "research_prompt_version": RESEARCH_PROMPT_VERSION,
         "research_tools_version": RESEARCH_TOOLS_VERSION, "collection": settings.default_collection,
-        "research": settings.advising_research_enabled, "tools": settings.tools_enabled,
+        "tools": settings.tools_enabled,
         "cases_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
         "workers": args.workers, "conversation_count": len(cases),
         "planned_turns": sum(len(c["turns"]) for c in cases),
@@ -126,7 +126,7 @@ def main():
                     body = json.loads(request_file.read_text(encoding="utf-8"))
                 else:
                     body = {"query": turn["prompt"], "requestId": str(uuid4()),
-                        "expectedSequence": transcript["lastSequence"], "mode": "advising"}
+                        "expectedSequence": transcript["lastSequence"]}
                     if index == 1:
                         body["collectionId"] = settings.default_collection
                     save(request_file, body)

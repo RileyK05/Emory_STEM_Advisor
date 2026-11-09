@@ -11,14 +11,13 @@ from app.api.schemas import (
     Contribution,
     ModelCallInfo,
     PromptInfo,
-    RefusalResponse,
     RetrievalTrace,
     SeamStatus,
 )
 from app.generation.answer import GeneratedAnswer
 from app.generation.claims import review_units
 from app.llm.base import ProviderError, RateLimitError, TransientProviderError
-from app.retrieval.types import CitedChunk, Refusal, Retrieved, SeamResult
+from app.retrieval.types import CitedChunk, Retrieved, SeamResult
 
 
 def provider_failure_detail(exc: ProviderError, subject: str) -> str:
@@ -174,24 +173,4 @@ def answer_response(
             timings=dict(retrieved.trace.timings),
         ),
         applicability=applicability,
-    )
-
-
-def refusal_response(refusal: Refusal, *, settings, latency_ms: int) -> RefusalResponse:
-    trace = refusal.trace
-    return RefusalResponse(
-        reason=refusal.reason,
-        trace=RetrievalTrace(
-            traceId=str(trace.trace_id),
-            query=trace.query,
-            normalizedQuery=trace.normalized_query,
-            seams=_seams(trace.seams),
-            contributions=[],
-            contextBlock=[],
-            prompt=PromptInfo(system="", user=""),
-            modelCall=_model_call(settings, None, latency_ms),
-            warnings=["refusal: zero grounded candidates; model was not called"] + list(trace.warnings),
-            errors=[],
-            timings=dict(trace.timings),
-        ),
     )

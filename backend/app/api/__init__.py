@@ -83,7 +83,6 @@ def _include_routers(app: FastAPI) -> None:
     from app.api.routes.health import router as health_router
     from app.api.routes.metrics import router as metrics_router
     from app.api.routes.privacy import router as privacy_router
-    from app.api.routes.prompts import router as prompt_router
     from app.api.routes.runs import router as run_router
     from app.auth.dependencies import get_workspace_principal
 
@@ -95,7 +94,6 @@ def _include_routers(app: FastAPI) -> None:
     app.include_router(metrics_router)
     # Institutional admin and debug surfaces enforce their own admin role.
     app.include_router(admin_router)
-    app.include_router(prompt_router)
     app.include_router(debug_router)
     # Everything else requires an authenticated principal.
     for authenticated_router in (router, artifact_router, conversation_router,

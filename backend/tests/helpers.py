@@ -27,9 +27,7 @@ def lenient_config():
 
 def api_client(db, collection, provider=None, embedder=None):
     app = create_app(
-        # Legacy-path tests until P2.4 deletes that route; research tests set
-        # advising_research_enabled=True explicitly.
-        settings=replace(load_settings(), advising_research_enabled=False),
+        settings=load_settings(),
         allow_test_client=True,
         config=lenient_config(),
         embedder=embedder or FakeEmbedder(dim=8),
@@ -80,36 +78,66 @@ def collection_name(db, collection):
 
 
 def create_user(db, *, role="student", status="active", workspace=None, email=None):
-    """Insert an app user with this role/status and return its Principal."""
-    user_id = uuid4()
-    workspace_key = workspace or f"ws-{user_id}"
-    email_addr = email or f"{user_id}@emory.edu"
-    db.execute(
-        queries.get("upsert_app_user"),
-        {
-            "user_id": user_id,
-            "issuer": "https://auth.emory.edu",
-            "subject": str(user_id),
-            "workspace_key": workspace_key,
-            "display_name": f"User {user_id}",
-            "email": email_addr,
-            "bootstrap": False,
-        },
-    ).fetchone()
-    db.execute(
-        queries.get("admin_update_user"),
-        {"user_id": user_id, "role": role, "status": status},
-    )
-    db.commit()
-    return Principal(
-        workspace_key=workspace_key,
-        issuer="https://auth.emory.edu",
-        subject=str(user_id),
-        display_name=f"User {user_id}",
-        email=email_addr,
-        role=role,
-        user_id=user_id,
-        status=status,
+    """Insert an app user with this role/status and return its Principal."""
+
+    user_id = uuid4()
+
+    workspace_key = workspace or f"ws-{user_id}"
+
+    email_addr = email or f"{user_id}@emory.edu"
+
+    db.execute(
+
+        queries.get("upsert_app_user"),
+
+        {
+
+            "user_id": user_id,
+
+            "issuer": "https://auth.emory.edu",
+
+            "subject": str(user_id),
+
+            "workspace_key": workspace_key,
+
+            "display_name": f"User {user_id}",
+
+            "email": email_addr,
+
+            "bootstrap": False,
+
+        },
+
+    ).fetchone()
+
+    db.execute(
+
+        queries.get("admin_update_user"),
+
+        {"user_id": user_id, "role": role, "status": status},
+
+    )
+
+    db.commit()
+
+    return Principal(
+
+        workspace_key=workspace_key,
+
+        issuer="https://auth.emory.edu",
+
+        subject=str(user_id),
+
+        display_name=f"User {user_id}",
+
+        email=email_addr,
+
+        role=role,
+
+        user_id=user_id,
+
+        status=status,
+
     )
 
 

@@ -1050,33 +1050,6 @@ async function setupPage({
           json: { detail: 'conversation request failed; saved turns were retained' },
         });
       }
-      if (body.mode === 'history') {
-        const previous = record.turns.filter((turn) => turn.sequence < userTurn.sequence);
-        const references = previous.map((turn) => turn.sequence);
-        const answer =
-          previous.map((turn) => `Turn ${turn.sequence} (${turn.role}):\n${turn.text}`).join('\n\n') ||
-          'No prior turns are saved in this conversation.';
-        record.turns.push({
-          sequence: ++record.lastSequence,
-          requestId: body.requestId,
-          role: 'assistant',
-          text: answer,
-          status: 'history',
-          evidence: { type: 'history', citations: [], contextBlock: [], traceId: null, turnReferences: references },
-          createdAt: '2026-10-08T00:01:01Z',
-        });
-        record.updatedAt = '2026-10-08T00:01:01Z';
-        conversationSummaries[0] = { ...record };
-        return route.fulfill({
-          json: {
-            type: 'history',
-            answer,
-            turnReferences: references,
-            conversationId: id,
-            sequence: record.lastSequence,
-          },
-        });
-      }
       if (sourceIds?.length === 0) {
         const reason = 'No sources were selected for this question.';
         record.turns.push({

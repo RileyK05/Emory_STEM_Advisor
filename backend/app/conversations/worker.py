@@ -27,9 +27,6 @@ PROGRESS_STAGES = frozenset({"planning", "retrieving", "routing", "generating", 
                              "validating", "validated", "researching", "comparing", "finalizing"})
 _TOOL_PROGRESS_EVENTS = frozenset({"tool_started", "tool_replayed", "tool_completed",
                                    "tool_failed", "tool_unknown"})
-_MAX_PROVISIONAL_BYTES = 32 * 1024
-_MAX_PROVISIONAL_EVENTS = 128
-_DELTA_BATCH_BYTES = 1024
 
 
 @dataclass(frozen=True)
@@ -80,55 +77,8 @@ class _TurnGuard:
                     or source["index_revision"] != revision):
                 raise HTTPException(409, "selected source revision changed; refresh before generating")
         conn.commit()
-        # A provisional flush calls the guard during provider streaming; returning
-        # the borrow here keeps the execution pool free between checks.
+        # Return the borrow so the execution pool stays free between checks.
         release_borrow(conn)
-
-
-class _ProvisionalStream:
-    """Persists the model's unverified output as bounded, batched progress events."""
-
-    def __init__(self, context, guard: _TurnGuard):
-        self.context, self.guard = context, guard
-        self._buffer = ""
-        self._bytes = 0
-        self._events = 0
-        self._truncated = False
-
-    def text(self, value: str) -> None:
-        if self._truncated:
-            return
-        for character in value:
-            self._buffer += character
-            if len(self._buffer.encode("utf-8")) >= _DELTA_BATCH_BYTES:
-                self.flush()
-                if self._truncated:
-                    return
-        # Provider chunks are already bounded by the provider seam. Persist each
-        # chunk promptly so reconnects can recover output while it is generating.
-        self.flush()
-
-    def reset(self) -> None:
-        self._buffer = ""
-        if self._events >= _MAX_PROVISIONAL_EVENTS:
-            self._truncated = True
-            return
-        self.context.progress({"kind": "provisional_reset"})
-        self._events += 1
-
-    def flush(self) -> None:
-        if not self._buffer:
-            return
-        self.guard()
-        size = len(self._buffer.encode("utf-8"))
-        if self._bytes + size > _MAX_PROVISIONAL_BYTES or self._events >= _MAX_PROVISIONAL_EVENTS:
-            self._truncated = True
-            self._buffer = ""
-            return
-        self.context.progress({"kind": "provisional_delta", "text": self._buffer})
-        self._bytes += size
-        self._events += 1
-        self._buffer = ""
 
 
 def _report_stage(context, event) -> None:
@@ -181,7 +131,6 @@ class ConversationTurnExecutor:
             from app.auth.capabilities import execution_settings
 
             settings = execution_settings(conn, settings, job.scope_key, ceilings=self.settings)
-            system_prompt = debug.get("systemPrompt")
             collection_id = UUID(effective["collectionUuid"])
             source_snapshot = {str(key): int(value) for key, value in
                                effective.get("sourceSnapshot", {}).items()}
@@ -202,25 +151,19 @@ class ConversationTurnExecutor:
 
             guard = _TurnGuard(conn, context, job, conversation_id, request_id,
                                collection_id, source_snapshot)
-            stream = _ProvisionalStream(context, guard)
             guard()
             from app.api.query_service import query_response
 
             response = query_response(
                 query_request, conn, settings, config, self.embedder, self.provider,
                 check_cancelled=guard, on_progress=lambda event: _report_stage(context, event),
-                on_provisional_text=stream.text, on_provisional_reset=stream.reset,
                 on_profile_selection=selected_profile, on_operation_created=operation_ids.append,
                 source_snapshot=source_snapshot,
                 workspace_key=job.scope_key, connection_profiles=self.connection_profiles,
                 connection_runtime=self.connection_runtime,
-                retrieval_query=effective.get("retrievalQuery"),
                 history_context=_history_context(snapshot, effective),
-                warm_citations=snapshot.get("context", {}).get("warmCitations") or [],
                 conversation_id=conversation_id, conversation_request_id=request_id,
-                system_prompt=system_prompt,
             )
-            stream.flush()
             guard()
             return ConversationTurnResult(
                 response.model_dump(mode="json"), source_snapshot, collection_id,

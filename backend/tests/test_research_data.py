@@ -878,7 +878,7 @@ def test_saved_research_reopens_evidence_beyond_warm_history_and_continues_its_p
     provider = _research_provider(monkeypatch, script)
     client = api_client(db, collection, provider=provider)
     client.app.state.settings = replace(client.app.state.settings, llm_provider="openai", llm_model_id="fake",
-        tools_enabled=True, advising_research_enabled=True, routing_enabled=False, db_pool_max_size=0,
+        tools_enabled=True, routing_enabled=False, db_pool_max_size=0,
         conversation_context_max_bytes=1024)
     stream_snapshot = _prepare_stream_snapshot(conversation,
         ConversationQuery(query="Continue that work", requestId=uuid4(), expectedSequence=56),
@@ -1046,7 +1046,7 @@ def test_research_answers_progressively_and_persists_its_decision(
             )
         import_atlas_sample(db, collection, tmp_path, atlas_with_alternatives)
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
-        tools_enabled=True, advising_research_enabled=True, routing_enabled=False,
+        tools_enabled=True, routing_enabled=False,
         embedding_model_id=MODEL, db_pool_max_size=0,
         research_max_tool_calls=8 if scenario in {"program_read_before_preparation", "preparation_after_state_rejection"} else 24,
         research_max_calls=8 if scenario == "preparation_after_state_rejection" else load_settings().research_max_calls)
@@ -1687,7 +1687,7 @@ def test_research_rejects_inactive_evidence_and_allows_one_correction(
 
     _corpus(db, collection, tmp_path)
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
-        tools_enabled=True, advising_research_enabled=True, routing_enabled=False,
+        tools_enabled=True, routing_enabled=False,
         embedding_model_id=MODEL, db_pool_max_size=0)
     def script(context, index):
         if index == 0:
@@ -1802,7 +1802,7 @@ def test_research_reserves_a_finish_and_withholds_stale_or_cancelled_results(
 
     corpus = _corpus(db, collection, tmp_path)
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
-        tools_enabled=True, advising_research_enabled=True, routing_enabled=False,
+        tools_enabled=True, routing_enabled=False,
         embedding_model_id=MODEL, db_pool_max_size=0, research_max_tool_calls=3)
     cancelled = False
     def script(context, index):

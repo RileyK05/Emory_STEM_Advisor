@@ -266,6 +266,7 @@ def test_advising_summary_api_endpoint(db, collection, tmp_path, migrated_dsn, m
         },
     )
     assert turn_res.status_code == 200
+    turn_calls = provider.calls
 
     # Call export-summary endpoint
     from dataclasses import replace
@@ -301,7 +302,7 @@ def test_advising_summary_api_endpoint(db, collection, tmp_path, migrated_dsn, m
     if export_mode == "queued_cancelled":
         assert finished.status.value == "cancelled"
         assert db.execute("SELECT count(*) AS n FROM artifacts").fetchone()["n"] == 0
-        assert provider.calls == 1
+        assert provider.calls == turn_calls, "a cancelled export never calls the model"
         return
     assert finished.status.value == "succeeded", finished.error
     record = client.get(f"/api/artifacts/{finished.result['artifactIds'][0]}").json()
