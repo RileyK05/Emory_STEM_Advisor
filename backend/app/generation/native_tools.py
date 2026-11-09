@@ -1,11 +1,12 @@
 """Request-bound native artifact tools; all writes remain staged until publication."""
 
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from app.generation.artifact_candidate import ArtifactCandidate, ElementBinding, validate_candidate
 from app.tools.builtins import SourceReadOutput, build_default_registry
 from app.tools.registry import (
     ToolCapability,
+    ToolInputError,
     ToolInputModel,
     ToolOutputModel,
     ToolScope,
@@ -48,8 +49,13 @@ def artifact_tool_context(*, kind, inputs, chunks, prior, context, operation, se
     def stage(value, _scope):
         check()
         candidate = value.candidate
-        spec = validate_candidate(kind, candidate.model_dump_json(), chunks, mode=inputs.mode)
-        validate_generation_size(spec)
+        try:
+            spec = validate_candidate(kind, candidate.model_dump_json(), chunks, mode=inputs.mode)
+            validate_generation_size(spec)
+        except ValueError as exc:
+            # The model can correct its own draft; the refusal goes back to it.
+            raise ToolInputError("The candidate was not staged; fix it and stage it again: "
+                                 + _candidate_problem(exc)) from exc
         # This result is data in the tool ledger. The leased worker alone can
         # create a durable artifact after the final validation and all fences.
         return StageArtifactOutput(**candidate.model_dump())
@@ -81,6 +87,13 @@ def artifact_tool_context(*, kind, inputs, chunks, prior, context, operation, se
     }
     fingerprint = json_digest(identity)
     return registry, scope, fingerprint
+
+
+def _candidate_problem(exc: ValueError) -> str:
+    if isinstance(exc, ValidationError):
+        return "; ".join(f"{'.'.join(str(part) for part in error['loc']) or 'spec'}: {error['msg']}"
+                         for error in exc.errors()[:5])
+    return str(exc)[:300]
 
 
 def validate_generation_size(spec):

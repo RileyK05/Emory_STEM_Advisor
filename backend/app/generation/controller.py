@@ -199,7 +199,7 @@ class ToolConversationController:
                         continue
                     executed[call.id] = (call.name, encoded_args, output)
                     tool_count += ran
-                if call.name in terminal_tool_names:
+                if call.name in terminal_tool_names and not _is_refusal(output):
                     return GenerationResult(text=output, finish_reason="stop",
                         usage=_aggregate_usage(usages), request_id=result.request_id, model=result.model)
                 messages.append(ToolResultMessage(call.id, call.name, output))
@@ -356,6 +356,15 @@ def _is_cancelled(cancellation) -> bool:
     if cancellation is None:
         return False
     return cancellation.is_set() if hasattr(cancellation, "is_set") else bool(cancellation())
+
+
+def _is_refusal(output: str) -> bool:
+    """A rejected call's result: the model is told why and may call again."""
+    try:
+        value = json.loads(output)
+    except ValueError:
+        return False
+    return isinstance(value, dict) and set(value) == {"error"}
 
 
 def _tool_output(value: Any, max_bytes: int) -> str:

@@ -103,3 +103,32 @@ def test_tool_cannot_read_an_unselected_resource_or_publish(db, collection, tmp_
     assert tool["status"] == "completed" and "outside its scope" in tool["result_json"]
     assert db.execute("SELECT accounted_tokens FROM operations WHERE operation_id=%s",
                       (job.job_id,)).fetchone()["accounted_tokens"] == 220
+
+
+def test_a_candidate_that_fails_validation_goes_back_to_the_model(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    bindings = [{"element_id": "p1", "source_slots": [1]}]
+    invalid = {**SPEC, "evidence": [{"chunk_id": str(uuid4())}]}
+    class Provider:
+        def __init__(self):
+            self.calls = []
+        def generate(self, request):
+            self.calls.append(request)
+            spec = invalid if len(self.calls) == 1 else SPEC
+            if len(self.calls) == 2:
+                refusal = json.loads(request.messages[-1].content)
+                assert "not staged" in refusal["error"] and "evidence" in refusal["error"]
+            return GenerationResult(tool_calls=(ToolCall(
+                f"stage-{len(self.calls)}", "advisor_stage_artifact",
+                {"candidate": json.loads(candidate(spec, bindings))}),),
+                finish_reason="tool_calls", usage=Usage(100, 10, source="provider"),
+                model="fake-native")
+    provider = Provider()
+    client, store, executor = runtime(db, collection, tmp_path, provider)
+    run_id = start_run(client, "document", {"prompt": "Alpha", "sourceIds": [str(source)]},
+                       "native-corrected")
+    assert run_once(store, "native-tools", executor).status.value == "succeeded"
+    assert len(provider.calls) == 2
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    assert client.get("/api/artifacts/" + artifact_id).json()["spec"]["blocks"][0]["text"] \
+        == "Alpha facts."
