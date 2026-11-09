@@ -168,7 +168,7 @@ gate.
 | --- | --- |
 | P1.9 | U1: the user decides whether to keep or cut the debug backend. |
 | P2.6 | The user decides whether greeting small talk (S06) is declined or answered; then rerun the scope set. |
-| P3.2 | The user decides how artifacts are generated: the current model drafts the whole artifact in hidden reasoning and runs out of tokens. |
+| P3.2 | Decided 2026-11-09: artifacts are built by reprompting. R0-R6 in [artifact-reprompting.md](artifact-reprompting.md), then rerun the bar (R7). |
 | P3.4 | U4: the user scores 10 artifacts 1–5 (mean ≥4, none below 3). |
 | P4.3 | Claude builds the Linux Docker/gVisor `runsc` host. |
 | P4.4 | P4.3 exists; then run the function probes (health, Office recalculation, HTML screenshots, latency). |
