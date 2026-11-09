@@ -125,6 +125,10 @@ class Settings:
     # the operation's remaining time rather than failing immediately at the cap.
     llm_max_concurrency: int = 8
     llm_max_output_tokens: int = 1024
+    # A native artifact spec (a full plan or workbook) is far longer than an answer:
+    # a printable four-semester plan ran out at 4,096 tokens. At about 70 tokens a
+    # second, 8,192 still fits a 120-second call.
+    artifact_max_output_tokens: int = 8_192
     # A reply cut off at the output limit is retried with a doubled allowance up
     # to this ceiling: a reasoning model can spend its whole allowance before it
     # writes anything, and a cut-off draft is withheld rather than published.
@@ -407,7 +411,8 @@ class Settings:
         if self.embedding_max_tokens <= 0 or self.hf_max_context <= 0:
             raise ValueError("model token ceilings must be positive")
         if (not math.isfinite(self.llm_timeout_seconds)
-                or self.llm_timeout_seconds <= 0 or self.llm_max_output_tokens <= 0):
+                or self.llm_timeout_seconds <= 0 or self.llm_max_output_tokens <= 0
+                or self.artifact_max_output_tokens <= 0):
             raise ValueError("generation limits must be positive")
         if type(self.llm_max_concurrency) is not int or not 1 <= self.llm_max_concurrency <= 1000:
             raise ValueError("LLM_MAX_CONCURRENCY must be between 1 and 1000")
@@ -505,6 +510,7 @@ def load_settings() -> Settings:
         llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 60),
         llm_max_concurrency=_int("LLM_MAX_CONCURRENCY", 8),
         llm_max_output_tokens=_int("LLM_MAX_OUTPUT_TOKENS", 1024),
+        artifact_max_output_tokens=_int("ARTIFACT_MAX_OUTPUT_TOKENS", 8_192),
         answer_truncation_max_output_tokens=_int("ANSWER_TRUNCATION_MAX_OUTPUT_TOKENS", 16_384),
         routing_enabled=_bool("ROUTING_ENABLED", False),
         routing_eval_suite_hash=_optional("ROUTING_EVAL_SUITE_HASH"),

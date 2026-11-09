@@ -82,6 +82,7 @@ def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, c
     from app.config import load_settings
     from app.conversations.store import ConversationStore
     from app.conversations.worker import ConversationTurnExecutor, ConversationTurnResult
+    from app.db.collections import resolve_collection
     from app.jobs.store import JobStore
 
     store = ConversationStore(db, "development")
@@ -109,6 +110,7 @@ def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, c
         profile_selections=(),
         # Without a job store the run cannot be admitted; the answer still publishes.
         job_store=jobs if admits else None, settings=load_settings(),
+        collection_name=f"c-{collection}",
     )
 
     published = ConversationTurnExecutor.publish_success(db, job, result)
@@ -131,6 +133,9 @@ def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, c
     assert payload["kind"] == "document"
     assert payload["inputs"]["mode"] == "grounded"
     assert "Published answer:" in payload["inputs"]["prompt"]
+    # The run must find the collection the turn answered from.
+    resolved, _ = resolve_collection(db, load_settings(), payload["inputs"].get("collectionId"))
+    assert resolved == collection
 
 
 @pytest.mark.parametrize("referenced,accepted", [

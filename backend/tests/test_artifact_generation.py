@@ -122,7 +122,7 @@ def test_http_job_worker_artifact_revision_and_download_end_to_end(db, collectio
     assert b"lecture.txt" in exported.content
     assert start_run(client, "document", inputs, "native-once") == run_id
     assert len(provider.calls) == 1
-    assert provider.calls[0].max_output_tokens == 1024
+    assert provider.calls[0].max_output_tokens == load_settings().artifact_max_output_tokens
     assert provider.calls[0].timeout_seconds == 60
     assert db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"] == 1
 

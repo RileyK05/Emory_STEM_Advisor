@@ -41,6 +41,8 @@ class ConversationTurnResult:
     profile_selections: tuple[tuple[UUID, int], ...]
     job_store: Any = None
     settings: Any = None
+    # The name the turn resolved its collection from; artifact runs resolve by name.
+    collection_name: str | None = None
 
 
 def _request_ids(job: Job) -> tuple[UUID, UUID]:
@@ -224,6 +226,7 @@ class ConversationTurnExecutor:
                 response.model_dump(mode="json"), source_snapshot, collection_id,
                 operation_ids[-1] if operation_ids else None, tuple(selected_profiles),
                 job_store=self.job_store, settings=self.settings,
+                collection_name=effective.get("collectionId"),
             )
         finally:
             conn.close()
@@ -292,7 +295,7 @@ class ConversationTurnExecutor:
                 "prompt": brief + "\n\nPublished answer:\n" + answer,
                 "mode": "grounded",
                 "sourceIds": sorted(value.source_snapshot),
-                "collectionId": str(value.collection_id),
+                "collectionId": value.collection_name,
             }
             if purpose == "revise":
                 revises = artifact.get("revises")

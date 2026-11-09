@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 from fastapi.testclient import TestClient
 
 from app.api import create_app
+from app.config import load_settings
 from app.db.connection import connect, connection_dsn
 from app.generation.artifacts import build_artifact_handlers
 from app.jobs.runtime import RunExecutor
@@ -70,7 +71,8 @@ def test_calculator_then_terminal_stage_is_audited_and_published_once(db, collec
     calls = db.execute("SELECT * FROM model_calls ORDER BY created_at").fetchall()
     assert len(calls) == 2
     assert all(c["sampling_policy"] == "greedy" and c["requested_temperature"] == 0 for c in calls)
-    assert all(c["requested_output_tokens"] == 1024 for c in calls)
+    cap = load_settings().artifact_max_output_tokens
+    assert all(c["requested_output_tokens"] == cap for c in calls)
     tools = db.execute("SELECT * FROM tool_executions").fetchall()
     assert {t["tool_id"] for t in tools} == {"advisor_calculate", "advisor_stage_artifact"}
     assert all(t["status"] == "completed" for t in tools)
