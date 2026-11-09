@@ -132,6 +132,7 @@ def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, c
     payload = runs[0]["payload"]
     assert payload["kind"] == "document"
     assert payload["inputs"]["mode"] == "grounded"
+    assert payload["inputs"]["researchRunId"] == str(run.run_id)
     assert "Published answer:" in payload["inputs"]["prompt"]
     # The run must find the collection the turn answered from.
     resolved, _ = resolve_collection(db, load_settings(), payload["inputs"].get("collectionId"))

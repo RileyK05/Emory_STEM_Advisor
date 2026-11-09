@@ -615,8 +615,8 @@ def main() -> None:
             db_pool_max_size=args.pool_size, auth_mode="development",
             http_threadpool_tokens=max(64, args.concurrency),
             llm_max_concurrency=args.max_concurrency,
-            operation_max_calls=4,
-            operation_token_budget=max(16_000, args.token_p95 * 4),
+            artifact_operation_max_calls=4,
+            artifact_operation_token_budget=max(16_000, args.token_p95 * 4),
             # The harness measures app capacity, not a developer's quota policy.
             quota_queries_per_minute=0, quota_queries_per_day=0,
             quota_tokens_per_day=0, quota_spend_usd_per_day=0.0,

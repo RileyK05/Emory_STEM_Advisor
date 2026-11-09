@@ -120,6 +120,14 @@ FROM programs
 WHERE collection_id = %(collection_id)s AND is_active
 ORDER BY title;
 
+-- name: artifact_program_by_title
+SELECT program_id
+FROM programs
+WHERE collection_id = %(collection_id)s
+  AND (title ILIKE %(title)s OR title ILIKE %(title_pattern)s)
+ORDER BY length(title) ASC
+LIMIT 1;
+
 -- name: list_program_items
 SELECT i.position, i.section, i.text, i.choose,
        coalesce(array_agg(m.target_code ORDER BY m.target_code)

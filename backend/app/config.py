@@ -138,9 +138,15 @@ class Settings:
     debug_panel_enabled: bool = True
     debug_session_ttl_seconds: int = 28800
 
-    operation_timeout_seconds: float = 120.0
-    operation_max_calls: int = 2
-    operation_token_budget: int = 16_000
+    # One artifact run is one operation sized for the checked call chain:
+    # outline, one call per section, in-conversation corrections and repair rounds.
+    artifact_max_sections: int = 8
+    artifact_repair_attempts: int = 2
+    artifact_repair_rounds: int = 2
+    artifact_operation_timeout_seconds: float = 300.0
+    artifact_operation_max_calls: int = 40
+    # Starting ceiling until R0's measured p95 plus 25% is recorded.
+    artifact_operation_token_budget: int = 300_000
     # The hard budget for a turn's saved transcript plus referenced artifact
     # revisions. Research itself reads at most 6,000 bytes of transcript.
     conversation_context_max_bytes: int = 512_000
@@ -175,7 +181,6 @@ class Settings:
     auth_session_ttl_seconds: int = 28800
     auth_transaction_ttl_seconds: int = 300
     tools_enabled: bool = True
-    tool_max_calls: int = 4
     # One research run gets exactly one operation with these limits.
     # Reservation units are serialized prompt bytes, so the token budget is an
     # accounting ceiling, not a promised token bill. The budgets are the p95 plus
@@ -312,8 +317,10 @@ class Settings:
                 or self.research_max_output_tokens <= 0
                 or self.research_truncation_max_output_tokens < self.research_max_output_tokens):
             raise ValueError("research limits are invalid")
-        if not 1 <= self.tool_max_calls <= 100:
-            raise ValueError("TOOL_MAX_CALLS must be between 1 and 100")
+        if (not 1 <= self.artifact_max_sections <= 50
+                or not 0 <= self.artifact_repair_attempts <= 10
+                or not 0 <= self.artifact_repair_rounds <= 10):
+            raise ValueError("artifact section and repair limits are invalid")
         if self.auth_mode not in {"development", "oidc"}:
             raise ValueError("AUTH_MODE must be development or oidc")
         if self.storage_backend not in {"local", "blob", "dual"}:
@@ -356,11 +363,11 @@ class Settings:
             raise ValueError("generation limits must be positive")
         if type(self.llm_max_concurrency) is not int or not 1 <= self.llm_max_concurrency <= 1000:
             raise ValueError("LLM_MAX_CONCURRENCY must be between 1 and 1000")
-        if (not math.isfinite(self.operation_timeout_seconds)
-                or self.operation_timeout_seconds <= 0
-                or not 1 <= self.operation_max_calls <= 100
-                or self.operation_token_budget < 1):
-            raise ValueError("operation limits are invalid")
+        if (not math.isfinite(self.artifact_operation_timeout_seconds)
+                or self.artifact_operation_timeout_seconds <= 0
+                or not 1 <= self.artifact_operation_max_calls <= 100
+                or self.artifact_operation_token_budget < 1):
+            raise ValueError("artifact operation limits are invalid")
         if self.screenshot_renderer not in {"disabled", "sandbox", "playwright"}:
             raise ValueError("SCREENSHOT_RENDERER must be disabled, sandbox, or playwright")
         if self.screenshot_renderer == "sandbox" and not (
@@ -439,9 +446,12 @@ def load_settings() -> Settings:
         routing_enabled=_bool("ROUTING_ENABLED", False),
         routing_eval_suite_hash=_optional("ROUTING_EVAL_SUITE_HASH"),
         admin_api_enabled=_bool("ADMIN_API_ENABLED", False),
-        operation_timeout_seconds=_float("OPERATION_TIMEOUT_SECONDS", 120),
-        operation_max_calls=_int("OPERATION_MAX_CALLS", 2),
-        operation_token_budget=_int("OPERATION_TOKEN_BUDGET", 16_000),
+        artifact_max_sections=_int("ARTIFACT_MAX_SECTIONS", 8),
+        artifact_repair_attempts=_int("ARTIFACT_REPAIR_ATTEMPTS", 2),
+        artifact_repair_rounds=_int("ARTIFACT_REPAIR_ROUNDS", 2),
+        artifact_operation_timeout_seconds=_float("ARTIFACT_OPERATION_TIMEOUT_SECONDS", 300),
+        artifact_operation_max_calls=_int("ARTIFACT_OPERATION_MAX_CALLS", 40),
+        artifact_operation_token_budget=_int("ARTIFACT_OPERATION_TOKEN_BUDGET", 300_000),
         conversation_context_max_bytes=_int("CONVERSATION_CONTEXT_MAX_BYTES", 512_000),
         visual_artifact_review_enabled=_bool("VISUAL_ARTIFACT_REVIEW_ENABLED", False),
         screenshot_renderer=os.environ.get("SCREENSHOT_RENDERER", "disabled"),
@@ -470,7 +480,6 @@ def load_settings() -> Settings:
         auth_session_ttl_seconds=_int("AUTH_SESSION_TTL_SECONDS", 28800),
         auth_transaction_ttl_seconds=_int("AUTH_TRANSACTION_TTL_SECONDS", 300),
         tools_enabled=_bool("TOOLS_ENABLED", True),
-        tool_max_calls=_int("TOOL_MAX_CALLS", 4),
         research_max_calls=_int("RESEARCH_MAX_CALLS", 16),
         research_max_tool_calls=_int("RESEARCH_MAX_TOOL_CALLS", 14),
         research_reasoning_effort=os.environ.get("RESEARCH_REASONING_EFFORT", "medium") or None,

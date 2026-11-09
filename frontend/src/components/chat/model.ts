@@ -83,6 +83,10 @@ const STAGE_LABELS: Record<string, string> = {
   researching: 'Researching your options…',
   comparing: 'Comparing your options…',
   finalizing: 'Preparing a recommendation…',
+  outlining: 'Planning the outline…',
+  writing: 'Writing a section…',
+  checking: 'Checking courses and order…',
+  repairing: 'Fixing a section…',
 };
 
 export const streamStageLabel = (stage: string | null) => (stage && STAGE_LABELS[stage]) || 'Thinking…';

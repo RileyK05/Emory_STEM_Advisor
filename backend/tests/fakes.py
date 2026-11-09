@@ -177,6 +177,65 @@ class ScriptedProvider:
         return self.result
 
 
+class ArtifactStageProvider:
+    """Scripted provider for the artifact pipeline's terminal stage tools.
+
+    ``outline`` is one StageOutline payload (or a list, consumed in order).
+    ``sections`` maps a section id to a list of StageSection payloads, so a test
+    can script a refusal followed by a correction. Each response is one tool
+    call; the last scripted payload repeats when exhausted.
+    """
+
+    def __init__(self, *, outline=None, sections=None, edits=None,
+                 usage: Usage | None = None, model: str = "fake-stage"):
+        self.outline = outline if isinstance(outline, list) else [outline] if outline else []
+        self.sections = {key: list(value) for key, value in (sections or {}).items()}
+        self.edits = edits if isinstance(edits, list) else [edits] if edits else []
+        self.usage = usage or Usage(100, 30, source="provider")
+        self.model = model
+        self.requests: list = []
+        self._counts: dict[str, int] = {}
+        self._calls = 0
+        self._last_section: str | None = None
+        self._last_section_payload: dict | None = None
+
+    def generate(self, request):
+        import json
+
+        from app.generation.native_tools import EDITS_TOOL, OUTLINE_TOOL, SECTION_TOOL
+        from app.llm.base import ToolCall, normalize_message
+
+        self.requests.append(request)
+        tool = request.tools[0].name if request.tools else ""
+        payload = json.loads(normalize_message(request.messages[-1])["content"])
+        section_id = (payload.get("section") or {}).get("id") if tool == SECTION_TOOL else None
+        if section_id is not None:
+            self._last_section = section_id
+            self._last_section_payload = payload
+        elif tool == SECTION_TOOL:
+            section_id = self._last_section
+            payload = self._last_section_payload or payload
+        key = f"{tool}:{section_id or ''}"
+        count = self._counts.get(key, 0)
+        self._counts[key] = count + 1
+        if tool == OUTLINE_TOOL:
+            arguments = self.outline[min(count, len(self.outline) - 1)]
+        elif tool == EDITS_TOOL:
+            arguments = self.edits[min(count, len(self.edits) - 1)]
+        elif tool == SECTION_TOOL:
+            outputs = self.sections[section_id]
+            arguments = outputs[min(count, len(outputs) - 1)]
+        else:  # pragma: no cover - the pipeline offers only these three tools
+            raise AssertionError(f"unexpected stage tool {tool!r}")
+        if callable(arguments):
+            arguments = arguments(payload)
+        call_id, self._calls = self._calls, self._calls + 1
+        return GenerationResult(
+            tool_calls=(ToolCall(f"{tool}-{call_id}", tool, arguments),),
+            finish_reason="tool_calls", usage=self.usage, model=self.model,
+        )
+
+
 class FakeClock:
     def __init__(self):
         self.value = datetime(2026, 10, 7, tzinfo=UTC)

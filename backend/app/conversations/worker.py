@@ -24,7 +24,8 @@ from app.operations.budget import fence_violation
 logger = logging.getLogger(__name__)
 
 PROGRESS_STAGES = frozenset({"planning", "retrieving", "routing", "generating", "using_tools",
-                             "validating", "validated", "researching", "comparing", "finalizing"})
+                             "validating", "validated", "researching", "comparing", "finalizing",
+                             "outlining", "writing", "checking", "repairing"})
 _TOOL_PROGRESS_EVENTS = frozenset({"tool_started", "tool_replayed", "tool_completed",
                                    "tool_failed", "tool_unknown"})
 
@@ -246,6 +247,9 @@ class ConversationTurnExecutor:
                     raise ValueError("artifact revision is missing")
                 inputs["artifactId"] = revises["artifactId"]
                 inputs["expectedRevisionId"] = revises["revisionId"]
+            research_run_id = (value.response.get("research") or {}).get("runId")
+            if research_run_id:
+                inputs["researchRunId"] = research_run_id
         from app.generation.artifacts import ArtifactGenerationInput
         from app.jobs.artifact_runs import admit_artifact_run
 

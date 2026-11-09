@@ -98,8 +98,8 @@ def client_for(*, scope="local-development", conn=None):
     app = FastAPI()
     app.state.job_store = MemoryStore()
     app.state.settings = SimpleNamespace(
-        operation_max_calls=2,
-        operation_token_budget=16_000,
+        artifact_operation_max_calls=2,
+        artifact_operation_token_budget=16_000,
         llm_max_output_tokens=1024,
         data_dir="data",
         workspace_storage_max_bytes=104857600,

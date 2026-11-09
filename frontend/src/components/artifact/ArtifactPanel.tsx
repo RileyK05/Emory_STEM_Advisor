@@ -16,7 +16,14 @@ function RunCard({
   onRetry: () => void;
   onDismiss: () => void;
 }) {
-  const lastStage = [...item.events].reverse().find((event) => event.stage)?.stage;
+  const lastEvent = [...item.events].reverse().find((event) => event.stage);
+  const lastStage = lastEvent?.stage;
+  const stageText =
+    lastStage === 'writing' && lastEvent?.unit
+      ? `Writing section ${lastEvent.unit}…`
+      : lastStage === 'repairing' && lastEvent?.unit
+        ? `Fixing ${lastEvent.unit}…`
+        : (readableStage(lastStage) ?? 'Working…');
   const state = item.run.state;
   const active = state === 'queued' || state === 'running';
   const nothingSaved = state === 'succeeded' && runOutputs(item.run, item.events).length === 0;
@@ -31,7 +38,7 @@ function RunCard({
           {active
             ? state === 'queued'
               ? 'Waiting to start…'
-              : (readableStage(lastStage) ?? 'Working…')
+              : stageText
             : state === 'failed'
               ? "Couldn't make this. Try again."
               : state === 'cancelled'

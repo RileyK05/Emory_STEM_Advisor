@@ -133,6 +133,17 @@ WHERE target.course_id = %(course_id)s
   AND (%(source_ids)s::uuid[] IS NULL OR c.source_id = ANY(%(source_ids)s::uuid[]))
 ORDER BY c.chunk_index;
 
+-- name: artifact_prerequisite_nodes_for_code
+SELECT n.node_id, n.kind, n.parent_node_id, n.position, n.node_type,
+       n.target_code, n.condition_text
+FROM prereq_nodes n
+JOIN courses co ON co.course_id = n.course_id
+WHERE co.collection_id = %(collection_id)s
+  AND co.code = %(code)s
+  AND co.lifecycle = 'current'
+  AND co.parse_status = 'parsed'
+  AND n.kind = 'prerequisite';
+
 -- name: get_course_id_by_code
 SELECT course_id
 FROM courses

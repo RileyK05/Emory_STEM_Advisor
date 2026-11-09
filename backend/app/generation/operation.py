@@ -20,9 +20,9 @@ class GenerationOperation:
         self.reservation = None
         self.last_request = None
         self.controller.ensure(conn, operation_id, workspace_key, limits or OperationLimits(
-            active_budget_seconds=settings.operation_timeout_seconds,
-            max_calls=settings.operation_max_calls,
-            total_token_budget=settings.operation_token_budget,
+            active_budget_seconds=settings.artifact_operation_timeout_seconds,
+            max_calls=settings.artifact_operation_max_calls,
+            total_token_budget=settings.artifact_operation_token_budget,
             per_call_output_cap=settings.llm_max_output_tokens,
             per_call_timeout_seconds=settings.llm_timeout_seconds,
         ))

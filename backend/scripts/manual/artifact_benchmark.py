@@ -29,14 +29,22 @@ import docx
 import openpyxl
 from fastapi.testclient import TestClient
 
-from app.advising.catalog import _restore_tree, load_campus_equivalents
+from app.advising.catalog import load_campus_equivalents
 from app.api import create_app
+from app.artifacts.checks import (
+    extract_artifact_text,
+    extract_planned_terms,
+    invalid_course_codes,
+    leak_matches,
+    plan_order_violations,
+    program_requirement_check,
+)
 from app.artifacts.docx import export_docx
 from app.artifacts.inert_html import render_inert_markup
 from app.artifacts.models import DocumentSpec, HtmlArtifactSpec, WorkbookSpec
 from app.artifacts.storage import ArtifactStore, validate_spec
 from app.artifacts.xlsx import _FORMULA_BLOCKLIST, export_xlsx
-from app.atlas.requisites import AllOf, CourseRef, canonical_codes_in
+from app.atlas.requisites import canonical_codes_in
 from app.config import configure_runtime_database, load_settings
 from app.db import queries
 from app.db.connection import close_pools, connector, open_connection, resolved_database_url
@@ -48,19 +56,6 @@ from app.jobs.store import JobStore
 from app.jobs.worker import run_once
 
 logger = logging.getLogger(__name__)
-
-FORBIDDEN_LEAK_PATTERNS = [
-    re.compile(r"(?i)\b(?:minimax|minicpm|gpt-[34]|claude-[23]|anthropic|openai)\b"),
-    re.compile(r"(?i)\b(?:system_prompt|You are an advising assistant|Ground your answer)\b"),
-    re.compile(r"(?i)\bTraceback \(most recent call last\):"),
-    re.compile(r'(?i)File "[^"]+", line \d+'),
-    re.compile(r"(?i)\b(?:HTTP 500|status_code 422|503 Service Unavailable)\b"),
-]
-
-TERM_PATTERNS = [
-    re.compile(r"(?i)\b(?:semester|term|fall|spring|summer)\s*(\d+)\b"),
-    re.compile(r"(?i)\b(year\s*\d+[\s\-_]*(?:fall|spring|summer))\b"),
-]
 
 
 @dataclass
@@ -85,91 +80,6 @@ class BenchmarkResult:
     @property
     def passed(self) -> bool:
         return all(c.ok for c in self.checks)
-
-
-def extract_artifact_text(spec: dict[str, Any]) -> str:
-    """Extract all student-visible text from an artifact specification."""
-    kind = spec.get("kind")
-    texts: list[str] = [spec.get("title") or ""]
-    if kind == "document":
-        for block in spec.get("blocks", []):
-            btype = block.get("type")
-            if block.get("text"):
-                texts.append(block["text"])
-            if btype == "list" and "items" in block:
-                texts.extend(block["items"])
-            elif btype == "table":
-                texts.extend(block.get("headers", []))
-                for row in block.get("rows", []):
-                    texts.extend(row)
-    elif kind == "workbook":
-        for sheet in spec.get("sheets", []):
-            texts.append(sheet.get("name", ""))
-            for cell in sheet.get("cells", []):
-                if cell.get("value") is not None:
-                    texts.append(str(cell["value"]))
-    elif kind == "html":
-        texts.append(spec.get("html", ""))
-    return "\n".join(texts)
-
-
-def extract_planned_terms(spec: dict[str, Any]) -> dict[str, int]:
-    """Map scheduled course codes to a 1-based term/semester index from a plan."""
-    mapping: dict[str, int] = {}
-    kind = spec.get("kind")
-    current_term = 1
-    if kind == "document":
-        for block in spec.get("blocks", []):
-            text = block.get("text", "")
-            for pattern in TERM_PATTERNS:
-                m = pattern.search(text)
-                if m:
-                    try:
-                        current_term = int(m.group(1))
-                    except ValueError:
-                        current_term += 1
-                    break
-            codes = canonical_codes_in(text)
-            for code in codes:
-                mapping.setdefault(code, current_term)
-            if block.get("type") == "list":
-                for item in block.get("items", []):
-                    for code in canonical_codes_in(item):
-                        mapping.setdefault(code, current_term)
-            elif block.get("type") == "table":
-                headers = block.get("headers", [])
-                col_terms = {}
-                for idx, h in enumerate(headers):
-                    for pattern in TERM_PATTERNS:
-                        m = pattern.search(h)
-                        if m:
-                            try:
-                                col_terms[idx] = int(m.group(1))
-                            except ValueError:
-                                col_terms[idx] = idx + 1
-                            break
-                for row in block.get("rows", []):
-                    for col_idx, cell_text in enumerate(row):
-                        term_idx = col_terms.get(col_idx, current_term)
-                        for code in canonical_codes_in(cell_text):
-                            mapping.setdefault(code, term_idx)
-    elif kind == "workbook":
-        for s_idx, sheet in enumerate(spec.get("sheets", []), start=1):
-            s_name = sheet.get("name", "")
-            s_term = s_idx
-            for pattern in TERM_PATTERNS:
-                m = pattern.search(s_name)
-                if m:
-                    try:
-                        s_term = int(m.group(1))
-                    except ValueError:
-                        s_term = s_idx
-                    break
-            for cell in sheet.get("cells", []):
-                val = str(cell.get("value") or "")
-                for code in canonical_codes_in(val):
-                    mapping.setdefault(code, s_term)
-    return mapping
 
 
 def evaluate_checks(
@@ -235,12 +145,7 @@ def evaluate_checks(
     if spec is not None:
         art_text = extract_artifact_text(spec)
         codes = set(canonical_codes_in(art_text))
-        invalid_codes = set()
-        for code in codes:
-            if code not in known_courses:
-                twins = campus_equivalents.get(code, frozenset())
-                if not (twins & known_courses):
-                    invalid_codes.add(code)
+        invalid_codes = invalid_course_codes(codes, known_courses, campus_equivalents)
         if expected.get("no_hallucinated_course"):
             bad = expected["no_hallucinated_course"]
             if bad in codes or bad in canonical_codes_in(turn.get("text") or ""):
@@ -261,30 +166,10 @@ def evaluate_checks(
     # K5: Program truth: courses in plan/checklist appear in program requirements
     prog_title = expected.get("program")
     if spec is not None and prog_title and (expected.get("plan") or expected.get("checklist")):
-        prog_row = conn.execute(
-            """SELECT program_id FROM programs
-               WHERE collection_id = %s AND (title ILIKE %s OR title ILIKE %s)
-               ORDER BY length(title) ASC LIMIT 1""",
-            (collection_id, prog_title, f"%{prog_title}%"),
-        ).fetchone()
-        if prog_row:
-            items = conn.execute(queries.get("list_program_items"), {"program_id": prog_row["program_id"]}).fetchall()
-            prog_allowed_codes: set[str] = set()
-            for itm in items:
-                itm_codes = canonical_codes_in(itm["text"])
-                for ic in itm_codes:
-                    prog_allowed_codes.add(ic)
-                    prog_allowed_codes.update(campus_equivalents.get(ic, frozenset()))
-            art_codes = set(canonical_codes_in(extract_artifact_text(spec)))
-            unsupported = art_codes - prog_allowed_codes
-            # Allow common general education/electives or completed courses
-            completed = set(expected.get("completed_courses", []))
-            unsupported -= completed
-            k5_ok = len(unsupported) == 0 or len(unsupported) <= len(art_codes) * 0.4
-            k5_detail = f"{len(art_codes) - len(unsupported)}/{len(art_codes)} courses in program requirements"
-        else:
-            k5_ok = True
-            k5_detail = f"program '{prog_title}' not in dev database"
+        k5_ok, k5_detail, _unsupported = program_requirement_check(
+            conn, collection_id, prog_title, extract_artifact_text(spec), campus_equivalents,
+            expected.get("completed_courses", ()),
+        )
     else:
         k5_ok = True
         k5_detail = "N/A"
@@ -293,41 +178,10 @@ def evaluate_checks(
     # K6: Order: in plans, no course sits in or before a term holding its required prerequisite
     if spec is not None and expected.get("plan"):
         plan_terms = extract_planned_terms(spec)
-        completed_set = set(expected.get("completed_courses", []))
-        for c in list(completed_set):
-            completed_set.update(campus_equivalents.get(c, frozenset()))
-        order_violations = []
-        for code, term_idx in plan_terms.items():
-            node_rows = conn.execute(
-                """SELECT n.node_id, n.kind, n.parent_node_id, n.position, n.node_type,
-                          n.target_code, n.condition_text
-                   FROM prereq_nodes n JOIN courses co ON co.course_id = n.course_id
-                   WHERE co.collection_id = %s AND co.code = %s AND co.lifecycle = 'current'
-                     AND co.parse_status = 'parsed' AND n.kind = 'prerequisite'""",
-                (collection_id, code),
-            ).fetchall()
-            if not node_rows:
-                continue
-            try:
-                tree = _restore_tree([dict(r) for r in node_rows])
-            except ValueError:
-                continue
-            # A required prerequisite is a course reachable from the root through
-            # all-of groups only; an any-of alternative is not required on its own.
-            required: set[str] = set()
-            stack = [tree]
-            while stack:
-                node = stack.pop()
-                if isinstance(node, CourseRef):
-                    required.add(node.code)
-                elif isinstance(node, AllOf):
-                    stack.extend(node.items)
-            earlier_courses = {c for c, t in plan_terms.items() if t < term_idx} | completed_set
-            later_or_same = {c for c, t in plan_terms.items() if t >= term_idx and c != code}
-            for prereq in required:
-                names = {prereq} | set(campus_equivalents.get(prereq, frozenset()))
-                if names & later_or_same and not names & earlier_courses:
-                    order_violations.append(f"{code} (term {term_idx}) before/with {prereq}")
+        order_violations = plan_order_violations(
+            conn, collection_id, plan_terms, expected.get("completed_courses", ()),
+            campus_equivalents,
+        )
         k6_ok = len(order_violations) == 0
         k6_detail = "order verified" if k6_ok else f"violations: {order_violations[:3]}"
     else:
@@ -442,11 +296,7 @@ def evaluate_checks(
     # K10: Clean text: no prompt text, model name, job id, status code, or stack trace
     all_visible = (turn.get("text") or "") + "\n" + (extract_artifact_text(spec) if spec else "")
     job_id_str = str(turn.get("job_id") or "")
-    leaks = []
-    for pat in FORBIDDEN_LEAK_PATTERNS:
-        m = pat.search(all_visible)
-        if m:
-            leaks.append(m.group(0))
+    leaks = leak_matches(all_visible)
     if job_id_str and job_id_str in all_visible:
         leaks.append(f"job_id:{job_id_str}")
     k10_ok = len(leaks) == 0

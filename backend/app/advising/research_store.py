@@ -114,6 +114,7 @@ class RunRecord:
     stop_reason: str | None
     state_revision: int
     state: ResearchState | None
+    root_trace_id: UUID | None = None
 
 
 def _record(row, collection_id=None) -> RunRecord:
@@ -122,6 +123,7 @@ def _record(row, collection_id=None) -> RunRecord:
         row["scope_digest"], row["scope_manifest"], row["status"], row["stop_reason"],
         row["state_revision"],
         ResearchState.model_validate(row["state"], strict=False) if row["state"] else None,
+        row["root_trace_id"],
     )
 
 

@@ -1,7 +1,6 @@
-"""Real job transactions around native provider tools and staged artifacts."""
-import json
+"""Real job transactions around the artifact stage tools and staged publication."""
 from dataclasses import replace
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi.testclient import TestClient
 
@@ -12,16 +11,19 @@ from app.generation.artifacts import build_artifact_handlers
 from app.jobs.runtime import RunExecutor
 from app.jobs.store import JobStore
 from app.jobs.worker import run_once
-from app.llm.base import GenerationResult, ToolCall, ToolResultMessage, Usage
-from tests.fakes import FakeEmbedder
+from app.llm.base import GenerationResult, Usage
+from tests.fakes import ArtifactStageProvider, FakeEmbedder
 from tests.helpers import collection_name, ingest_text, lenient_config, start_run
-from tests.test_artifact_generation import SPEC, candidate
+from tests.test_artifact_generation import outline, section
+
+
+def message_text(message) -> str:
+    return message["content"] if isinstance(message, dict) else message.content
 
 
 def runtime(db, collection, tmp_path, provider):
-    from app.config import load_settings
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake-native",
-                       tools_enabled=True, operation_token_budget=64_000,
+                       tools_enabled=True, artifact_operation_token_budget=64_000,
                        default_collection=collection_name(db, collection),
                        database_url=connection_dsn(db), data_dir=tmp_path)
     config = lenient_config()
@@ -34,47 +36,31 @@ def runtime(db, collection, tmp_path, provider):
     return TestClient(app), store, RunExecutor(handlers, data_dir=tmp_path)
 
 
-def test_calculator_then_terminal_stage_is_audited_and_published_once(db, collection, tmp_path):
+def test_stage_tools_are_audited_and_published_once(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
-    class Provider:
-        def __init__(self):
-            self.calls = []
-        def generate(self, request):
-            self.calls.append(request)
-            assert request.temperature == 0
-            assert request.response_schema is None
-            assert "advisor_stage_artifact" in {t.name for t in request.tools}
-            assert db.execute("SELECT count(*) AS n FROM artifacts").fetchone()["n"] == 0
-            db.commit()
-            if len(self.calls) == 1:
-                return GenerationResult(tool_calls=(ToolCall(
-                    "calculate-1", "advisor_calculate", {"expression": "0.1+0.2"}),),
-                    finish_reason="tool_calls", usage=Usage(100, 10, source="provider"))
-            result_message = request.messages[-1]
-            assert isinstance(result_message, ToolResultMessage)
-            assert json.loads(result_message.content)["result"] == "0.3"
-            return GenerationResult(tool_calls=(ToolCall(
-                "stage-1", "advisor_stage_artifact", {"candidate": json.loads(candidate(
-                    SPEC, [{"element_id": "p1", "source_slots": [1]}]))}),),
-                finish_reason="tool_calls", usage=Usage(120, 30, source="provider"), model="fake-native")
-    provider = Provider()
+    provider = ArtifactStageProvider(outline=outline(), sections={"s1": [section()]})
     client, store, executor = runtime(db, collection, tmp_path, provider)
     inputs = {"prompt": "Alpha", "sourceIds": [str(source)]}
-    run_id = start_run(client, "document", inputs, "native-tools-once")
-    finished = run_once(store, "native-tools", executor)
-    assert finished.status.value == "succeeded"
-    assert len(provider.calls) == 2
+    run_id = start_run(client, "document", inputs, "stage-tools-once")
+    finished = run_once(store, "stage-tools", executor)
+    assert finished.status.value == "succeeded", finished.error
+    assert len(provider.requests) == 2
+    assert all(request.temperature == 0 for request in provider.requests)
+    assert all(request.response_schema is None for request in provider.requests)
+    assert all({tool.name for tool in request.tools} == {"advisor_stage_outline"}
+               or {tool.name for tool in request.tools} == {"advisor_stage_section"}
+               for request in provider.requests)
     artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
     artifact = client.get("/api/artifacts/" + artifact_id).json()
-    assert artifact["spec"]["evidence"]["p1"][0]["source_id"] == str(source)
-    assert start_run(client, "document", inputs, "native-tools-once") == run_id
+    assert artifact["spec"]["evidence"]["s1:p1"][0]["source_id"] == str(source)
+    assert start_run(client, "document", inputs, "stage-tools-once") == run_id
     calls = db.execute("SELECT * FROM model_calls ORDER BY created_at").fetchall()
     assert len(calls) == 2
     assert all(c["sampling_policy"] == "greedy" and c["requested_temperature"] == 0 for c in calls)
     cap = load_settings().artifact_max_output_tokens
     assert all(c["requested_output_tokens"] == cap for c in calls)
     tools = db.execute("SELECT * FROM tool_executions").fetchall()
-    assert {t["tool_id"] for t in tools} == {"advisor_calculate", "advisor_stage_artifact"}
+    assert {t["tool_id"] for t in tools} == {"advisor_stage_outline", "advisor_stage_section"}
     assert all(t["status"] == "completed" for t in tools)
     operation = db.execute("SELECT * FROM operations").fetchone()
     assert operation["operation_id"] == UUID(run_id)
@@ -82,53 +68,37 @@ def test_calculator_then_terminal_stage_is_audited_and_published_once(db, collec
     assert len(client.get("/api/artifacts").json()) == 1
 
 
-def test_tool_cannot_read_an_unselected_resource_or_publish(db, collection, tmp_path):
+def test_a_rejected_stage_goes_back_to_the_model_in_the_same_conversation(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
-    class Provider:
-        def generate(self, request):
-            return GenerationResult(tool_calls=(ToolCall("bad-read", "advisor_read_source",
-                {"resource_id": str(uuid4())}),), finish_reason="tool_calls",
-                usage=Usage(100, 10, source="provider"), model="fake-native")
-    client, store, executor = runtime(db, collection, tmp_path, Provider())
-    job = store.create(kind="artifact.run", scope_key="development", idempotency_key="bad-read",
-                       max_attempts=1, payload={"kind": "document", "inputs": {
-                           "prompt": "Alpha", "sourceIds": [str(source)]}})
-    finished = run_once(store, "native-tools", executor)
-    assert finished.status.value == "failed" and finished.error["type"] == "tool_failed"
-    assert client.get("/api/artifacts").json() == []
-    # The out-of-scope read is refused before any read and recorded as that
-    # refusal; the model's retry of the same call cannot publish either.
-    assert db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"] == 2
-    tool = db.execute("SELECT status, result_json FROM tool_executions").fetchone()
-    assert tool["status"] == "completed" and "outside its scope" in tool["result_json"]
-    assert db.execute("SELECT accounted_tokens FROM operations WHERE operation_id=%s",
-                      (job.job_id,)).fetchone()["accounted_tokens"] == 220
-
-
-def test_a_candidate_that_fails_validation_goes_back_to_the_model(db, collection, tmp_path):
-    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
-    bindings = [{"element_id": "p1", "source_slots": [1]}]
-    invalid = {**SPEC, "evidence": [{"chunk_id": str(uuid4())}]}
-    class Provider:
-        def __init__(self):
-            self.calls = []
-        def generate(self, request):
-            self.calls.append(request)
-            spec = invalid if len(self.calls) == 1 else SPEC
-            if len(self.calls) == 2:
-                refusal = json.loads(request.messages[-1].content)
-                assert "not staged" in refusal["error"] and "evidence" in refusal["error"]
-            return GenerationResult(tool_calls=(ToolCall(
-                f"stage-{len(self.calls)}", "advisor_stage_artifact",
-                {"candidate": json.loads(candidate(spec, bindings))}),),
-                finish_reason="tool_calls", usage=Usage(100, 10, source="provider"),
-                model="fake-native")
-    provider = Provider()
+    bad = section(text="Bad PSYC 999.", slots=(99,))
+    provider = ArtifactStageProvider(outline=outline(), sections={"s1": [bad, section()]})
     client, store, executor = runtime(db, collection, tmp_path, provider)
     run_id = start_run(client, "document", {"prompt": "Alpha", "sourceIds": [str(source)]},
-                       "native-corrected")
-    assert run_once(store, "native-tools", executor).status.value == "succeeded"
-    assert len(provider.calls) == 2
+                       "stage-corrected")
+    finished = run_once(store, "stage-tools", executor)
+    assert finished.status.value == "succeeded", finished.error
+    refusal = message_text(provider.requests[-1].messages[-1])
+    assert "not accepted" in refusal and "slots" in refusal
     artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
-    assert client.get("/api/artifacts/" + artifact_id).json()["spec"]["blocks"][0]["text"] \
+    assert client.get("/api/artifacts/" + artifact_id).json()["spec"]["blocks"][-1]["text"] \
         == "Alpha facts."
+
+
+def test_an_answer_without_a_stage_tool_never_publishes(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+
+    class TextOnly:
+        def generate(self, request):
+            return GenerationResult(text="I wrote the whole artifact here.",
+                                    finish_reason="stop",
+                                    usage=Usage(100, 20, source="provider"))
+
+    client, store, executor = runtime(db, collection, tmp_path, TextOnly())
+    store.create(kind="artifact.run", scope_key="development", idempotency_key="no-stage",
+                 max_attempts=1, payload={"kind": "document", "inputs": {
+                     "prompt": "Alpha", "sourceIds": [str(source)]}})
+    finished = run_once(store, "stage-tools", executor)
+    assert finished.status.value == "failed"
+    assert finished.error["type"] == "invalid_output"
+    assert client.get("/api/artifacts").json() == []
+    assert db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"] == 1

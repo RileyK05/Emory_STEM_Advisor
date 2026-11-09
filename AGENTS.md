@@ -273,4 +273,4 @@ The suite is small on purpose. Before adding a test:
   buried in a long document, or written as words ("one hundred and twenty-four"),
   gets missed. Prefer splitting a policy by heading to tuning retrieval.
 - Local generation on CPU (MiniCPM-2B, no GPU) needs more than the 60 s
-  default: set `LLM_TIMEOUT_SECONDS` / `OPERATION_TIMEOUT_SECONDS`.
+  default: set `LLM_TIMEOUT_SECONDS` / `ARTIFACT_OPERATION_TIMEOUT_SECONDS`.

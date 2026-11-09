@@ -1942,6 +1942,22 @@ leads back to exact chunks and locators. No artifact or tool call writes
 prerequisites or generates similarity nudges. Typed tables/charts can form
 document/workbook content; standalone diagram/chart renderers do not exist.
 
+Artifact generation is a checked chain of small provider calls, never one call
+that emits a whole spec: grounding, outline, one call per section, assembly,
+deterministic checks, and targeted repair. A run made from a research turn
+grounds on that run's stored evidence in its stored order; a direct run uses
+retrieval. Course records and program requirement lines are fixed database
+slots, never model facts. Each stage is one tool conversation with a single
+terminal tool, so a rejected stage returns its reason to the model in the same
+conversation. Term plans are ordered by `advising.sequence.plan_sequence`; a
+section may not add, drop, or move a scheduled course, and a blocked course
+goes in a final advisor section with the planner's reason. Workbooks receive
+rows as data; code assigns cell identities, headers, widths, and the only
+formulas (declared total columns). HTML sections are fragments assembled and
+sanitized once. Revisions are `keep`, `replace`, `insert_after`, and `delete`
+edits: kept sections and their evidence stay byte-identical. The checks shared
+with the benchmark live in `app/artifacts/checks.py`.
+
 Office PDF preview runs the selected document/workbook revision through the
 authenticated isolated LibreOffice runner. Formula workbooks require verified
 recalculated caches before PDF preview. XLSX downloads report recalculation

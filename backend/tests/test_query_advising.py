@@ -54,7 +54,7 @@ def _api_client(db, provider, config=None):
         llm_provider="openai",
         llm_model_id="offline-advising-tools",
         tools_enabled=True,
-        operation_max_calls=8,
+        artifact_operation_max_calls=8,
         database_url=connection_dsn(db),
     )
     app = create_app(

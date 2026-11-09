@@ -22,6 +22,7 @@ _PROGRESS_STAGES = frozenset({
     "planning", "retrieving", "routing", "generating", "repairing", "assembling",
     "validating", "validated", "visual_review", "rendering",
     "recalculating", "publishing", "tool_started", "tool_completed", "tool_reused", "tool_replayed",
+    "outlining", "writing", "checking",
 })
 
 

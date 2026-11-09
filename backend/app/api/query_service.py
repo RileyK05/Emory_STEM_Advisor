@@ -209,9 +209,7 @@ def query_response(
             on_profile_selection(selection)
     if provider is None or not callable(getattr(provider, "generate", None)):
         raise HTTPException(503, "Research advising requires an available tools-capable connection.")
-    settings = replace(settings, operation_max_calls=settings.research_max_calls,
-        operation_timeout_seconds=settings.research_operation_timeout_seconds,
-        operation_token_budget=settings.research_operation_token_budget,
+    settings = replace(settings,
         llm_max_output_tokens=settings.research_max_output_tokens,
         **research_sampling(settings))
     scope = build_scope(conn, collection_id=collection_id, workspace_key=workspace_key,
@@ -227,9 +225,9 @@ def query_response(
     # Rounds request the ordinary allowance; the per-call cap admits the larger
     # allowance a truncated round retries with (research_controller).
     operation = GenerationOperation(conn, settings, trace_id, workspace_key, limits=OperationLimits(
-        active_budget_seconds=settings.operation_timeout_seconds,
-        max_calls=settings.operation_max_calls,
-        total_token_budget=settings.operation_token_budget,
+        active_budget_seconds=settings.research_operation_timeout_seconds,
+        max_calls=settings.research_max_calls,
+        total_token_budget=settings.research_operation_token_budget,
         per_call_output_cap=max(settings.llm_max_output_tokens,
                                 settings.research_truncation_max_output_tokens),
         per_call_timeout_seconds=settings.llm_timeout_seconds,
