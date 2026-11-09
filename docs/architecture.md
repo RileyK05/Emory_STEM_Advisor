@@ -1175,56 +1175,6 @@ queries means shared sources only, matching the source-fence listing. It never
 disables the private-workspace fence, so an evaluation or script without a
 workspace cannot pull another workspace's private chunks into official results.
 
-### Query planning (opt-in, `QUERY_PLANNING_ENABLED`)
-
-Raw-prompt keyword matching lets generic words ("major", "courses") pull in
-unrelated program and policy pages, and a weak embedding cannot rescue an
-interest such as "data engineering" that names no course. With planning on,
-`query_response` selects the connection and creates the operation *before*
-retrieval, then makes one planning call (`app/generation/query_plan.py`):
-
-- The prompt is fixed instructions, then the scoped catalog directory
-  (`app/retrieval/directory.py`), then the question last, so the long prefix
-  is byte-stable for provider prompt caching. The directory lists every course
-  (`CODE|Title|hint words`) and document id the query may read: current,
-  indexed, workspace-visible sources inside the effective source selection
-  (an empty selection is empty). Codes, titles and filenames come from the
-  database; hint words and the glossary come from the supplied
-  `configs/catalog-directory.md`. Text is flattened to one line per entry and
-  the prompt-region sentinel is broken, so an entry cannot impersonate a
-  header or close the region. It is memoized by scope plus every visible
-  source revision, so publication or a selection change rebuilds it.
-  Providers are stateless, so every planning request sends the whole
-  directory; reuse is the provider's prompt cache. The request carries
-  `cache_key` (prompt version + directory digest), which the compatible
-  adapter sends as `prompt_cache_key` when `LLM_COMPATIBLE_CACHE_KEY=true`
-  (some compatible endpoints only hit the cache with the key). Reported hits
-  are stored in `model_calls.cached_prompt_tokens` (NULL = not reported).
-- The model returns `{course_codes, documents, search_queries}`. Validation
-  keeps only directory codes and document ids, bounded by `[planning]` in
-  `retrieval.toml`; anything else is dropped and counted. The plan never
-  carries SQL, source ids, URLs or authorization; application code runs every
-  search in the query's scope.
-- `retrieve(..., plan=)` first reserves exact named-program bound evidence from
-  the question's keyword lookup, then assembles the question's embedding and
-  exact-code hits (other raw OR keyword matches are replaced),
-  planned course descriptions read directly by code, the best passages inside
-  planned documents for the question, and per-search keyword+embedding hits
-  (round-robin). Repeated passages and cross-listed aliases are dropped, then
-  the list is capped at `context_size`. Contributions chosen through the plan
-  carry the `plan` seam; the `plan` trace seam's `reason` is the validated
-  plan summary. A directory entry is discovery data only: the answer still
-  cites retrieved passages.
-- Planning is accounted like any call (reserved first, recorded even on
-  failure, linked to the trace once it exists). The operation gets one extra
-  call and `QUERY_PLANNING_TOKEN_BUDGET` extra reservation units (serialized
-  prompt bytes) for it; answer generation keeps `OPERATION_MAX_CALLS`. A local
-  `hf-local` model, an empty directory, an unaffordable reservation, a
-  provider error or unusable output falls back to unplanned retrieval with a
-  `query planning skipped: ...` trace warning. An empty plan (the question
-  needs nothing from the catalog) is also unplanned retrieval. Budget
-  exhaustion after the call and cancellation propagate.
-
 ## Similarity graph
 
 The graph is **department -> learned topic subgroups -> individual courses**.
@@ -1398,16 +1348,7 @@ cited_set_size = 6
 min_score = 0.15
 dedupe = true
 
-[planning]           # QUERY_PLANNING_ENABLED bounds
-max_search_queries = 5
-max_course_codes = 12
-max_documents = 3
-question_slots = 4
-document_chunks = 2
-search_slots = 2
-context_size = 28
-
-[research]           # ADVISING_RESEARCH_ENABLED working-state bounds
+[research]           # research working-state bounds
 max_candidates = 6
 max_evidence_items = 100
 max_evidence_bytes = 256000
@@ -1425,119 +1366,39 @@ walk_min_subtree = 1
 Thresholds and similarity numbers are starting values to be tuned on the eval
 set. The kill switch for any seam is `enabled = false`.
 
-### Refusal rule
+### Answers
 
-A query with zero surviving candidates returns a refusal ("no relevant
-material found"), still with a trace. The generative model is never prompted
-without a context block.
-
-### Answer generation
-
-`app/generation/answer.py` is the only place an answer prompt is built. It
-takes the cited chunks from `retrieve()` (already contract-checked), fences
-their text as untrusted data (never instructions), and asks the provider for
-an answer with bracketed chunk-number citations. It maps the markers the
-answer actually used back to `(source_name, locator_label, chunk_id)`
-citations. Missing, malformed, reversed, or out-of-range references (including
-compound/range forms) withhold the answer; numeric examples in code and
-Markdown links are not citations. Every nonempty answer paragraph, including a
-standalone heading, must carry its own valid current-context marker; a cited
-example or preamble cannot cover a separate uncited body. Blank-line handling
-includes CRLF and whitespace-only separators, and code masking preserves fence
-state across the whole answer before per-paragraph coverage is checked. A
-recognized course code in a factual paragraph must occur with the same subject
-and number, including any suffix, in the cited passage or its locator. Recognition
-uses the collection's course/program subject registry and deterministic subject
-aliases and number lists, so prose such as "across 15" is not a course code.
-Both sides of that comparison are read by one shared reader,
-`canonical_codes_in` (`atlas/requisites.py`), so a code the answer names
-canonically always matches the same code a passage spells unusually. The reader
-resolves identities with the requirement parser's subject resolution but reads
-prose, not a requirement: it applies no labels, exclusions or trees, and it
-never asserts that a course is required. It therefore reads the corpus's
-`Math_OX 112`, `Psyc_ox 110`, `Phys_OX 151`, `Econ_OX 101`, `BIOL 151or`,
-`Math 112_OX` and `BIOl 142L` spellings, and carries a subject across a
-listing separator (`CHEM 202Z + 202ZL`, `MATH 411-412`). Two rules differ from
-the requirement parser because the question differs: a passage listing codes
-carries the subject across its separator, and a number printed in a level
-phrase (`GER 300 level courses`) still names that course. The reader must
-never find fewer codes than the requirement parser or the previous gate reader
-found: a code it misses makes a correct answer look unsupported.
-The comparison tolerates source line wrapping and explicitly printed digits
-split by PDF spacing, without changing saved bytes or graph facts. A narrowly
-attributed student-report clause may name courses actually reported in the
-current request or exact user turns; assistant retellings and compaction
-summaries cannot grant this exemption. Institutional requirements and
-eligibility claims still need their own cited support. A clause that says
-the context does not support the claim may name an absent code; it cannot
-exempt a separate positive clause. These are
-conservative structural requirements; no model judges whether surrounding prose
-is entailed.
-
-An output that repeats twelve consecutive normalized words from its system
-instructions is withheld. This detects literal prompt echoes; semantic support,
-vacuous replies, and relevance to the current question still need separate
-quality evaluation.
-
-The existing single, budgeted citation rewrite also receives course-identity
-failures and the current passage numbers naming each code. These are discovery
-hints, never proof of the surrounding claim; the repaired output passes the
-same validation. A conversation's resolved follow-up topic reaches both
-retrieval and the answering prompt, while the saved user message remains exact.
-Explicit topic switches take precedence over pronoun-based continuation.
-
-Empty, refused, filtered, truncated, and unexecuted-tool output is also withheld.
-Usage is recorded before rejecting output. A reply that ran out of output
-allowance is asked again before it is withheld: the requested allowance doubles
-per cut-off reply, up to `ANSWER_TRUNCATION_MAX_OUTPUT_TOKENS`, the retry is told
-its previous reply was cut off, and the per-call output cap admits the larger
-allowance. A cut-off draft is still withheld once the retries are spent, and a
-retry the operation budget cannot afford stops the retry rather than the answer.
-The query operation holds one call beyond `OPERATION_MAX_CALLS` for that retry.
-There is no all-context citation fallback. `PROMPT_VERSION` identifies the prompt in the evidence chain. The
-prompt fences conversation history with historical-citation rules; requires
-cited bullets; distinguishes topical course-fit inferences from verified career
-outcomes; and omits unspecified special-topics offerings from recommendations.
-Course exploration stays focused on at most five course codes, exact titles, and
-supported topics; degree/eligibility comparisons require a question asking for
-them, and program matching uses course codes even when titles differ.
-
-`ANSWER_CITATION_REPAIR_ENABLED` (default true) permits one citation-format
-rewrite of completed text when the course-code gate can point at a supplied
-passage naming the same identity. The gate recognizes student report phrasing,
-denial/absence phrasing, suffix and printed-range shorthand, and the reviewed
-QTM↔DATASCI subject rename. These matches establish identity only; they never
-turn a user assertion or another program's list into a requirement. The rewrite It retains the original context and executed tool
-results, disables further tool execution for the rewrite, resets provisional
-output, and revalidates the final answer. Each attempt reserves and accounts
-against the existing operation budget; truncated or refused outputs are not
-repaired. SDK text-only stream decoders use typed non-streaming generation
-during tool conversations; final answers remain available to the streaming
-workflow. Explicit sequence/dependency-stage requests additionally require
-successful execution of `advisor_plan_course_sequence` before publication.
-Tool choice is required until that call executes within the same scope and
-operation budget; a model's claim that it ran a planner never substitutes for
-execution.
+Every answer is research (next section). There is no second answering path and
+no flag that selects one. The research gate checks course identities with one
+shared reader, `canonical_codes_in` (`atlas/requisites.py`), on both the answer
+and the evidence, so a code the answer names canonically always matches the same
+code a passage spells unusually. The reader resolves identities with the
+requirement parser's subject resolution but reads prose, not a requirement: it
+applies no labels, exclusions or trees, and it never asserts that a course is
+required. It reads the corpus's `Math_OX 112`, `Psyc_ox 110`, `Phys_OX 151`,
+`Econ_OX 101`, `BIOL 151or`, `Math 112_OX` and `BIOl 142L` spellings, and
+carries a subject across a listing separator (`CHEM 202Z + 202ZL`,
+`MATH 411-412`). A number printed in a level phrase (`GER 300 level courses`)
+still names that course. The reader must never find fewer codes than the
+requirement parser finds: a code it misses makes a correct answer look
+unsupported. These are structural checks; no model judges whether surrounding
+prose is entailed.
 
 `LLM_COMPATIBLE_THINKING` is an optional `enabled`/`disabled` vendor extension
 for compatible endpoints that document `thinking.type`. It is unset by default,
 does not alter native OpenAI, Anthropic, or Google payloads, and the adapter
 never chooses a model-specific value itself.
 
-The advising context also blocks courses with an empty structured requisite field
-when their exact stored course locator contains an explicit prerequisite or
-corequisite heading. This remains a parser/data-review blocker even when the
-retrieved fragment omits the heading. It never creates or infers graph edges.
-
 Nothing here imports a concrete provider: it takes a `Provider` from the API
 dependency wiring.
 
 ## Research advisor
 
-`ADVISING_RESEARCH_ENABLED=true` and `TOOLS_ENABLED=true` select research before
-legacy query planning/retrieval; flag-off requests keep the legacy workflow.
-Unavailable research connections fail explicitly; there is no silent fallback.
-The default is false. Migrations 037–040 hold its data; migration 039 adds
+Research answers every question, from `/api/query` and from saved turns
+(`api/query_service.py`). It needs a tools-capable connection; an unavailable
+one fails explicitly and `/ready` reports `no_advising_model_configured`. It
+settles token and cost quotas after publishing and records unanswered questions
+(`insufficient_evidence`) in the gap list. Migrations 037–040 hold its data; migration 039 adds
 private `research_steps.details` for discovery results, read/entity
 associations, executed preparation checks, provider-context evidence IDs/state
 revision/prompt digest, and rejected proposals. Root retrieval traces have
@@ -1705,8 +1566,7 @@ citations; the corresponding source still must be read.
 Calls reuse the existing accounting and durable tool ledger with a stable
 scope/provider/tool/prompt fingerprint. Changed arguments on a reused call ID
 fail closed. Identical read/discovery calls can reuse their result within the
-run. Research-specific settings replace legacy operation limits in one
-persisted operation; prompt bounds include tool schemas. The controller reserves
+run. Research limits (`RESEARCH_*`) bound one persisted operation; prompt bounds include tool schemas. The controller reserves
 final-call capacity for a final proposal and up to two corrections within the
 original budget. A rejected proposal forces a finish-only round with its
 validation feedback; the rejected proposal and matching tool result stay
@@ -1760,7 +1620,7 @@ not a course at all. *Claim support* is a question about the passage a block
 cites: a fact block that asserts a course is required, listed or part of a
 program must be backed by that passage. Both sides of both comparisons are
 read with the shared `canonical_codes_in` reader, and the locator label is
-part of a cited passage, as in the legacy path. A clause that reports the
+part of a cited passage. A clause that reports the
 evidence does not establish the claim may name the absent code; a positive
 clause may not. `judgment` and `question` blocks are exempt: neither
 asserts an institutional fact about a course. The server
@@ -2130,9 +1990,9 @@ admin creates an expiring `debug_sessions` row; the bearer token is returned onc
 and stored only as a digest. The token, carried in `X-Debug-Session`, scopes
 validated, allowlisted overrides to that admin's debug requests. Secrets,
 database/auth configuration, routing credentials, and provider keys are never
-overridable. The override set includes the answer system prompt, context window,
-compaction controls, operation/admission limits, and a bounded retrieval/fusion
-subset. A conversation turn stores the validated override set in its immutable
+overridable. The override set includes research limits, the context cap,
+operation/admission limits, and a bounded retrieval/fusion subset; a session's
+system prompt is stored but research does not apply it. A conversation turn stores the validated override set in its immutable
 input snapshot, so the worker reproduces the same effective settings. Debug
 overrides never apply to Main users and never cross a workspace; the Main bundle
 does not send the header.
@@ -2339,9 +2199,8 @@ once, while the terminal job still rejects publication.
 | POST | `/api/conversations/{id}/archive` | Reversibly remove from the active 500-conversation quota |
 | POST | `/api/conversations/{id}/restore` | Restore when active capacity still exists |
 | GET | `/api/conversations/{id}?after=&limit=` | Metadata and up to 200 immutable turns after a sequence |
-| POST | `/api/conversations/{id}/turns` | Bound advising request or explicit saved-history read |
 | POST | `/api/conversations/{id}/turns/stream` | Atomically queue one advising turn; durable request replay |
-| GET | `/api/conversations/{id}/turns/{requestId}/events?afterEventId=&limit=` | Owner-scoped stored progress and provisional text; reconnect without generation |
+| GET | `/api/conversations/{id}/turns/{requestId}/events?afterEventId=&limit=` | Owner-scoped stored progress; reconnect without generation |
 | POST | `/api/conversations/{id}/turns/{requestId}/abandon` | Settle an unknown/pending request and fence late completion |
 
 Metadata fields are `conversationId`, `title`, `lastSequence`,
@@ -2367,37 +2226,28 @@ whose bound job is terminal or missing, or whose synchronous deadline has
 passed; live queued/running work is never reconciled away.
 
 A turn request extends `QueryRequest` with UUID `requestId`, integer
-`expectedSequence`, `mode=advising|history`, and optional `artifactReferences`
+`expectedSequence`, and optional `artifactReferences`
 containing `{artifactId, revisionId}` pairs. Replay of an identical settled
 request returns its recorded result without another model call. A changed input,
 concurrent request, or unknown pending outcome returns 409. Abandoning cannot
 refund an already-started provider call; usage is still accounted before output
-is discarded. Advising responses add `conversationId` and `sequence`. The explicit
-history action returns the exact transcript and `turnReferences`, with no model
-or institutional retrieval; it does not summarize.
+is discarded.
 
-Stream start accepts the same advising request and returns `conversationId`,
-`requestId`, `jobId`, and job `state`; history mode remains a deterministic
-saved-history read. Matching stream replays inspect the bound job before loading
-new context; changed fingerprints conflict. A synchronous request identity
-cannot be reused to start a second job. Enqueue freezes the context and selected
+Stream start returns `conversationId`, `requestId`, `jobId`, and job `state`.
+Matching stream replays inspect the bound job before loading new context;
+changed fingerprints conflict. Enqueue freezes the context and selected
 source index revisions with the immutable user turn in one transaction. Jobs
 allow one attempt, so reconnect or lease recovery cannot initiate another
 provider call.
 
 Events return `events`, `nextEventId`, `requestState`, `jobState`, and `done`.
-Each event includes `eventId` and a whitelisted `type`: `provisional_delta`
-with plain text, `provisional_reset`, `stage`, or `state`. Pages contain at most
+Each event includes `eventId` and a whitelisted `type`: `stage` or `state`. Pages contain at most
 100 raw stored events; cursors advance past filtered events too. Event reads
 expose no provider error, credential, tool argument, or arbitrary raw payload.
-Provisional text is bounded and unverified; citations become interactive only
-from the final saved turn. Validated completion must save that turn with job
+Citations come only from the final saved turn. Validated completion must save that turn with job
 success under the lease, cancellation, sequence, source, profile, and operation
 budget fences. Ambiguous started calls require inspection or explicit abandon;
-they retain unknown usage reservations. Tool-enabled advising consumes provider
-streams per attempt, resets superseded tool-attempt text, and retains the same
-durable tool ledger and usage budget. First valid completion is terminal, so a
-later iterator error cannot erase already-measured usage.
+they retain unknown usage reservations. Research keeps one durable tool ledger and usage budget per turn.
 
 Native SDK streaming and the default local provider use their own incremental
 decoding paths. `hf-local` uses a bounded Transformers text-stream queue and a
@@ -2415,35 +2265,13 @@ deadline even if the model did not invoke its stopping criterion; late text is
 withheld while exact measured usage is retained.
 
 Omitted `sourceIds` inherits the last advising selection; `[]` remains empty and
-explicit null resets to all authorized sources. History reads do not change the
-advising topic. A pronoun follow-up deterministically includes the previous
-advising question in retrieval. On the legacy answer path every retained turn is
-represented once in the bounded model context: raw until a checkpoint, then
-through its summary plus the retained recent turns, fenced as untrusted history.
-Historical citation numbers and prior answers never become current institutional
-evidence. Passage bodies for citations the conversation already used are
-reattached to the next turn's numbered context (newest first, at most eight
-passages and 12 KB of text, and only sources still inside an explicit source
-selection). That set is separate from the history transcript, so uncited
-retrieved passages do not enlarge it. A passage already returned by the new
-search is not duplicated. Old citation numbers are not reused; the model cites
-the new numbers.
-
-Automatic compaction runs on the legacy advising path. When the rendered
-history (a prior summary plus recent turns) reaches
-`LLM_CONTEXT_WINDOW_TOKENS * CONVERSATION_COMPACTION_THRESHOLD` (default 50%),
-the stream/sync path freezes a `conversation_summaries` checkpoint, summarizes
-the covered turns, and replaces them with a bounded handoff. The handoff keeps
-`CONVERSATION_COMPACTION_KEEP_TURNS` raw turns and a deterministic reference
-index of exact source names, locators, chunk ids, source ids, artifact ids and
-revision ids; the model narrative is untrusted memory and never current
-evidence. `CONVERSATION_CONTEXT_MAX_BYTES` defaults to the model window times
-`CONVERSATION_TOKEN_ESTIMATE_BYTES` and remains the hard cap; when compaction is
-disabled or fails, an oversized context still fails 422 without dropping saved
-turns. A pending checkpoint older than five minutes is failed as `stale_pending`
-so a crashed summarizer cannot fence the conversation. The threshold, kept-turn
-count, context window, output cap and token estimate are configuration. Opt-in
-research uses the [working space](#conversation-working-space) instead.
+explicit null resets to all authorized sources. Research reads the saved
+transcript itself (at most 6,000 bytes of it, student messages kept ahead of
+long replies) and pages older turns with `advisor_read_conversation`; see the
+[working space](#conversation-working-space). The question reaches research
+unchanged. Historical citation numbers and prior answers never become current
+institutional evidence. `CONVERSATION_CONTEXT_MAX_BYTES` caps the transcript
+plus referenced artifact revisions one turn may carry.
 
 Normal answers expose `claims` as
 `{text, citationChunkIds, reviewStatus:'unreviewed'}`: paragraph review units,
@@ -2530,8 +2358,7 @@ row records the prompt that produced it as `registry-<digest>`,
 
 ### Usage, cost and quotas
 
-Model-call telemetry includes compaction, planning, answer/repair/retry,
-research and artifact attempts. Provider-reported token counts with unreported cache use are
+Model-call telemetry includes research and artifact attempts. Provider-reported token counts with unreported cache use are
 conservative tariff estimates when cached and ordinary input prices differ.
 Cache-share denominators include only calls reporting cache counts, and
 reporting coverage stays visible. API summaries and breakdowns expose
@@ -2653,7 +2480,6 @@ layers. Where code does not yet meet one, the requirement still applies.
   native OpenAI Decisions and Cloudflare Clef adapters and a structured
   classifier fallback. Model catalogs, IDs, and prices are configurable and
   dated. Decision models never grant access or infer/edit prerequisites.
-- One bounded quality escalation and ordered approved fallbacks are allowed.
   Connection/model settings are pinned for the logical operation, recording any
   fallback. Retries, repairs, and continuation share one request, time, and
   token budget. Every attempt is recorded before validation or rejection,
@@ -2678,8 +2504,8 @@ layers. Where code does not yet meet one, the requirement still applies.
   graph.
 - Worker leases, heartbeats, retries, cancellation, and terminal errors persist.
   No database transaction is held during extraction, model calls, or rendering.
-- Streaming output is provisional until validated; refusals, failures, and
-  cancellations are distinct terminal states.
+- Answers publish only once validated; failures and cancellations are distinct
+  terminal states.
 - Conversation context covers every retained turn exactly once through raw
   history or a successful summary with a coverage boundary. Failed summarization
   cannot advance that boundary. Citations and artifact revision IDs are
@@ -2882,7 +2708,7 @@ below are the guards and acceptance checks this project applies.
 | A14 | Unsaved edit stuck or lost; export uses older saved content; unclear workspace labels | Serialize saves, use expected-parent checks, retain failed drafts, and prevent stale saves from replacing newer revisions. Export identifies exactly which draft/revision it uses. Label artifacts by title/type/revision, not internal question numbers. |
 | A15 | Silent export to app/home folder, saved-page-only export, filename/overwrite/bytes defects | Offer export from the artifact workflow, return correct bytes/MIME/extension, and make the download outcome visible. Verify exported current content by reopening, formulas after recalculation, and source legends; never announce an unverified destination. Desktop file-dialog mechanics are not copied into the web app. |
 | A16 | Upload says No sources yet, wrong Auto type, no progress/page/quality data, confusing Reindex/sort | Distinguish empty, uploading, indexing, partial, failed, and indexed states with actionable errors and stable documented sorting. Auto uses actual format detection. Explain reindex behavior and show extraction coverage rather than implying a count proves quality. |
-| A17 | Long spinner, polling stops after fifteen minutes, pending input ignored, panels clip answers/cells | Stream provisional output and persistent job progress; recover event/poll connections until settled or unmounted. Verify slow jobs beyond fifteen minutes, keyboard/IME/pending input, narrow layouts, wrapped cells, focus, and source-panel behavior in the browser. |
+| A17 | Long spinner, polling stops after fifteen minutes, pending input ignored, panels clip answers/cells | Persistent job progress stages; recover event/poll connections until settled or unmounted. Verify slow jobs beyond fifteen minutes, keyboard/IME/pending input, narrow layouts, wrapped cells, focus, and source-panel behavior in the browser. |
 | A18 | Missing keychain disables all settings; bigger-model configuration unavailable; stale provider selection | Server-side profiles avoid dependence on a user's OS keychain. Distinguish absent credentials from unreadable secrets, diagnose the selected route, keep available providers usable, and reject completions bound to an obsolete connection/context. Verify env precedence and explicit routing configuration. |
 | A19 | Structurally valid output mistaken for factual or product correctness; omitted bugs in the docket | Each adopted family has regression checks and product/semantic evidence appropriate to the feature. Include real app/export checks; historical "fixed in code" is not release evidence. |
 | A20 | New native code/interactive HTML and imported files introduce execution risks | Exercise sandbox boundaries, scoped files, malicious XML/ZIP/HTML/code, resource limits, no network/secrets, and private workspace access. Verify failure when production isolation is unavailable. These are new feature acceptance checks, not claims about the old report. |

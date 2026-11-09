@@ -378,8 +378,9 @@ Partial fixes and remaining work:
   and the R1–R11 pass in [db-data-review.md](db-data-review.md) is re-run, its
   counts and anomalies stand. Never hand-edit `prereq_nodes` or `prereq_mentions`:
   fix the parser, re-import, re-run the sweep.
-- **The research advising path stays off by default** until its live score is at
-  least as good as the legacy path's.
+- **Research is the only answering path.** It met the legacy path's live scores
+  (P2.1: audit 173 vs 172, clarity 51 vs 50), and the legacy path was deleted
+  (P2.4).
 - **A section handle points at a section's first chunk**, so a rule several
   chunks into a long section needs a second page. The read reports its cursor,
   so the rule is reachable, but one page may not hold it.
