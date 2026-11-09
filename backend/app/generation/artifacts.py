@@ -197,6 +197,8 @@ class ArtifactHandler:
             "trace_id": str(grounding.trace_id),
             "model_id": active.llm_model_id or active.hf_model_id,
         })
+        if pipeline.fallback_sections:
+            provenance["degraded_sections"] = len(pipeline.fallback_sections)
         spec = spec.model_copy(update={"provenance": provenance})
         if (kind == "html" and isinstance(spec, HtmlArtifactSpec)
                 and self.settings.visual_artifact_review_enabled):

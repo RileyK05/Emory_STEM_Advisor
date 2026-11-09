@@ -18,9 +18,11 @@ from app.config import load_settings
 from app.db.connection import connect, connection_dsn
 from app.generation.artifact_candidate import validate_candidate
 from app.generation.artifacts import build_artifact_handlers
+from app.generation.native_tools import SECTION_TOOL
 from app.jobs.runtime import RunExecutor
 from app.jobs.store import JobStore
 from app.jobs.worker import run_once
+from app.llm.base import GenerationResult, Usage
 from app.programs.importer import import_programs
 from app.retrieval.trace import write_trace
 from tests.fakes import ArtifactStageProvider, FakeEmbedder
@@ -360,6 +362,33 @@ def test_a_section_that_moves_a_course_between_terms_is_refused(db, collection, 
     text = json.dumps(spec)
     assert "Term 1" in text and "Term 2" in text
     assert "MATH 112" in message_text(provider.requests[-1].messages[-1])
+
+
+def test_a_failed_plan_section_falls_back_to_the_fixed_course_list(db, collection, tmp_path):
+    source = _econ(db, collection, tmp_path)
+
+    class FailingSections(ArtifactStageProvider):
+        def generate(self, request):
+            if request.tools[0].name == SECTION_TOOL:
+                return GenerationResult(text="", finish_reason="length",
+                                        usage=Usage(100, 30, source="provider"))
+            return super().generate(request)
+
+    provider = FailingSections(outline=_plan_outline(["MATH 111", "MATH 112"]))
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "document",
+                       {"prompt": "Plan MATH 111 then MATH 112",
+                        "sourceIds": [str(source)]}, "plan-fallback")
+    finished = run_once(store, "plan", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    headings = [block.get("text") for block in spec["blocks"]
+                if block.get("type") == "heading"]
+    assert "Term 1" in headings and "Term 2" in headings
+    assert spec["provenance"]["degraded_sections"] == 2
+    assert any("MATH 111" in block.get("text", "") for block in spec["blocks"])
+    assert any("MATH 112" in block.get("text", "") for block in spec["blocks"])
 
 
 def test_a_blocked_course_goes_in_the_advisor_section(db, collection, tmp_path):
