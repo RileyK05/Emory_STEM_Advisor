@@ -36,7 +36,7 @@ from app.artifacts.inert_html import render_inert_markup
 from app.artifacts.models import DocumentSpec, HtmlArtifactSpec, WorkbookSpec
 from app.artifacts.storage import ArtifactStore, validate_spec
 from app.artifacts.xlsx import _FORMULA_BLOCKLIST, export_xlsx
-from app.atlas.requisites import canonical_codes_in
+from app.atlas.requisites import AllOf, CourseRef, canonical_codes_in
 from app.config import configure_runtime_database, load_settings
 from app.db import queries
 from app.db.connection import close_pools, connector, open_connection, resolved_database_url
@@ -298,24 +298,36 @@ def evaluate_checks(
             completed_set.update(campus_equivalents.get(c, frozenset()))
         order_violations = []
         for code, term_idx in plan_terms.items():
-            req_row = conn.execute(
-                "SELECT requisites FROM courses WHERE collection_id = %s AND code = %s",
+            node_rows = conn.execute(
+                """SELECT n.node_id, n.kind, n.parent_node_id, n.position, n.node_type,
+                          n.target_code, n.condition_text
+                   FROM prereq_nodes n JOIN courses co ON co.course_id = n.course_id
+                   WHERE co.collection_id = %s AND co.code = %s AND co.lifecycle = 'current'
+                     AND co.parse_status = 'parsed' AND n.kind = 'prerequisite'""",
                 (collection_id, code),
-            ).fetchone()
-            if req_row and req_row["requisites"]:
-                tree = _restore_tree(req_row["requisites"])
-                if tree is not None:
-                    # Collect required prerequisites
-                    earlier_courses = {
-                        c for c, t in plan_terms.items() if t < term_idx
-                    } | completed_set
-                    # A course cannot sit in or before a term that holds one of its required prereqs
-                    later_or_same = {
-                        c for c, t in plan_terms.items() if t >= term_idx and c != code
-                    }
-                    for prereq_candidate in canonical_codes_in(json.dumps(req_row["requisites"])):
-                        if prereq_candidate in later_or_same and prereq_candidate not in earlier_courses:
-                            order_violations.append(f"{code} (term {term_idx}) before/with {prereq_candidate}")
+            ).fetchall()
+            if not node_rows:
+                continue
+            try:
+                tree = _restore_tree([dict(r) for r in node_rows])
+            except ValueError:
+                continue
+            # A required prerequisite is a course reachable from the root through
+            # all-of groups only; an any-of alternative is not required on its own.
+            required: set[str] = set()
+            stack = [tree]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, CourseRef):
+                    required.add(node.code)
+                elif isinstance(node, AllOf):
+                    stack.extend(node.items)
+            earlier_courses = {c for c, t in plan_terms.items() if t < term_idx} | completed_set
+            later_or_same = {c for c, t in plan_terms.items() if t >= term_idx and c != code}
+            for prereq in required:
+                names = {prereq} | set(campus_equivalents.get(prereq, frozenset()))
+                if names & later_or_same and not names & earlier_courses:
+                    order_violations.append(f"{code} (term {term_idx}) before/with {prereq}")
         k6_ok = len(order_violations) == 0
         k6_detail = "order verified" if k6_ok else f"violations: {order_violations[:3]}"
     else:
@@ -695,8 +707,7 @@ def main() -> None:
         collection_id = col_row["collection_id"]
 
         c_rows = startup_conn.execute(
-            "SELECT code FROM courses WHERE collection_id = %s AND is_current",
-            (collection_id,),
+            queries.get("list_collection_course_codes"), {"collection_id": collection_id}
         ).fetchall()
         known_courses = {r["code"] for r in c_rows}
         campus_equivalents = load_campus_equivalents(startup_conn, collection_id=collection_id)
@@ -728,7 +739,9 @@ def main() -> None:
     artifact_registry: dict[str, dict[str, Any]] = {}
     workspace_key = "development"
 
-    with TestClient(app, base_url="http://127.0.0.1", raise_server_exceptions=False) as client:
+    # Development sign-in accepts only loopback clients; TestClient defaults to "testclient".
+    with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50002),
+                    raise_server_exceptions=False) as client:
         for case in cases:
             c_id = case["id"]
             cat = case.get("category", "artifact")
@@ -795,7 +808,8 @@ def main() -> None:
 
                 # Fetch updated conversation record
                 c_data = client.get(f"/api/conversations/{conv_id}").json()
-                matching_turns = [t for t in c_data.get("turns", []) if t.get("requestId") == req_id]
+                matching_turns = [t for t in c_data.get("turns", [])
+                                  if t.get("requestId") == req_id and t.get("role") == "assistant"]
                 if matching_turns:
                     last_turn_record = matching_turns[0]
 
