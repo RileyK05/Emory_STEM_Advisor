@@ -527,6 +527,7 @@ def run_product(output_file: Path, modes: list[str], case_filter: str | None = N
         dsn = resolved_database_url(settings, conn)
         chunk_text = {str(r["chunk_id"]): r["text"] for r in
                       conn.execute("select chunk_id, text from chunks").fetchall()}
+        conn.commit()
         collection = settings.default_collection
         for mode in modes:
             research = mode == "research"
@@ -559,6 +560,7 @@ def run_product(output_file: Path, modes: list[str], case_filter: str | None = N
                         _check_code_existence(conn, result)
                         _check_no_promise(result)
                         _check_citations_resolve(conn, result)
+                        conn.commit()  # end the read so no transaction spans the run
                     else:
                         result.checks.append({"check": "answered", "ok": False,
                                               "detail": f"HTTP {response.status_code}"})
