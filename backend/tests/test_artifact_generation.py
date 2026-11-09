@@ -391,6 +391,29 @@ def test_a_failed_plan_section_falls_back_to_the_fixed_course_list(db, collectio
     assert any("MATH 112" in block.get("text", "") for block in spec["blocks"])
 
 
+def test_a_truncated_section_is_reprompted_and_published(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    truncated = GenerationResult(
+        text="I worked through the section but stopped at the limit.",
+        finish_reason="length",
+        usage=Usage(100, 8_192, source="provider"),
+    )
+    provider = ArtifactStageProvider(
+        outline=outline(),
+        sections={"s1": [truncated, section()]},
+    )
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "document",
+                       {"prompt": "Alpha", "sourceIds": [str(source)]}, "truncated-section")
+    finished = run_once(store, "truncated-section", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    assert any("Alpha facts." in block.get("text", "") for block in spec["blocks"])
+    assert "output token limit" in message_text(provider.requests[-1].messages[-1])
+    assert "degraded_sections" not in spec.get("provenance", {})
+
+
 def test_a_blocked_course_goes_in_the_advisor_section(db, collection, tmp_path):
     source = _econ(
         db, collection, tmp_path,

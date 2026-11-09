@@ -50,6 +50,12 @@ _FINAL_CALL_NOTE = ("The tool budget for this answer is used. Answer now from th
 _TOOL_BUDGET_REFUSAL = json.dumps({
     "error": "The tool budget for this operation is spent. Answer now from the numbered "
              "context and the tool results above; do not request more tools."})
+_CONTINUE_AFTER_OUTPUT_LIMIT = (
+    "Your last response hit the output token limit before calling the required tool. "
+    "Do not apologize, recap, or repeat yourself. Call the required tool now with the "
+    "content you already have, and keep any hidden reasoning brief."
+)
+_TRUNCATED_FINISH_REASONS = frozenset({"length", "max_tokens", "incomplete"})
 
 
 class ToolConversationError(RuntimeError):
@@ -66,12 +72,21 @@ class GenerationCancelled(ToolConversationError):
 
 class ToolConversationController:
     def __init__(self, *, max_tool_calls: int = 4, max_provider_calls: int = 8,
-                 max_result_bytes: int = MAX_TOOL_RESULT_BYTES):
+                 max_result_bytes: int = MAX_TOOL_RESULT_BYTES,
+                 max_output_continuations: int = 0,
+                 max_repair_calls: int | None = None):
         if max_tool_calls < 0 or max_provider_calls < 1 or max_result_bytes < 1:
             raise ValueError("tool conversation limits must be positive")
+        if max_output_continuations < 0:
+            raise ValueError("output continuations must not be negative")
         self.max_tool_calls = max_tool_calls
         self.max_provider_calls = max_provider_calls
         self.max_result_bytes = max_result_bytes
+        self.max_output_continuations = max_output_continuations
+        self.max_repair_calls = (max_provider_calls if max_repair_calls is None
+                                 else max_repair_calls)
+        if not 1 <= self.max_repair_calls <= max_provider_calls:
+            raise ValueError("repair call limit must fit inside the provider call limit")
 
     def run(self, provider, request: GenerationRequest, *, registry: ToolRegistry,
             scope: ToolScope, operation, ledger: ToolExecutionLedger | None = None,
@@ -87,7 +102,8 @@ class ToolConversationController:
         request_with_tools = replace(request, tools=registry.definitions)
         executed: dict[str, tuple[str, str, str]] = {}
         usages: list[Usage] = []
-        tool_count = provider_count = 0
+        tool_count = provider_count = truncated_count = repair_calls = 0
+        continuing = False
         if ledger is not None and (operation_id is None or workspace_key is None):
             raise ValueError("durable tool execution requires operation and workspace IDs")
         if ledger is not None and scope.principal_id != workspace_key:
@@ -110,14 +126,38 @@ class ToolConversationController:
                     tool for tool in active_request.tools if tool.name in terminal_tool_names))
             prepared = operation.prepare(active_request)
             provider_count += 1
+            if not continuing:
+                repair_calls += 1
+                if repair_calls > self.max_repair_calls:
+                    raise ToolCallLimitExceeded(
+                        "the model did not return a final answer within the call limit")
+            continuing = False
             result = _attempt(provider, prepared, operation, on_attempt=on_attempt,
                               before_provider_call=before_provider_call)
             usages.append(result.usage)
-            if result.tool_calls and (result.finish_reason or "").lower() in {
-                "length", "max_tokens", "content_filter", "error", "incomplete", "failed",
+            finish_reason = (result.finish_reason or "").lower()
+            if result.refusal:
+                return replace(result, usage=_aggregate_usage(usages))
+            if finish_reason in _TRUNCATED_FINISH_REASONS:
+                # A truncated response is resumable: keep the text it produced
+                # and ask it to finish the tool call instead of treating the
+                # call as a failure. Opencode's loop does the same with a
+                # synthetic user turn, bounded so a stuck model cannot run on.
+                if truncated_count < self.max_output_continuations:
+                    truncated_count += 1
+                    if result.text:
+                        messages.append(TextMessage("assistant", result.text))
+                    messages.append(TextMessage("user", _CONTINUE_AFTER_OUTPUT_LIMIT))
+                    continuing = True
+                    continue
+                if result.tool_calls:
+                    raise ToolConversationError("provider did not complete the tool request")
+                return replace(result, usage=_aggregate_usage(usages))
+            if result.tool_calls and finish_reason in {
+                "content_filter", "error", "failed",
             }:
                 raise ToolConversationError("provider did not complete the tool request")
-            if result.refusal or not result.tool_calls:
+            if not result.tool_calls:
                 return replace(result, usage=_aggregate_usage(usages))
             if tool_count + len(result.tool_calls) > self.max_tool_calls:
                 # The operation's tool budget is spent. The fence holds: none of

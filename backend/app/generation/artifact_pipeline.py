@@ -81,6 +81,9 @@ _MAX_PROGRAM_ITEMS = 120
 _MAX_SECTION_SLOTS = 8
 _MAX_SECTION_SLOT_CHARS = 4_000
 _MAX_SECTION_TEXT_CHARS = 12_000
+# Opencode's agent loop allows an output-limit response two synthetic
+# continuations before it gives up. The stage keeps the same bound.
+_OUTPUT_LIMIT_CONTINUATIONS = 2
 
 
 @dataclass(frozen=True)
@@ -1358,7 +1361,9 @@ class ArtifactPipeline:
         provider = _StageProvider(self.provider, f"{tool_id}:{stage_key}")
         return ToolConversationController(
             max_tool_calls=attempts + 1,
-            max_provider_calls=attempts + 1,
+            max_provider_calls=attempts + 1 + _OUTPUT_LIMIT_CONTINUATIONS,
+            max_output_continuations=_OUTPUT_LIMIT_CONTINUATIONS,
+            max_repair_calls=attempts + 1,
         ).run(
             provider, request, registry=registry, scope=scope, operation=self.operation,
             ledger=ledger, operation_id=self.operation.operation_id,

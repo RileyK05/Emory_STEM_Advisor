@@ -207,7 +207,13 @@ class ArtifactStageProvider:
 
         self.requests.append(request)
         tool = request.tools[0].name if request.tools else ""
-        payload = json.loads(normalize_message(request.messages[-1])["content"])
+        last = normalize_message(request.messages[-1]).get("content")
+        try:
+            payload = json.loads(last)
+        except (TypeError, ValueError):
+            # A synthetic continuation turn is not the JSON stage payload; the
+            # last real payload is still the section being written.
+            payload = self._last_section_payload or {}
         section_id = (payload.get("section") or {}).get("id") if tool == SECTION_TOOL else None
         if section_id is not None:
             self._last_section = section_id
@@ -225,6 +231,9 @@ class ArtifactStageProvider:
         elif tool == SECTION_TOOL:
             outputs = self.sections[section_id]
             arguments = outputs[min(count, len(outputs) - 1)]
+            if isinstance(arguments, GenerationResult):
+                # A scripted truncated reply: the controller should reprompt it.
+                return arguments
         else:  # pragma: no cover - the pipeline offers only these three tools
             raise AssertionError(f"unexpected stage tool {tool!r}")
         if callable(arguments):
