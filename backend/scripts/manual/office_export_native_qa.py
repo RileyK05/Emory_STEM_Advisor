@@ -19,7 +19,6 @@ from pypdf import PdfReader
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ARTIFACTS_ROOT = (REPO_ROOT / "data" / "manual-office-qa").resolve()
-EVIDENCE_PATH = REPO_ROOT / "docs" / "evidence" / "office-export-native-qa-2026-10-08.json"
 COM_SCRIPT = Path(__file__).with_name("office_export_qa_com.ps1")
 
 
@@ -149,70 +148,6 @@ def _make_specs():
     return document, workbook
 
 
-def _docx_import_summary(data: bytes) -> dict:
-    from app.artifacts.docx import import_docx
-
-    result = import_docx(data)
-    types = [block.type for block in result.spec.blocks]
-    paragraphs = [block.text for block in result.spec.blocks if block.type == "paragraph"]
-    lists = [block for block in result.spec.blocks if block.type == "list"]
-    tables = [block for block in result.spec.blocks if block.type == "table"]
-    assertions = {
-        "title_preserved": result.spec.title.startswith("Quarterly STEM Program Export QA Review"),
-        "long_title_preserved": len(result.spec.title) > 120,
-        "literal_priority_and_currency_preserved": any(
-            "#1 Priority" in text and "$1,234.50" in text for text in paragraphs
-        ),
-        "multiline_paragraph_preserved": any("Line one" in text and "Line two" in text
-                                               for text in paragraphs),
-        "ordered_and_bullet_lists_preserved": (
-            any(item.ordered for item in lists) and any(not item.ordered for item in lists)
-        ),
-        "table_preserved": bool(tables and tables[0].headers == ["**Item**", "**Amount**", "**Note**"]
-                                 and len(tables[0].rows) == 3),
-    }
-    return {"accepted": True, "original_sha256_matches": result.original_sha256 == sha256(data),
-            "title": result.spec.title, "block_types": types,
-            "table_count": len(tables), "assertions": assertions,
-            "all_assertions_pass": all(assertions.values())}
-
-
-def _xlsx_import_summary(data: bytes, spec) -> dict:
-    from app.artifacts.xlsx import import_xlsx
-
-    result = import_xlsx(data)
-    formula_cells = [cell.formula for sheet in result.spec.sheets for cell in sheet.cells
-                     if cell.formula]
-    cells = {cell.id: cell for sheet in result.spec.sheets for cell in sheet.cells}
-    assertions = {
-        "two_sheets": [sheet.name for sheet in result.spec.sheets] == ["Inputs", "Summary"],
-        "local_and_cross_sheet_formulas_preserved": (
-            "=B2*B3" in formula_cells and "=Inputs!B8" in formula_cells and "=B2+5" in formula_cells
-        ),
-        "typed_numeric_date_boolean_preserved": (
-            isinstance(cells["cell-001-2-2"].value, (int, float))
-            and cells["cell-001-4-2"].value == date(2026, 10, 8)
-            and cells["cell-001-5-2"].value is True
-        ),
-        "multiline_newline_wrap_and_minimum_height_preserved": (
-            cells["cell-001-7-2"].value == "Line one\nLine two"
-            and cells["cell-001-7-2"].style.wrap_text is True
-            and result.spec.sheets[0].row_heights.get(7, 0) >= 30
-        ),
-        "formula_like_text_preserved_as_literal": cells["cell-001-6-2"].value == "=1+1"
-        and cells["cell-001-6-2"].formula is None,
-    }
-    return {"accepted": True, "original_sha256_matches": result.original_sha256 == sha256(data),
-            "sheet_names": [sheet.name for sheet in result.spec.sheets],
-            "formula_expressions": formula_cells,
-            "calculated_values_are_not_in_workbook_spec": all(
-                cell.formula is None or cell.value is None
-                for sheet in result.spec.sheets for cell in sheet.cells
-            ),
-            "assertions": assertions, "all_assertions_pass": all(assertions.values()),
-            "workbook_spec_sheets": len(spec.sheets)}
-
-
 class _NativeExcelResultRunner:
     """Controlled evidence adapter; never installed as an application runner."""
 
@@ -254,8 +189,6 @@ def run() -> dict:
                    default=_jsonable) + "\n", encoding="utf-8",
     )
 
-    docx_import = _docx_import_summary(docx_bytes)
-    xlsx_import = _xlsx_import_summary(xlsx_bytes, workbook_spec)
     inspect_office_archive(docx_bytes, kind="docx")
     xlsx_archive = inspect_office_archive(xlsx_bytes, kind="xlsx")
     xlsx_names = xlsx_archive.names
@@ -308,14 +241,7 @@ def run() -> dict:
     validator = {"status": "not_run", "message": "native workbook was not saved"}
     if native_xlsx_path.is_file():
         native_bytes = native_xlsx_path.read_bytes()
-        try:
-            native_import = _xlsx_import_summary(native_bytes, workbook_spec)
-        except Exception as exc:  # noqa: BLE001 - report the repo importer boundary
-            native_import = {"accepted": False, "error_type": type(exc).__name__,
-                             "error": str(exc),
-                             "limitation": "native Excel output uses a feature the repo importer does not preserve"}
-        native_xlsx = {"sha256": sha256(native_bytes), "size_bytes": len(native_bytes),
-                       "repo_import": native_import}
+        native_xlsx = {"sha256": sha256(native_bytes), "size_bytes": len(native_bytes)}
         validation = recalculate_xlsx(
             xlsx_bytes, workbook_spec, runner=_NativeExcelResultRunner(native_bytes),
         )
@@ -337,8 +263,7 @@ def run() -> dict:
         },
         "container_safety": {"xlsx_has_no_macros_or_external_links": safe_container,
                              "formula_sources": ["=B2*B3", "=Inputs!B8", "=B2+5"]},
-        "repository_importers": {"docx_export_reimport": docx_import,
-                                 "xlsx_export_reimport": xlsx_import},
+        "repository_importers": "removed in P1.9: students no longer upload Office files",
         "native_office": com_report,
         "native_saved_xlsx": native_xlsx,
         "app_recalculation_validator_with_native_result_adapter": validator,
@@ -348,12 +273,11 @@ def run() -> dict:
         "limitations": [
             "This validates a controlled fixture in local desktop Word and Excel only.",
             "COM rendering is native Windows Office evidence, not production isolated Linux Office proof.",
-            "The repository importer preserves only its explicitly supported content subset.",
             "WorkbookSpec stores formula expressions, not calculated formula values; the original exported XLSX has no calculated cache until an engine recalculates it.",
             "The native Excel result adapter is used only to exercise the app validator in this QA run; it is not configured as a production runner.",
         ],
     }
-    _write_json(EVIDENCE_PATH, report)
+    _write_json(run_dir / "evidence.json", report)
     (run_dir / "com-stdout.txt").write_text(completed.stdout, encoding="utf-8")
     (run_dir / "com-stderr.txt").write_text(completed.stderr, encoding="utf-8")
     return report
@@ -362,7 +286,7 @@ def run() -> dict:
 def main() -> None:
     report = run()
     print(json.dumps({
-        "status": report["status"], "evidence": str(EVIDENCE_PATH),
+        "status": report["status"], "evidence": report["run_directory"] + "/evidence.json",
         "run_directory": report["run_directory"], "com_status": report["native_office"]["status"],
         "word_pages": report["pdf_pages"].get("word", {}).get("page_count"),
         "excel_pages": report["pdf_pages"].get("excel", {}).get("page_count"),
