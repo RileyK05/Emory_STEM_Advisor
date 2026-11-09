@@ -69,6 +69,15 @@ the model in the same conversation (`_is_refusal`, since `2e679a2`). That is the
 repair loop: the model sees exactly what failed and calls again. Each stage
 allows `ARTIFACT_REPAIR_ATTEMPTS` corrections before the run fails.
 
+A response cut off at the output limit is not a failed answer. Like Opencode's
+agent loop, the controller keeps the truncated text, adds a synthetic user turn
+("Your last response hit the output token limit ... call the required tool now
+with the content you already have"), and calls again. Two continuations are
+allowed before the stage falls back or fails, so a model that spends its first
+allowance on hidden reasoning still has room to stage the tool call. A dropped
+connection or rate limit is retried with backoff inside the operation fence and
+does not consume a correction.
+
 ### Stage 0: grounding
 
 - A turn-made artifact grounds on the research run that proposed it: the
@@ -85,8 +94,10 @@ allows `ARTIFACT_REPAIR_ATTEMPTS` corrections before the run fails.
 ### Stage 1: outline
 
 One call, terminal tool `advisor_stage_outline`. Input is the brief, the kind,
-the numbered slots (source name, locator, first 300 characters only), and for a
-revision the current outline (see Revisions). Output, per kind:
+the numbered slots (source name, locator, first 300 characters only), the exact
+program titles that match the brief, and which course codes named in the brief
+exist in the collection (`course_codes.not_in_collection` names the ones that
+do not), and for a revision the current outline (see Revisions). Output, per kind:
 
 - **document:** `title`, then up to `ARTIFACT_MAX_SECTIONS` sections, each
   `{id, heading, purpose, block_types, source_slots}`.

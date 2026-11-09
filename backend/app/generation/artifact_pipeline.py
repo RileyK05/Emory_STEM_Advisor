@@ -82,8 +82,11 @@ _MAX_SECTION_SLOTS = 8
 _MAX_SECTION_SLOT_CHARS = 4_000
 _MAX_SECTION_TEXT_CHARS = 12_000
 # Opencode's agent loop allows an output-limit response two synthetic
-# continuations before it gives up. The stage keeps the same bound.
+# continuations before it gives up. The stage keeps the same bound, and gives
+# transient provider failures their own retries so a dropped connection never
+# consumes a correction or a continuation.
 _OUTPUT_LIMIT_CONTINUATIONS = 2
+_TRANSIENT_RETRIES = 2
 
 
 @dataclass(frozen=True)
@@ -1061,7 +1064,10 @@ class ArtifactPipeline:
         allowed = set(fixed)
         for code in fixed:
             allowed.update(self.campus_equivalents.get(code, frozenset()))
-        extra = set(canonical_codes_in(text)) - allowed
+        # Meeting times ("MW 11") and room labels can look like a course code.
+        # Only a code that exists in the collection can be another scheduled course.
+        named = {code for code in canonical_codes_in(text) if self._course_exists(code)}
+        extra = named - allowed
         if not extra:
             return
         if getattr(section, "blocked_reasons", []):
@@ -1385,9 +1391,11 @@ class ArtifactPipeline:
         provider = _StageProvider(self.provider, f"{tool_id}:{stage_key}")
         return ToolConversationController(
             max_tool_calls=attempts + 1,
-            max_provider_calls=attempts + 1 + _OUTPUT_LIMIT_CONTINUATIONS,
+            max_provider_calls=(attempts + 1 + _OUTPUT_LIMIT_CONTINUATIONS
+                                + _TRANSIENT_RETRIES),
             max_output_continuations=_OUTPUT_LIMIT_CONTINUATIONS,
             max_repair_calls=attempts + 1,
+            max_transient_retries=_TRANSIENT_RETRIES,
         ).run(
             provider, request, registry=registry, scope=scope, operation=self.operation,
             ledger=ledger, operation_id=self.operation.operation_id,

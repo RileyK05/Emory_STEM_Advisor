@@ -647,9 +647,10 @@ def main() -> None:
                     last_turn_record = {"text": f"Refusal/error: {stream_res.text}", "status": "failed"}
                     break
 
-                # Drain worker until turn is done
-                while time.monotonic() - t0 <= 90:
-                    run_once(store, f"bench-{c_id}", executor, lease_seconds=60)
+                # Drain worker until turn is done. The guard is generous: a model
+                # call can run for minutes, and run_once is synchronous.
+                while time.monotonic() - t0 <= 600:
+                    run_once(store, f"bench-{c_id}", executor, lease_seconds=600)
                     events_res = client.get(f"/api/conversations/{conv_id}/turns/{req_id}/events")
                     if events_res.status_code == 200 and events_res.json().get("done"):
                         break
@@ -668,8 +669,8 @@ def main() -> None:
                 if art_run and seq_idx == len(conv_messages) - 1:
                     run_id = art_run["runId"]
                     t_run0 = time.monotonic()
-                    while time.monotonic() - t_run0 <= 150:
-                        run_once(store, f"bench-{c_id}-art", executor, lease_seconds=60)
+                    while time.monotonic() - t_run0 <= 600:
+                        run_once(store, f"bench-{c_id}-art", executor, lease_seconds=600)
                         run_check = client.get(f"/api/runs/{run_id}")
                         if run_check.status_code == 200:
                             st = run_check.json().get("state")

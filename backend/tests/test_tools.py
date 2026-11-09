@@ -35,7 +35,7 @@ def test_registry_requires_exact_tool_id_and_capability():
 def test_schema_rejects_extra_fields_and_malformed_arguments():
     registry = build_default_registry()
     scope = ToolScope("user:1", frozenset({ToolCapability.CALCULATE}))
-    with pytest.raises(Exception, match="schema validation"):
+    with pytest.raises(Exception, match="schema validation.*shell"):
         registry.invoke("advisor_calculate", {"expression": "1+1", "shell": True}, scope)
     with pytest.raises(Exception, match="schema validation"):
         registry.invoke("advisor_calculate", {"expression": {"item": "1+1", "shell": True}}, scope)

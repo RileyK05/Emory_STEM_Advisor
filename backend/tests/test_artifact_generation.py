@@ -326,7 +326,8 @@ def test_a_plan_is_ordered_by_the_parser_and_not_by_the_model(db, collection, tm
     source = _econ(db, collection, tmp_path)
     provider = ArtifactStageProvider(
         outline=_plan_outline(["ECON 201"], completed=["ECON 101"]),
-        sections={"term1": [_plan_section("ECON 201 Intermediate Macroeconomics.")]},
+        sections={"term1": [_plan_section(
+            "ECON 201 Intermediate Macroeconomics, MW 11:00-12:15.")]},
     )
     client, store, executor = setup_runtime(db, collection, provider, tmp_path)
     run_id = start_run(client, "document",
@@ -339,6 +340,7 @@ def test_a_plan_is_ordered_by_the_parser_and_not_by_the_model(db, collection, tm
     headings = [block.get("text") for block in spec["blocks"]
                 if block.get("type") == "heading"]
     assert "Term 1" in headings
+    assert "degraded_sections" not in spec.get("provenance", {})
     assert any("ECON 201" in block.get("text", "") for block in spec["blocks"])
 
 

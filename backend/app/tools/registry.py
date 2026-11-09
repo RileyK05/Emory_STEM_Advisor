@@ -195,7 +195,12 @@ class ToolRegistry:
             parsed = spec.input_model.model_validate(
                 repair_arguments(dict(arguments), spec.input_model))
         except ValidationError as exc:
-            raise ToolInputError("Tool arguments failed schema validation.") from exc
+            detail = "; ".join(
+                f"{'.'.join(str(part) for part in error['loc']) or 'input'}: {error['msg']}"
+                for error in exc.errors()[:5]
+            )
+            raise ToolInputError(
+                "Tool arguments failed schema validation: " + detail[:500]) from exc
 
         for field_name in spec.resource_fields:
             value = getattr(parsed, field_name)

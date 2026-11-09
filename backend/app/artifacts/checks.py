@@ -70,12 +70,12 @@ def extract_planned_terms(spec: dict) -> dict[str, int]:
                     except ValueError:
                         current_term += 1
                     break
-            codes = canonical_codes_in(text)
+            codes = _course_codes_in(text)
             for code in codes:
                 mapping.setdefault(code, current_term)
             if block.get("type") == "list":
                 for item in block.get("items", []):
-                    for code in canonical_codes_in(item):
+                    for code in _course_codes_in(item):
                         mapping.setdefault(code, current_term)
             elif block.get("type") == "table":
                 headers = block.get("headers", [])
@@ -92,7 +92,7 @@ def extract_planned_terms(spec: dict) -> dict[str, int]:
                 for row in block.get("rows", []):
                     for col_idx, cell_text in enumerate(row):
                         term_idx = col_terms.get(col_idx, current_term)
-                        for code in canonical_codes_in(cell_text):
+                        for code in _course_codes_in(cell_text):
                             mapping.setdefault(code, term_idx)
     elif kind == "workbook":
         for s_idx, sheet in enumerate(spec.get("sheets", []), start=1):
@@ -108,7 +108,7 @@ def extract_planned_terms(spec: dict) -> dict[str, int]:
                     break
             for cell in sheet.get("cells", []):
                 val = str(cell.get("value") or "")
-                for code in canonical_codes_in(val):
+                for code in _course_codes_in(val):
                     mapping.setdefault(code, s_term)
     return mapping
 
@@ -127,11 +127,30 @@ def content_elements(spec) -> set[str]:
     return set()
 
 
+_MEETING_DAY_SUBJECTS = frozenset({
+    "M", "T", "W", "R", "F", "S", "U",
+    "MW", "TR", "MF", "WF", "MT", "WR", "FS", "MR", "TW",
+})
+
+
+def _is_meeting_time_code(code: str) -> bool:
+    return code.split(" ", 1)[0] in _MEETING_DAY_SUBJECTS
+
+
+def _course_codes_in(text: str) -> list[str]:
+    return [code for code in canonical_codes_in(text)
+            if not _is_meeting_time_code(code)]
+
+
 def invalid_course_codes(codes, known_courses: set[str],
                          campus_equivalents: dict[str, frozenset[str]]) -> set[str]:
     """Codes that are neither a real course nor the other campus's same course."""
     invalid = set()
     for code in codes:
+        # A schedule can print a meeting pattern such as "MW 11" that looks
+        # exactly like a course code. Day letters are not a course subject.
+        if _is_meeting_time_code(code):
+            continue
         if code in known_courses:
             continue
         if campus_equivalents.get(code, frozenset()) & known_courses:
@@ -161,10 +180,10 @@ def program_requirement_check(
     ).fetchall()
     allowed: set[str] = set()
     for item in items:
-        for code in canonical_codes_in(item["text"]):
+        for code in _course_codes_in(item["text"]):
             allowed.add(code)
             allowed.update(campus_equivalents.get(code, frozenset()))
-    artifact_codes = set(canonical_codes_in(artifact_text))
+    artifact_codes = set(_course_codes_in(artifact_text))
     unsupported = artifact_codes - allowed
     unsupported -= set(completed_courses)
     ok = len(unsupported) == 0 or len(unsupported) <= len(artifact_codes) * 0.4
