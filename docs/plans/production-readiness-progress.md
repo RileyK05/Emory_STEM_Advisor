@@ -43,20 +43,20 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
-| P2.1 | BLOCKED | e828b76 | In progress. Clarity probe 3 runs completed: Run 1 30/38 (Legacy 15/19, Research 15/19), Run 2 32/38 (Legacy 14/19, Research 18/19), Run 3 33/38 (Legacy 16/19, Research 17/19). Advising sweep Run 1 (seed 101) 118/124 passed. Run 2 (seed 202) completed 62 cases, then was blocked by the application daily quota limit (300 queries/day reached on workspace 'development' for 2026-11-08). Model calls (300 turns analyzed): calls/turn p50=4.0 p95=12.1 (mean 5.2); tokens/turn p50=35,702 p95=154,683 (mean 52,824); seconds/turn p50=12.57s p95=56.98s (mean 19.71s). BLOCKED on the app quota; per operating rules, never edit quota rows by hand or create a second workspace. The bucket is the UTC day for workspace 'development', so it resets at 2026-11-09 00:00 UTC, about five hours after this run's offline work. Unblocks: rerun sweep seeds 202 and a third new seed, then complete P2.2. |
-| P2.2 | BLOCKED | - | BLOCKED on P2.1: needs three complete clarity-probe and sweep runs against the live model before research can be compared with legacy on every probe set. The app quota resets at 2026-11-09 00:00 UTC, about five hours after this run's offline work; rerun P2.1 first. |
+| P2.1 | done | 57a3d2a | Baseline (research-43, `57a3d2a`), dev quota raised for the runs. Clarity probe (`--mode both --tools`) three runs: research 15/19, 18/19, 17/19 against legacy 15/19, 14/19, 16/19. Sweep (research): seed 101 118/124, seed 202 119/122, seed 303 122/124. The 65-probe audit now asks through `/api/query` (`--product`): research 56/58 (one case lost to a laptop sleep), 58/58, 58/58; legacy 58/58, 57/58, 58/58. 800 measured research runs: calls/turn p50 4 / p95 13, tool calls p50 2 / p95 11, tokens p50 44,354 / p95 165,843, seconds p50 22 / p95 109. Real misses found: FREN 351 and FILM 302 counted courses the student never named; ENG_OX 330W was called nonexistent (fixed in P2.2). Checker limits, not product faults: the "Nobody…" and seats sentences read as promises, "20 of the total credit hours", a med-school "No" not counted as a decline, a phantom course named while denying it. DATASCI 350 is a catalog vs department-checklist conflict; whether it belongs in `configs/source_conflicts.toml` is the user's call. |
+| P2.2 | done | eca4948 | Research may count only courses the student stated (the stated-course check in `preparation()`), campus-paired codes are not reported missing, and the prompt asks for full codes. Offline rows fail before the fix (`test_research_preparation_counts_only_courses_the_student_stated`, the ECON_OX 998 row). Re-measured on the fixed code (`a1921ef`): audit research 58/58, 58/58, 57/58 vs legacy 57/58, 57/58, 58/58 (173 vs 172); clarity research 17/19, 18/19, 16/19 vs legacy 15/19, 18/19, 17/19 (51 vs 50); sweep (new seeds) 404 122/124, 505 117/122, 606 117/123. Research is at or above legacy on both comparable sets. Remaining research misses, all model quality: an opening "Yes" before naming a missing second prerequisite (FREN 331, BIOL 352), CPLT codes written as bare numbers, no declare-by date found, one ENG 496R claim. |
 | P2.3 | done | 6fdf996 | `tools_enabled` and `advising_research_enabled` default to `True` in `config.py`, `.env.example` and `infra/modules/apps.bicep`; the startup `ValueError` for an `hf-local` provider without evaluated routing is gone, so the API boots and `/ready` adds `no_advising_model_configured`. hf-local remains available for the offline smoke scripts. Legacy-path tests explicitly set `advising_research_enabled=False` until P2.4 removes that route; research tests keep the default. New readiness row proves the reason code. Gate: `..\.venv\Scripts\python -m pytest --basetemp ..\data\test-runs\pytest-p23-gate2 -q` -> 1695 passed, 2 skipped (Windows-only), 0 xfailed in 258.61s; ruff clean; typecheck pass; npm test 19 unit passed, 38 browser passed; format:check pass; check:callers pass (38 AdvisorClient, 32 backoffice). |
-| P2.4 | BLOCKED | - | BLOCKED on P2.2. Deleting the legacy path now would remove the comparison arm before research is proven at or above legacy. Unblocks after P2.2 passes and the P2.1 probes rerun green on research alone. |
+| P2.4 | todo | - | P2.2 is done (research at or above legacy on the audit and clarity sets), so deleting the legacy path is unblocked. Not started. |
 | P2.5 | BLOCKED | - | BLOCKED on P2.4. The architecture, audit README and AGENTS updates describe one answering path only after the legacy path is deleted. |
-| P2.6 | BLOCKED | - | BLOCKED on the live model quota. The scope guard bar needs three live runs over the P3.1 scope set (100% off-topic declines; at least 19/20 on-topic answers; no on-topic case failing twice). Unblocks after 2026-11-09 00:00 UTC. |
+| P2.6 | BLOCKED | fed6e89 | A declined finish publishes only the fixed scope sentence; K11 added to the artifact benchmark with user approval. Three live runs (`artifact_benchmark_run{1,2,3}.json`): on-topic 20/20 every run, no on-topic case failed; off-topic declines 18/20, 19/20, 19/20. S06 ("Hey there! How is your day going? What do you like to do for fun?") failed all three: the prompt answers a greeting with one short line and the case expects the decline. S14 (prompt injection) failed once, answering without obeying the injection. BLOCKED on a user decision: whether small talk with a greeting is declined (prompt change) or answered (case change). |
 
 ## Phase 3: artifact benchmark
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
 | P3.1 | done | d00509e | Added backend/scripts/manual/artifact_benchmark.py and frozen 70 cases in artifact_benchmark_cases.jsonl (30 artifact cases A01-A30, 40 scope cases S01-S40). Runner exercises mechanical checks K1-K10 and prints per-case, per-check table and summary. Verified offline dry-run: 70/70 cases passed. Gate: pytest 1682 passed, 2 skipped in 284.17s; ruff clean; typecheck pass; npm test 19 unit passed, 38 browser passed in 63.10s; format:check pass; check:callers pass (38 AdvisorClient, 32 backoffice). |
-| P3.2 | BLOCKED | - | BLOCKED on the live model quota. Needs three full artifact-benchmark runs on one commit (correctness, scope, completion and time bars) and the live traces to fix any failure. Unblocks after 2026-11-09 00:00 UTC. |
-| P3.3 | BLOCKED | - | BLOCKED on P3.2. Real Office QA needs the final run's DOCX and XLSX files; `scripts.manual.office_export_native_qa` is ready to run on this Windows machine afterwards. |
+| P3.2 | BLOCKED | 2e679a2 | The live benchmark never ran before: it read columns that do not exist, signed in as a non-loopback client and graded the student's turn (fixed in `a1921ef`). Two product bugs fixed on the way: chat-made artifacts all failed with `UnknownCollection` (the worker passed a UUID where the job resolves a name; `cb41738`), and artifacts shared the 4,096-token answer cap (`ARTIFACT_MAX_OUTPUT_TOKENS`, 8,192); an invalid staged draft now goes back to the model instead of failing the run (`2e679a2`). Three runs: 4/30, 5/30, 6/30 artifact cases pass; 33 of 43 runs ended at the output cap. Replays show why: `minimax-m3.1-flash` writes the whole artifact in hidden reasoning (27,000–32,000 characters) before staging it. Six failed jobs replayed: 0/6 at the default, 1/6 at `low` effort, 0/6 with thinking disabled (the provider ignores it), 0/1 at 16,384 tokens. Turn time also misses the 90 s bar (research turns 95–316 s). BLOCKED on a user decision about how artifacts are generated (another model for artifacts, or building them section by section). |
+| P3.3 | done | 70fe158 | The QA script referenced the importers P1.9 removed; it now checks the exporters only and keeps its evidence in the run directory. Run `data/manual-office-qa/20261109T072540Z-b5c7950a`: fresh hidden Word 16.0 and Excel instances opened both exports read-only; Word 3 pages, Excel 2 pages, all rendered to PNG and inspected (literal `#1` and `=1+1` stay text, line break, lists, table, currency and date formats correct); Excel's full recalculation matched and the app's formula validator returned `verified`; no macros or external links. Caveat: synthetic fixtures, because P3.2 produced too few DOCX/XLSX artifacts to check. |
 | P3.4 | BLOCKED | - | BLOCKED on U4: needs the user to score 10 artifacts 1-5 from `data/manual-checks/artifact-sample/`. |
 
 ## Phase 4: sandbox benchmark
@@ -75,7 +75,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
-| P5.1 | BLOCKED | - | BLOCKED on P2.1's complete three-run data. The current 300-turn sample gives calls/turn p50 4.0/p95 12.1 and tokens/turn p50 35,702/p95 154,683, but no separately measured tool-call p95 and no completed sweep runs 2–3. Setting `research_max_calls`, `research_max_tool_calls` and `research_operation_token_budget` now would size production budgets from a partial sample. |
+| P5.1 | done | b4f210a | From P2.1's 800 runs plus 25%: `research_max_calls` 14→16 (p95 13), `research_max_tool_calls` 24→14 (p95 11), `research_operation_token_budget` 640,000→210,000 (p95 165,843), in `config.py` and `.env.example`. Gate: 1705 passed, 2 skipped. |
 | P5.2 | done | 617254d | Added settings-driven per-student limiter (`QUOTA_QUERIES_PER_MINUTE=0`, `QUOTA_QUERIES_PER_DAY=0`, `QUOTA_TOKENS_PER_DAY=0`, `QUOTA_SPEND_USD_PER_DAY=0`, `QUOTA_MAX_ACTIVE_JOBS=0`; `0` = unlimited default) in `config.py` and `.env.example`, wired through `QuotaService` (`quotas/service.py`), `conversations/store.py`, `routes/conversations.py`, `routes/corpus.py`, `query_service.py`, `jobs/artifact_runs.py` and `jobs/store.py`. Daily exhaustion returns `"You've reached today's limit. It resets at 00:00 UTC."` with `Retry-After` and `X-Quota-Reset-At`; `frontend/src/api/http.ts` strips raw HTTP status prefixes from student-facing errors, normalizes any raw 429 to the reset-time sentence, and `useSavedChat.ts` preserves both the error banner and the student's draft on send failure. Verified by parametrized rows in `test_rate_limits_and_quotas.py` and browser test `"reaching the daily query limit shows the reset time without a raw 429 and keeps the draft"`. Gate: `.venv\Scripts\python.exe -m pytest -c backend/pyproject.toml --rootdir backend --basetemp data/test-runs/pytest-p52-gate backend/tests` -> 1670 passed, 2 skipped (Windows-only), 0 xfailed in 518.37s; `.venv\Scripts\python.exe -m ruff check backend` -> All checks passed; `npm.cmd --prefix frontend run typecheck` -> pass; `npm.cmd --prefix frontend test` -> 19 unit passed, 33 browser passed; `npm.cmd --prefix frontend run format:check` -> pass; `npm.cmd --prefix frontend run check:callers` -> pass (37 AdvisorClient, 32 backoffice). |
 | P5.3 | done | 95ea6f7 | Added `LLM_MAX_CONCURRENCY=8` in `config.py` and `.env.example`, wired per-process `ProviderGate` across cloud/compatible SDK sync and stream calls bounded by remaining operation deadline, and updated `retry_transient` (shared by legacy and research controllers) for exponential backoff with jitter, `Retry-After` honouring, immediate rate-limited failure when `Retry-After >= remaining_seconds`, deadline ceiling on backoff waits, and no replay on `ProviderTimeoutError(request_sent=True)`. `FakeClock` rows in `test_generation.py` and `test_provider_bounds.py` verify all four invariants with zero real `sleep`. Gate: `.venv\Scripts\python.exe -m pytest -c backend/pyproject.toml --rootdir backend --basetemp data/test-runs/pytest-p53-gate backend/tests` -> 1666 passed, 2 skipped (Windows-only), 0 xfailed in 731.12s; `.venv\Scripts\python.exe -m ruff check backend` -> All checks passed; `npm.cmd --prefix frontend run typecheck` -> pass; `npm.cmd --prefix frontend test` -> 19 unit passed, 32 browser passed; `npm.cmd --prefix frontend run format:check` -> pass; `npm.cmd --prefix frontend run check:callers` -> pass (37 AdvisorClient, 32 backoffice). |
 | P5.4 | done | 26783c2 | Added `WORKSPACE_STORAGE_MAX_BYTES=104857600` (100 MiB = 5x the 20 MiB single-upload cap, explained in comments) in `config.py` and `.env.example`, workspace storage byte queries in `db/queries/quotas.sql` (`lock_workspace_storage`, `get_workspace_artifact_spec_bytes`, `list_workspace_storage_artifact_originals`, `list_workspace_storage_sources`) and `delete_artifact_for_workspace` in `db/queries/artifacts.sql`, and `QuotaService.check_storage_quota` / `workspace_storage_bytes` in `quotas/service.py`. Enforced across `ArtifactStore` (`create_uncommitted`, `revise_uncommitted`, `create`, `revise`), `ingest_file` (`ingest/pipeline.py`), `routes/corpus.py` (`upload_source`, `reindex_source`), `routes/artifacts.py`, `jobs/runtime.py`, and `scripts/worker.py`, refusing over-quota writes with HTTP 413 `"Your workspace storage is full. Remove an uploaded file or saved artifact before adding more."`. Verified by parametrized rows in `test_ingest_revision.py` and `test_artifact_api.py` proving refusal and space reclamation after deletion. Gate: `.venv\Scripts\python.exe -m pytest -c backend/pyproject.toml --rootdir backend --basetemp data/test-runs/pytest-p54-gate backend/tests` -> 1673 passed, 2 skipped (Windows-only), 0 xfailed in 270.38s; `.venv\Scripts\python.exe -m ruff check backend` -> All checks passed; `npm.cmd --prefix frontend run typecheck` -> pass; `npm.cmd --prefix frontend test` -> 19 unit passed, 33 browser passed; `npm.cmd --prefix frontend run format:check` -> pass; `npm.cmd --prefix frontend run check:callers` -> pass (37 AdvisorClient, 32 backoffice). |
@@ -113,7 +113,7 @@ Status values: `todo`, `doing`, `done`, `BLOCKED`.
 
 | ID | Status | Commit | Evidence |
 | --- | --- | --- | --- |
-| P8.1 | BLOCKED | - | BLOCKED on P2.2. Reproducing the known misses needs live research runs; the fixes belong in research and must be proven by an offline row that fails before the fix. |
+| P8.1 | done | eca4948 | Item 1 (courses the student never stated counted as done) fixed with offline rows that fail first. Live repros on the fixed code: "I'm premed, can I take PHYS 141 in Spring 2027?" answers not listed for Spring 2027; "Is DATASCI 463 offered in Spring 2027?" answers only Spring 2026; a cost question separates the $93,128 bill from the $97,948 cost of attendance. ARCHE, declare-by and policy-4plus1 did not reproduce in P2.1; ECON 102 in a question block has no known prompt. |
 
 ## Stage I: user items
 
@@ -167,21 +167,15 @@ gate.
 | BLOCKED row | What unblocks it |
 | --- | --- |
 | P1.9 | U1: the user decides whether to keep or cut the debug backend. |
-| P2.1 | The application quota resets at 2026-11-09 00:00 UTC. Rerun the sweep seeds 202 and a third new seed; the clarity probe's three runs are already recorded. |
-| P2.2 | P2.1 completes, then fix research in the controller/tools/final checks and rerun all three probe sets. |
-| P2.4 | P2.2 proves research at or above legacy, then delete the legacy path and rerun P2.1's probes on research alone. |
 | P2.5 | P2.4 lands, then update `docs/architecture.md`, the audit README and AGENTS.md for one answering path. |
-| P2.6 | Three live scope-set runs after the quota resets (100% declines, ≥19/20 on-topic, no case failing twice). |
-| P8.1 | P2.2 reproduces each known miss and adds an offline row that fails before the research fix. |
-| P3.2 | Three live artifact-benchmark runs after the quota resets, with the correctness/scope/completion/time bars. |
-| P3.3 | P3.2's final run, then `scripts.manual.office_export_native_qa` on this Windows machine. |
+| P2.6 | The user decides whether greeting small talk (S06) is declined or answered; then rerun the scope set. |
+| P3.2 | The user decides how artifacts are generated: the current model drafts the whole artifact in hidden reasoning and runs out of tokens. |
 | P3.4 | U4: the user scores 10 artifacts 1–5 (mean ≥4, none below 3). |
 | P4.3 | Claude builds the Linux Docker/gVisor `runsc` host. |
 | P4.4 | P4.3 exists; then run the function probes (health, Office recalculation, HTML screenshots, latency). |
 | P4.5 | P4.3 exists; then run the ten containment probes through P4.2's script. |
 | P4.6 | P4.3 exists; then run the 200-sequential/100-concurrent soak and recovery checks. |
 | P4.7 | P4.3–P4.6 pass; then rerun P3.2 with `OFFICE_ENABLED=true` and `SCREENSHOT_RENDERER=sandbox`. |
-| P5.1 | P2.1's complete p95 call/tool-call/token data, then set the research budgets to p95 +25%. |
 | P5.5 | An idle production-sized host or multiple replicas plus a connection pooler. The measured Tier 1 failure is in `docs/plans/scale-6000.md`: best p95 first token 42.7 s, p95 full answer 62.4 s, 284/300 completed, conversation pool 30/30 exhausted. |
 | U1 | The user decides whether to keep or cut the debug backend; this unblocks P1.9. |
 | U2 | The user publishes reviewed requirement rules for the most-asked programs. |
@@ -195,12 +189,15 @@ gate.
 
 ### Benchmark scores
 
-- Clarity probe, three runs: 30/38, 32/38, 33/38 overall; research was 15/19,
-  18/19, 17/19 against legacy's 15/19, 14/19, 16/19.
-- Advising sweep: seed 101 118/124; seed 202 cut off after 62 cases by the
-  daily quota; seed 203 not run.
-- P3.1 artifact benchmark: offline dry run 70/70 cases passed. The live
-  correctness bar (P3.2) was not run.
+- Clarity probe, research vs legacy: baseline 15/19, 18/19, 17/19 vs 15/19,
+  14/19, 16/19; fixed code 17/19, 18/19, 16/19 vs 15/19, 18/19, 17/19.
+- 65-probe audit through the product, research vs legacy: baseline 56, 58, 58
+  vs 58, 57, 58 of 58; fixed code 58, 58, 57 vs 57, 57, 58.
+- Advising sweep (research): baseline seeds 101/202/303 118/124, 119/122,
+  122/124; fixed code seeds 404/505/606 122/124, 117/122, 117/123.
+- P3.1 artifact benchmark: offline 70/70. Live (P3.2): 40/70, 44/70, 45/70;
+  artifact cases 4/30, 5/30, 6/30; scope on-topic 20/20 each run, off-topic
+  18, 19, 19 of 20.
 - P5.5 load, best 300-turn run: 284 completed, 4 failed, 12 pending; p95 first
   token 42.7 s; p95 full answer 62.4 s. The 60-worker pilot was 60/60 at
   12.4 s / 15.7 s. Tier 1 did not pass.
