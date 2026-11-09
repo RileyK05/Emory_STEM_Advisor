@@ -58,6 +58,7 @@ from app.generation.native_tools import (
     candidate_problem,
     stage_scope,
     stage_spec,
+    validate_generation_size,
 )
 from app.jobs.store import SafeJobError
 from app.llm.base import GenerationRequest, GenerationResult, ToolCall
@@ -926,6 +927,11 @@ class ArtifactPipeline:
         findings = []
         for round_index in range(self.settings.artifact_repair_rounds + 1):
             spec = self._assemble()
+            try:
+                validate_generation_size(spec)
+            except ValueError as exc:
+                raise SafeJobError("invalid_output",
+                                   "The artifact exceeded the supported size.") from exc
             self.context.progress({"stage": "checking"})
             findings = self._check(spec)
             if not findings:
