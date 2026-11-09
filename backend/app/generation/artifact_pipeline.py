@@ -31,6 +31,7 @@ from app.artifacts.checks import (
     ArtifactCheckFinding,
     check_generated_artifact,
     extract_planned_terms,
+    invalid_course_codes,
 )
 from app.artifacts.inert_html import render_inert_markup
 from app.artifacts.models import (
@@ -859,6 +860,8 @@ class ArtifactPipeline:
             _check_course_list(section, value.courses,
                                " ".join(_block_text(block) for block in blocks),
                                self.known_courses, self.campus_equivalents)
+            self._check_plan_codes(
+                section, " ".join(_block_text(block) for block in blocks))
         value.blocks = blocks
         value.html = ""
         value.rows = []
@@ -882,6 +885,7 @@ class ArtifactPipeline:
         if getattr(section, "courses", []):
             _check_course_list(section, value.courses, fragment,
                                self.known_courses, self.campus_equivalents)
+            self._check_plan_codes(section, fragment)
         value.blocks = []
         value.rows = []
         value.html = fragment
@@ -911,6 +915,7 @@ class ArtifactPipeline:
             text = " ".join(str(item) for row in value.rows for item in row.values)
             _check_course_list(section, value.courses, text,
                                self.known_courses, self.campus_equivalents)
+            self._check_plan_codes(section, text)
             scheduled = set()
             for row in value.rows:
                 for item in row.values:
@@ -923,6 +928,25 @@ class ArtifactPipeline:
                 raise ValueError("a term sheet cannot add courses that are not in its fixed list")
         value.blocks = []
         value.html = ""
+
+    def _check_plan_codes(self, section, text: str):
+        fixed = list(getattr(section, "courses", []))
+        if not fixed:
+            return
+        allowed = set(fixed)
+        for code in fixed:
+            allowed.update(self.campus_equivalents.get(code, frozenset()))
+        extra = set(canonical_codes_in(text)) - allowed
+        if not extra:
+            return
+        if getattr(section, "blocked_reasons", []):
+            unknown = invalid_course_codes(extra, self.known_courses,
+                                           self.campus_equivalents)
+            if unknown:
+                raise ValueError("unknown courses: " + ", ".join(sorted(unknown)))
+            return
+        raise ValueError("a term section cannot name other courses: "
+                         + ", ".join(sorted(extra)))
 
     def _check_bindings(self, section, value: StageSection, elements: set[str]):
         bindings = value.bindings or []
