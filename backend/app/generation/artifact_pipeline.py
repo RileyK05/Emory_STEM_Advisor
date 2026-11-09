@@ -306,6 +306,13 @@ class ArtifactPipeline:
 
     def _validate_outline(self, value: StageOutline):
         limit = self.settings.artifact_max_sections
+        requested_codes = canonical_codes_in(self.inputs.prompt)
+        if (self.kind != "html" and requested_codes
+                and re.search(r"(?i)\b(?:plan|schedule|semester|term|year)\b", self.inputs.prompt)
+                and not value.selected_courses):
+            raise ValueError(
+                "this request asks for a term plan and names courses; put those exact "
+                "course codes in selected_courses and name the program")
         if self.kind == "workbook":
             if not value.sheets:
                 raise ValueError("a workbook outline needs at least one sheet")
