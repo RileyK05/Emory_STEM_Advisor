@@ -32,9 +32,3 @@ INSERT INTO citations (
     %(locator_label)s, %(text_snapshot)s
 );
 
--- name: attach_operation_model_calls_to_trace
--- A planning call runs before its retrieval trace exists; link it once written.
-UPDATE model_calls
-SET trace_id = %(trace_id)s
-WHERE operation_id = %(operation_id)s
-  AND trace_id IS NULL;

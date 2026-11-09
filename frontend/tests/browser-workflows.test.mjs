@@ -1184,7 +1184,6 @@ async function setupPage({
           activeSessions: 2,
           conversations: conversationSummaries.length,
           turns: 10,
-          summaries: 2,
           queuedJobs: 0,
           runningJobs: 0,
           sources: sourceRows.length,

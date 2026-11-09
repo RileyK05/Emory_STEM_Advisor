@@ -4,7 +4,6 @@ SELECT NOT EXISTS (
     WHERE status = 'queued'
        OR (status = 'running' AND lease_expires_at > statement_timestamp())
     UNION ALL SELECT 1 FROM conversation_requests WHERE state = 'pending'
-    UNION ALL SELECT 1 FROM conversation_summaries WHERE state = 'pending'
     UNION ALL SELECT 1 FROM operation_calls c JOIN operations o USING (operation_id)
         WHERE c.status = 'reserved' AND o.deadline_at > statement_timestamp()
 ) AS ready;
@@ -18,9 +17,6 @@ WHERE status = 'queued'
 UNION ALL
 SELECT 'pending_conversation_requests', count(*), min(request_id::text)
 FROM conversation_requests WHERE state = 'pending'
-UNION ALL
-SELECT 'pending_conversation_summaries', count(*), min(summary_id::text)
-FROM conversation_summaries WHERE state = 'pending'
 UNION ALL
 SELECT 'reserved_operation_calls', count(*), min(c.operation_id::text)
 FROM operation_calls c JOIN operations o USING (operation_id)

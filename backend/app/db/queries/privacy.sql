@@ -106,9 +106,6 @@ DELETE FROM privacy_exports WHERE workspace_key = %(workspace_key)s;
 -- name: delete_workspace_research
 DELETE FROM research_runs WHERE workspace_key = %(workspace_key)s;
 
--- name: delete_workspace_summaries
-DELETE FROM conversation_summaries WHERE workspace_key = %(workspace_key)s;
-
 -- name: delete_workspace_conversations
 DELETE FROM conversations WHERE workspace_key = %(workspace_key)s;
 

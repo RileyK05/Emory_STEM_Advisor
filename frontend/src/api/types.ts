@@ -593,7 +593,6 @@ export interface AdminOverview {
   activeSessions: number;
   conversations: number;
   turns: number;
-  summaries: number;
   queuedJobs: number;
   runningJobs: number;
   failedJobs: number;

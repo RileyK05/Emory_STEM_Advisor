@@ -9,7 +9,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api import deps
 from app.api.admission import AdmissionLimits
-from app.api.query_service import query_response
 from app.api.schemas import (
     ConversationRecord,
     ConversationStreamEventsResponse,
@@ -153,8 +152,7 @@ def _load_references(conn, settings, workspace, body):
 
 def _history_context(store, conversation_id, settings, references) -> str:
     """The transcript the research model reads, within the conversation context budget."""
-    rows = store.context(conversation_id, max_bytes=settings.conversation_context_max_bytes,
-                         archive=True)
+    rows = store.context(conversation_id)
     artifact_bytes = len(json.dumps(references, ensure_ascii=False,
                                     separators=(",", ":")).encode("utf-8"))
     history = research_history_prompt(rows, max_bytes=min(
@@ -304,62 +302,3 @@ def stream_events(conversation_id: UUID, request_id: UUID, conn: Conn, workspace
             "requestState": request_row["request_state"], "jobState": state,
             "done": request_row["request_state"] != "pending"
             or state in {JobStatus.SUCCEEDED.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value}}
-
-
-@router.post("/{conversation_id}/turns", response_model=ConversationTurnResponse,
-             response_model_exclude_unset=True)
-def turn(conversation_id: UUID, body: ConversationQuery, request: Request,
-         conn: Conn, workspace: Workspace, debug: Debug, principal: PrincipalDep):
-    store = ConversationStore(conn, workspace)
-    snapshot = {"request": body.model_dump(mode="json", exclude_unset=True), "query": body.query}
-    replay = store.replay(conversation_id, body.requestId, snapshot)
-    if replay is not None:
-        return public_payload(replay, principal)
-    settings = deps.execution_settings(
-        request, conn, workspace, debug.settings if debug is not None else None)
-    config = debug.config if debug is not None else request.app.state.config
-    # The sequence check under the publication lock also fences context loaded
-    # before another request's completion.
-    prior, source_ids = _scope(store, conversation_id, body)
-    collection = body.collectionId or prior.get("collectionId")
-    references = _load_references(conn, settings, workspace, body)
-    history_context = _history_context(store, conversation_id, settings, references)
-    conn.commit()
-    snapshot["effective"] = {"collectionId": collection,
-                             "sourceIds": [str(item) for item in source_ids] if source_ids is not None else None,
-                             "artifactReferences": references}
-    if debug is not None:
-        snapshot["debug"] = debug.snapshot()
-    artifact_context = json.dumps(references, ensure_ascii=False, separators=(",", ":"))
-    replay = store.begin(conversation_id, body.requestId, body.expectedSequence, snapshot)
-    if replay is not None:
-        return public_payload(replay, principal)
-    def check_current():
-        current = store.get(conversation_id)
-        conn.commit()
-        if current["pending_request_id"] != body.requestId:
-            raise HTTPException(409, "conversation request was abandoned; completion was withheld")
-
-    try:
-        result = query_response(
-            QueryRequest(query=body.query, collectionId=collection, sourceIds=source_ids),
-            conn, settings, config, request.app.state.embedder,
-            request.app.state.provider, workspace_key=workspace,
-            connection_profiles=request.app.state.connection_profiles,
-            connection_runtime=request.app.state.connection_runtime,
-            history_context=history_context + "\nExact referenced artifact revisions:\n" + artifact_context,
-            check_cancelled=check_current,
-            conversation_id=conversation_id, conversation_request_id=body.requestId,
-        ).model_dump(mode="json")
-    except HTTPException as exc:
-        store.finish(conversation_id, body.requestId, {
-            "type": "failed", "reason": str(exc.detail), "statusCode": exc.status_code,
-        }, state="failed")
-        raise
-    except Exception:  # noqa: BLE001 - persist safe failure without leaking provider or private internals
-        store.finish(conversation_id, body.requestId, {
-            "type": "failed", "reason": "Conversation request failed. Saved turns were retained.",
-            "statusCode": 503,
-        }, state="failed")
-        raise HTTPException(503, "conversation request failed; saved turns were retained") from None
-    return public_payload(store.finish(conversation_id, body.requestId, result), principal)

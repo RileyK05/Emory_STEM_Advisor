@@ -12,94 +12,85 @@ from app.auth.models import Principal
 from app.conversations.experiments import ExperimentService
 from app.conversations.store import (
     ConversationStore,
-    history_prompt,
     research_history_prompt,
 )
 from app.db import queries
 from app.db.connection import connect
 from app.jobs.store import JobStore, SafeJobError
 from tests.fakes import FakeProvider
-from tests.helpers import api_client, collection_name, ingest_text
+from tests.helpers import api_client, collection_name, ingest_text, send_turn
 
 
 @pytest.mark.parametrize("mode", ["development", "oidc"])
-def test_history_and_exact_citations_survive_reload_and_request_replay(db, collection, tmp_path, mode):
+def test_saved_answers_and_exact_citations_survive_reload_and_request_replay(
+        db, collection, tmp_path, mode):
     ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is a documented course concept.")
-    provider = FakeProvider("Alpha is documented [1].")
+    provider = FakeProvider("Alpha is documented.")
     client = api_client(db, collection, provider=provider)
     client.app.dependency_overrides[get_principal] = lambda: Principal(
         workspace_key="development", issuer=None, subject="test", mode=mode)
-    made = client.post("/api/conversations", json={"title": "Alpha questions"}).json()
-    path = "/api/conversations/" + made["conversationId"]
+    conversation = client.post("/api/conversations", json={"title": "Alpha questions"}).json()["conversationId"]
+    path = "/api/conversations/" + conversation
     first = {"query": "alpha", "collectionId": collection_name(db, collection),
              "requestId": str(uuid4()), "expectedSequence": 0}
-    response = client.post(path + "/turns", json=first)
-    assert response.status_code == 200, response.text
-    answer = response.json()
-    if mode == "oidc":
-        assert answer["trace"]["prompt"] == {"system": "", "user": ""}
-        assert answer["trace"]["seams"] == []
-    else:
-        assert answer["trace"]["prompt"]["system"]
-    assert answer["sequence"] == 2
-    assert answer["claims"][0]["reviewStatus"] == "unreviewed"
-    assert answer["claims"][0]["citationChunkIds"] == [answer["citations"][0]["chunkId"]]
-    calls = provider.calls
-    assert client.post(path + "/turns", json=first).json() == answer
-    assert provider.calls == calls, "a replay returns the saved answer without calling the model"
-    assert client.post(path + "/turns", json={**first, "query": "different"}).status_code == 409
+    assert send_turn(client, conversation, first).status_code == 202
     saved = client.get(path).json()
     assert [t["sequence"] for t in saved["turns"]] == [1, 2]
-    exact = saved["turns"][1]["evidence"]["contextBlock"][0]["text"]
+    answer = saved["turns"][1]["evidence"]
+    assert answer["citations"][0]["sourceName"] == "alpha.txt"
+    assert "trace" not in answer, "saved turns keep no prompt or retrieval diagnostics"
+    calls = provider.calls
+    replay = client.post(path + "/turns/stream", json=first)
+    assert replay.status_code == 202 and replay.json()["state"] == "succeeded"
+    assert provider.calls == calls, "a replay inspects the saved job without calling the model"
+    assert client.post(path + "/turns/stream", json={**first, "query": "different"}).status_code == 409
+    exact = answer["contextBlock"][0]["text"]
     assert exact == "Alpha is a documented course concept."
     db.execute("DELETE FROM sources")
     db.commit()
     assert client.get(path).json()["turns"][1]["evidence"]["contextBlock"][0]["text"] == exact
-    assert provider.calls == calls
     assert db.execute("SELECT count(*) AS n FROM claims WHERE review_status='unreviewed'").fetchone()["n"] == 1
+
 
 
 def test_followup_uses_complete_history_and_inherits_explicit_empty_scope(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is a documented course concept.")
-    provider = FakeProvider("Alpha is documented [1].")
+    provider = FakeProvider("Alpha is documented.")
     client = api_client(db, collection, provider=provider)
-    conversation = client.post("/api/conversations", json={"title": "Follow-ups"}).json()
-    path = "/api/conversations/" + conversation["conversationId"]
+    conversation = client.post("/api/conversations", json={"title": "Follow-ups"}).json()["conversationId"]
+    path = "/api/conversations/" + conversation
     name = collection_name(db, collection)
-    assert client.post(path + "/turns", json={"query": "alpha", "collectionId": name,
-        "sourceIds": [str(source)], "requestId": str(uuid4()), "expectedSequence": 0}).status_code == 200
-    followup = client.post(path + "/turns", json={"query": "what does that mean?",
+    send_turn(client, conversation, {"query": "alpha", "collectionId": name,
+        "sourceIds": [str(source)], "requestId": str(uuid4()), "expectedSequence": 0})
+    send_turn(client, conversation, {"query": "what does that mean?",
         "requestId": str(uuid4()), "expectedSequence": 2})
-    assert followup.status_code == 200, followup.text
     history = json.loads(provider.last_messages[1]["content"])["history_untrusted"]
     assert "alpha" in history and "Alpha is documented." in history
-    assert client.get(path).json()["turns"][2]["evidence"]["effective"]["sourceIds"] == [str(source)]
-    empty = client.post(path + "/turns", json={"query": "alpha", "sourceIds": [],
+    turns = client.get(path).json()["turns"]
+    assert turns[2]["evidence"]["effective"]["sourceIds"] == [str(source)]
+    send_turn(client, conversation, {"query": "alpha", "sourceIds": [],
         "requestId": str(uuid4()), "expectedSequence": 4})
-    assert empty.status_code == 200
-    assert empty.json()["research"]["outcome"] == "insufficient_evidence"
-    inherited = client.post(path + "/turns", json={"query": "more about it",
+    send_turn(client, conversation, {"query": "more about it",
         "requestId": str(uuid4()), "expectedSequence": 6})
-    assert inherited.json()["research"]["outcome"] == "insufficient_evidence"
+    turns = client.get(path).json()["turns"]
+    assert turns[6]["evidence"]["effective"]["sourceIds"] == []
+    assert [turns[i]["evidence"]["research"]["outcome"] for i in (5, 7)] == [
+        "insufficient_evidence", "insufficient_evidence"]
+
 
 
 def test_an_explicit_null_scope_resets_to_the_whole_collection(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is a documented course concept.")
-    provider = FakeProvider("Alpha is documented [1].")
-    client = api_client(db, collection, provider=provider)
-    conversation = client.post("/api/conversations", json={"title": "Scope resets"}).json()
-    path = "/api/conversations/" + conversation["conversationId"]
+    client = api_client(db, collection, provider=FakeProvider("Alpha is documented."))
+    conversation = client.post("/api/conversations", json={"title": "Scope resets"}).json()["conversationId"]
     name = collection_name(db, collection)
-    assert client.post(path + "/turns", json={"query": "alpha", "collectionId": name,
-        "sourceIds": [str(source)], "requestId": str(uuid4()), "expectedSequence": 0}).status_code == 200
-    plain = client.post(path + "/turns", json={"query": "alpha requirements", "sourceIds": [str(source)],
+    send_turn(client, conversation, {"query": "alpha", "collectionId": name,
+        "sourceIds": [str(source)], "requestId": str(uuid4()), "expectedSequence": 0})
+    send_turn(client, conversation, {"query": "alpha", "sourceIds": None,
         "requestId": str(uuid4()), "expectedSequence": 2})
-    assert plain.status_code == 200, plain.text
-    # An explicit null resets to the whole collection rather than inheriting [source].
-    reset = client.post(path + "/turns", json={"query": "alpha", "sourceIds": None,
-        "requestId": str(uuid4()), "expectedSequence": 4})
-    assert reset.status_code == 200, reset.text
-    assert reset.json()["type"] == "answer"
+    turns = client.get("/api/conversations/" + conversation).json()["turns"]
+    assert turns[2]["evidence"]["effective"]["sourceIds"] is None
+    assert turns[3]["evidence"]["type"] == "answer"
 
 
 def test_private_conversation_cannot_be_listed_read_written_or_abandoned_by_other_owner(db, collection):
@@ -111,7 +102,7 @@ def test_private_conversation_cannot_be_listed_read_written_or_abandoned_by_othe
     owner[0] = "bob"
     assert client.get("/api/conversations").json() == []
     assert client.get(path).status_code == 404
-    assert client.post(path + "/turns", json={"query": "alpha",
+    assert client.post(path + "/turns/stream", json={"query": "alpha",
         "requestId": str(uuid4()), "expectedSequence": 0}).status_code == 404
     assert client.post(path + "/turns/" + str(uuid4()) + "/abandon").status_code == 404
 
@@ -155,21 +146,17 @@ def test_history_carries_citation_labels_not_retrieved_passage_bodies(db, collec
                        "locatorLabel": "CS 1"}], "trace": {"contextBlock": context}})
     # Twenty retrieved passages (~32 KB) were saved for display, but history
     # re-sends only the answer text and compact citation labels (EMO-017).
-    rows = store.context(conversation, max_bytes=8192)
-    assert len(rows[-1]["evidence"]["contextBlock"]) == 20
-    history = json.loads(history_prompt(rows))
+    archived = store.context(conversation)
+    assert len(archived[-1]["evidence"]["contextBlock"]) == 20
+    history = json.loads(research_history_prompt(archived, max_bytes=8192))
     assert "passage" not in json.dumps(history)
-    assert history[-1]["evidence"]["citations"] == [
+    assert history["turns"][-1]["evidence"]["citations"] == [
         {"chunkId": "c1", "sourceName": "atlas", "locatorLabel": "CS 1"}]
-    assert history[0]["evidence"] == {}
-    with pytest.raises(HTTPException):
-        store.context(conversation, max_bytes=1024)
-    archived = store.context(conversation, max_bytes=1024, archive=True)
+    assert history["turns"][0]["evidence"] == {}
     selected = research_history_prompt(archived, max_bytes=1024)
     assert len(selected.encode("utf-8")) <= 1024
     assert json.loads(selected)["omitted_turns"] == 1
     assert [turn["text"] for turn in json.loads(selected)["turns"]] == ["data engineering?"]
-    assert archived[-1]["text"] == rows[-1]["text"]
     # A newer long reply cannot hide a student correction. Keep exact messages,
     # including the superseded report, so the model can reconcile chronology.
     correction = {"sequence": 3, "role": "user", "text": "CS 253 is now completed.",
@@ -197,11 +184,11 @@ def test_artifact_context_binds_exact_revision_not_current_title_only(db, collec
     store.revise(saved["artifact_id"], saved["revision_id"], DocumentSpec.model_validate(revised))
     made = client.post("/api/conversations", json={"title": "Artifact reference"}).json()
     path = "/api/conversations/" + made["conversationId"]
-    response = client.post(path + "/turns", json={"query": "summarize this plan",
+    response = send_turn(client, made["conversationId"], {"query": "summarize this plan",
         "collectionId": collection_name(db, collection),
         "requestId": str(uuid4()), "expectedSequence": 0,
         "artifactReferences": [{"artifactId": original["artifactId"], "revisionId": original["revisionId"]}]})
-    assert response.status_code == 200, response.text
+    assert response.status_code == 202, response.text
     reference = client.get(path).json()["turns"][0]["evidence"]["effective"]["artifactReferences"][0]
     assert reference["spec"]["blocks"][0]["text"] == "Immutable original paragraph"
 

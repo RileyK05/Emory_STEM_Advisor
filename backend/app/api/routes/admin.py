@@ -96,7 +96,7 @@ def overview(conn: Conn, principal: Admin):
     return AdminOverview(
         users=row["users"], admins=row["admins"], disabledUsers=row["disabled_users"],
         activeSessions=row["active_sessions"], conversations=row["conversations"],
-        turns=row["turns"], summaries=row["summaries"], queuedJobs=row["queued_jobs"],
+        turns=row["turns"], queuedJobs=row["queued_jobs"],
         runningJobs=row["running_jobs"], failedJobs=row["failed_jobs"],
         sources=row["sources"], artifacts=row["artifacts"], traces=row["traces"],
     )

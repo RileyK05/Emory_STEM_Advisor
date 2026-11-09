@@ -26,10 +26,19 @@ Survey (2026-11-09, `488b967`):
 | C5 | todo | Code comments that narrate plan history (`P2.1`, `P5.1`, round numbers) say what is true instead. Unused SQL queries go. |
 | C6 | todo | Split files that grew by accretion once C1 lands (`research_tools.py` 1,438 lines, `routes/admin.py` 944). |
 | C7 | blocked | Debug sessions and experiments (P1.9, U1): the user decides keep or cut. Since C1 a debug session's system-prompt override is stored but not applied. |
-| C8 | todo | Provider streaming: nothing calls `provider.stream()` since C1. The adapters' `stream` methods, `consume_stream`, `StreamEvent`, the gate's stream wrapper and their tests go. |
-| C9 | todo | Conversation summaries (compaction): nothing writes them since C1. The store's summary methods, `queries/conversation_summaries.sql`, the privacy/backup/admin reads, and a migration dropping the table. |
+| C8 | done | Provider streaming: nothing calls `provider.stream()` since C1. The adapters' `stream` methods, `consume_stream`, `StreamEvent`, the gate's stream wrapper and their tests go. hf-local loses its streaming worker and bounded streamer; the bare-model audit uses `generate`. |
+| C9 | done | Conversation summaries (compaction): nothing writes them since C1. The store's summary methods, `queries/conversation_summaries.sql`, the privacy/backup/admin reads, and a migration dropping the table. Migration 088 also drops the prompt registry's tables (`prompt_versions`, `prompt_promotions`, `eval_suite_fixtures`); `queries/prompts.sql`, `queries/planning.sql` and three uncalled queries go. `ConversationStore.context` is the recent window only. |
 | C10 | todo | Frontend states only the legacy path produced: provisional drafts (`provisional_delta`/`provisional_reset` events), `history` and `refusal` turns, `RefusalResponse`. The event route stops relaying provisional kinds. |
-| C11 | todo | The synchronous `POST /api/conversations/{id}/turns` route: the UI uses only the stream route. Port its tests to the stream route, then delete it. |
+| C11 | done | The synchronous `POST /api/conversations/{id}/turns` route: the UI uses only the stream route. Port its tests to the stream route, then delete it. `tests.helpers.send_turn` starts a streamed turn and runs the worker once. |
+
+Found along the way, not yet done:
+
+- `ConversationStore.begin` and `replay` have only test callers since C11; the
+  tests seed pending requests with them.
+- `conversations.context_boundary_sequence` is read in four queries but nothing
+  writes it (the memory-reset feature it served is gone).
+- The `streaming` connection capability is still declared and stored, though
+  nothing streams.
 
 Every step keeps the gates green: `pytest`, `ruff`, `npm run typecheck`,
 `npm test`, `npm run format:check`, `npm run check:callers`, and from C2 on

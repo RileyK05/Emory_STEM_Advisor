@@ -151,3 +151,30 @@ def start_run(client, kind, inputs, key, workspace="development"):
     store = getattr(client.app.state, "job_store", None) or JobStore(connector(settings))
     return str(admit_artifact_run(store, kind=kind, inputs=inputs, scope_key=workspace,
                                   idempotency_key=key, settings=settings).job_id)
+
+
+def send_turn(client, conversation_id, body):
+    """Send one chat turn the way the app does and let the worker answer it.
+
+    Starts the streamed turn, then runs the conversation worker once on its own
+    connection. Returns the stream start response; read the saved turns with
+    GET /api/conversations/{id}.
+    """
+    from app.conversations.worker import ConversationTurnExecutor
+    from app.db.connection import connect, connection_dsn
+    from app.jobs.store import JobStore
+    from app.jobs.worker import run_once
+
+    started = client.post(f"/api/conversations/{conversation_id}/turns/stream", json=body)
+    if started.status_code != 202:
+        return started
+    db = client.app.state.override_conn
+    db.commit()  # The worker reads on its own connection.
+    dsn = connection_dsn(db)
+    state = client.app.state
+    executor = ConversationTurnExecutor(
+        settings=state.settings, config=state.config, embedder=state.embedder,
+        provider=state.provider, connection_profiles=state.connection_profiles,
+        connection_runtime=state.connection_runtime, connect=lambda: connect(dsn))
+    run_once(JobStore(lambda: connect(dsn)), "test-worker", executor)
+    return started

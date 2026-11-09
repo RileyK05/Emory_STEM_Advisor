@@ -16,7 +16,6 @@ export function OverviewPanel({ toolbar }: AdminPanelProps) {
         ['Active sessions', overview.activeSessions],
         ['Conversations', overview.conversations],
         ['Turns', overview.turns],
-        ['Compaction checkpoints', overview.summaries],
         ['Queued jobs', overview.queuedJobs],
         ['Running jobs', overview.runningJobs],
         ['Failed jobs', overview.failedJobs],

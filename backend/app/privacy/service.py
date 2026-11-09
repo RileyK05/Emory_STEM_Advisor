@@ -22,7 +22,6 @@ _DELETE_STEPS = (
     "delete_workspace_feedback_events",
     "delete_workspace_feedback",
     "delete_workspace_research",
-    "delete_workspace_summaries",
     # Capture legacy trace ids through turn evidence before conversations go.
     "delete_workspace_legacy_retrieval_traces",
     "delete_workspace_retrieval_traces",

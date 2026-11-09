@@ -36,7 +36,7 @@ from app.db import queries
 from app.db.connection import connect
 from app.programs.importer import import_programs, program_id
 from app.programs.requirements import parse_program, to_record
-from tests.helpers import ingest_text
+from tests.helpers import ingest_text, send_turn
 from tests.test_atlas_import import _import as import_atlas_sample
 from tests.test_programs import CS_BS, _ingest_catalog_file
 
@@ -745,12 +745,12 @@ def test_conversation_workspace_reuses_only_published_scoped_work(
 
 
 @pytest.mark.parametrize("resume", ["evidence", "conversation", "escaped_conversation", "reworded_conversation", "natural_query_conversation", "empty_search_conversation"])
-def test_saved_research_reopens_evidence_beyond_warm_history_and_continues_its_plan(
+def test_saved_research_reopens_evidence_beyond_recent_history_and_continues_its_plan(
         db, collection, tmp_path, monkeypatch, resume):
     from app.advising.research_workspace import ConversationWorkspace
     from app.api.routes.conversations import ConversationQuery, _prepare_stream_snapshot
     from app.config import load_settings
-    from app.conversations.store import ConversationStore, warm_citations
+    from app.conversations.store import ConversationStore
     from app.generation.research_tools import ResearchSession, StateInput
     from app.llm.base import ToolCall
     from tests.fakes import FakeEmbedder
@@ -788,9 +788,7 @@ def test_saved_research_reopens_evidence_beyond_warm_history_and_continues_its_p
               for sid in extra for c in read_document(db, scope, sid).chunks]
     conversations.finish(conversation, noise, {"type": "answer", "answer": "Seminars listed.",
         "citations": bodies, "trace": {"contextBlock": bodies}})
-    rows = conversations.context(conversation, max_bytes=1024, archive=True)
-    assert len(warm_citations(rows)) == 8
-    assert all(c["sourceId"] != str(corpus["atlas"]) for c in warm_citations(rows))
+    rows = conversations.context(conversation)
     # The last advising scope must survive falling outside the 50-turn recent
     # view; these transcript-only turns do not reset that source selection.
     for sequence in range(4, 56, 2):
@@ -885,16 +883,17 @@ def test_saved_research_reopens_evidence_beyond_warm_history_and_continues_its_p
         db, client.app.state.settings, "development", conversations)
     assert json.loads(stream_snapshot["context"]["historyContext"])["omitted_turns"] > 0
     assert set(stream_snapshot["effective"]["sourceIds"]) == set(selected_sources)
-    response = client.post(f"/api/conversations/{conversation}/turns", json={"query": "Continue that work",
+    started = send_turn(client, conversation, {"query": "Continue that work",
         "requestId": str(uuid4()), "expectedSequence": 56})
-    assert response.status_code == 200, response.text
+    assert started.status_code == 202, started.text
+    answer = client.get(f"/api/conversations/{conversation}?after=56").json()["turns"][-1]
     if resume == "evidence":
-        assert response.json()["citations"][0]["chunkId"] == str(course.chunks[0].chunk_id)
+        assert answer["evidence"]["citations"][0]["chunkId"] == str(course.chunks[0].chunk_id)
     elif resume != "empty_search_conversation":
-        assert not response.json()["citations"] and "afternoon" in response.json()["answer"]
+        assert not answer["evidence"]["citations"] and "afternoon" in answer["text"]
     else:
-        assert not response.json()["citations"]
-    saved = store.get(UUID(response.json()["research"]["runId"]))
+        assert not answer["evidence"]["citations"]
+    saved = store.get(UUID(answer["evidence"]["research"]["runId"]))
     if resume == "empty_search_conversation":
         assert saved.status == "insufficient_evidence" and saved.state is None
         assert len(provider.requests) == 3

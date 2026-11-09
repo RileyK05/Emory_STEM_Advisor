@@ -69,7 +69,7 @@ def _seed(conn, settings, config, embedder, *, report, source_id=None):
 def _probe(conn, settings, config, embedder, provider, conversation, *, case, question, sources=None):
     sources = None if sources is None else [str(source) for source in sources]
     conversations = ConversationStore(conn, "development")
-    rows = conversations.context(conversation, max_bytes=12000, archive=True)
+    rows = conversations.context(conversation)
     sequence = conversations.get(conversation)["last_sequence"]
     request = uuid4()
     conversations.begin(conversation, request, sequence, {"query": question,

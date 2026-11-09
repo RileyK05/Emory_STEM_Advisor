@@ -12,7 +12,7 @@ from app.artifacts.advising_summary import (
 from app.artifacts.storage import ArtifactStore
 from app.conversations.store import ConversationStore
 from tests.fakes import FakeProvider
-from tests.helpers import api_client, collection_name, ingest_text, start_run
+from tests.helpers import api_client, collection_name, ingest_text, send_turn, start_run
 
 
 def _append_turn_pair(
@@ -256,16 +256,13 @@ def test_advising_summary_api_endpoint(db, collection, tmp_path, migrated_dsn, m
     created_conv = client.post("/api/conversations", json={"title": "Calc Planning"}).json()
     conv_id = created_conv["conversationId"]
 
-    turn_res = client.post(
-        f"/api/conversations/{conv_id}/turns",
-        json={
-            "query": "What are prerequisites for physics?",
-            "collectionId": collection_name(db, collection),
-            "requestId": str(uuid4()),
-            "expectedSequence": 0,
-        },
-    )
-    assert turn_res.status_code == 200
+    turn_res = send_turn(client, conv_id, {
+        "query": "What are prerequisites for physics?",
+        "collectionId": collection_name(db, collection),
+        "requestId": str(uuid4()),
+        "expectedSequence": 0,
+    })
+    assert turn_res.status_code == 202
     turn_calls = provider.calls
 
     # Call export-summary endpoint

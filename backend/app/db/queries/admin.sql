@@ -7,7 +7,6 @@ SELECT
       WHERE revoked_at IS NULL AND expires_at > now()) AS active_sessions,
     (SELECT count(*) FROM conversations) AS conversations,
     (SELECT count(*) FROM conversation_turns) AS turns,
-    (SELECT count(*) FROM conversation_summaries) AS summaries,
     (SELECT count(*) FROM jobs WHERE status = 'queued') AS queued_jobs,
     (SELECT count(*) FROM jobs WHERE status = 'running') AS running_jobs,
     (SELECT count(*) FROM jobs WHERE status = 'failed') AS failed_jobs,
@@ -71,15 +70,6 @@ INSERT INTO admin_audit (
     %(audit_id)s, %(actor_user_id)s, %(actor_workspace)s, %(action)s,
     %(target_type)s, %(target_id)s, %(detail)s
 );
-
--- name: admin_list_audit
-SELECT a.audit_id, a.actor_user_id, a.actor_workspace, a.action, a.target_type,
-       a.target_id, a.detail, a.created_at, u.email AS actor_email,
-       u.display_name AS actor_display_name
-FROM admin_audit a
-LEFT JOIN app_users u ON u.user_id = a.actor_user_id
-ORDER BY a.created_at DESC
-LIMIT %(limit)s;
 
 -- name: admin_list_audit_filtered
 SELECT a.audit_id, a.actor_user_id, a.actor_workspace, a.action, a.target_type,

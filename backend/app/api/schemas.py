@@ -326,7 +326,6 @@ class AdminOverview(_WireModel):
     activeSessions: int
     conversations: int
     turns: int
-    summaries: int
     queuedJobs: int
     runningJobs: int
     failedJobs: int
