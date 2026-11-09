@@ -263,7 +263,7 @@ def run() -> dict:
         },
         "container_safety": {"xlsx_has_no_macros_or_external_links": safe_container,
                              "formula_sources": ["=B2*B3", "=Inputs!B8", "=B2+5"]},
-        "repository_importers": "removed in P1.9: students no longer upload Office files",
+        "repository_importers": "removed: students no longer upload Office files",
         "native_office": com_report,
         "native_saved_xlsx": native_xlsx,
         "app_recalculation_validator_with_native_result_adapter": validator,

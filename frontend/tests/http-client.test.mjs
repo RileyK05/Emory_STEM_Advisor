@@ -26,13 +26,13 @@ test('query preserves explicit empty source scope', async () => {
   let captured;
   const handler = async (input, init) => {
     captured = { input: String(input), init };
-    return Response.json({ type: 'refusal', reason: 'No selected sources.' });
+    return Response.json({ type: 'answer', answer: 'No selected sources.', citations: [] });
   };
   await withStubbedFetch(handler, async () => {
     const response = await new HttpClient().query({ query: 'requirements', sourceIds: [] });
     assert.equal(captured.input, '/api/query');
     assert.deepEqual(JSON.parse(captured.init.body), { query: 'requirements', sourceIds: [] });
-    assert.equal(response.type, 'refusal');
+    assert.equal(response.type, 'answer');
   });
 });
 
@@ -189,7 +189,7 @@ test('conversation stream submission and event reads are separate storage reques
         { status: 202 },
       );
     return Response.json({
-      events: [{ eventId: 2, type: 'provisional_delta', text: 'Unverified' }],
+      events: [{ eventId: 2, type: 'stage', stage: 'researching' }],
       nextEventId: 2,
       requestState: 'pending',
       jobState: 'running',
@@ -198,7 +198,7 @@ test('conversation stream submission and event reads are separate storage reques
   };
   await withStubbedFetch(handler, async () => {
     const client = new HttpClient();
-    const request = { query: 'Follow up', requestId: 'req-1', expectedSequence: 2, mode: 'advising' };
+    const request = { query: 'Follow up', requestId: 'req-1', expectedSequence: 2 };
     assert.deepEqual(await client.startConversationTurnStream('conv/1', request), {
       conversationId: 'conv-1',
       requestId: 'req-1',
@@ -206,7 +206,7 @@ test('conversation stream submission and event reads are separate storage reques
       state: 'queued',
     });
     const page = await client.getConversationTurnEvents('conv/1', 'req-1', 1, 20);
-    assert.equal(page.events[0].text, 'Unverified');
+    assert.equal(page.events[0].stage, 'researching');
     assert.equal(calls[0].url, '/api/conversations/conv%2F1/turns/stream');
     assert.deepEqual(JSON.parse(calls[0].init.body), request);
     assert.equal(calls[1].url, '/api/conversations/conv%2F1/turns/req-1/events?afterEventId=1&limit=20');

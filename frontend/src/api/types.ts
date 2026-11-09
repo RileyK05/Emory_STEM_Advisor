@@ -3,8 +3,7 @@
 // backend FastAPI schemas (backend/app/api/schemas.py) both satisfy; the mock
 // client satisfies them too.
 
-/** plan = evidence a validated query plan chose (opt-in query planning). */
-export type SeamName = 'keyword' | 'embed' | 'prereq' | 'plan';
+export type SeamName = 'keyword' | 'embed' | 'prereq';
 
 export interface SeamStatus {
   name: SeamName;
@@ -328,19 +327,17 @@ export interface ApplicabilityNotice {
   declaredCohort?: string | null;
 }
 
-export type QueryResponse =
-  | {
-      type: 'answer';
-      answer: string;
-      citations: Citation[];
-      trace: RetrievalTrace;
-      claims?: ParagraphClaimReviewUnit[];
-      research?: ResearchDecisionInfo | null;
-      applicability?: ApplicabilityNotice | null;
-      artifactRun?: ArtifactRunInfo | null;
-      artifactNotice?: string | null;
-    }
-  | { type: 'refusal'; reason: string; trace?: RetrievalTrace };
+export type QueryResponse = {
+  type: 'answer';
+  answer: string;
+  citations: Citation[];
+  trace: RetrievalTrace;
+  claims?: ParagraphClaimReviewUnit[];
+  research?: ResearchDecisionInfo | null;
+  applicability?: ApplicabilityNotice | null;
+  artifactRun?: ArtifactRunInfo | null;
+  artifactNotice?: string | null;
+};
 
 export interface ParagraphClaimReviewUnit {
   text: string;
@@ -478,8 +475,6 @@ export interface ConversationStreamStartResponse {
   state: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown';
 }
 export type ConversationStreamEvent =
-  | { eventId: number; type: 'provisional_delta'; text: string }
-  | { eventId: number; type: 'provisional_reset' }
   | {
       eventId: number;
       type: 'stage';

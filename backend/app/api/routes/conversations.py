@@ -281,11 +281,7 @@ def stream_events(conversation_id: UUID, request_id: UUID, conn: Conn, workspace
         item = {"eventId": row["event_id"]}
         if event_type == "progress":
             kind = payload.get("kind")
-            if kind == "provisional_delta" and isinstance(payload.get("text"), str) and len(payload["text"].encode("utf-8")) <= 4096:
-                item.update({"type": kind, "text": payload["text"]})
-            elif kind == "provisional_reset":
-                item["type"] = kind
-            elif kind == "stage" and payload.get("stage") in PROGRESS_STAGES:
+            if kind == "stage" and payload.get("stage") in PROGRESS_STAGES:
                 item.update({"type": kind, "stage": payload["stage"]})
             else:
                 continue

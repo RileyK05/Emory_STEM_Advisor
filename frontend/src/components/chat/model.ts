@@ -54,14 +54,13 @@ export interface AssistantEntry {
 
 export type ChatEntry = UserEntry | AssistantEntry;
 
-/** The unverified text and stage of a turn that is still being generated. */
+/** The progress stage of a turn that is still being answered. */
 export interface StreamPreview {
   requestId: string;
-  text: string;
   stage: string | null;
 }
 
-export const emptyPreview = (requestId: string): StreamPreview => ({ requestId, text: '', stage: null });
+export const emptyPreview = (requestId: string): StreamPreview => ({ requestId, stage: null });
 
 /** Fold one event into the preview of `requestId`, starting fresh if the preview belongs to another request. */
 export function applyStreamEvent(
@@ -70,16 +69,7 @@ export function applyStreamEvent(
   event: ConversationStreamEvent,
 ): StreamPreview {
   const base = current?.requestId === requestId ? current : emptyPreview(requestId);
-  switch (event.type) {
-    case 'provisional_delta':
-      return { ...base, text: base.text + event.text };
-    case 'provisional_reset':
-      return { ...base, text: '' };
-    case 'stage':
-      return { ...base, stage: event.stage };
-    default:
-      return base;
-  }
+  return event.type === 'stage' ? { ...base, stage: event.stage } : base;
 }
 
 const STAGE_LABELS: Record<string, string> = {

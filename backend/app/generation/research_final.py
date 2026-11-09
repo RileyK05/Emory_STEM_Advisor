@@ -160,8 +160,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
         if block.kind != "fact" or not _INCLUSION.search(block.text):
             continue
         # The locator is part of the cited passage: a course record's locator
-        # names the course the passage is about, exactly as the legacy path's
-        # cited chunks do.
+        # names the course the passage is about.
         support = "\n".join(
             f"{records[e].locator_label}\n{records[e].exact_text}"
             for e in block.evidence_ids if e in records)

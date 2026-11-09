@@ -1307,25 +1307,6 @@ textarea.code {
   align-items: flex-start;
 }
 
-.provisional {
-  width: 100%;
-  padding: 12px 14px;
-  border: 1px dashed var(--border-strong);
-  border-radius: 12px;
-  color: var(--text-2);
-}
-
-.provisional p {
-  margin-top: 4px;
-  white-space: pre-wrap;
-}
-
-.provisional-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-}
-
 .attachment-row {
   display: flex;
   flex-wrap: wrap;

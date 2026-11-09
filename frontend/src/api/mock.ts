@@ -119,20 +119,35 @@ function answerResponse(
   };
 }
 
-/** A canned refusal: no context was assembled and the model was not called. */
-function refusal(query: string, wait: number, reason: string, seams: SeamStatus[], warnings: string[]): QueryResponse {
+/** A canned "the sources do not cover this" answer: research read nothing it could cite. */
+function unanswered(
+  query: string,
+  wait: number,
+  reason: string,
+  seams: SeamStatus[],
+  warnings: string[],
+): QueryResponse {
   return {
-    type: 'refusal',
-    reason,
+    type: 'answer',
+    answer: reason,
+    citations: [],
     trace: buildTrace({
       query,
       seams,
       contributions: [],
       contextChunkIds: [],
-      answer: '',
+      answer: reason,
       latencyMs: Math.round(wait / 2),
       warnings,
     }),
+    research: {
+      runId: 'demo-unanswered',
+      outcome: 'insufficient_evidence',
+      completeness: 'partial',
+      blocks: [{ kind: 'limitation', text: reason, evidenceIds: [], citationNumbers: [], candidateIds: [] }],
+      artifact: null,
+      unresolvedQuestions: [],
+    },
   };
 }
 
@@ -194,7 +209,7 @@ export class MockClient implements AdvisorClient {
     if (req.sourceIds?.length === 0) {
       response = noSelectedSourceResponse(req.query, wait);
     } else if (q.includes('quantum')) {
-      response = refusalResponse(req.query, wait);
+      response = unansweredResponse(req.query, wait);
     } else if (q.includes('gradient') || q.includes('semantic') || q.includes('embed')) {
       response = embeddingResponse(req.query, wait);
     } else if (q.includes('prereq') || q.includes('depend')) {
@@ -365,7 +380,7 @@ export class MockClient implements AdvisorClient {
 }
 
 function noSelectedSourceResponse(query: string, wait: number): QueryResponse {
-  return refusal(
+  return unanswered(
     query,
     wait,
     'No sources were selected for this question. Select one or more indexed sources and try again.',
@@ -374,20 +389,17 @@ function noSelectedSourceResponse(query: string, wait: number): QueryResponse {
       seam('embed', 'dormant', 0, 'no sources selected'),
       seam('prereq', 'dormant', 0, 'no sources selected'),
     ],
-    ['No sources were selected; retrieval and generation were skipped.'],
+    ['No sources were selected, so there was nothing to read.'],
   );
 }
 
-function refusalResponse(query: string, wait: number): QueryResponse {
-  return refusal(
+function unansweredResponse(query: string, wait: number): QueryResponse {
+  return unanswered(
     query,
     wait,
     'No relevant material found in the uploaded docs for this question.',
     [seam('keyword', 'active', 0), PREREQ_DORMANT, seam('embed', 'active', 0)],
-    [
-      'fusion: zero grounded candidates after union; refusal rule applied (invariant 4)',
-      'model was not called; generative stage skipped for zero-candidate queries',
-    ],
+    ['Research is partial; unresolved questions remain.'],
   );
 }
 

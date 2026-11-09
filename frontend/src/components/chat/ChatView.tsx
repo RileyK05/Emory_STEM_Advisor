@@ -13,11 +13,9 @@ interface Props {
 
 export function ChatView({ chat, attachments, onRemoveAttachment }: Props) {
   const bottom = useRef<HTMLDivElement>(null);
-  const textLength = chat.pending?.preview?.text.length ?? 0;
-
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [chat.entries, chat.pending !== null, textLength]);
+  }, [chat.entries, chat.pending !== null]);
 
   const suggest = (text: string) => {
     chat.setDraft(text);

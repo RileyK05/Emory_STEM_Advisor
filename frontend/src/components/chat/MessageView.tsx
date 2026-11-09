@@ -215,12 +215,6 @@ export function PendingAnswer({
       <div className="thinking">
         <Dots /> {streamStageLabel(preview?.stage ?? null)}
       </div>
-      {preview?.text && (
-        <div className="provisional">
-          <span className="provisional-label">Draft — sources are still being checked</span>
-          <p aria-label="Unverified provisional answer">{preview.text}</p>
-        </div>
-      )}
       {slow && (
         <div className="slow-notice" role="status">
           <p>This is taking longer than usual.</p>

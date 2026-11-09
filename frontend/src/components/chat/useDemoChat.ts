@@ -43,30 +43,21 @@ export function useDemoChat(): ChatController {
     };
     getClient()
       .query({ query, ...(scope !== null ? { sourceIds: scope } : {}) })
-      .then((res) => {
-        if (res.type === 'refusal')
-          settle({
-            ...base,
-            kind: 'refusal',
-            text: res.reason,
-            context: res.trace?.contextBlock ?? [],
-            trace: res.trace,
-          });
-        else
-          settle({
-            ...base,
-            kind: 'answer',
-            text: res.answer,
-            citations: res.citations,
-            context: res.trace.contextBlock,
-            responseId: res.trace.traceId,
-            research: res.research,
-            applicability: res.applicability,
-            artifactRun: res.artifactRun,
-            artifactNotice: res.artifactNotice,
-            trace: res.trace,
-          });
-      })
+      .then((res) =>
+        settle({
+          ...base,
+          kind: 'answer',
+          text: res.answer,
+          citations: res.citations,
+          context: res.trace.contextBlock,
+          responseId: res.trace.traceId,
+          research: res.research,
+          applicability: res.applicability,
+          artifactRun: res.artifactRun,
+          artifactNotice: res.artifactNotice,
+          trace: res.trace,
+        }),
+      )
       .catch((cause: unknown) => settle({ ...base, kind: 'error', text: errorMessage(cause) }))
       .finally(() => {
         if (generation.current === epoch) setSending(false);

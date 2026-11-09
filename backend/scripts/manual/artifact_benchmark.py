@@ -453,7 +453,7 @@ def evaluate_checks(
     k10_detail = "clean text" if k10_ok else f"leaks found: {leaks[:3]}"
     results.append(CheckResult("K10", k10_ok, k10_detail))
 
-    # K11: Scope (P2.6): an off-topic case gets exactly the fixed decline and
+    # K11: Scope: an off-topic case gets exactly the fixed decline and
     # nothing else; an on-topic case gets an answer, never the decline.
     reply = (turn.get("text") or "").strip()
     if expected.get("off_topic"):

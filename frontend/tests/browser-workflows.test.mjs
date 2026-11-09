@@ -910,7 +910,7 @@ async function setupPage({
         return route.fulfill({
           json: {
             events: [
-              { eventId: 1, type: 'provisional_delta', text: 'Unverified provisional text.' },
+              { eventId: 1, type: 'stage', stage: 'retrieving' },
               { eventId: 2, type: 'stage', stage: 'generating' },
             ].filter((event) => event.eventId > afterEventId),
             nextEventId: 2,
@@ -2117,11 +2117,11 @@ test('reopened pending conversation resumes stored stream events without posting
     resumeStreams: [{ conversationId: 'resume-1', requestId: 'resume-request', body: { query: 'What is a basis?' } }],
   });
   try {
-    await state.page.getByLabel('Unverified provisional answer').getByText('Unverified provisional text.').waitFor();
+    await state.page.locator('.message-pending').getByText('Writing an answer…').waitFor();
     assert.equal(
       await state.page.locator('.message-pending .source-chip, .message-pending .cite-mark').count(),
       0,
-      'provisional output carries no active citations',
+      'a pending turn carries no citations',
     );
     await state.page
       .locator('.message-assistant')
@@ -2786,7 +2786,7 @@ test('saved conversation exposes pending requests for explicit abandonment', asy
         await release;
         return route.fulfill({
           json: {
-            events: [{ eventId: 2, type: 'provisional_delta', text: 'Late stale text' }],
+            events: [{ eventId: 2, type: 'stage', stage: 'finalizing' }],
             nextEventId: 2,
             requestState: 'pending',
             jobState: 'running',
@@ -2796,7 +2796,7 @@ test('saved conversation exposes pending requests for explicit abandonment', asy
       }
       return route.fulfill({
         json: {
-          events: [{ eventId: 1, type: 'provisional_delta', text: 'Still generating' }].filter(
+          events: [{ eventId: 1, type: 'stage', stage: 'researching' }].filter(
             (event) => event.eventId > after,
           ),
           nextEventId: 1,
@@ -2815,14 +2815,14 @@ test('saved conversation exposes pending requests for explicit abandonment', asy
     assert.equal(await message(page).inputValue(), 'Cancel this newly submitted turn.');
 
     await send(page, 'A different new request.');
-    await page.getByLabel('Unverified provisional answer').getByText('Still generating').waitFor();
+    await page.locator('.message-pending').getByText('Researching your options…').waitFor();
     const lateResponse = page.waitForResponse(
       (response) => response.url().includes(heldRequestId) && response.url().includes('afterEventId=1'),
     );
     releaseLateRead();
     await (await lateResponse).finished();
     await page.evaluate(() => new Promise(requestAnimationFrame));
-    assert.equal(await page.getByText('Late stale text', { exact: true }).count(), 0);
+    assert.equal(await page.getByText('Preparing a recommendation…', { exact: true }).count(), 0);
     assert.equal(
       await page.getByRole('button', { name: 'Send', exact: true }).isDisabled(),
       true,
@@ -3216,23 +3216,22 @@ test("artifact run fails: panel card says \"Couldn't make this. Try again.\" and
   }
 });
 
-test('network drops mid-stream: draft stays during reconnect and saved answer replaces it when turn finishes', async () => {
+test('network drops mid-stream: progress stays during reconnect and the saved answer replaces it', async () => {
   const { context, page } = await setupPage({
     dropStreamNetworkOnce: true,
   });
   try {
     await send(page, 'What is a basis?');
-    // Provisional draft is visible
-    const provisional = page.locator('.provisional');
-    await provisional.getByText('Unverified provisional text.').waitFor();
+    const pending = page.locator('.message-pending');
+    await pending.getByText('Writing an answer…').waitFor();
 
-    // Reconnecting notice appears while the draft stays visible
+    // Reconnecting notice appears while the pending turn stays visible
     await page.getByText('Reconnecting to the answer in progress… Your question will not be sent twice.').waitFor();
-    assert.equal(await provisional.getByText('Unverified provisional text.').count(), 1);
+    assert.equal(await pending.count(), 1);
 
-    // Turn completes: saved answer replaces provisional draft
+    // Turn completes: the saved answer replaces the pending turn
     await page.getByText('A basis spans the vector space.', { exact: true }).waitFor();
-    assert.equal(await page.locator('.provisional').count(), 0);
+    assert.equal(await page.locator('.message-pending').count(), 0);
     assert.equal(
       await page.getByText('Reconnecting to the answer in progress… Your question will not be sent twice.').count(),
       0,

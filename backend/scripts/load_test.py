@@ -477,7 +477,7 @@ async def _run_conversations(app, collection: str, requests: int, concurrency: i
     statuses: Counter = Counter()
     details: Counter = Counter()
     latencies: list[float] = []
-    first_tokens: list[float] = []
+    first_progress: list[float] = []
     polls = 0
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://localhost",
@@ -520,11 +520,11 @@ async def _run_conversations(app, collection: str, requests: int, concurrency: i
                         polls += 1
                         body = events.json()
                         if not first_seen and any(
-                            event.get("type") == "provisional_delta" and event.get("text")
+                            event.get("type") == "stage"
                             for event in body.get("events", [])
                         ):
                             first_seen = True
-                            first_tokens.append(time.perf_counter() - start)
+                            first_progress.append(time.perf_counter() - start)
                         after = body.get("nextEventId", after)
                         if body.get("done"):
                             statuses[f"{body.get('requestState')}/{body.get('jobState')}"] += 1
@@ -549,7 +549,7 @@ async def _run_conversations(app, collection: str, requests: int, concurrency: i
     )
     if details:
         extra += " errors=" + ", ".join(f"{key}×{value}" for key, value in details.items())
-    return statuses, latencies, first_tokens, elapsed, extra
+    return statuses, latencies, first_progress, elapsed, extra
 
 
 def main() -> None:
@@ -728,7 +728,7 @@ def main() -> None:
             if args.scenario == "conversation":
                 workers = _start_workers(settings, config, embedder, provider,
                                          args.workers, stop)
-                statuses, latencies, first_tokens, elapsed, extra = asyncio.run(
+                statuses, latencies, first_progress, elapsed, extra = asyncio.run(
                     _run_conversations(app, collection, args.requests, args.concurrency,
                                        args.timeout_seconds, args.poll_ms / 1000,
                                        auth_provider))
@@ -752,10 +752,10 @@ def main() -> None:
 
         _summary(args.scenario, statuses, latencies, elapsed, extra=extra, waits=waits)
         if args.scenario == "conversation":
-            if first_tokens:
-                print(f"  first token ms: p50={_percentile(first_tokens, 0.50) * 1000:.0f} "
-                      f"p95={_percentile(first_tokens, 0.95) * 1000:.0f} "
-                      f"p99={_percentile(first_tokens, 0.99) * 1000:.0f}")
+            if first_progress:
+                print(f"  first progress ms: p50={_percentile(first_progress, 0.50) * 1000:.0f} "
+                      f"p95={_percentile(first_progress, 0.95) * 1000:.0f} "
+                      f"p99={_percentile(first_progress, 0.99) * 1000:.0f}")
             if provider.rate_limited:
                 print(f"  provider 429s: {provider.rate_limited}")
             if any(status.startswith(("failed", "pending")) for status in statuses):

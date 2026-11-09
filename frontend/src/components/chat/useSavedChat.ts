@@ -21,9 +21,9 @@ function savedScope(record: ConversationRecord): SourceScope | undefined {
 }
 
 /**
- * Saved conversations over the HTTP API. Every chat is persisted; answers stream as
- * jobs whose provisional text is replaced by the saved, cited turn. A request is never
- * replayed by the browser: reconnecting only reads stored events.
+ * Saved conversations over the HTTP API. Every chat is persisted; each answer is a job
+ * whose progress the chat follows until the saved, cited turn replaces it. A request
+ * is never replayed by the browser: reconnecting only reads stored events.
  */
 export function useSavedChat(): ChatController {
   const { scope, setScope } = useApp();

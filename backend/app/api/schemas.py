@@ -22,7 +22,7 @@ class QueryRequest(BaseModel):
 
 
 class SeamStatus(BaseModel):
-    name: Literal["keyword", "embed", "prereq", "plan"]
+    name: Literal["keyword", "embed", "prereq"]
     enabled: bool
     state: Literal["active", "dormant", "disabled", "failed"]
     reason: str | None = None
@@ -147,12 +147,6 @@ class AnswerResponse(BaseModel):
     claims: list[ClaimReviewUnit] = Field(default_factory=list)
     research: ResearchDecisionInfo | None = None
     applicability: ApplicabilityNotice | None = None
-
-
-class RefusalResponse(BaseModel):
-    type: Literal["refusal"] = "refusal"
-    reason: str
-    trace: RetrievalTrace
 
 
 class SourceDoc(BaseModel):

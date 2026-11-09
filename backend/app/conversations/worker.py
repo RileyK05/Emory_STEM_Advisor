@@ -1,4 +1,4 @@
-"""Single-attempt generation worker for durable provisional conversation turns."""
+"""Single-attempt worker for durable conversation turns."""
 
 from __future__ import annotations
 

@@ -10,7 +10,7 @@ from app.generation.research_controller import SYSTEM as SYSTEM_PROMPT
 from app.retrieval.config import RetrievalConfig
 
 # Research reads its own prompt; a debug session's prompt override is recorded
-# but not applied (the debug backend's future is the user's decision, P1.9).
+# but not applied until the debug backend is kept or cut.
 DEFAULT_SYSTEM_PROMPT = SYSTEM_PROMPT
 
 

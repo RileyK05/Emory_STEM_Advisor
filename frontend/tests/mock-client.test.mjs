@@ -8,11 +8,11 @@ const source = await readFile(new URL('../src/api/mock.ts', import.meta.url), 'u
 const corpusSource = await readFile(new URL('../src/api/corpus.ts', import.meta.url), 'utf8');
 const mock = await import(toDataUrl(source.replace("from './corpus'", `from '${toDataUrl(corpusSource)}'`)));
 
-test('mock refuses explicit empty source scope without building a context', async () => {
+test('mock answers an explicit empty source scope without building a context', async () => {
   const result = await new mock.MockClient().query({ query: 'What is a vector basis?', sourceIds: [] });
-  assert.equal(result.type, 'refusal');
-  if (result.type === 'refusal') assert.match(result.reason, /No sources were selected/);
-  assert.deepEqual(result.trace?.contextBlock, []);
+  assert.equal(result.research?.outcome, 'insufficient_evidence');
+  assert.match(result.answer, /No sources were selected/);
+  assert.deepEqual(result.trace.contextBlock, []);
 });
 
 test('mock make-a-plan answer starts an artifact run', async () => {
@@ -30,5 +30,5 @@ test('mock scoped answer never includes passages from deselected sources', async
   assert.equal(selected.type, 'answer');
   if (selected.type === 'answer') assert.ok(selected.trace.contextBlock.every((item) => item.sourceName === 'Linear Algebra Primer'));
   const excluded = await client.query({ query: 'What is a vector basis?', sourceIds: ['src-safety'] });
-  assert.equal(excluded.type, 'refusal');
+  assert.equal(excluded.research?.outcome, 'insufficient_evidence');
 });
