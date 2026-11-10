@@ -102,3 +102,13 @@ def test_an_answer_without_a_stage_tool_never_publishes(db, collection, tmp_path
     assert finished.error["type"] == "invalid_output"
     assert client.get("/api/artifacts").json() == []
     assert db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"] == 1
+
+
+def test_a_long_outline_purpose_is_shortened_not_refused():
+    """A model that writes the section into its purpose still gets its outline accepted."""
+    from app.generation.native_tools import OutlineSection
+
+    long = "Cover the first term and every course in it. " * 40
+    section = OutlineSection(id="s1", heading="Term 1", purpose=long, block_types=["paragraph"])
+    assert 0 < len(section.purpose) <= 600
+    assert section.purpose.endswith(".") and long.startswith(section.purpose)

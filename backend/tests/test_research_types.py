@@ -869,3 +869,18 @@ def test_compare_keeps_all_mention_refs_for_retained_codes():
     assert result.status == "ok"
     shared_refs = result.data["comparison"]["shared"]["CS 170"]
     assert len(shared_refs) == 6
+
+
+@pytest.mark.parametrize(("question", "asked"), [
+    ("I've done CS 170 and MATH 111. Make a plan for the rest of the Computer Science BS.", True),
+    ("Make a checklist of everything the Neuroscience and Behavioral Biology BS requires.", True),
+    ("Compare the Computer Science BA and BS in a document I can keep.", True),
+    ("I took MATH_OX 111 at Oxford. Plan my Chemistry BS from here.", True),
+    ("What does CS 253 require?", False),
+    ("Is the plan to take MATH 111 good?", False),
+    ("How do I make the dean's list?", False),
+])
+def test_research_is_told_when_the_student_asks_for_something_to_keep(question, asked):
+    from app.generation.research_controller import _asks_for_artifact
+
+    assert _asks_for_artifact(question) is asked

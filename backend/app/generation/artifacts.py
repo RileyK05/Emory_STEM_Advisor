@@ -39,11 +39,13 @@ from app.generation.evidence import record_attempt
 from app.generation.operation import GenerationOperation
 from app.jobs.runtime import StagedArtifact, StagedRunResult
 from app.jobs.store import SafeJobError
-from app.llm.base import ProviderError
+from app.llm.base import ProviderError, ProviderTimeoutError
 from app.operations.budget import OperationBudgetError
 from app.retrieval.retrieve import retrieve
 from app.retrieval.types import Refusal
 from app.tools.executions import ToolLedgerError
+
+_TOO_SLOW = "This took too long to make. Try again, or ask for a shorter version."
 
 
 class ArtifactGenerationInput(BaseModel):
@@ -161,7 +163,12 @@ class ArtifactHandler:
         except (ToolConversationError, ToolLedgerError) as exc:
             raise SafeJobError("tool_failed", "Native tool execution could not be completed safely.") from exc
         except OperationBudgetError as exc:
+            if exc.code == "deadline_exceeded":
+                raise SafeJobError(exc.code, _TOO_SLOW) from exc
             raise SafeJobError(exc.code, str(exc)) from exc
+        except ProviderTimeoutError as exc:
+            # A call cut short by the run's deadline is a slow run, not a broken connection.
+            raise SafeJobError("deadline_exceeded", _TOO_SLOW) from exc
         except ProviderError as exc:
             raise SafeJobError("provider_failed", "Model connection failed; check provider settings.") from exc
         finally:

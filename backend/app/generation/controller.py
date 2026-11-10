@@ -56,6 +56,7 @@ _CONTINUE_AFTER_OUTPUT_LIMIT = (
     "content you already have, and keep any hidden reasoning brief."
 )
 _TRUNCATED_FINISH_REASONS = frozenset({"length", "max_tokens", "incomplete"})
+_sleep = time.sleep  # Tests replace this with a FakeClock's sleep.
 
 
 class ToolConversationError(RuntimeError):
@@ -75,7 +76,8 @@ class ToolConversationController:
                  max_result_bytes: int = MAX_TOOL_RESULT_BYTES,
                  max_output_continuations: int = 0,
                  max_repair_calls: int | None = None,
-                 max_transient_retries: int = 2):
+                 max_transient_retries: int = 2,
+                 sleep: Callable[[float], None] | None = None):
         if max_tool_calls < 0 or max_provider_calls < 1 or max_result_bytes < 1:
             raise ValueError("tool conversation limits must be positive")
         if max_output_continuations < 0 or max_transient_retries < 0:
@@ -85,6 +87,7 @@ class ToolConversationController:
         self.max_result_bytes = max_result_bytes
         self.max_output_continuations = max_output_continuations
         self.max_transient_retries = max_transient_retries
+        self.sleep = sleep
         self.max_repair_calls = (max_provider_calls if max_repair_calls is None
                                  else max_repair_calls)
         if not 1 <= self.max_repair_calls <= max_provider_calls:
@@ -151,7 +154,12 @@ class ToolConversationController:
                 delay = (min(float(retry_after), 8.0)
                          if retry_after is not None and retry_after > 0
                          else min(2.0 ** (transient_retries - 1), 8.0))
-                time.sleep(delay)
+                # The wait counts against the operation's deadline like any call.
+                status = operation.controller.get(operation.conn, operation.operation_id)
+                operation.conn.commit()
+                if delay >= status.remaining_seconds:
+                    raise
+                (self.sleep or _sleep)(delay)
                 continuing = True
                 continue
             transient_retries = 0

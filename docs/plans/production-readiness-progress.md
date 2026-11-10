@@ -168,7 +168,7 @@ gate.
 | --- | --- |
 | P1.9 | U1: the user decides whether to keep or cut the debug backend. |
 | P2.6 | The user decides whether greeting small talk (S06) is declined or answered; then rerun the scope set. |
-| P3.2 | Decided 2026-11-09: artifacts are built by reprompting. R1–R6 are done in `77ae770`/`83cab88`; R0’s baseline and R7’s three live runs await spend approval. |
+| P3.2 | Decided 2026-11-09: artifacts are built by reprompting. R1–R6 are done in `77ae770`/`83cab88`; R0’s baseline and R7’s three live runs await spend approval. Live sample A01–A06 (2026-11-09): 0/6 before the fixes (150–300 s artifacts, 3 never requested), 3/6 after parallel sections and the research hint, all within K1's time. Remaining: A01/A04 exhaust their stage corrections (term sections naming other terms' courses, missing bindings, >20 outline courses); A03 still answered in chat. |
 | P3.4 | U4: the user scores 10 artifacts 1–5 (mean ≥4, none below 3). |
 | P4.3 | Claude builds the Linux Docker/gVisor `runsc` host. |
 | P4.4 | P4.3 exists; then run the function probes (health, Office recalculation, HTML screenshots, latency). |

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from typing import Any
 from uuid import UUID
@@ -65,6 +66,7 @@ from app.generation.native_tools import (
     stage_spec,
     validate_generation_size,
 )
+from app.generation.operation import GenerationOperation
 from app.jobs.store import SafeJobError
 from app.llm.base import GenerationRequest, GenerationResult, ToolCall
 from app.retrieval.types import CitedChunk
@@ -169,6 +171,21 @@ def _cell_type(value):
     return "text"
 
 
+@dataclass
+class _Lane:
+    """One connection and operation handle that model calls run on.
+
+    Parallel section calls each get their own lane: a psycopg connection and a
+    budget reservation must never be shared between threads. Every lane points
+    at the run's single persisted operation, whose row locks keep concurrent
+    reservations inside one budget.
+    """
+
+    conn: object
+    operation: object
+    started: float
+
+
 class ArtifactPipeline:
     """Deterministic artifact pipeline for one leased artifact run."""
 
@@ -191,6 +208,8 @@ class ArtifactPipeline:
         connect=None,
     ):
         self.conn = conn
+        # Parallel sections need fresh connections; without a factory they run in order.
+        self._can_parallelize = connect is not None
         self.connect = connect or (lambda: conn)
         self.job = job
         self.context = context
@@ -216,7 +235,7 @@ class ArtifactPipeline:
         self.kept: dict[str, AssembledSection] = {}
         self.section_texts: dict[str, str] = {}
         self.fallback_sections: set[str] = set()
-        self._last_attempt_started = time.perf_counter()
+        self._main_lane = _Lane(conn, operation, time.perf_counter())
         self._provider_calls = 0
 
     # --- entry ---------------------------------------------------------------
@@ -611,7 +630,7 @@ class ArtifactPipeline:
             },
             "slots": [{"slot": index, "source": slot.source_name,
                        "locator": slot.locator_label, "excerpt": slot.text[:300]}
-                      for index, slot in enumerate(self.grounding.slots, 1)],
+                      for index, slot in self._outline_slots()],
         }
         self.kept = {section.id: payloads[section.id] for section in sections
                      if section.id in payloads}
@@ -791,11 +810,45 @@ class ArtifactPipeline:
 
     def _write_sections(self, sections):
         total = len(sections)
-        for index, section in enumerate(sections, 1):
-            self.context.progress({"stage": "writing", "unit": f"{index} of {total}"})
-            self._write_section(section)
+        self._write_many([(section, None, f"{index} of {total}")
+                          for index, section in enumerate(sections, 1)], stage="writing")
 
-    def _write_section(self, section, repair: str | None = None):
+    def _write_many(self, items, *, stage: str):
+        """Write (section, repair, label) items, in parallel when the run has a connect factory.
+
+        Each parallel call runs on its own lane. Every item finishes before the
+        first error is raised, so no thread is left writing after the run fails.
+        """
+        workers = min(self.settings.artifact_section_concurrency, len(items))
+        if workers <= 1 or not self._can_parallelize:
+            for section, repair, label in items:
+                self.context.progress({"stage": stage, "unit": label})
+                self._write_section(section, repair)
+            return
+
+        def write(item):
+            section, repair, label = item
+            conn = self.connect()
+            try:
+                operation = GenerationOperation(conn, self.settings,
+                                                self.operation.operation_id, self.job.scope_key)
+                self.context.progress({"stage": stage, "unit": label})
+                self._write_section(section, repair,
+                                    lane=_Lane(conn, operation, time.perf_counter()))
+            finally:
+                conn.close()
+
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="artifact-section") as pool:
+            futures = [pool.submit(write, item) for item in items]
+            errors = [future.exception() for future in futures]
+        for error in errors:
+            if isinstance(error, GenerationCancelled):
+                raise error
+        for error in errors:
+            if error is not None:
+                raise error
+
+    def _write_section(self, section, repair: str | None = None, lane: _Lane | None = None):
         visible = self._visible_section(section)
         payload = self._section_payload(visible, repair)
         messages = _stage_messages(
@@ -817,6 +870,7 @@ class ArtifactPipeline:
                 lambda value, _scope: self._stage_section(visible, value),
                 messages,
                 stage_key=section.id,
+                lane=lane,
             )
         except GenerationCancelled:
             raise
@@ -832,11 +886,18 @@ class ArtifactPipeline:
             raise SafeJobError("invalid_output", "The model did not return a complete section.")
 
     def _fallback_section(self, section):
-        """Write a planner-fixed term when the model cannot produce a section."""
-        slots = list(getattr(section, "source_slots", []) or [])
-        if not slots:
-            raise SafeJobError("invalid_output", "The model did not return a complete section.")
+        """Write a planner-fixed term when the model cannot produce a section.
+
+        Each course line cites the section slots that name that course, so the
+        evidence is the course's own record, never an unrelated passage.
+        """
+        allowed = set(getattr(section, "source_slots", []) or [])
         courses = list(section.courses)
+        course_slots = {code: [index for index in self._slots_for_codes([code])
+                               if index in allowed] for code in courses}
+        if not courses or not all(course_slots.values()):
+            raise SafeJobError("invalid_output", "The model did not return a complete section.")
+        slots = sorted({index for found in course_slots.values() for index in found})
         reasons = list(getattr(section, "blocked_reasons", []) or [])
         intro = ("These courses need advisor review: " + "; ".join(reasons) + "."
                  if reasons else "Planned courses: " + ", ".join(courses) + ".")
@@ -854,13 +915,13 @@ class ArtifactPipeline:
                 f"<li>{item}</li>" for item in items) + "</ul>"
             payload = StageSection(
                 html=fragment, courses=courses,
-                bindings=[{"element_id": "html", "source_slots": [slots[0]]}],
+                bindings=[{"element_id": "html", "source_slots": slots}],
             )
         elif self.kind == "workbook":
             columns = list(section.columns)
             payload = StageSection(
                 rows=[{"values": [code] + [""] * (len(columns) - 1),
-                       "source_slots": [slots[0]]} for code in courses],
+                       "source_slots": course_slots[code]} for code in courses],
                 courses=courses,
             )
         else:
@@ -870,7 +931,7 @@ class ArtifactPipeline:
             ]
             payload = StageSection(
                 blocks=blocks, courses=courses,
-                bindings=[{"element_id": block["id"], "source_slots": [slots[0]]}
+                bindings=[{"element_id": block["id"], "source_slots": slots}
                           for block in blocks],
             )
         self._validate_section(section, payload)
@@ -899,23 +960,13 @@ class ArtifactPipeline:
                 slots.append({"slot": index, "source": slot.source_name,
                               "locator": slot.locator_label,
                               "text": slot.text[:_MAX_SECTION_SLOT_CHARS]})
-        written = []
-        for existing in self._current_sections():
-            if existing.id == section.id:
-                break
-            payload = self.section_payloads.get(existing.id)
-            if payload is None:
-                continue
-            text = payload.html or " ".join(
-                block.get("text", "") for block in payload.blocks[:1])
-            written.append({"heading": existing.heading if hasattr(existing, "heading")
-                            else existing.name, "first_sentence": _first_sentence(text)})
         payload = {
             "request": self.inputs.prompt,
             "mode": self.inputs.mode,
             "kind": self.kind,
             "outline": [{"id": item.id,
-                         "heading": getattr(item, "heading", getattr(item, "name", ""))}
+                         "heading": getattr(item, "heading", getattr(item, "name", "")),
+                         "purpose": getattr(item, "purpose", getattr(item, "row_purpose", ""))}
                         for item in self._current_sections()],
             "section": {
                 "id": section.id,
@@ -927,7 +978,6 @@ class ArtifactPipeline:
                 "blocked_reasons": getattr(section, "blocked_reasons", []),
             },
             "slots": slots,
-            "written": written,
         }
         if self.kind == "workbook":
             payload["columns"] = [
@@ -1155,14 +1205,15 @@ class ArtifactPipeline:
                 raise SafeJobError("invalid_output", finding.student_message)
             by_section.setdefault(finding.section_id, []).append(finding)
         by_id = {section.id: section for section in self._current_sections()}
+        items = []
         for section_id, section_findings in by_section.items():
             section = by_id.get(section_id)
             if section is None:
                 raise SafeJobError("invalid_output", section_findings[0].student_message)
-            self.context.progress({"stage": "repairing",
-                                   "unit": getattr(section, "heading", getattr(section, "name", ""))})
-            self._write_section(section, repair=" ".join(
-                finding.message for finding in section_findings[:5]))
+            items.append((section,
+                          " ".join(finding.message for finding in section_findings[:5]),
+                          getattr(section, "heading", getattr(section, "name", ""))))
+        self._write_many(items, stage="repairing")
 
     def _assemble(self):
         self.section_texts = {}
@@ -1351,7 +1402,8 @@ class ArtifactPipeline:
     # --- stage call ----------------------------------------------------------
 
     def _run_stage(self, tool_id: str, description: str, input_model, handler,
-                   messages, *, stage_key: str = ""):
+                   messages, *, stage_key: str = "", lane: _Lane | None = None):
+        lane = lane or self._main_lane
         attempts = self.settings.artifact_repair_attempts
         spec = stage_spec(tool_id, description, input_model, handler)
         registry = ToolRegistry((spec,))
@@ -1372,13 +1424,13 @@ class ArtifactPipeline:
 
         def audit(prepared, call_result, call_error):
             record_attempt(
-                self.conn, self.trace_id, self.settings, call_result, call_error,
-                int((time.perf_counter() - self._last_attempt_started) * 1000),
-                operation_id=self.operation.operation_id, request=prepared,
+                lane.conn, self.trace_id, self.settings, call_result, call_error,
+                int((time.perf_counter() - lane.started) * 1000),
+                operation_id=lane.operation.operation_id, request=prepared,
                 selection=self.selection,
             )
-            self.conn.commit()
-            self._last_attempt_started = time.perf_counter()
+            lane.conn.commit()
+            lane.started = time.perf_counter()
 
         request = GenerationRequest(
             messages,
@@ -1397,27 +1449,27 @@ class ArtifactPipeline:
             max_repair_calls=attempts + 1,
             max_transient_retries=_TRANSIENT_RETRIES,
         ).run(
-            provider, request, registry=registry, scope=scope, operation=self.operation,
-            ledger=ledger, operation_id=self.operation.operation_id,
+            provider, request, registry=registry, scope=scope, operation=lane.operation,
+            ledger=ledger, operation_id=lane.operation.operation_id,
             workspace_key=self.job.scope_key, scope_fingerprint=fingerprint,
             terminal_tool_names=frozenset({tool_id}),
-            cancellation=self._guard,
-            before_provider_call=self._before_provider_call,
+            cancellation=lambda: self._guard(lane),
+            before_provider_call=lambda: self._before_provider_call(lane),
             on_attempt=audit,
         )
 
-    def _guard(self):
+    def _guard(self, lane: _Lane):
         self.context.check_cancelled()
-        self.operation.assert_publishable()
-        self.conn.commit()
+        lane.operation.assert_publishable()
+        lane.conn.commit()
 
-    def _before_provider_call(self):
+    def _before_provider_call(self, lane: _Lane):
         self.context.check_cancelled()
-        self.conn.commit()
+        lane.conn.commit()
         from app.db.connection import release_borrow
 
-        release_borrow(self.conn)
-        self._last_attempt_started = time.perf_counter()
+        release_borrow(lane.conn)
+        lane.started = time.perf_counter()
 
 
 class ArtifactTargetError(ValueError):

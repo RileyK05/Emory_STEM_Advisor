@@ -7,9 +7,9 @@ model in the same conversation, which is the repair loop.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field, ValidationError
+from pydantic import BeforeValidator, Field, ValidationError
 
 from app.generation.artifact_candidate import ElementBinding
 from app.tools.registry import (
@@ -28,12 +28,32 @@ BLOCK_TYPES = ("paragraph", "heading", "list", "table", "code", "quote")
 COLUMN_TYPES = ("text", "number", "date", "total")
 
 _ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+_NOTE_CHARS = 600
+
+
+def _short_note(value):
+    """Keep a planning note to one paragraph.
+
+    A purpose is the outline's instruction to the call that writes the
+    section; the student never sees it. A model that writes the section into
+    its purpose would otherwise be refused for length on every retry, so the
+    note is cut at a sentence or word boundary instead.
+    """
+    if not isinstance(value, str) or len(value) <= _NOTE_CHARS:
+        return value
+    cut = value[:_NOTE_CHARS]
+    end = max(cut.rfind(". "), cut.rfind("; "))
+    return (cut[:end + 1] if end > _NOTE_CHARS // 2 else cut.rsplit(" ", 1)[0]).strip()
+
+
+Note = Annotated[str, BeforeValidator(_short_note),
+                 Field(description="One or two sentences on what this part covers.")]
 
 
 class OutlineSection(ToolInputModel):
     id: str = Field(min_length=1, max_length=32, pattern=_ID_PATTERN)
     heading: str = Field(min_length=1, max_length=200)
-    purpose: str = Field(min_length=1, max_length=1000)
+    purpose: Note = Field(min_length=1)
     block_types: list[Literal["paragraph", "heading", "list", "table", "code", "quote"]] = Field(
         min_length=1, max_length=6)
     source_slots: list[int] = Field(default_factory=list, max_length=50)
@@ -51,7 +71,7 @@ class OutlineSheet(ToolInputModel):
     id: str = Field(min_length=1, max_length=32, pattern=_ID_PATTERN)
     name: str = Field(min_length=1, max_length=31)
     columns: list[OutlineColumn] = Field(min_length=1, max_length=12)
-    row_purpose: str = Field(min_length=1, max_length=1000)
+    row_purpose: Note = Field(min_length=1)
     source_slots: list[int] = Field(default_factory=list, max_length=50)
     courses: list[str] = Field(default_factory=list, max_length=20)
     blocked_reasons: list[str] = Field(default_factory=list, max_length=20)
@@ -91,7 +111,7 @@ class StageSection(ToolInputModel):
 class EditOperation(ToolInputModel):
     action: Literal["keep", "replace", "insert_after", "delete"]
     section_id: str = Field(min_length=1, max_length=32, pattern=_ID_PATTERN)
-    purpose: str = Field(default="", max_length=1000)
+    purpose: Note = ""
     section: OutlineSection | None = None
     sheet: OutlineSheet | None = None
 

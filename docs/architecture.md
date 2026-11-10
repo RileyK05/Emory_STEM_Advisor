@@ -1954,7 +1954,12 @@ section may not add, drop, or move a scheduled course, and a blocked course
 goes in a final advisor section with the planner's reason. Workbooks receive
 rows as data; code assigns cell identities, headers, widths, and the only
 formulas (declared total columns). HTML sections are fragments assembled and
-sanitized once. Revisions are `keep`, `replace`, `insert_after`, and `delete`
+sanitized once. Sections are written from the outline alone (every heading and
+purpose, not sibling text), so they run in parallel, up to
+`ARTIFACT_SECTION_CONCURRENCY`, each on its own connection and budget
+reservation against the run's one operation; the provider gate still bounds
+calls in flight. A run cut short by its deadline reports that it took too long,
+not a connection failure. Revisions are `keep`, `replace`, `insert_after`, and `delete`
 edits: kept sections and their evidence stay byte-identical. The checks shared
 with the benchmark live in `app/artifacts/checks.py`.
 

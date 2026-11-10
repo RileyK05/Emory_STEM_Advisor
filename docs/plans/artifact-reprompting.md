@@ -122,8 +122,9 @@ gets:
 
 - the outline (all headings and purposes), so the section knows its place;
 - the section's own slots in full text, and no others;
-- one line per section already written (its heading and first sentence), so
-  sections do not repeat each other;
+- every section's purpose in the outline, so sections do not repeat each other
+  (sibling text is not sent: it would make the prompt depend on which call
+  finished first);
 - the block schema for only the block types this section uses.
 
 Output is the section's blocks (document, html) or its rows (workbook), each
@@ -142,8 +143,9 @@ The model never writes a formula or a cell address.
 Code wraps them in a fixed page template and runs the existing sanitizer once
 on the assembled page.
 
-Sections run in order in v1. Parallel sections are R5, only if the time bar is
-missed.
+Sections run in parallel (R5, added 2026-11-09 after the first live sample took
+150-300 s per artifact): up to `ARTIFACT_SECTION_CONCURRENCY` (4) at once, each on
+its own connection and reservation against the run's single operation.
 
 ### Stage 3: plans are ordered by the planner
 

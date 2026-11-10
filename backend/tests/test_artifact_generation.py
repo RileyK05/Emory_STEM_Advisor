@@ -363,7 +363,10 @@ def test_a_section_that_moves_a_course_between_terms_is_refused(db, collection, 
     spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
     text = json.dumps(spec)
     assert "Term 1" in text and "Term 2" in text
-    assert "MATH 112" in message_text(provider.requests[-1].messages[-1])
+    # Sections run in parallel, so term 2's correction need not be the last request.
+    assert any("MATH 112" in message_text(request.messages[-1])
+               and "not accepted" in message_text(request.messages[-1])
+               for request in provider.requests)
 
 
 def test_a_failed_plan_section_falls_back_to_the_fixed_course_list(db, collection, tmp_path):
@@ -391,6 +394,13 @@ def test_a_failed_plan_section_falls_back_to_the_fixed_course_list(db, collectio
     assert spec["provenance"]["degraded_sections"] == 2
     assert any("MATH 111" in block.get("text", "") for block in spec["blocks"])
     assert any("MATH 112" in block.get("text", "") for block in spec["blocks"])
+    # Each fallback course list cites the records of its own courses.
+    lists = [block for block in spec["blocks"] if block["id"].endswith("fallback-courses")]
+    assert lists
+    for block in lists:
+        codes = [item.split(" ")[0] + " " + item.split(" ")[1] for item in block["items"]]
+        for ref in spec["evidence"][block["id"]]:
+            assert any(code in ref["text_snapshot"] for code in codes), ref["locator_label"]
 
 
 def test_a_truncated_section_is_reprompted_and_published(db, collection, tmp_path):
@@ -416,7 +426,11 @@ def test_a_truncated_section_is_reprompted_and_published(db, collection, tmp_pat
     assert "degraded_sections" not in spec.get("provenance", {})
 
 
-def test_a_transient_provider_failure_is_retried(db, collection, tmp_path):
+def test_a_transient_provider_failure_is_retried(db, collection, tmp_path, monkeypatch):
+    from tests.fakes import FakeClock
+
+    clock = FakeClock()
+    monkeypatch.setattr("app.generation.controller._sleep", clock.sleep)
     source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
 
     class FlakyOnce(ArtifactStageProvider):
@@ -438,6 +452,7 @@ def test_a_transient_provider_failure_is_retried(db, collection, tmp_path):
                        {"prompt": "Alpha", "sourceIds": [str(source)]}, "flaky-section")
     finished = run_once(store, "flaky-section", executor)
     assert finished.status.value == "succeeded", finished.error
+    assert clock.slept == [1.0], "one backoff wait inside the operation deadline"
     artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
     spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
     assert any("Alpha facts." in block.get("text", "") for block in spec["blocks"])

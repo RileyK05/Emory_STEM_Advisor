@@ -60,7 +60,7 @@ ROLE AND CONTRACT
 - Keep facts, candidate judgments, limits and questions in their own blocks. State an assumption only when a different assumption would change the advice.
 - completeness=complete means the student's question is answered, even with a caution attached. Use partial only when the main question stays unanswered. A detail you could not confirm is not partial.
 - A factual question needs no working state: search, read, then call advisor_finish. Record state only to compare options or recommend.
-- Set finish.decision.artifact only when asked to keep/export something or revise the attached artifact; the answer still says it is being made. A printable plan, checklist, report or handout is a document; a spreadsheet is a workbook; html is only for a web or interactive page.
+- Set finish.decision.artifact when asked to make, keep or export a plan, checklist, report, sheet or page, or to revise the attached artifact; say it is being made. A printable plan, checklist, report or handout is a document; a spreadsheet is a workbook; html is only for a web or interactive page.
 
 SCOPE
 - You help only with Emory advising: courses, majors, requirements, academic policies, and pre-med, grad-school or career preparation for a major.
@@ -258,6 +258,24 @@ def _requests_preparation(question):
     """
     words = set(_tokens(question, 2))
     return bool(words & {"sequence", "prerequisite", "prerequisites", "preparation"})
+
+
+_ARTIFACT_ASK = re.compile(
+    r"\b(?:make|create|build|draft|generate|put together|write up|give me)\b[^.?!]{0,60}?"
+    r"\b(?:plan|checklist|schedule|spreadsheet|workbook|sheet|document|doc|handout|report|"
+    r"page|comparison|table)s?\b"
+    r"|\b(?:printable|print it|i can (?:print|keep)|export|download)\b"
+    r"|\bplan (?:out )?my\b",
+    re.IGNORECASE)
+
+
+def _asks_for_artifact(question) -> bool:
+    """The student asked for something to keep: a plan, checklist, sheet or page.
+
+    A hint only: the model still decides the kind and writes the brief, and an
+    artifact is never made without its own request.
+    """
+    return bool(_ARTIFACT_ASK.search(question or ""))
 
 
 def _finish_text_call(text):
@@ -683,6 +701,9 @@ class ResearchController:
                     "Then offer only the real codes listed.")}
                    if (unknown := session.unknown_question_codes()
                        if hasattr(session, "unknown_question_codes") else None) else {}),
+                **({"artifact_requested": "The student asked for a plan, checklist, "
+                    "sheet or page to keep: set finish.decision.artifact."}
+                   if _asks_for_artifact(question) else {}),
                 "finish_required": finishing, "instruction": hint,
                 "state_update_requested": state_required,
                 "source_read_requested": read_required,

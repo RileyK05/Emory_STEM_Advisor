@@ -143,6 +143,9 @@ class Settings:
     artifact_max_sections: int = 8
     artifact_repair_attempts: int = 2
     artifact_repair_rounds: int = 2
+    # Sections written at once. Each runs on its own connection; the provider's
+    # LLM_MAX_CONCURRENCY gate still bounds calls in flight.
+    artifact_section_concurrency: int = 4
     artifact_operation_timeout_seconds: float = 300.0
     artifact_operation_max_calls: int = 40
     # Starting ceiling until R0's measured p95 plus 25% is recorded.
@@ -319,7 +322,8 @@ class Settings:
             raise ValueError("research limits are invalid")
         if (not 1 <= self.artifact_max_sections <= 50
                 or not 0 <= self.artifact_repair_attempts <= 10
-                or not 0 <= self.artifact_repair_rounds <= 10):
+                or not 0 <= self.artifact_repair_rounds <= 10
+                or not 1 <= self.artifact_section_concurrency <= 16):
             raise ValueError("artifact section and repair limits are invalid")
         if self.auth_mode not in {"development", "oidc"}:
             raise ValueError("AUTH_MODE must be development or oidc")
@@ -449,6 +453,7 @@ def load_settings() -> Settings:
         artifact_max_sections=_int("ARTIFACT_MAX_SECTIONS", 8),
         artifact_repair_attempts=_int("ARTIFACT_REPAIR_ATTEMPTS", 2),
         artifact_repair_rounds=_int("ARTIFACT_REPAIR_ROUNDS", 2),
+        artifact_section_concurrency=_int("ARTIFACT_SECTION_CONCURRENCY", 4),
         artifact_operation_timeout_seconds=_float("ARTIFACT_OPERATION_TIMEOUT_SECONDS", 300),
         artifact_operation_max_calls=_int("ARTIFACT_OPERATION_MAX_CALLS", 40),
         artifact_operation_token_budget=_int("ARTIFACT_OPERATION_TOKEN_BUDGET", 300_000),
