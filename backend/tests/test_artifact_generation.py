@@ -322,10 +322,14 @@ def _econ(db, collection, tmp_path, extra="", program=ECON_MINOR):
     return source
 
 
-def test_a_plan_is_ordered_by_the_parser_and_not_by_the_model(db, collection, tmp_path):
+@pytest.mark.parametrize("draft_courses", [[], ["ECON 101"] * 23])
+def test_a_plan_is_ordered_by_the_parser_and_not_by_the_model(
+        db, collection, tmp_path, draft_courses):
     source = _econ(db, collection, tmp_path)
+    draft = _plan_outline(["ECON 201"], completed=["ECON 101"])
+    draft["sections"][0]["courses"] = draft_courses
     provider = ArtifactStageProvider(
-        outline=_plan_outline(["ECON 201"], completed=["ECON 101"]),
+        outline=draft,
         sections={"term1": [_plan_section(
             "ECON 201 Intermediate Macroeconomics, MW 11:00-12:15.")]},
     )

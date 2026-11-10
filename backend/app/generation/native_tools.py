@@ -50,6 +50,13 @@ Note = Annotated[str, BeforeValidator(_short_note),
                  Field(description="One or two sentences on what this part covers.")]
 
 
+def _ignore_outline_courses(value):
+    if not isinstance(value, list):
+        return value
+    return [{key: field for key, field in item.items() if key != "courses"}
+            if isinstance(item, dict) else item for item in value]
+
+
 class OutlineSection(ToolInputModel):
     id: str = Field(min_length=1, max_length=32, pattern=_ID_PATTERN)
     heading: str = Field(min_length=1, max_length=200)
@@ -57,7 +64,7 @@ class OutlineSection(ToolInputModel):
     block_types: list[Literal["paragraph", "heading", "list", "table", "code", "quote"]] = Field(
         min_length=1, max_length=6)
     source_slots: list[int] = Field(default_factory=list, max_length=50)
-    courses: list[str] = Field(default_factory=list, max_length=20)
+    courses: list[str] = Field(default_factory=list)
     blocked_reasons: list[str] = Field(default_factory=list, max_length=20)
 
 
@@ -73,7 +80,7 @@ class OutlineSheet(ToolInputModel):
     columns: list[OutlineColumn] = Field(min_length=1, max_length=12)
     row_purpose: Note = Field(min_length=1)
     source_slots: list[int] = Field(default_factory=list, max_length=50)
-    courses: list[str] = Field(default_factory=list, max_length=20)
+    courses: list[str] = Field(default_factory=list)
     blocked_reasons: list[str] = Field(default_factory=list, max_length=20)
 
 
@@ -87,8 +94,10 @@ class OutlineChart(ToolInputModel):
 
 class StageOutline(ToolInputModel):
     title: str = Field(min_length=1, max_length=200)
-    sections: list[OutlineSection] = Field(default_factory=list, max_length=20)
-    sheets: list[OutlineSheet] = Field(default_factory=list, max_length=20)
+    sections: Annotated[list[OutlineSection], BeforeValidator(_ignore_outline_courses)] = Field(
+        default_factory=list, max_length=20)
+    sheets: Annotated[list[OutlineSheet], BeforeValidator(_ignore_outline_courses)] = Field(
+        default_factory=list, max_length=20)
     charts: list[OutlineChart] = Field(default_factory=list, max_length=20)
     program: str | None = Field(default=None, max_length=200)
     selected_courses: list[str] = Field(default_factory=list, max_length=40)
@@ -104,7 +113,7 @@ class StageSection(ToolInputModel):
     blocks: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
     html: str = Field(default="", max_length=64_000)
     rows: list[SectionRow] = Field(default_factory=list, max_length=200)
-    courses: list[str] = Field(default_factory=list, max_length=20)
+    courses: list[str] = Field(default_factory=list)
     bindings: list[ElementBinding] = Field(default_factory=list, max_length=1000)
 
 
