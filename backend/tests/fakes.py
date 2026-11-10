@@ -196,8 +196,6 @@ class ArtifactStageProvider:
         self.requests: list = []
         self._counts: dict[str, int] = {}
         self._calls = 0
-        self._last_section: str | None = None
-        self._last_section_payload: dict | None = None
 
     def generate(self, request):
         import json
@@ -207,20 +205,9 @@ class ArtifactStageProvider:
 
         self.requests.append(request)
         tool = request.tools[0].name if request.tools else ""
-        last = normalize_message(request.messages[-1]).get("content")
-        try:
-            payload = json.loads(last)
-        except (TypeError, ValueError):
-            # A synthetic continuation turn is not the JSON stage payload; the
-            # last real payload is still the section being written.
-            payload = self._last_section_payload or {}
+        # Each stage keeps its original user payload across repairs and continuations.
+        payload = json.loads(normalize_message(request.messages[1])["content"])
         section_id = (payload.get("section") or {}).get("id") if tool == SECTION_TOOL else None
-        if section_id is not None:
-            self._last_section = section_id
-            self._last_section_payload = payload
-        elif tool == SECTION_TOOL:
-            section_id = self._last_section
-            payload = self._last_section_payload or payload
         key = f"{tool}:{section_id or ''}"
         count = self._counts.get(key, 0)
         self._counts[key] = count + 1

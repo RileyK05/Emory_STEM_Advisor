@@ -1949,9 +1949,10 @@ grounds on that run's stored evidence in its stored order; a direct run uses
 retrieval. Course records and program requirement lines are fixed database
 slots, never model facts. Each stage is one tool conversation with a single
 terminal tool, so a rejected stage returns its reason to the model in the same
-conversation. Term plans are ordered by `advising.sequence.plan_sequence`; a
-section may not add, drop, or move a scheduled course, and a blocked course
-goes in a final advisor section with the planner's reason. Workbooks receive
+conversation. Term plans are ordered by `advising.sequence.plan_sequence`. Code
+renders each course with its own course record citation and puts blocked courses
+in a final advisor section with the planner's reasons. The model may add one
+short course-code-free excerpt from the section's evidence. Workbooks receive
 rows as data; code assigns cell identities, headers, widths, and the only
 formulas (declared total columns). HTML sections are fragments assembled and
 sanitized once. Sections are written from the outline alone (every heading and

@@ -302,18 +302,6 @@ def _plan_outline(selected, completed=(), program="Economics (Minor)"):
     }
 
 
-def _plan_section(text):
-    def build(payload):
-        slots = payload["section"]["source_slots"]
-        return {
-            "blocks": [{"id": "p1", "type": "paragraph", "text": text}],
-            "bindings": [{"element_id": "p1", "source_slots": [slots[0]]}],
-            "courses": payload["section"]["courses"],
-        }
-
-    return build
-
-
 def _econ(db, collection, tmp_path, extra="", program=ECON_MINOR):
     source = import_atlas_sample(db, collection, tmp_path, text=ATLAS_SAMPLE + extra)
     path = _write_programs(tmp_path, ("Economics (Minor)", program))
@@ -330,8 +318,7 @@ def test_a_plan_is_ordered_by_the_parser_and_not_by_the_model(
     draft["sections"][0]["courses"] = draft_courses
     provider = ArtifactStageProvider(
         outline=draft,
-        sections={"term1": [_plan_section(
-            "ECON 201 Intermediate Macroeconomics, MW 11:00-12:15.")]},
+        sections={"term1": [{"note": "Macro theory."}]},
     )
     client, store, executor = setup_runtime(db, collection, provider, tmp_path)
     run_id = start_run(client, "document",
@@ -345,45 +332,63 @@ def test_a_plan_is_ordered_by_the_parser_and_not_by_the_model(
                 if block.get("type") == "heading"]
     assert "Term 1" in headings
     assert "degraded_sections" not in spec.get("provenance", {})
-    assert any("ECON 201" in block.get("text", "") for block in spec["blocks"])
+    course = next(block for block in spec["blocks"] if block["type"] == "list")
+    assert course["items"] == ["ECON 201 — Intermediate Macroeconomics"]
+    assert any(block.get("text") == "Macro theory." for block in spec["blocks"])
 
 
-def test_a_section_that_moves_a_course_between_terms_is_refused(db, collection, tmp_path):
+@pytest.mark.parametrize("kind", ["document", "workbook"])
+def test_a_plan_note_cannot_move_a_course_between_terms(db, collection, tmp_path, kind):
     source = _econ(db, collection, tmp_path)
-    wrong = _plan_section("MATH 111 is scheduled here.")
-    correct = _plan_section("MATH 112 Calculus II.")
+    draft = _plan_outline(["MATH 111", "MATH 112"])
+    if kind == "workbook":
+        draft["sections"] = []
+        draft["sheets"] = [{
+            "id": "draft", "name": "Draft", "row_purpose": "One course per row.",
+            "columns": [{"key": "course", "header": "Course"}],
+        }]
     provider = ArtifactStageProvider(
-        outline=_plan_outline(["MATH 111", "MATH 112"]),
-        sections={"term1": [_plan_section("MATH 111 Calculus I.")],
-                  "term2": [wrong, correct]},
+        outline=draft,
+        sections={"term1": [{"note": "Limits."}],
+                  "term2": [{"note": "MATH 111 is scheduled here."}, {"note": "Series."}]},
     )
     client, store, executor = setup_runtime(db, collection, provider, tmp_path)
-    run_id = start_run(client, "document",
-                       {"prompt": "Plan MATH 111 then MATH 112",
+    run_id = start_run(client, kind,
+                       {"prompt": "Make a semester plan starting with MATH 111 for the Economics minor",
                         "sourceIds": [str(source)]}, "plan-moved")
     finished = run_once(store, "plan", executor)
     assert finished.status.value == "succeeded", finished.error
     artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
     spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
-    text = json.dumps(spec)
-    assert "Term 1" in text and "Term 2" in text
-    # Sections run in parallel, so term 2's correction need not be the last request.
-    assert any("MATH 112" in message_text(request.messages[-1])
-               and "not accepted" in message_text(request.messages[-1])
-               for request in provider.requests)
+    from app.artifacts.checks import extract_planned_terms
+
+    assert extract_planned_terms(spec) == {"MATH 111": 1, "MATH 112": 2}
+    assert "MATH 111 is scheduled here" not in json.dumps(spec)
+    assert "degraded_sections" not in spec.get("provenance", {})
+    if kind == "document":
+        lines = {block["items"][0]: block["id"] for block in spec["blocks"]
+                 if block["type"] == "list"}
+        assert any(block.get("text") == "Series." for block in spec["blocks"])
+    else:
+        lines = {cell["value"]: f"{sheet['id']}/{cell['id']}"
+                 for sheet in spec["sheets"] for cell in sheet["cells"] if cell["row"] == 2}
+        assert any(cell["value"] == "Series." for cell in spec["sheets"][1]["cells"])
+    assert set(lines) == {"MATH 111 — Calculus I", "MATH 112 — Calculus II"}
+    for line, element_id in lines.items():
+        record = line.replace(" — ", ": ")
+        assert [ref["text_snapshot"].splitlines()[0]
+                for ref in spec["evidence"][element_id]] == [record]
 
 
 def test_a_failed_plan_section_falls_back_to_the_fixed_course_list(db, collection, tmp_path):
     source = _econ(db, collection, tmp_path)
 
-    class FailingSections(ArtifactStageProvider):
-        def generate(self, request):
-            if request.tools[0].name == SECTION_TOOL:
-                return GenerationResult(text="", finish_reason="length",
-                                        usage=Usage(100, 30, source="provider"))
-            return super().generate(request)
-
-    provider = FailingSections(outline=_plan_outline(["MATH 111", "MATH 112"]))
+    truncated = GenerationResult(text="", finish_reason="length",
+                                 usage=Usage(100, 30, source="provider"))
+    provider = ArtifactStageProvider(
+        outline=_plan_outline(["MATH 111", "MATH 112"]),
+        sections={"term1": [truncated], "term2": [truncated]},
+    )
     client, store, executor = setup_runtime(db, collection, provider, tmp_path)
     run_id = start_run(client, "document",
                        {"prompt": "Plan MATH 111 then MATH 112",
@@ -396,11 +401,11 @@ def test_a_failed_plan_section_falls_back_to_the_fixed_course_list(db, collectio
                 if block.get("type") == "heading"]
     assert "Term 1" in headings and "Term 2" in headings
     assert spec["provenance"]["degraded_sections"] == 2
-    assert any("MATH 111" in block.get("text", "") for block in spec["blocks"])
-    assert any("MATH 112" in block.get("text", "") for block in spec["blocks"])
     # Each fallback course list cites the records of its own courses.
-    lists = [block for block in spec["blocks"] if block["id"].endswith("fallback-courses")]
-    assert lists
+    lists = [block for block in spec["blocks"] if block["type"] == "list"]
+    assert [block["items"] for block in lists] == [
+        ["MATH 111 — Calculus I"], ["MATH 112 — Calculus II"],
+    ]
     for block in lists:
         codes = [item.split(" ")[0] + " " + item.split(" ")[1] for item in block["items"]]
         for ref in spec["evidence"][block["id"]]:
@@ -471,7 +476,7 @@ def test_a_blocked_course_goes_in_the_advisor_section(db, collection, tmp_path):
     )
     provider = ArtifactStageProvider(
         outline=_plan_outline(["ECON 499"]),
-        sections={"advisor": [_plan_section("ECON 499 needs instructor permission.")]},
+        sections={"advisor": [{"note": "Permission only."}]},
     )
     client, store, executor = setup_runtime(db, collection, provider, tmp_path)
     run_id = start_run(client, "document",
@@ -484,7 +489,8 @@ def test_a_blocked_course_goes_in_the_advisor_section(db, collection, tmp_path):
     headings = [block.get("text") for block in spec["blocks"]
                 if block.get("type") == "heading"]
     assert "Check with your advisor" in headings
-    assert any("ECON 499" in block.get("text", "") for block in spec["blocks"])
+    assert any("ECON 499 — Independent Study" in item and "unparsed" in item
+               for block in spec["blocks"] for item in block.get("items", []))
 
 
 def test_a_revision_replaces_one_section_and_keeps_the_rest_byte_identical(db, collection, tmp_path):

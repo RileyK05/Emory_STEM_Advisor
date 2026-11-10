@@ -65,7 +65,7 @@ class OutlineSection(ToolInputModel):
         min_length=1, max_length=6)
     source_slots: list[int] = Field(default_factory=list, max_length=50)
     courses: list[str] = Field(default_factory=list)
-    blocked_reasons: list[str] = Field(default_factory=list, max_length=20)
+    blocked_reasons: list[str] = Field(default_factory=list)
 
 
 class OutlineColumn(ToolInputModel):
@@ -81,7 +81,7 @@ class OutlineSheet(ToolInputModel):
     row_purpose: Note = Field(min_length=1)
     source_slots: list[int] = Field(default_factory=list, max_length=50)
     courses: list[str] = Field(default_factory=list)
-    blocked_reasons: list[str] = Field(default_factory=list, max_length=20)
+    blocked_reasons: list[str] = Field(default_factory=list)
 
 
 class OutlineChart(ToolInputModel):
@@ -110,11 +110,14 @@ class SectionRow(ToolInputModel):
 
 
 class StageSection(ToolInputModel):
-    blocks: list[dict[str, Any]] = Field(default_factory=list, max_length=40)
+    blocks: list[dict[str, Any]] = Field(default_factory=list, max_length=41)
     html: str = Field(default="", max_length=64_000)
     rows: list[SectionRow] = Field(default_factory=list, max_length=200)
-    courses: list[str] = Field(default_factory=list)
     bindings: list[ElementBinding] = Field(default_factory=list, max_length=1000)
+
+
+class StagePlanNote(ToolInputModel):
+    note: str = Field(default="", max_length=_NOTE_CHARS)
 
 
 class EditOperation(ToolInputModel):
