@@ -310,27 +310,38 @@ def _econ(db, collection, tmp_path, extra="", program=ECON_MINOR):
     return source
 
 
-@pytest.mark.parametrize("draft_courses", [[], ["ECON 101"] * 23])
-def test_a_plan_is_ordered_by_the_parser_and_not_by_the_model(
-        db, collection, tmp_path, draft_courses):
+@pytest.mark.parametrize(("prompt", "planned", "draft_courses", "selected"), [
+    ("Plan ECON 201 with ECON 101 done", True, [], ["ECON 201"]),
+    ("Plan ECON 201 with ECON 101 done", True, ["ECON 101"] * 23, ["ECON 201"]),
+    ("Make a checklist covering ECON 201 this semester", False, [], []),
+    ("Make a checklist covering ECON 201\n\nPublished answer:\nPlan ECON 201 for next semester.",
+     False, [], ["ECON 201"]),
+])
+def test_the_artifact_outline_uses_the_planner_for_term_plans(
+        db, collection, tmp_path, prompt, planned, draft_courses, selected):
     source = _econ(db, collection, tmp_path)
-    draft = _plan_outline(["ECON 201"], completed=["ECON 101"])
+    draft = _plan_outline(selected, completed=["ECON 101"] if planned else [])
+    if not planned:
+        draft["sections"] = outline()["sections"]
     draft["sections"][0]["courses"] = draft_courses
     provider = ArtifactStageProvider(
         outline=draft,
-        sections={"term1": [{"note": "Macro theory."}]},
+        sections={"term1": [{"note": "Macro theory."}],
+                  "s1": [section("ECON 201 — Intermediate Macroeconomics")]},
     )
     client, store, executor = setup_runtime(db, collection, provider, tmp_path)
-    run_id = start_run(client, "document",
-                       {"prompt": "Plan ECON 201 with ECON 101 done",
-                        "sourceIds": [str(source)]}, "plan-ordered")
+    run_id = start_run(client, "document", {"prompt": prompt, "sourceIds": [str(source)]},
+                       "plan-ordered")
     finished = run_once(store, "plan", executor)
     assert finished.status.value == "succeeded", finished.error
     artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
     spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
     headings = [block.get("text") for block in spec["blocks"]
                 if block.get("type") == "heading"]
-    assert "Term 1" in headings
+    assert headings == (["Term 1"] if planned else ["Facts"])
+    if not planned:
+        assert spec["blocks"][-1]["text"] == "ECON 201 — Intermediate Macroeconomics"
+        return
     assert "degraded_sections" not in spec.get("provenance", {})
     course = next(block for block in spec["blocks"] if block["type"] == "list")
     assert course["items"] == ["ECON 201 — Intermediate Macroeconomics"]
