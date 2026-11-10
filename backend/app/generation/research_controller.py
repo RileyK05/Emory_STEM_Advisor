@@ -60,7 +60,7 @@ ROLE AND CONTRACT
 - Keep facts, candidate judgments, limits and questions in their own blocks. State an assumption only when a different assumption would change the advice.
 - completeness=complete means the student's question is answered, even with a caution attached. Use partial only when the main question stays unanswered. A detail you could not confirm is not partial.
 - A factual question needs no working state: search, read, then call advisor_finish. Record state only to compare options or recommend.
-- Set finish.decision.artifact when asked to make, keep or export a plan, checklist, report, sheet or page, or to revise the attached artifact; say it is being made. A printable plan, checklist, report or handout is a document; a spreadsheet is a workbook; html is only for a web or interactive page.
+- Set finish.decision.artifact when asked to make or keep a plan, checklist, report, sheet or page, to revise the attached artifact, or to summarize the chat (purpose=summary); say it is being made. A plan, checklist, report or handout is a document; a spreadsheet is a workbook; html is only for a web page.
 
 SCOPE
 - You help only with Emory advising: courses, majors, requirements, academic policies, and pre-med, grad-school or career preparation for a major.
@@ -263,19 +263,92 @@ def _requests_preparation(question):
 _ARTIFACT_ASK = re.compile(
     r"\b(?:make|create|build|draft|generate|put together|write up|give me)\b[^.?!]{0,60}?"
     r"\b(?:plan|checklist|schedule|spreadsheet|workbook|sheet|document|doc|handout|report|"
-    r"page|comparison|table)s?\b"
+    r"page|comparison|table|roadmap)s?\b"
     r"|\b(?:printable|print it|i can (?:print|keep)|export|download)\b"
-    r"|\bplan (?:out )?my\b",
+    r"|\bplan (?:out )?my\b"
+    # A request that is only the thing itself: "A semester-by-semester spreadsheet for ...".
+    r"|^\s*(?:an?|one)\s+(?:(?!(?:about|of|for|on|in|to|with)\b)[\w-]+\s+){0,4}?"
+    r"(?:spreadsheet|workbook|checklist|roadmap|handout|worksheet)\b"
+    r"|^\s*(?:an?\s+)?(?:(?!(?:about|of|for|on|in|to|with)\b)[\w-]+\s+){0,3}?"
+    r"(?:semester-by-semester|term-by-term|year-by-year|four-year|4-year|graduation)\s+"
+    r"(?:plan|schedule)\b",
     re.IGNORECASE)
+_SUMMARY_ASK = re.compile(
+    r"\bsummar(?:y|ize|ise)\b[^.?!]{0,40}\b(?:chat|conversation|discussion|thread)\b"
+    r"|\b(?:turn|put|make)\b[^.?!]{0,20}\b(?:chat|conversation)\b[^.?!]{0,20}"
+    r"\b(?:into|as)\b[^.?!]{0,15}\b(?:document|doc)\b",
+    re.IGNORECASE)
+_SHEET_ASK = re.compile(r"\b(?:spreadsheet|workbook|excel|sheet|csv)\b", re.IGNORECASE)
+_PAGE_ASK = re.compile(r"\b(?:web ?page|webpage|html|website|interactive)\b", re.IGNORECASE)
+_PROGRAM_NAME = re.compile(
+    r"((?:[A-Z][\w'’&-]*(?:\s+(?:and|of|in|for|&)\s+(?=[A-Z])|\s+))*[A-Z][\w'’&-]*)"
+    r"\s+(?:BS|BA|BBA|B\.S\.|B\.A\.|minor|major|co-major)\b")
+_NAME_STOPWORDS = frozenset({"and", "of", "in", "for", "the", "&"})
 
 
 def _asks_for_artifact(question) -> bool:
     """The student asked for something to keep: a plan, checklist, sheet or page.
 
     A hint only: the model still decides the kind and writes the brief, and an
-    artifact is never made without its own request.
+    ordinary question that mentions a plan does not match.
     """
-    return bool(_ARTIFACT_ASK.search(question or ""))
+    return bool(_ARTIFACT_ASK.search(question or "") or _SUMMARY_ASK.search(question or ""))
+
+
+def _missing_program(question, titles) -> str | None:
+    """A degree program the student named that no program in scope matches.
+
+    Conservative on purpose: a name of one word, or with an acronym ("CS and Math"),
+    is not judged, and a word matches a title word by its first three letters
+    ("Math" and "Mathematics"), so a real program is never called missing.
+    """
+    titles = list(titles)
+    match = _PROGRAM_NAME.search(question or "")
+    if match is None or not titles:
+        return None
+    name = match.group(1)
+    words = [word for word in re.findall(r"[A-Za-z]+", name.lower())
+             if word not in _NAME_STOPWORDS]
+    if len(words) < 2 or any(word.isupper() and len(word) <= 4 for word in re.findall(r"[A-Za-z]+", name)):
+        return None
+    for title in titles:
+        have = re.findall(r"[a-z]+", title.lower())
+        if all(any(h.startswith(w[:3]) or w.startswith(h[:3]) for h in have if len(h) >= 3)
+               for w in words):
+            return None
+    return name
+
+
+def _artifact_for(question: str):
+    """The artifact request for a student's own words, when research did not make one."""
+    from app.advising.research_types import ArtifactRequest
+
+    text = " ".join(question.split())
+    if _SUMMARY_ASK.search(text):
+        return ArtifactRequest(kind="document", title="Conversation summary",
+                               brief=text[:4_000], purpose="summary")
+    kind = "workbook" if _SHEET_ASK.search(text) else "html" if _PAGE_ASK.search(text) else "document"
+    return ArtifactRequest(kind=kind, title=text[:200], brief=text[:4_000])
+
+
+def _with_requested_artifact(decision, question, titles, *, referenced: bool):
+    """Hand the student's request to the artifact pipeline when research left it out.
+
+    A summary of the conversation is built from the saved turns, so a document made
+    for one takes that purpose. No artifact is made for a program that does not exist,
+    for a declined or clarifying answer, or when the turn revised an attached one.
+    """
+    if _missing_program(question, titles) is not None:
+        return decision.model_copy(update={"artifact": None}) if decision.artifact else decision
+    artifact = decision.artifact
+    if (artifact is not None and _SUMMARY_ASK.search(question or "")
+            and artifact.kind == "document" and artifact.purpose == "create"):
+        return decision.model_copy(update={"artifact": artifact.model_copy(
+            update={"purpose": "summary", "revises": None})})
+    if (artifact is None and _asks_for_artifact(question) and not referenced
+            and decision.outcome in {"recommendation", "information"}):
+        return decision.model_copy(update={"artifact": _artifact_for(question)})
+    return decision
 
 
 def _finish_text_call(text):
@@ -404,6 +477,8 @@ class ResearchController:
         discovery_rounds = 0
         corrections_used = 0
         artifact_reminded = False
+        program_titles = [pin.title for pin in session.scope.programs.values()]
+        missing_program = _missing_program(question, program_titles)
         # A reply cut off at the output limit is not a malformed answer: reasoning
         # models can spend the whole allowance on hidden deliberation. Retry the
         # same round with a larger allowance before falling back to corrections.
@@ -628,19 +703,27 @@ class ResearchController:
                 round_results.append(ToolResultMessage(call.id, call.name, output))
                 if call.name == "advisor_finish":
                     accepted = json.loads(output)
-                    if (request_context.get("artifact_requested") and not artifact_reminded
-                            and accepted.get("status") == "ok" and session.decision is not None
+                    nudge = None
+                    if (not artifact_reminded and accepted.get("status") == "ok"
+                            and session.decision is not None
                             and session.decision.outcome != "declined"
-                            and session.decision.artifact is None and corrections_used < 2
+                            and corrections_used < 2
                             and tools_used < settings.research_max_tool_calls
                             and _round + 1 < settings.research_max_calls
                             and status.remaining_calls > 1
                             and status.remaining_seconds > _SALVAGE_RESERVE_SECONDS):
+                        if missing_program and session.decision.artifact is not None:
+                            nudge = (f"The student named {missing_program}, which is not a program in "
+                                     "the catalog. Say so, name the closest programs, and set no "
+                                     "decision.artifact.")
+                        elif (request_context.get("artifact_requested") and not missing_program
+                                and session.decision.artifact is None):
+                            nudge = ("The student asked for an artifact to keep. Set decision.artifact "
+                                     "with kind, title, and a brief.")
+                    if nudge:
                         artifact_reminded = True
                         session.rejected_decision = session.decision
-                        accepted = {"status": "conflict", "limitations": [
-                            ("The student asked for an artifact to keep. Set decision.artifact "
-                             "with kind, title, and a brief.")]}
+                        accepted = {"status": "conflict", "limitations": [nudge]}
                         output = json.dumps(accepted)
                         # Keep the validated result replayable if the provider repeats
                         # the same proposal. Only publication is deferred this round.
@@ -664,6 +747,9 @@ class ResearchController:
                                       f"I did not check every requirement for: {coverage}."]
                         session.decision = session.decision.model_copy(update={
                             "completeness": "partial", "unresolved_questions": tuple(unresolved[:8])})
+                    session.decision = _with_requested_artifact(
+                        session.decision, question, program_titles,
+                        referenced=bool(session.artifact_references))
                     return session.decision, _aggregate_usage(usages), prepared.messages[0].content, user, result.model
             if not repairing:
                 hint = ""

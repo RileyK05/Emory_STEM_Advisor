@@ -1473,8 +1473,14 @@ Out-of-scope and unknown identifiers both raise `NotInScope`.
   revision, revise requires one, and summary requires a document with no
   revision; an unreferenced revision rejects the finish as `rejected_finish`.
   When a valid finish omits an explicitly requested artifact, the controller
-  asks for one correction if the budget allows. A second valid finish can
-  publish without an artifact.
+  asks for one correction if the budget allows. If the finish still has none,
+  the controller makes the request from the student's own words (kind from
+  the wording, the question as title and brief), but never for a declined,
+  clarifying or insufficient-evidence answer, for a turn that referenced an
+  artifact, or for a degree program no program in scope matches. In that last
+  case the finish is asked once to say so, and any artifact it carries is
+  dropped. A document made for a request to summarize the conversation takes
+  the `summary` purpose, which is built from the saved turns.
   `research_decisions` stores structurally valid decisions
   (limits, issued evidence only, every fact cited) with their digest. A fact
   block that asserts program inclusion must name only course codes present in

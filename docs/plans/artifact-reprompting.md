@@ -127,11 +127,18 @@ gets:
   finished first);
 - the block schema for only the block types this section uses.
 
-Output is the section's blocks (document, html) or its rows (workbook), each
-with `source_slots`. The tool checks the blocks against the native models, the
-bindings against this section's slots, a per-section size cap, and the same
-course-existence rule as the outline. Grounded mode requires a binding for
-every content element. Authoring mode forbids bindings, as today.
+Output is the section's blocks (document), one html fragment (html) or its
+rows (workbook), each with `source_slots`. Each kind offers its own fields
+(`StageDocumentSection`, `StageHtmlSection`, `StageWorkbookSection`), so a
+document section cannot send `html` and a page cannot send blocks; an empty
+value for a field the kind does not use is dropped, and a null for an unused
+text field means "". A document block cites its slots on the block itself,
+which joins any listed binding; a page lists its slots and code builds the one
+`html` binding; a number in a table cell is written as its text. The tool
+checks the blocks against the native models, the slots against this section's
+slots, a per-section size cap, and the same course-existence rule as the
+outline. Grounded mode requires a binding for every content element. Authoring
+mode forbids bindings, as today.
 
 **Workbook rows are data, not cells.** The model returns
 `rows: [[value, ...], ...]` keyed by the outline's columns. Code assigns cell

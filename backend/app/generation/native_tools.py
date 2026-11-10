@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BeforeValidator, Field, ValidationError
+from pydantic import BeforeValidator, Field, ValidationError, model_validator
 
 from app.generation.artifact_candidate import ElementBinding
 from app.tools.registry import (
@@ -110,10 +110,68 @@ class SectionRow(ToolInputModel):
 
 
 class StageSection(ToolInputModel):
+    """The checked draft of one section, whatever kind of artifact it belongs to."""
     blocks: list[dict[str, Any]] = Field(default_factory=list, max_length=41)
     html: str = Field(default="", max_length=64_000)
     rows: list[SectionRow] = Field(default_factory=list, max_length=200)
     bindings: list[ElementBinding] = Field(default_factory=list, max_length=1000)
+
+
+class _SectionInput(ToolInputModel):
+    """What the model sends for one section. Each artifact kind offers its own fields."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_empty_extras(cls, data):
+        # A provider fills in every field it has seen, including ones another kind
+        # uses. An empty value there means "not used", so it is dropped, not refused.
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items()
+                    if key in cls.model_fields or value not in (None, "", [], {})}
+        return data
+
+
+class StageDocumentSection(_SectionInput):
+    # A block may carry `source_slots`: the numbered slots it uses.
+    blocks: list[dict[str, Any]] = Field(default_factory=list, max_length=41)
+    bindings: list[ElementBinding] = Field(default_factory=list, max_length=1000)
+
+    def draft(self) -> StageSection:
+        return StageSection(blocks=self.blocks, bindings=self.bindings)
+
+
+class StageHtmlSection(_SectionInput):
+    html: str = Field(default="", max_length=64_000)
+    source_slots: list[int] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_bindings(cls, data):
+        # A page has one piece of content, so any bindings it sends are just its slots.
+        if isinstance(data, dict) and isinstance(data.get("bindings"), list):
+            data = dict(data)
+            slots = list(data.get("source_slots") or [])
+            for binding in data.pop("bindings"):
+                if isinstance(binding, dict) and isinstance(binding.get("source_slots"), list):
+                    slots += [slot for slot in binding["source_slots"] if slot not in slots]
+            data["source_slots"] = slots
+        return data
+
+    def draft(self) -> StageSection:
+        bindings = ([ElementBinding(element_id="html", source_slots=self.source_slots)]
+                    if self.source_slots else [])
+        return StageSection(html=self.html, bindings=bindings)
+
+
+class StageWorkbookSection(_SectionInput):
+    rows: list[SectionRow] = Field(default_factory=list, max_length=200)
+
+    def draft(self) -> StageSection:
+        return StageSection(rows=self.rows)
+
+
+SECTION_INPUTS = {"document": StageDocumentSection, "html": StageHtmlSection,
+                  "workbook": StageWorkbookSection}
 
 
 class StagePlanNote(ToolInputModel):

@@ -163,6 +163,52 @@ def test_a_draft_is_refused_then_corrected_in_the_same_conversation(db, collecti
         == "Alpha facts."
 
 
+_TABLE = {"id": "t1", "type": "table", "headers": ["Course", "Credits"]}
+
+
+@pytest.mark.parametrize(("kind", "block_types", "drafts", "requests", "published"), [
+    # Unused fields arrive empty, and a block cites its own slots.
+    ("document", ["paragraph"], [{"blocks": [{"id": "p1", "type": "paragraph",
+                                               "text": "Alpha facts.", "source_slots": [1]}],
+                                  "html": None, "rows": []}], 2, "Alpha facts."),
+    # Credits written as a number are text in a table.
+    ("document", ["table"], [{"blocks": [{**_TABLE, "rows": [["Alpha 101", 4]],
+                                           "source_slots": [1]}]}], 2, "Alpha 101"),
+    ("document", ["table"], [{"blocks": [{**_TABLE, "rows": [["Alpha 101", True]],
+                                           "source_slots": [1]}]},
+                             {"blocks": [{**_TABLE, "rows": [["Alpha 101", "4"]],
+                                          "source_slots": [1]}]}], 3, "Alpha 101"),
+    # A block cannot cite a slot outside its section.
+    ("document", ["paragraph"], [{"blocks": [{"id": "p1", "type": "paragraph", "text": "Alpha.",
+                                               "source_slots": [9]}]}, section()], 3, "Alpha facts."),
+    # A page names its slots; code builds the one binding.
+    ("html", ["paragraph"], [{"html": "<p>Alpha facts.</p>", "source_slots": [1],
+                              "blocks": [], "rows": None}], 2, "Alpha facts."),
+    ("html", ["paragraph"], [{"html": "<p>Alpha facts.</p>"},
+                             {"html": "<p>Alpha facts.</p>", "source_slots": [1]}], 3,
+     "Alpha facts."),
+])
+def test_a_section_is_accepted_in_the_shape_its_kind_offers(
+        db, collection, tmp_path, kind, block_types, drafts, requests, published):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    provider = ArtifactStageProvider(
+        outline=outline(sections=[{"id": "s1", "heading": "Facts", "purpose": "State the facts.",
+                                   "block_types": block_types, "source_slots": [1]}]),
+        sections={"s1": drafts})
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, kind, {"prompt": "Alpha", "sourceIds": [str(source)]},
+                       f"section-shape-{kind}-{requests}-{len(drafts)}-{block_types[0]}")
+    finished = run_once(store, "section-shape", executor)
+    assert finished.status.value == "succeeded", finished.error
+    assert len(provider.requests) == requests
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get("/api/artifacts/" + artifact_id).json()["spec"]
+    assert published in json.dumps(spec)
+    if "Credits" in json.dumps(drafts):
+        table = next(block for block in spec["blocks"] if block["type"] == "table")
+        assert ["Alpha 101", "4"] in table["rows"]
+
+
 def test_a_model_that_never_corrects_fails_cleanly_with_usage_accounted(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
     provider = ArtifactStageProvider(
@@ -343,6 +389,7 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
         assert spec["blocks"][-1]["text"] == "ECON 201 — Intermediate Macroeconomics"
         return
     assert "degraded_sections" not in spec.get("provenance", {})
+    assert spec["title"] == "Economics (Minor): Term plan"
     course = next(block for block in spec["blocks"] if block["type"] == "list")
     assert course["items"] == ["ECON 201 — Intermediate Macroeconomics"]
     assert any(block.get("text") == "Macro theory." for block in spec["blocks"])

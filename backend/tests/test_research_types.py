@@ -876,11 +876,68 @@ def test_compare_keeps_all_mention_refs_for_retained_codes():
     ("Make a checklist of everything the Neuroscience and Behavioral Biology BS requires.", True),
     ("Compare the Computer Science BA and BS in a document I can keep.", True),
     ("I took MATH_OX 111 at Oxford. Plan my Chemistry BS from here.", True),
+    ("A semester-by-semester spreadsheet for the Economics and Human Health BA.", True),
+    ("A one-page roadmap of the Applied Mathematics minor.", True),
+    ("Summarize this conversation into a document I can keep.", True),
+    ("Turn this chat into a document I can print.", True),
     ("What does CS 253 require?", False),
     ("Is the plan to take MATH 111 good?", False),
     ("How do I make the dean's list?", False),
+    ("A question about the plan.", False),
+    ("My plan is to take CS 170.", False),
+    ("What does the checklist say about CS 170?", False),
+    ("Can you summarize what CS 170 covers?", False),
 ])
 def test_research_is_told_when_the_student_asks_for_something_to_keep(question, asked):
     from app.generation.research_controller import _asks_for_artifact
 
     assert _asks_for_artifact(question) is asked
+
+
+_PROGRAMS = ["NEUROSCIENCE AND BEHAVIORAL BIOLOGY (BS)", "APPLIED MATHEMATICS (MINOR)",
+             "MATHEMATICS AND COMPUTER SCIENCE (BS)", "PSYCHOLOGY (BS)"]
+
+
+@pytest.mark.parametrize(("question", "missing"), [
+    ("Make me a plan for the Underwater Basket Weaving BS.", "Underwater Basket Weaving"),
+    ("Plan my Neuroscience and Behavioral Biology BS from here.", None),
+    ("A roadmap of the Applied Math minor.", None),        # a word and its prefix
+    ("Plan my CS and Math BS.", None),                       # an acronym is not judged
+    ("Plan my Astrology BS.", None),                         # one word is not judged
+    ("Make a plan for the Mathematics and Computer Science BS.", None),
+    ("What does MATH 111 require?", None),
+])
+def test_a_named_program_that_is_not_in_scope_is_found(question, missing):
+    from app.generation.research_controller import _missing_program
+
+    assert _missing_program(question, _PROGRAMS) == missing
+    assert _missing_program(question, []) is None
+
+
+@pytest.mark.parametrize(("question", "decision", "expected"), [
+    # Research left out the artifact the student asked for: their words become the request.
+    ("Plan my Psychology BS.", {}, ("document", "create")),
+    ("A semester-by-semester spreadsheet for the Psychology BS.", {}, ("workbook", "create")),
+    ("Make a web page roadmap of the Psychology BS.", {}, ("html", "create")),
+    ("Summarize this chat.", {}, ("document", "summary")),
+    # A summary asked for as a document is built from the saved turns.
+    ("Summarize this conversation into a document I can keep.",
+     {"artifact": ArtifactRequest(kind="document", title="Summary", brief="Summarize.")},
+     ("document", "summary")),
+    # Never for a program that does not exist, or an answer that is not a recommendation.
+    ("Make me a plan for the Underwater Basket Weaving BS.", {}, None),
+    ("Make me a plan for the Underwater Basket Weaving BS.",
+     {"artifact": ArtifactRequest(kind="document", title="Plan", brief="Plan.")}, None),
+    ("Plan my Psychology BS.", {"outcome": "insufficient_evidence"}, None),
+    ("Plan my Psychology BS.", {"outcome": "clarification"}, None),
+    ("What does PSYC 110 require?", {}, None),
+])
+def test_research_hands_the_students_request_to_the_artifact_pipeline(
+        question, decision, expected):
+    from app.generation.research_controller import _with_requested_artifact
+
+    result = _with_requested_artifact(_decision(**decision), question, _PROGRAMS, referenced=False)
+    assert (result.artifact and (result.artifact.kind, result.artifact.purpose))         == (expected or None)
+    revised = _with_requested_artifact(_decision(**decision), question, _PROGRAMS, referenced=True)
+    assert (revised.artifact is None) == (not decision.get("artifact") and expected is not None
+                                          or expected is None)

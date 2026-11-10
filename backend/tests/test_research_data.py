@@ -1719,7 +1719,9 @@ def test_research_allows_a_bounded_finish_correction(
         if correction == "add_artifact":
             assert response.research.artifact.title == "Degree plan"
         else:
-            assert response.research.artifact is None
+            # Asked twice and still none: the student's own words become the request.
+            assert response.research.artifact.kind == "document"
+            assert "Computer Science BS" in response.research.artifact.brief
         assert response.answer
         return
 

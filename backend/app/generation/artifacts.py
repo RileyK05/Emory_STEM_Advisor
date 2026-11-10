@@ -1,6 +1,7 @@
 """Bounded artifact generation by a checked chain of small provider calls."""
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -44,6 +45,8 @@ from app.operations.budget import OperationBudgetError
 from app.retrieval.retrieve import retrieve
 from app.retrieval.types import Refusal
 from app.tools.executions import ToolLedgerError
+
+logger = logging.getLogger(__name__)
 
 _TOO_SLOW = "This took too long to make. Try again, or ask for a shorter version."
 
@@ -161,6 +164,9 @@ class ArtifactHandler:
         except ArtifactTargetError as exc:
             raise SafeJobError(exc.code, str(exc)) from exc
         except (ToolConversationError, ToolLedgerError) as exc:
+            # Controller and ledger text only: never model output or slot text.
+            logger.warning("artifact job %s stopped its tool conversation: %s %s",
+                           job.job_id, exc, " ".join(getattr(exc, "__notes__", ())))
             raise SafeJobError("tool_failed", "Native tool execution could not be completed safely.") from exc
         except OperationBudgetError as exc:
             if exc.code == "deadline_exceeded":

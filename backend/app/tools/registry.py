@@ -133,9 +133,18 @@ def repair_arguments(value: Any, annotation: Any) -> Any:
         value = value[0]
     if is_model and isinstance(value, dict):
         fields = annotation.model_fields
-        return {key: repair_arguments(item, fields[key].annotation) if key in fields else item
+        return {key: _repair_field(item, fields[key]) if key in fields else item
                 for key, item in value.items()}
     return value
+
+
+def _repair_field(value: Any, field: Any) -> Any:
+    # A string field that defaults to "" and arrives as null means "not used",
+    # the same way an empty array arrives as null. A required string keeps its null.
+    if (value is None and field.default == "" and _concrete(field.annotation) is str
+            and not _allows_none(field.annotation)):
+        return ""
+    return repair_arguments(value, field.annotation)
 
 
 @dataclass(frozen=True)

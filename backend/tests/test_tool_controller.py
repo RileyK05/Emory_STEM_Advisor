@@ -348,6 +348,18 @@ def test_null_stays_null_for_a_field_that_allows_it():
     assert repair_arguments({"names": {}}, Maybe)["names"] == ()
 
 
+def test_null_for_an_unused_string_is_empty_but_a_required_string_keeps_its_null():
+    """A provider fills unused fields with null: "" for one that defaults to "", else untouched."""
+    class Section(BaseModel):
+        model_config = ConfigDict(extra="forbid", strict=True)
+        html: str = ""
+        title: str
+
+    assert repair_arguments({"html": None, "title": "t"}, Section) == {"html": "", "title": "t"}
+    assert repair_arguments({"html": None, "title": None}, Section)["title"] is None
+    Section.model_validate(repair_arguments({"html": None, "title": "t"}, Section))
+
+
 def test_an_empty_object_for_an_optional_object_means_none():
     class Holder(BaseModel):
         model_config = ConfigDict(extra="forbid", strict=True)
