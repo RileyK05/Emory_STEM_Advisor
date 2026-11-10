@@ -22,6 +22,39 @@ Done, uncommitted, offline gates pass (ruff, 1592 backend tests):
 - 2.1 code hands the student's request to the artifact pipeline when research leaves it out.
 - 2.2 noun-phrase requests and "roadmap"; 2.3 summaries (research-48); 2.4 a program that is not in scope gets no artifact; 2.5 plan titles come from the program record.
 
+Review fixes after the first live rerun (17 cases, 1 passed):
+
+- The tool ledger binds a run to the scope fingerprint of its first stage, but
+  `_run_stage` recomputed it from the current slots. The planner (`7369c95`)
+  appends course records research had not read, so every later stage was
+  refused ("tool operation context or limits changed"). This was F5's unrecorded
+  failure. The fingerprint is now taken once, from the grounding as the run
+  starts.
+- A block's own `source_slots` sent as text ("3") is repaired like any tool
+  number; a null table cell is an empty cell.
+- A salvaged research reply also gets the code-made artifact request (2.1); it
+  was applied only on the normal finish.
+- `_missing_program` judges the tail of a name, so "my Emory Biology BS" and "an
+  Oxford Chemistry BS plan" are no longer called missing.
+- A run that fails its checks logs the findings (codes and checks only), so the
+  K4 "not in the catalog" failures name their code.
+- K4 read table cells joined with spaces, so "Section A — Physics" next to "12"
+  became PHYS 12. Pieces are now joined with a separator no code spans
+  (`PIECE_SEPARATOR`), and a finding spelled differently from its canonical code
+  ("Math_OX 112") is still traced to its section, so it can be repaired instead
+  of failing the run (user-approved `checks.py` change).
+- Each section's payload lists `not_in_course_atlas`, the codes in its slots
+  that are not current Atlas courses (program text names retired or absent
+  courses), and the section prompt says to name those by title.
+
+Seen in the 5-case random check, not fixed:
+
+- A summary is built in code from the saved turns (no model call), so a K4
+  finding there has no repair round (summary-1: PHYS 444, PHYS 499).
+- compare-4 compared the Applied Mathematics BS when the student asked about
+  the minor, and wrote "Print readiness…" text into the document. No K-check
+  catches either.
+
 Not done:
 
 - **2.6** (do not repeat a course code that is not in the Atlas). It contradicts behavior the code already has on purpose: salvage writes "There is no PSYC 219 in the Course Atlas." (`test_research_types.py`), and research's `no_current_course_note` tells the model to name the code. Rejecting answers that name it would fight both. K4 (frozen) still fails any reply that names the fake code, so A26-style cases can fail K4 while behaving as designed. Needs a decision: change the existing wording to avoid the code, or ask for a K4 change.

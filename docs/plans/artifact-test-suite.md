@@ -91,9 +91,13 @@ python -m scripts.manual.artifact_suite report --dir ../data/manual-checks/suite
 - **Before calling P3.2 done**: also run a new seed. Passing one seed while
   failing a fresh one means the fix is tuned to the sample.
 - `--per-family 4` gives 48 cases. A case takes one to four minutes, so one
-  repeat is about two hours and three repeats about six. `--resume` continues
-  a stopped run. Run it alone: the benchmark's queue check (K1) and its worker
-  loop assume no other jobs are running.
+  repeat is about two hours and three repeats about six. Each case runs in its
+  own benchmark process (a revise case with the case it revises), so a stopped
+  run loses only the case in progress: `run --resume` with the same arguments
+  first closes the jobs the stopped run left open (waiting out a lease of up to
+  10 minutes), then continues with the next unfinished case. Run it alone: the
+  benchmark's queue check (K1) and its worker loop assume no other jobs are
+  running.
 - Generated case files and run output go under `data/manual-checks/`
   (gitignored), never in the repo.
 

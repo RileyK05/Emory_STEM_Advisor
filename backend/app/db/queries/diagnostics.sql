@@ -74,6 +74,16 @@ WHERE workspace_key = %(workspace_key)s
   AND created_at >= %(since)s AND created_at <= %(until)s
 ORDER BY created_at;
 
+-- name: artifact_suite_open_jobs
+-- Jobs a stopped benchmark run left queued or running. Both job kinds key on
+-- "<kind>:<conversation_id>:<request_id>".
+SELECT j.job_id, j.status, j.lease_expires_at
+FROM jobs AS j
+WHERE j.status IN ('queued', 'running')
+  AND split_part(j.idempotency_key, ':', 2) IN (
+      SELECT conversation_id::text FROM conversations
+      WHERE workspace_key = %(workspace_key)s AND title LIKE 'Benchmark %%');
+
 -- name: artifact_suite_turns
 SELECT sequence, role, status, text, request_id, evidence
 FROM conversation_turns

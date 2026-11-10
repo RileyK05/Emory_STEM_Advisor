@@ -311,11 +311,15 @@ def _missing_program(question, titles) -> str | None:
              if word not in _NAME_STOPWORDS]
     if len(words) < 2 or any(word.isupper() and len(word) <= 4 for word in re.findall(r"[A-Za-z]+", name)):
         return None
-    for title in titles:
-        have = re.findall(r"[a-z]+", title.lower())
-        if all(any(h.startswith(w[:3]) or w.startswith(h[:3]) for h in have if len(h) >= 3)
-               for w in words):
-            return None
+    # Words before the name can be part of the sentence ("my Emory Biology BS", "a
+    # Junior Physics BS student"), so any tail of the name that matches a title is enough.
+    for start in range(len(words)):
+        tail = words[start:]
+        for title in titles:
+            have = re.findall(r"[a-z]+", title.lower())
+            if all(any(h.startswith(w[:3]) or w.startswith(h[:3]) for h in have if len(h) >= 3)
+                   for w in tail):
+                return None
     return name
 
 
@@ -454,6 +458,11 @@ class ResearchController:
                 if isinstance(exc, (ToolConversationError, OperationBudgetError)):
                     raise ToolConversationError("The advisor couldn't answer that. Try again.") from exc
                 raise
+            # A salvaged reply still carries the student's request for something to keep.
+            decision = _with_requested_artifact(
+                decision, session.question,
+                [pin.title for pin in session.scope.programs.values()],
+                referenced=bool(session.artifact_references))
             session.decision = decision
             system, user, model = session.last_call
             return decision, _aggregate_usage(usages), system, user, model

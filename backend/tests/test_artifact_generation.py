@@ -171,9 +171,15 @@ _TABLE = {"id": "t1", "type": "table", "headers": ["Course", "Credits"]}
     ("document", ["paragraph"], [{"blocks": [{"id": "p1", "type": "paragraph",
                                                "text": "Alpha facts.", "source_slots": [1]}],
                                   "html": None, "rows": []}], 2, "Alpha facts."),
-    # Credits written as a number are text in a table.
+    # A slot number written as text is the same slot.
+    ("document", ["paragraph"], [{"blocks": [{"id": "p1", "type": "paragraph",
+                                               "text": "Alpha facts.", "source_slots": ["1"]}]}],
+     2, "Alpha facts."),
+    # Credits written as a number are text in a table, and a null cell is empty.
     ("document", ["table"], [{"blocks": [{**_TABLE, "rows": [["Alpha 101", 4]],
                                            "source_slots": [1]}]}], 2, "Alpha 101"),
+    ("document", ["table"], [{"blocks": [{**_TABLE, "rows": [["Alpha 101", 4], ["Alpha 102", None]],
+                                           "source_slots": [1]}]}], 2, "Alpha 102"),
     ("document", ["table"], [{"blocks": [{**_TABLE, "rows": [["Alpha 101", True]],
                                            "source_slots": [1]}]},
                              {"blocks": [{**_TABLE, "rows": [["Alpha 101", "4"]],
@@ -359,6 +365,8 @@ def _econ(db, collection, tmp_path, extra="", program=ECON_MINOR):
 @pytest.mark.parametrize(("prompt", "planned", "draft_courses", "selected"), [
     ("Plan ECON 201 with ECON 101 done", True, [], ["ECON 201"]),
     ("Plan ECON 201 with ECON 101 done", True, ["ECON 101"] * 23, ["ECON 201"]),
+    # The grounding never retrieved the record: the planner appends it mid-run.
+    ("Plan my semester after Calculus I limits", True, [], ["ECON 201"]),
     ("Make a checklist covering ECON 201 this semester", False, [], []),
     ("Make a checklist covering ECON 201\n\nPublished answer:\nPlan ECON 201 for next semester.",
      False, [], ["ECON 201"]),
@@ -611,3 +619,25 @@ def test_a_revision_replaces_one_section_and_keeps_the_rest_byte_identical(db, c
     assert any(block.get("text") == "Alpha facts revised." for block in changed)
     assert any(block.get("text") == "Changed" for block in changed)
     assert revised["parentRevisionId"] == prior["revisionId"]
+
+
+@pytest.mark.parametrize(("rows", "known", "flagged"), [
+    # A heading cell next to its course count is not a course ("Physics" and "12").
+    ([["Section A — Physics", "12"]], set(), {}),
+    # An unknown code is flagged and owned by the section, however the section spells it.
+    ([["POLS387: Independent Research", "4"]], set(), {"POLS 387": "s1"}),
+    ([["Math_OX 112", "Calculus II"]], set(), {"MATH_OX 112": "s1"}),
+    ([["MATH 111", "Calculus I"]], {"MATH 111"}, {}),
+])
+def test_the_course_check_reads_each_piece_and_names_its_section(rows, known, flagged):
+    from app.artifacts.checks import check_generated_artifact
+    from app.artifacts.storage import validate_spec
+
+    spec = validate_spec("document", {"kind": "document", "title": "Checklist", "blocks": [
+        {"id": "s1:t", "type": "table", "headers": ["Course", "Hours"], "rows": rows}]})
+    # The pipeline's own section text joins a table's cells with spaces.
+    findings = check_generated_artifact(
+        None, collection_id=None, spec=spec, known_courses=known, campus_equivalents={},
+        section_texts={"s1": " ".join(cell for row in rows for cell in row)})
+    assert {finding.message.split(" is not")[0]: finding.section_id
+            for finding in findings if finding.check == "K4"} == flagged

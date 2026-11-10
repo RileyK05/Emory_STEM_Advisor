@@ -762,9 +762,16 @@ def test_a_provider_dropout_keeps_what_the_run_already_proposed(monkeypatch, fai
     controller = ResearchController()
     monkeypatch.setattr(controller, "_run", dropped_after_one_call)
     salvaged = _decision()
-    session = SimpleNamespace(salvage=lambda: salvaged)
+    scope = SimpleNamespace(programs={})
+    session = SimpleNamespace(salvage=lambda: salvaged, question="What does PSYC 110 require?",
+                              scope=scope, artifact_references=())
     decision, *_ = controller.run(session, None, None)
     assert decision is session.decision is salvaged
+    # A salvaged reply still hands on the student's request for something to keep.
+    session = SimpleNamespace(salvage=lambda: salvaged, question="Plan my Psychology BS.",
+                              scope=scope, artifact_references=())
+    decision, *_ = controller.run(session, None, None)
+    assert decision.artifact.kind == "document"
 
     with pytest.raises(type(error)) as exc_info:  # Nothing to keep, so the student is told to retry.
         controller.run(SimpleNamespace(salvage=lambda: None, last_call=("system", "user", "model")), None, None)
@@ -905,6 +912,10 @@ _PROGRAMS = ["NEUROSCIENCE AND BEHAVIORAL BIOLOGY (BS)", "APPLIED MATHEMATICS (M
     ("Plan my CS and Math BS.", None),                       # an acronym is not judged
     ("Plan my Astrology BS.", None),                         # one word is not judged
     ("Make a plan for the Mathematics and Computer Science BS.", None),
+    # Words of the sentence before a real name are not part of it.
+    ("Make a four-year plan for my Emory Psychology BS.", None),
+    ("I'm a Junior Neuroscience and Behavioral Biology BS student; plan my terms.", None),
+    ("Make an Oxford Applied Mathematics minor plan.", None),
     ("What does MATH 111 require?", None),
 ])
 def test_a_named_program_that_is_not_in_scope_is_found(question, missing):

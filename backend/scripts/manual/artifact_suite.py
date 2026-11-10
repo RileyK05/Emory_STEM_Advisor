@@ -18,9 +18,12 @@ Usage, from backend/::
     python -m scripts.manual.artifact_suite run --cases CASES.jsonl --repeat 3 --out-dir DIR
     python -m scripts.manual.artifact_suite report --dir DIR [--out SUMMARY.json]
 
-`run` writes, per repeat, the benchmark's own report (`runN.json`, `runN.log`)
-and this suite's diagnosis (`diagN.json`). `report` reads them back; it needs no
-model. A case takes one to four minutes, so a 50-case repeat takes about two hours.
+`run` runs each case in its own benchmark process (a revise case together with
+the case it revises) and keeps each one's report and diagnosis under `runN/`, so
+a stopped run continues with `--resume` and loses at most the case in progress.
+When a repeat finishes it writes the merged `runN.json`, `runN.log` and
+`diagN.json`. `report` reads them back; it needs no model. A case takes one to
+four minutes, so a 50-case repeat takes about two hours.
 """
 
 from __future__ import annotations
@@ -33,8 +36,9 @@ import re
 import statistics
 import subprocess
 import sys
+import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -330,25 +334,111 @@ def run(args) -> None:
     (out_dir / "meta.json").write_text(json.dumps({
         "cases": str(cases_path), "repeat": args.repeat, "started": _now().isoformat(),
     }, indent=2), encoding="utf-8")
+    units = _units(cases)
     for repeat in range(args.repeat):
         report = out_dir / f"run{repeat}.json"
         if args.resume and (out_dir / f"diag{repeat}.json").exists():
             print(f"repeat {repeat}: already done, skipped")
             continue
+        unit_dir = out_dir / f"run{repeat}"
+        unit_dir.mkdir(exist_ok=True)
+        if not args.resume:
+            for stale in unit_dir.iterdir():
+                stale.unlink()
+        _settle_open_jobs()
         print(f"repeat {repeat + 1}/{args.repeat}: {len(cases)} cases", flush=True)
         started = _now()
-        with (out_dir / f"run{repeat}.log").open("w", encoding="utf-8") as log:
-            subprocess.run([sys.executable, "-m", "scripts.manual.artifact_benchmark",
-                            "--cases", str(cases_path), "--out", str(report)],
-                           stdout=log, stderr=subprocess.STDOUT, check=False)
-        finished = _now()
-        diagnosis = diagnose(cases, started, finished)
+        for index, unit in enumerate(units):
+            name = f"{index:02d}"
+            bench_path, diag_path = unit_dir / f"{name}.json", unit_dir / f"{name}.diag.json"
+            if bench_path.exists() and diag_path.exists():
+                continue
+            unit_cases = unit_dir / f"{name}.cases.jsonl"
+            unit_cases.write_text("".join(json.dumps(case) + "\n" for case in unit),
+                                  encoding="utf-8")
+            unit_started = _now()
+            with (unit_dir / f"{name}.log").open("w", encoding="utf-8") as log:
+                subprocess.run([sys.executable, "-m", "scripts.manual.artifact_benchmark",
+                                "--cases", str(unit_cases), "--out", str(bench_path)],
+                               stdout=log, stderr=subprocess.STDOUT, check=False)
+            diagnosis = diagnose(unit, unit_started, _now())
+            diag_path.write_text(json.dumps(diagnosis, indent=1, default=str), encoding="utf-8")
+            passed = _passed_ids(bench_path)
+            print(f"  [{index + 1}/{len(units)}] " + ", ".join(
+                f"{case['id']} {'PASS' if case['id'] in passed else 'FAIL'}" for case in unit),
+                flush=True)
+        results, diagnosis, logs = [], {}, []
+        for index in range(len(units)):
+            name = f"{index:02d}"
+            if (unit_dir / f"{name}.json").exists():
+                results += json.loads((unit_dir / f"{name}.json").read_text(encoding="utf-8"))["results"]
+            diagnosis.update(json.loads((unit_dir / f"{name}.diag.json").read_text(encoding="utf-8")))
+            logs.append((unit_dir / f"{name}.log").read_text(encoding="utf-8"))
+        report.write_text(json.dumps({"total_cases": len(results),
+                                      "passed_cases": sum(1 for row in results if row["passed"]),
+                                      "results": results}, indent=2), encoding="utf-8")
+        (out_dir / f"run{repeat}.log").write_text("".join(logs), encoding="utf-8")
         (out_dir / f"diag{repeat}.json").write_text(
             json.dumps(diagnosis, indent=1, default=str), encoding="utf-8")
         passed = _passed_ids(report)
-        print(f"  {len(passed)}/{len(cases)} passed in {(finished - started).total_seconds() / 60:.0f} min",
+        print(f"  {len(passed)}/{len(cases)} passed in {(_now() - started).total_seconds() / 60:.0f} min",
               flush=True)
     print(f"done; summarize with: python -m scripts.manual.artifact_suite report --dir {out_dir}")
+
+
+def _units(cases) -> list[list[dict]]:
+    """Cases that share one benchmark process: a revise case runs with the case it revises,
+    because the benchmark attaches the earlier artifact only from its own run."""
+    units: list[list[dict]] = []
+    owner: dict[str, int] = {}
+    for case in cases:
+        base = case["expected"].get("revises_case")
+        if base in owner:
+            units[owner[base]].append(case)
+            owner[case["id"]] = owner[base]
+            continue
+        owner[case["id"]] = len(units)
+        units.append([case])
+    return units
+
+
+def _settle_open_jobs() -> None:
+    """Close what a stopped run left behind, so K1's empty-queue check holds again.
+
+    Queued benchmark jobs are cancelled at once. A running one belonged to the stopped
+    process: it is asked to cancel, its lease is left to expire (at most the benchmark's
+    600 s), and expired leases are recovered. Orphaned conversation requests are settled.
+    """
+    from app.config import configure_runtime_database
+    from app.conversations.recovery import reconcile_pending_requests
+    from app.db.connection import close_pools, connector, resolved_database_url
+    from app.jobs.store import JobStore
+
+    settings = load_settings()
+    with open_connection(settings) as conn:
+        open_jobs = conn.execute(queries.get("artifact_suite_open_jobs"),
+                                 {"workspace_key": WORKSPACE}).fetchall()
+        dsn = resolved_database_url(settings, conn)
+    if not open_jobs:
+        return
+    configure_runtime_database(dsn)
+    store = JobStore(connector(replace(settings, database_url=dsn)))
+    try:
+        for job in open_jobs:
+            store.cancel(job["job_id"])
+        latest = max((job["lease_expires_at"] for job in open_jobs
+                      if job["lease_expires_at"] is not None), default=None)
+        if latest is not None and latest > _now():
+            wait = (latest - _now()).total_seconds() + 2
+            print(f"waiting {wait:.0f} s for a stopped run's lease to expire", flush=True)
+            time.sleep(wait)
+        store.recover_expired()
+        with open_connection(settings) as conn:
+            reconcile_pending_requests(conn, older_than_seconds=1)
+            conn.commit()
+    finally:
+        close_pools()
+    print(f"settled {len(open_jobs)} job(s) left by a stopped run", flush=True)
 
 
 def diagnose(cases, since, until) -> dict[str, dict]:

@@ -28,8 +28,15 @@ TERM_PATTERNS = [
 ]
 
 
+# Joins the pieces of an artifact (title, blocks, list items, table cells) so that a
+# course-code reader cannot read across two of them: a table row ["Section A — Physics",
+# "12"] is a heading cell and a course count, not "PHYS 12". A plain newline lets the
+# reader continue a subject or a code list into the next piece.
+PIECE_SEPARATOR = "\n|\n"
+
+
 def extract_artifact_text(spec: dict) -> str:
-    """Extract all student-visible text from an artifact specification."""
+    """Extract all student-visible text from an artifact specification, piece by piece."""
     kind = spec.get("kind")
     texts: list[str] = [spec.get("title") or ""]
     if kind == "document":
@@ -51,7 +58,7 @@ def extract_artifact_text(spec: dict) -> str:
                     texts.append(str(cell["value"]))
     elif kind == "html":
         texts.append(spec.get("html", ""))
-    return "\n".join(texts)
+    return PIECE_SEPARATOR.join(texts)
 
 
 def extract_planned_terms(spec: dict) -> dict[str, int]:
@@ -279,6 +286,11 @@ def _section_for_text(text: str, section_texts: dict[str, str]) -> str | None:
     for section_id, section_text in section_texts.items():
         if text and text in section_text:
             return section_id
+    # A course code is reported in canonical form ("MATH_OX 112", "DATASCI 110"); the
+    # section may spell it the way its source does ("Math_OX 112", "QTM 110").
+    for section_id, section_text in section_texts.items():
+        if text and text in canonical_codes_in(section_text):
+            return section_id
     return None
 
 
@@ -306,7 +318,8 @@ def check_generated_artifact(
                                    campus_equivalents)
     for code in sorted(invalid):
         findings.append(ArtifactCheckFinding(
-            "K4", f"{code} is not in the catalog; use only codes supplied in the slots.",
+            "K4", f"{code} is not in the current Course Atlas; remove the code and name the "
+            "course by its title instead.",
             "The artifact named a course that is not in the catalog.", _section_for_text(code, section_texts)))
 
     if program_title:
