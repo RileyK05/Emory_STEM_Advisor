@@ -63,3 +63,50 @@ ORDER BY ch.source_id, ch.chunk_index, ch.chunk_id;
 -- name: diagnostic_recent_research_runs
 SELECT run_id, operation_id, status, stop_reason FROM research_runs
 WHERE workspace_key = %(workspace_key)s ORDER BY created_at DESC LIMIT 5;
+
+-- The artifact suite (scripts.manual.artifact_suite) reads one benchmark
+-- repeat's conversations back by title and time window.
+-- name: artifact_suite_conversations
+SELECT conversation_id, title, created_at
+FROM conversations
+WHERE workspace_key = %(workspace_key)s
+  AND title = ANY(%(titles)s)
+  AND created_at >= %(since)s AND created_at <= %(until)s
+ORDER BY created_at;
+
+-- name: artifact_suite_turns
+SELECT sequence, role, status, text, request_id, evidence
+FROM conversation_turns
+WHERE conversation_id = %(conversation_id)s
+ORDER BY sequence;
+
+-- name: artifact_suite_run_job
+SELECT job_id, status, error, result, created_at, finished_at, payload
+FROM jobs
+WHERE kind = 'artifact.run'
+  AND idempotency_key LIKE %(key_prefix)s
+ORDER BY created_at;
+
+-- name: artifact_suite_job_stages
+SELECT payload->>'stage' AS stage
+FROM job_events
+WHERE job_id = %(job_id)s AND event_type = 'progress' AND payload ? 'stage'
+ORDER BY event_id;
+
+-- name: artifact_suite_tool_refusals
+SELECT tool_id, result_json
+FROM tool_executions
+WHERE operation_id = %(operation_id)s AND result_json LIKE '{"error"%%'
+ORDER BY created_at;
+
+-- name: artifact_suite_model_calls
+SELECT count(*) AS calls,
+       coalesce(sum(prompt_tokens), 0) AS prompt_tokens,
+       coalesce(sum(completion_tokens), 0) AS completion_tokens,
+       count(*) FILTER (WHERE finish_reason IN ('length', 'max_tokens')) AS truncated,
+       count(*) FILTER (WHERE status = 'failed') AS failed
+FROM model_calls
+WHERE operation_id = %(operation_id)s OR trace_id = %(trace_id)s;
+
+-- name: artifact_suite_revision_spec
+SELECT spec FROM artifact_revisions WHERE revision_id = %(revision_id)s;

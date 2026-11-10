@@ -153,6 +153,7 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.restore_consolidated BACKUP --data-dir NEW_DIRECTORY
 ../.venv/Scripts/python -m scripts.team_snapshot --backup FILE --maintenance-confirmed  # public data only, for teammates; never share a plain backup
 ../.venv/Scripts/python -m scripts.manual.advising_sweep --per-family 12 --out FILE  # live answers about random courses and programs, graded from the database
+../.venv/Scripts/python -m scripts.manual.artifact_suite generate --seed N --out CASES  # then `run --cases CASES --repeat 3 --out-dir DIR` and `report --dir DIR`; see docs/plans/artifact-test-suite.md
 ../.venv/Scripts/python -m scripts.smoke.local_model    # slow, downloads weights
 ../.venv/Scripts/python -m scripts.smoke.embeddings     # ~250 MB download
 ```
