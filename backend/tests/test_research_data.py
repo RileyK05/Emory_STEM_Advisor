@@ -1676,19 +1676,53 @@ def test_research_answers_progressively_and_persists_its_decision(
         "exact_evidence_untrusted"]) <= settings.research_max_prompt_bytes for r in provider.requests)
 
 
-def test_research_rejects_inactive_evidence_and_allows_one_correction(
-        db, collection, tmp_path, monkeypatch):
+@pytest.mark.parametrize("correction", ["inactive_evidence", "add_artifact", "omit_artifact"])
+def test_research_allows_a_bounded_finish_correction(
+        db, collection, tmp_path, monkeypatch, correction):
     from app.api.query_service import query_response
     from app.api.schemas import QueryRequest
     from app.config import load_settings
     from app.llm.base import ToolCall
-    from tests.fakes import FakeEmbedder
+    from tests.fakes import FakeEmbedder, FakeProvider
     from tests.helpers import MODEL, collection_name, lenient_config
 
     _corpus(db, collection, tmp_path)
     settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
         tools_enabled=True, routing_enabled=False,
         embedding_model_id=MODEL, db_pool_max_size=0)
+    if correction != "inactive_evidence":
+        provider = FakeProvider("The program awards a BS.")
+        generate = provider.generate
+        finishes = []
+
+        def finish_as_json(request):
+            result = generate(request)
+            call, = result.tool_calls
+            if call.name != "advisor_finish":
+                return result
+            context = json.loads(request.messages[1].content)
+            finishes.append(context["instruction"])
+            decision = dict(call.arguments["decision"])
+            if len(finishes) == 2 and correction == "add_artifact":
+                decision["artifact"] = {"kind": "document", "title": "Degree plan",
+                                        "brief": "Plan the remaining Computer Science BS terms."}
+            # Two identical JSON proposals normalize to the same tool call ID.
+            return replace(result, text=json.dumps(decision), tool_calls=(), finish_reason="stop")
+
+        monkeypatch.setattr(provider, "generate", finish_as_json)
+        response = query_response(QueryRequest(query="Plan my Computer Science BS from here.",
+            collectionId=collection_name(db, collection)), db, settings, lenient_config(),
+            FakeEmbedder(8), provider)
+        assert len(finishes) == 2 and "set decision.artifact" in finishes[1].lower()
+        steps = ResearchStore(db, "development").steps(UUID(response.research.runId))
+        assert sum(step["action_kind"] == "rejected_finish" for step in steps) == 1
+        if correction == "add_artifact":
+            assert response.research.artifact.title == "Degree plan"
+        else:
+            assert response.research.artifact is None
+        assert response.answer
+        return
+
     def script(context, index):
         if index == 0:
             return [ToolCall("read", "advisor_read_courses", {"course_codes": ["ECON 201"]})]

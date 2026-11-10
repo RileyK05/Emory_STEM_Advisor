@@ -403,6 +403,7 @@ class ResearchController:
         tools_used = no_progress = 0
         discovery_rounds = 0
         corrections_used = 0
+        artifact_reminded = False
         # A reply cut off at the output limit is not a malformed answer: reasoning
         # models can spend the whole allowance on hidden deliberation. Retry the
         # same round with a larger allowance before falling back to corrections.
@@ -627,6 +628,23 @@ class ResearchController:
                 round_results.append(ToolResultMessage(call.id, call.name, output))
                 if call.name == "advisor_finish":
                     accepted = json.loads(output)
+                    if (request_context.get("artifact_requested") and not artifact_reminded
+                            and accepted.get("status") == "ok" and session.decision is not None
+                            and session.decision.outcome != "declined"
+                            and session.decision.artifact is None and corrections_used < 2
+                            and tools_used < settings.research_max_tool_calls
+                            and _round + 1 < settings.research_max_calls
+                            and status.remaining_calls > 1
+                            and status.remaining_seconds > _SALVAGE_RESERVE_SECONDS):
+                        artifact_reminded = True
+                        session.rejected_decision = session.decision
+                        accepted = {"status": "conflict", "limitations": [
+                            ("The student asked for an artifact to keep. Set decision.artifact "
+                             "with kind, title, and a brief.")]}
+                        output = json.dumps(accepted)
+                        # Keep the validated result replayable if the provider repeats
+                        # the same proposal. Only publication is deferred this round.
+                        round_results[-1] = ToolResultMessage(call.id, call.name, output)
                     if accepted.get("status") != "ok" or session.decision is None:
                         session.store.record_action(session.run.run_id, action_kind="rejected_finish",
                             details={"proposal": dict(call.arguments), "result": accepted})

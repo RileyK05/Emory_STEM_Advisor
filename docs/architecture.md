@@ -1472,6 +1472,9 @@ Out-of-scope and unknown identifiers both raise `NotInScope`.
   the exact `{artifactId, revisionId}` the turn referenced. Create forbids a
   revision, revise requires one, and summary requires a document with no
   revision; an unreferenced revision rejects the finish as `rejected_finish`.
+  When a valid finish omits an explicitly requested artifact, the controller
+  asks for one correction if the budget allows. A second valid finish can
+  publish without an artifact.
   `research_decisions` stores structurally valid decisions
   (limits, issued evidence only, every fact cited) with their digest. A fact
   block that asserts program inclusion must name only course codes present in
