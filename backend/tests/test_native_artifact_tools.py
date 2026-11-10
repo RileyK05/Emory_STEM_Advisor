@@ -70,34 +70,78 @@ def test_stage_tools_are_audited_and_published_once(db, collection, tmp_path):
     assert len(client.get("/api/artifacts").json()) == 1
 
 
-@pytest.mark.parametrize("stage", ["section", "outline"])
+@pytest.mark.parametrize("stage", ["section", "outline", "course", "program"])
 def test_a_rejected_stage_goes_back_to_the_model_in_the_same_conversation(
         db, collection, tmp_path, stage):
-    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
     title = "Keep this title"
+    answer = "Alpha facts."
+    if stage == "course":
+        from tests.test_artifact_generation import import_atlas_sample
+
+        source = import_atlas_sample(db, collection, tmp_path)
+        prompt = "Describe MATH 111 Calculus I"
+        marker = "MATH 111: Calculus I"
+        answer = "MATH 111 — Calculus I"
+        unrelated = "MATH 112 — Calculus II"
+    elif stage == "program":
+        from app.programs.importer import import_programs
+        from app.programs.requirements import parse_program, to_record
+        from tests.test_programs import CS_BS, _ingest_catalog_file
+
+        program = "Computer Science (BS)"
+        identity = _ingest_catalog_file(db, collection, tmp_path, program, CS_BS)
+        record = to_record(parse_program(program, CS_BS), catalog="Test Catalog",
+                           source_url="https://example.test/catalog.pdf", first_page=3, last_page=4)
+        path = tmp_path / "programs.jsonl"
+        path.write_text(json.dumps({**record, "source": identity}) + "\n", encoding="utf-8")
+        assert import_programs(db, collection_id=collection, path=path)["bound"] == 1
+        db.commit()
+        source = None
+        prompt = f"Describe the degree awarded for {program}"
+        marker = "program.md"
+        answer = "Degree awarded BS"
+        unrelated = "Degree awarded BA"
+    else:
+        source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+        prompt = "Alpha"
     if stage == "outline":
         bad = outline(slots=(99,), title=title)
         # The correction sends just the changed field. The accepted title survives.
         provider = ArtifactStageProvider(
             outline=[bad, {"sections": outline()["sections"]}], sections={"s1": [section()]})
-    else:
+    elif stage == "section":
         bad = section(text="Bad PSYC 999.", slots=(99,))
         provider = ArtifactStageProvider(
             outline=outline(title=title), sections={"s1": [bad, section()]})
+    else:
+        def outline_for_entity(payload):
+            slot = next(item["slot"] for item in payload["slots"]
+                        if marker == item["source"] or item["excerpt"].startswith(marker))
+            return outline(slots=(slot,), title=title)
+
+        bad = section(unrelated, bindings=[])
+        provider = ArtifactStageProvider(
+            outline=[outline_for_entity], sections={"s1": [bad, section(answer, bindings=[])]})
     client, store, executor = runtime(db, collection, tmp_path, provider)
-    run_id = start_run(client, "document", {"prompt": "Alpha", "sourceIds": [str(source)]},
-                       "stage-corrected")
+    inputs = {"prompt": prompt}
+    if source is not None:
+        inputs["sourceIds"] = [str(source)]
+    run_id = start_run(client, "document", inputs, "stage-corrected")
     finished = run_once(store, "stage-tools", executor)
     assert finished.status.value == "succeeded", finished.error
     refusal = next(json.loads(message_text(request.messages[-1]))
                    for request in provider.requests
                    if "not accepted" in message_text(request.messages[-1]))
-    assert "slots" in refusal["error"]
+    assert ("binding" if stage in {"course", "program"} else "slots") in refusal["error"]
     assert refusal["previous_arguments"] == bad
     artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
     spec = client.get("/api/artifacts/" + artifact_id).json()["spec"]
     assert spec["title"] == title
-    assert spec["blocks"][-1]["text"] == "Alpha facts."
+    assert spec["blocks"][-1]["text"] == answer
+    if stage in {"course", "program"}:
+        assert set(spec["evidence"]) == {"s1:p1"}
+        reference, = spec["evidence"]["s1:p1"]
+        assert answer.replace(" — ", ": ").casefold() in reference["text_snapshot"].casefold()
 
 
 def test_an_answer_without_a_stage_tool_never_publishes(db, collection, tmp_path):
