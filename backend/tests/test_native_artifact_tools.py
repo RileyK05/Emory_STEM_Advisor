@@ -1,7 +1,9 @@
 """Real job transactions around the artifact stage tools and staged publication."""
+import json
 from dataclasses import replace
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api import create_app
@@ -68,20 +70,34 @@ def test_stage_tools_are_audited_and_published_once(db, collection, tmp_path):
     assert len(client.get("/api/artifacts").json()) == 1
 
 
-def test_a_rejected_stage_goes_back_to_the_model_in_the_same_conversation(db, collection, tmp_path):
+@pytest.mark.parametrize("stage", ["section", "outline"])
+def test_a_rejected_stage_goes_back_to_the_model_in_the_same_conversation(
+        db, collection, tmp_path, stage):
     source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
-    bad = section(text="Bad PSYC 999.", slots=(99,))
-    provider = ArtifactStageProvider(outline=outline(), sections={"s1": [bad, section()]})
+    title = "Keep this title"
+    if stage == "outline":
+        bad = outline(slots=(99,), title=title)
+        # The correction sends just the changed field. The accepted title survives.
+        provider = ArtifactStageProvider(
+            outline=[bad, {"sections": outline()["sections"]}], sections={"s1": [section()]})
+    else:
+        bad = section(text="Bad PSYC 999.", slots=(99,))
+        provider = ArtifactStageProvider(
+            outline=outline(title=title), sections={"s1": [bad, section()]})
     client, store, executor = runtime(db, collection, tmp_path, provider)
     run_id = start_run(client, "document", {"prompt": "Alpha", "sourceIds": [str(source)]},
                        "stage-corrected")
     finished = run_once(store, "stage-tools", executor)
     assert finished.status.value == "succeeded", finished.error
-    refusal = message_text(provider.requests[-1].messages[-1])
-    assert "not accepted" in refusal and "slots" in refusal
+    refusal = next(json.loads(message_text(request.messages[-1]))
+                   for request in provider.requests
+                   if "not accepted" in message_text(request.messages[-1]))
+    assert "slots" in refusal["error"]
+    assert refusal["previous_arguments"] == bad
     artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
-    assert client.get("/api/artifacts/" + artifact_id).json()["spec"]["blocks"][-1]["text"] \
-        == "Alpha facts."
+    spec = client.get("/api/artifacts/" + artifact_id).json()["spec"]
+    assert spec["title"] == title
+    assert spec["blocks"][-1]["text"] == "Alpha facts."
 
 
 def test_an_answer_without_a_stage_tool_never_publishes(db, collection, tmp_path):

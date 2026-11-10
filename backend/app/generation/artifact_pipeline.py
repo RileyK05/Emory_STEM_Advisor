@@ -1392,6 +1392,7 @@ class ArtifactPipeline:
             ledger=ledger, operation_id=lane.operation.operation_id,
             workspace_key=self.job.scope_key, scope_fingerprint=fingerprint,
             terminal_tool_names=frozenset({tool_id}),
+            terminal_repair_model=input_model,
             cancellation=lambda: self._guard(lane),
             before_provider_call=lambda: self._before_provider_call(lane),
             on_attempt=audit,

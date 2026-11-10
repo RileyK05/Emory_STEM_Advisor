@@ -41,6 +41,7 @@ from app.tools.registry import (
     ToolRegistry,
     ToolScope,
     UnknownTool,
+    repair_arguments,
 )
 
 MAX_TOOL_RESULT_BYTES = 64_000
@@ -98,6 +99,7 @@ class ToolConversationController:
             operation_id: UUID | None = None, workspace_key: str | None = None,
             scope_fingerprint: str | None = None,
             terminal_tool_names: frozenset[str] = frozenset(),
+            terminal_repair_model: type[BaseModel] | None = None,
             cancellation: threading.Event | Callable[[], bool] | None = None,
             on_progress: Callable[[str, Mapping[str, Any]], None] | None = None,
             on_attempt: Callable[[GenerationRequest, GenerationResult | None, Exception | None], None] | None = None,
@@ -105,7 +107,8 @@ class ToolConversationController:
             ) -> GenerationResult:
         messages: list[Message] = list(request.messages)
         request_with_tools = replace(request, tools=registry.definitions)
-        executed: dict[str, tuple[str, str, str]] = {}
+        executed: dict[str, tuple[str, str, str, ToolCall]] = {}
+        previous_drafts: dict[str, dict] = {}
         usages: list[Usage] = []
         tool_count = provider_count = truncated_count = repair_calls = 0
         transient_retries = 0
@@ -209,14 +212,20 @@ class ToolConversationController:
                 encoded_args = _canonical_arguments(call.arguments)
                 prior = executed.get(call.id)
                 if prior is not None:
-                    old_name, old_args, output = prior
+                    old_name, old_args, output, effective = prior
                     if old_name != call.name or old_args != encoded_args:
                         raise ToolCallChanged("a repeated tool call ID changed its request")
                     _progress(on_progress, "tool_reused", call)
                 else:
+                    effective = call
+                    if call.name in previous_drafts:
+                        patch = repair_arguments(dict(call.arguments), terminal_repair_model)
+                        if isinstance(patch, dict):
+                            effective = replace(call, arguments=previous_drafts[call.name] | patch)
+                            _validate_call(effective)
                     try:
                         output, ran = self._invoke(
-                            call, registry=registry, scope=scope, ledger=ledger,
+                            effective, registry=registry, scope=scope, ledger=ledger,
                             operation_id=operation_id, workspace_key=workspace_key,
                             scope_fingerprint=scope_fingerprint, on_progress=on_progress)
                     except ToolCallLimitReached:
@@ -228,11 +237,31 @@ class ToolConversationController:
                         messages.append(ToolResultMessage(call.id, call.name,
                                                          _TOOL_BUDGET_REFUSAL))
                         continue
-                    executed[call.id] = (call.name, encoded_args, output)
+                    executed[call.id] = (call.name, encoded_args, output, effective)
                     tool_count += ran
-                if call.name in terminal_tool_names and not _is_refusal(output):
-                    return GenerationResult(text=output, finish_reason="stop",
-                        usage=_aggregate_usage(usages), request_id=result.request_id, model=result.model)
+                if call.name in terminal_tool_names:
+                    if not _is_refusal(output):
+                        return GenerationResult(text=output, finish_reason="stop",
+                            usage=_aggregate_usage(usages), request_id=result.request_id,
+                            model=result.model)
+                    if terminal_repair_model is not None:
+                        draft = repair_arguments(dict(effective.arguments), terminal_repair_model)
+                        if isinstance(draft, dict):
+                            previous_drafts[call.name] = {
+                                key: value for key, value in draft.items()
+                                if key in terminal_repair_model.model_fields
+                            }
+                        feedback = json.loads(output)
+                        feedback["repair"] = (
+                            "Correct the reported rule. Send only the top-level fields to replace. "
+                            "Omitted schema fields keep their previous values. To clear a field, "
+                            "send its empty value explicitly.")
+                        feedback["previous_arguments"] = dict(effective.arguments)
+                        encoded = json.dumps(feedback, ensure_ascii=False)
+                        if len(encoded.encode("utf-8")) > self.max_result_bytes:
+                            del feedback["previous_arguments"]
+                            encoded = json.dumps(feedback, ensure_ascii=False)
+                        output = encoded
                 messages.append(ToolResultMessage(call.id, call.name, output))
         raise ToolCallLimitExceeded("the model did not return a final answer within the call limit")
 
