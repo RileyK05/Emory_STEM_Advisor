@@ -21,7 +21,7 @@ from app.api.schemas import (
     QueryRequest,
     ResearchDecisionInfo,
 )
-from app.api.serialize import answer_response, provider_failure_detail
+from app.api.serialize import answer_response
 from app.config import Settings
 from app.connections.models import (
     ConnectionUnavailable,
@@ -45,7 +45,7 @@ from app.generation.research_final import (
 )
 from app.generation.research_tools import ResearchSession
 from app.jobs.store import JobCancelled, LeaseLost
-from app.llm.base import Provider, ProviderError
+from app.llm.base import Provider, ProviderError, provider_failure_detail
 from app.operations.budget import OperationBudgetError, OperationLimits
 from app.retrieval.config import RetrievalConfig
 from app.retrieval.trace import normalize_query, write_trace
@@ -178,6 +178,7 @@ def query_response(
     history_context: str | None = None,
     conversation_id: UUID | None = None,
     conversation_request_id: UUID | None = None,
+    retry: bool = False,
 ) -> AnswerResponse:
     from app.auth.capabilities import EXECUTION_SETTINGS, execution_settings
 
@@ -238,7 +239,7 @@ def query_response(
     run, created = store.start(scope, run_id=uuid4(), operation_id=operation.operation_id,
         root_trace_id=trace_id, prompt_version=RESEARCH_PROMPT_VERSION,
         config_version=str(config.version), conversation_id=conversation_id,
-        request_id=conversation_request_id)
+        request_id=conversation_request_id, retry=retry)
     if not created:
         raise HTTPException(409, "This conversation request already owns a research run; reconnect to it.")
     session = ResearchSession(

@@ -56,6 +56,8 @@ from app.util.digest import canonical_json_bytes, json_digest
 
 TERMINAL_STATUSES = frozenset({"completed", "partial", "clarification",
                                "insufficient_evidence", "interrupted", "failed", "cancelled"})
+# Statuses a retried request may replace: the attempt did not finish.
+RETRYABLE_STATUSES = frozenset({"failed", "interrupted", "running"})
 
 
 class ResearchStoreError(RuntimeError):
@@ -141,17 +143,25 @@ class ResearchStore:
     def start(self, scope: ResearchScope, *, run_id: UUID, prompt_version: str,
               config_version: str, operation_id: UUID | None = None,
               root_trace_id: UUID | None = None, conversation_id: UUID | None = None,
-              request_id: UUID | None = None) -> tuple[RunRecord, bool]:
+              request_id: UUID | None = None,
+              retry: bool = False) -> tuple[RunRecord, bool]:
         """Create the run, or return the one already bound to this conversation request.
 
         Returns (run, created). A duplicate request never starts a second run.
+        A retry (a later attempt of the request's job) replaces a run that
+        failed, or that a lost attempt left running: only one attempt holds the
+        job's lease, so that run's worker is gone.
         """
         if scope.workspace_key != self.workspace_key:
             raise ValueError("scope belongs to another workspace")
         if conversation_id is not None and request_id is not None:
             existing = self._for_request(conversation_id, request_id)
             if existing is not None:
-                return existing, False
+                if not (retry and existing.status in RETRYABLE_STATUSES):
+                    return existing, False
+                with self.conn.transaction():
+                    self.conn.execute(queries.get("detach_research_run_from_request"),
+                                      {"run_id": existing.run_id})
         try:
             with self.conn.transaction():
                 self.conn.execute(queries.get("insert_research_run"), {

@@ -53,6 +53,58 @@ def test_saved_answers_and_exact_citations_survive_reload_and_request_replay(
 
 
 
+@pytest.mark.parametrize("busy_attempts, answered", [(1, True), (3, False)])
+def test_a_busy_model_retries_the_turn_on_a_new_research_run(
+        db, collection, tmp_path, busy_attempts, answered):
+    from datetime import UTC, datetime, timedelta
+
+    from app.conversations.worker import BUSY_REASON, ConversationTurnExecutor
+    from app.db.connection import connection_dsn
+    from app.jobs.worker import run_once
+    from app.llm.base import RateLimitError
+
+    ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is a documented course concept.")
+    attempt = {"n": 0}
+
+    def busy(_request):
+        if attempt["n"] <= busy_attempts:
+            # Longer than the run has left, so the run gives up at once.
+            raise RateLimitError("busy", provider="fake", retry_after=999)
+
+    client = api_client(db, collection, provider=FakeProvider("Alpha is documented.",
+                                                               on_call=busy))
+    conversation = client.post("/api/conversations", json={"title": "Busy"}).json()["conversationId"]
+    request_id = uuid4()
+    started = client.post(f"/api/conversations/{conversation}/turns/stream", json={
+        "query": "alpha", "collectionId": collection_name(db, collection),
+        "requestId": str(request_id), "expectedSequence": 0})
+    assert started.status_code == 202
+    db.commit()
+    dsn, state = connection_dsn(db), client.app.state
+    executor = ConversationTurnExecutor(
+        settings=state.settings, config=state.config, embedder=state.embedder,
+        provider=state.provider, connection_profiles=state.connection_profiles,
+        connection_runtime=state.connection_runtime, connect=lambda: connect(dsn))
+    for n in range(1, 4):
+        attempt["n"] = n
+        # Each attempt runs after the previous one's retry delay has passed.
+        later = datetime.now(UTC) + timedelta(minutes=2 * n)
+        if run_once(JobStore(lambda: connect(dsn), clock=lambda later=later: later),
+                    "test-worker", executor) is None:
+            break
+    turn = client.get(f"/api/conversations/{conversation}").json()["turns"][-1]
+    runs = db.execute(
+        "SELECT status, conversation_request_id FROM research_runs WHERE conversation_id = %s "
+        "ORDER BY created_at", (conversation,)).fetchall()
+    bound = [run["status"] for run in runs if run["conversation_request_id"] == request_id]
+    if answered:
+        assert turn["status"] != "failed" and turn["text"] != BUSY_REASON
+        assert len(runs) == 2 and bound == ["completed"]
+    else:
+        assert (turn["status"], turn["text"]) == ("failed", BUSY_REASON)
+        assert len(runs) == 3 and bound == ["failed"]
+
+
 def test_followup_uses_complete_history_and_inherits_explicit_empty_scope(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "alpha.txt", "Alpha is a documented course concept.")
     provider = FakeProvider("Alpha is documented.")
@@ -400,6 +452,7 @@ def test_final_publication_fences_keep_measured_usage_and_withhold_assistant(
 
     class GeneratedOnce:
         publish_success = ConversationTurnExecutor.publish_success
+        retryable_codes = ConversationTurnExecutor.retryable_codes
 
         def __call__(self, job, _context):
             conn = connect(migrated_dsn)

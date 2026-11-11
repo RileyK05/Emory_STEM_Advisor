@@ -120,7 +120,7 @@ def test_generation_gap_recurrence_and_provider_outage_are_distinct(db, collecti
     gap = client.get("/api/gaps").json()["gaps"][0]
     assert gap["state"] == "open" and gap["occurrenceCount"] == 1
 
-    client.app.state.provider = FakeProvider("Alpha [1].")
+    client.app.state.provider = FakeProvider("Alpha is documented [1].")
     answered = client.post("/api/query", json=request)
     assert answered.status_code == 200 and answered.json()["type"] == "answer"
     observed = client.get("/api/gaps").json()
@@ -343,7 +343,7 @@ def test_invalid_source_scope_is_not_widened(db, collection):
 
 def test_saved_citation_snapshot_survives_source_deletion(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "a.txt", "alpha beta")
-    resp = api_client(db, collection, provider=FakeProvider("Alpha [1].")).post("/api/query", json={
+    resp = api_client(db, collection, provider=FakeProvider("Alpha is documented [1].")).post("/api/query", json={
         "query": "alpha", "collectionId": collection_name(db, collection),
     })
     assert resp.json()["type"] == "answer"

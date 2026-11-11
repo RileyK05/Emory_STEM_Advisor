@@ -94,15 +94,88 @@ class DecisionRejected(ValueError):
     pass
 
 
+# A clause that names a course the master says does not exist must say so. The
+# finish gate requires naming it, so this is the one wording that may.
+_ABSENT_SAID = re.compile(
+    r"\b(?:does(?: not|n['’]t) exist|no such (?:course|class)|"
+    r"(?:is|are)(?: not|n['’]t) (?:a |an )?(?:current |real |valid )?(?:emory )?"
+    r"(?:course|class)(?:es)?\b|there (?:is|are) no|"
+    r"not (?:in|found in|listed in) the course atlas|no record of)", re.IGNORECASE)
+
+
+# What an answer is made of, checked before what it claims. A model that is
+# injected or misfires can return a stub, its own instructions, or text shaped
+# like a secret; none of it may reach a student.
+_STUB = re.compile(r"(?:placeholder|lorem ipsum|todo|tbd|n/?a|answer|text|none|null)?",
+                   re.IGNORECASE)
+_MIN_ANSWER_LETTERS = 12
+_ECHO_SHINGLE = 8
+_ECHO_LIMIT = 3
+_SECRET = re.compile(
+    r"\bsk-[A-Za-z0-9_-]{16,}|\b[A-Z][A-Z0-9_]{2,}_(?:API_)?KEY\s*=|"
+    r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"Traceback \(most recent call last\):|File \"[^\"]+\", line \d+")
+_URL = re.compile(r"\bhttps?://[^\s)\]>\"']+|\bwww\.[^\s)\]>\"']+", re.IGNORECASE)
+_CREDENTIAL_ASK = re.compile(
+    r"\b(?:verify|enter|provide|send|confirm|share|submit|type)\b[^.!?\n]{0,60}"
+    r"\b(?:password|passcode|credentials)\b", re.IGNORECASE)
+
+
+def _shingles(text: str) -> set[tuple[str, ...]]:
+    words = re.findall(r"[a-z0-9]+", text.lower())
+    return {tuple(words[i:i + _ECHO_SHINGLE]) for i in range(len(words) - _ECHO_SHINGLE + 1)}
+
+
+def answer_content_problems(decision: FinalDecision, *, instructions: str | None,
+                            evidence: list[EvidenceRecord]) -> list[str]:
+    """Reject a reply that is empty, echoes the instructions, or carries a secret or link."""
+    texts = [block.text for block in decision.blocks]
+    problems = []
+    if any(not re.search(r"[A-Za-z]", text) or _STUB.fullmatch(text.strip(" .,:;!?-*#\"'"))
+           for text in texts) or sum(len(re.findall(r"[A-Za-z]", t)) for t in texts) < (
+               _MIN_ANSWER_LETTERS):
+        problems.append("a block has no answer in it; write the answer itself in plain sentences")
+    written = "\n".join(texts)
+    if instructions and len(_shingles(written) & _instruction_shingles(instructions)) >= (
+            _ECHO_LIMIT):
+        problems.append("the reply repeats the advisor's instructions; answer the student instead")
+    if _SECRET.search(written):
+        problems.append("the reply contains credential, key or error text; remove it")
+    known = "\n".join(f"{record.source_name}\n{record.exact_text}" for record in evidence).lower()
+    for url in _URL.findall(written):
+        bare = re.sub(r"^https?://", "", url.rstrip(".,;:!?").lower()).rstrip("/")
+        if bare not in known:
+            problems.append("the reply links to a page no evidence names; remove the link")
+            break
+    if _CREDENTIAL_ASK.search(written):
+        problems.append("the reply asks the student for a password or credentials; remove it")
+    return problems
+
+
+_INSTRUCTION_SHINGLES: dict[int, set[tuple[str, ...]]] = {}
+
+
+def _instruction_shingles(instructions: str) -> set[tuple[str, ...]]:
+    # The instructions are a few fixed strings; shingle each once.
+    key = hash(instructions)
+    if key not in _INSTRUCTION_SHINGLES:
+        _INSTRUCTION_SHINGLES[key] = _shingles(instructions)
+    return _INSTRUCTION_SHINGLES[key]
+
+
 def validate_final(decision: FinalDecision, state: ResearchState | None,
                    evidence: list[EvidenceRecord], supplied: set[str],
                    checks: dict[str, dict], entity_evidence: dict[str, set[str]] | None = None,
                    artifact_references: set[tuple[str, str]] | None = None,
                    known_course_codes: frozenset[str] | None = None,
-                   retired_courses: frozenset[str] = frozenset()) -> None:
+                   retired_courses: frozenset[str] = frozenset(),
+                   instructions: str | None = None,
+                   absent_codes: frozenset[str] = frozenset()) -> None:
     candidates = {c.id: c for c in state.candidates} if state else {}
     records = {e.evidence_id: e for e in evidence}
     problems = (validate_decision_limits(decision) + validate_fact_support(decision)
+                + (answer_content_problems(decision, instructions=instructions,
+                                           evidence=evidence) if decision.blocks else [])
                 + validate_evidence_references(decision, supplied & records.keys())
                 + validate_candidate_references(decision, set(candidates)))
     if not decision.blocks:
@@ -138,6 +211,21 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
     established |= _program_requirement_mentions(records, set(records))
     if known_course_codes:
         established |= set(known_course_codes)
+    # Codes the student asked about that are not courses. Naming one is how an
+    # answer says it does not exist, so a clause that says so is not an identity
+    # claim; a clause that names one any other way treats it as a course.
+    # A code a passage the run read names is real to this run, master or not.
+    absent_codes = frozenset(absent_codes - established)
+    unsaid_absent: set[str] = set()
+    for block in decision.blocks:
+        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
+            if not _ABSENT_SAID.search(clause):
+                unsaid_absent |= set(canonical_codes_in(clause)) & absent_codes
+    if unsaid_absent:
+        problems.append(
+            f"{', '.join(sorted(unsaid_absent))} is not a course; say in the same sentence "
+            "that it does not exist, and claim nothing else about it")
+    established |= absent_codes
     for block in decision.blocks:
         if block.kind not in {"fact", "limitation"}:
             # A judgment compares candidates the run already read; a question
@@ -165,7 +253,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
             f"{records[e].locator_label}\n{records[e].exact_text}"
             for e in block.evidence_ids if e in records)
         present = set(canonical_codes_in(support)) | _program_requirement_mentions(
-            records, set(block.evidence_ids))
+            records, set(block.evidence_ids)) | absent_codes
         missing = set()
         for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
             named = set(canonical_codes_in(clause)) - present

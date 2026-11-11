@@ -1,4 +1,4 @@
-"""Single-attempt worker for durable conversation turns."""
+"""Worker for durable conversation turns; a busy model is retried, nothing else."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from app.debug.registry import OverrideError, validate_retrieval, validate_setti
 from app.jobs.store import JobCancelled, SafeJobError
 from app.jobs.types import Job
 from app.jobs.worker import JobContext
+from app.llm.base import RateLimitError, TransientProviderError
 from app.operations.budget import fence_violation
 
 logger = logging.getLogger(__name__)
@@ -97,8 +98,15 @@ def _history_context(snapshot: dict, effective: dict) -> str:
             + "\nExact referenced artifact revisions:\n" + references)
 
 
+BUSY_REASON = "The advisor is busy right now. Try again in a minute."
+
+
 class ConversationTurnExecutor:
     """Execute one leased conversation request and publish only after validation."""
+
+    # A turn is retried only when the model was busy (rate-limited or a
+    # transient outage). Anything else fails the turn on its first attempt.
+    retryable_codes = frozenset({"provider_busy"})
 
     def __init__(self, *, settings, config, embedder, provider, connection_profiles,
                  connection_runtime, connect, job_store=None):
@@ -155,16 +163,26 @@ class ConversationTurnExecutor:
             guard()
             from app.api.query_service import query_response
 
-            response = query_response(
-                query_request, conn, settings, config, self.embedder, self.provider,
-                check_cancelled=guard, on_progress=lambda event: _report_stage(context, event),
-                on_profile_selection=selected_profile, on_operation_created=operation_ids.append,
-                source_snapshot=source_snapshot,
-                workspace_key=job.scope_key, connection_profiles=self.connection_profiles,
-                connection_runtime=self.connection_runtime,
-                history_context=_history_context(snapshot, effective),
-                conversation_id=conversation_id, conversation_request_id=request_id,
-            )
+            try:
+                response = query_response(
+                    query_request, conn, settings, config, self.embedder, self.provider,
+                    check_cancelled=guard, on_progress=lambda event: _report_stage(context, event),
+                    on_profile_selection=selected_profile,
+                    on_operation_created=operation_ids.append,
+                    source_snapshot=source_snapshot,
+                    workspace_key=job.scope_key, connection_profiles=self.connection_profiles,
+                    connection_runtime=self.connection_runtime,
+                    history_context=_history_context(snapshot, effective),
+                    conversation_id=conversation_id, conversation_request_id=request_id,
+                    retry=job.attempt_count > 1,
+                )
+            except HTTPException as exc:
+                cause = exc.__cause__
+                if exc.status_code == 503 and isinstance(
+                        cause, (RateLimitError, TransientProviderError)):
+                    raise SafeJobError("provider_busy", str(exc.detail), retryable=True,
+                                       retry_after=getattr(cause, "retry_after", None)) from exc
+                raise
             guard()
             return ConversationTurnResult(
                 response.model_dump(mode="json"), source_snapshot, collection_id,
@@ -182,8 +200,9 @@ class ConversationTurnExecutor:
         Without this, `pending_request_id` stays set forever and every later
         turn is rejected with 409 until the student manually abandons it.
         """
+        busy = isinstance(exc, SafeJobError) and exc.code == "provider_busy"
         cls._settle(conn, job, state="failed", reason=(
-            "The advisor couldn't answer that. Try again."
+            BUSY_REASON if busy else "The advisor couldn't answer that. Try again."
         ))
 
     @classmethod

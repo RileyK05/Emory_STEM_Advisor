@@ -303,6 +303,44 @@ def test_run_once_invokes_failure_hook_after_terminal_execution_and_publication_
         assert calls == [(finished.job_id, "RuntimeError")]
 
 
+@pytest.mark.parametrize("raised, status, wait", [
+    # A busy model waits as long as the provider asked, but at least the backoff.
+    ("busy-7", JobStatus.QUEUED, 7),
+    ("busy", JobStatus.QUEUED, 1),
+    ("busy-600", JobStatus.QUEUED, 60),
+    # A kind that names its retryable failures retries nothing else.
+    ("bug", JobStatus.FAILED, None),
+    ("stale", JobStatus.FAILED, None),
+])
+def test_a_declared_executor_retries_only_what_it_marks(migrated_dsn, db, raised, status, wait):
+    from datetime import timedelta
+
+    from app.jobs.dispatch import KindDispatchingExecutor
+    from app.jobs.store import SafeJobError
+
+    clock = FakeClock()
+    store = make_store(migrated_dsn, clock)
+    store.create(kind="conversation.turn", scope_key="declared",
+                 idempotency_key=f"declared-{raised}", payload={}, max_attempts=3)
+
+    class Turn:
+        retryable_codes = frozenset({"provider_busy"})
+
+        def __call__(self, job, context):
+            if raised == "bug":
+                raise RuntimeError("bug")
+            if raised == "stale":
+                raise SafeJobError("stale_source", "A source changed.")
+            after = float(raised.split("-")[1]) if "-" in raised else None
+            raise SafeJobError("provider_busy", "busy", retry_after=after)
+
+    finished = run_once(store, "worker-declared",
+                        KindDispatchingExecutor(conversation=Turn(), artifacts=Turn()))
+    assert finished.status is status
+    if wait is not None:
+        assert finished.available_at == clock() + timedelta(seconds=wait)
+
+
 def test_run_once_invokes_cancellation_hook_when_a_late_success_is_fenced(migrated_dsn, db):
     store = make_store(migrated_dsn)
     store.create(kind="conversation.turn", scope_key="cancel-hook",

@@ -473,6 +473,8 @@ class ResearchController:
         settings = session.settings
         session.question = question
         session.history_context = history_context
+        session.instructions = SYSTEM + (
+            WORKSPACE_SYSTEM if getattr(session, "workspace", None) else "")
         registry = session.registry()
         executor = ToolConversationController(max_tool_calls=settings.research_max_tool_calls,
                                               max_provider_calls=settings.research_max_calls)

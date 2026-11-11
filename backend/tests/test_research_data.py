@@ -1889,6 +1889,11 @@ def test_research_reserves_a_finish_and_withholds_stale_or_cancelled_results(
     # The sweep's ENG_OX 330W miss: the Atlanta code has no current record,
     # but the Atlas pairs it with a current Oxford course, so it is real.
     ("i took ECON_OX 998 at oxford, is that the same as ECON 998?", {}),
+    # A word before a number is not a course unless it is a subject, or the
+    # student wrote it as a code.
+    ("can i declare econ with 88 credit hours", {}),
+    ("is the top 10 list out", {}),
+    ("is XYZ 101 a real class", {"XYZ 101": []}),
 ])
 def test_a_named_course_that_does_not_exist_is_flagged(db, collection, tmp_path, question, unknown):
     from app.config import load_settings

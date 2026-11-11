@@ -422,6 +422,8 @@ class ResearchSession:
         self.decision = None
         self.rejected_decision = None
         self.question = None
+        # The advisor's fixed instructions, so a reply that repeats them is refused.
+        self.instructions = None
         self.history_context = None
         self.execution_id = None
         self.new_evidence = 0
@@ -1271,7 +1273,8 @@ class ResearchSession:
             validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
                            self.supplied, finishable_checks, self.entity_evidence,
                            self.artifact_references, self._known_course_codes(),
-                           self._retired_courses(value.decision))
+                           self._retired_courses(value.decision), self.instructions,
+                           frozenset(self.unknown_question_codes()))
         except DecisionRejected as exc:
             self.rejected_decision = value.decision
             opened = self._open_courses(value.decision.recommended_course_codes)
@@ -1308,6 +1311,7 @@ class ResearchSession:
         records = self.store.evidence(self.run.run_id)
         known = self.supplied | {record.evidence_id for record in records}
         retired = self._retired_courses(proposal)
+        unknown = frozenset(self.unknown_question_codes())
         kept, used = [], 0
         for block in proposal.blocks:
             single = proposal.model_copy(update={
@@ -1317,7 +1321,8 @@ class ResearchSession:
             size = len(block.text.encode("utf-8"))
             try:
                 validate_final(single, self.state, records, known, {}, self.entity_evidence,
-                               None, self._known_course_codes(), retired)
+                               None, self._known_course_codes(), retired, self.instructions,
+                               unknown)
             except DecisionRejected:
                 continue
             if used + size > MAX_DECISION_TEXT_BYTES:
@@ -1327,8 +1332,9 @@ class ResearchSession:
         # What the master already settles is not lost with the block that said it.
         named = {code for block in kept for code in canonical_codes_in(block.text)}
         absent = [DecisionBlock(kind="limitation", text=f"There is no {code} in the Course Atlas.")
-                  for code in sorted(set(self.unknown_question_codes()) - named)]
-        if not absent and not any(block.kind == "fact" for block in kept):
+                  for code in sorted(unknown - named)]
+        # A kept block that already says the course does not exist is the answer.
+        if not absent and not named & unknown and not any(block.kind == "fact" for block in kept):
             return None
         kept = [*absent, *kept]
         self.supplied = known
@@ -1363,7 +1369,13 @@ class ResearchSession:
         if not named:
             return {}
         known = self._known_course_codes()
-        unknown = [code for code in named if code not in known]
+        # A subject no course has is a word ("with 88", "top 10"), unless the
+        # student wrote it as a code, in capitals.
+        subjects = {code.split(" ")[0] for code in known}
+        unknown = [code for code in named if code not in known and (
+            code.split(" ")[0] in subjects
+            or re.search(rf"(?<![A-Za-z]){re.escape(code.split(' ')[0])}(?![a-z])",
+                         self.question or ""))]
         if not unknown:
             return {}
         # The Atlas's campus equivalence names the same course on the other

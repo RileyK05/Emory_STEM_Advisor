@@ -227,6 +227,50 @@ def test_research_finish_rejects_unrenderable_or_unexecuted_references(decision,
         validate_final(decision, None, [], set(), {})
 
 
+_CITED = "See the registrar page at registrar.emory.edu/forms for the petition."
+
+
+@pytest.mark.parametrize("text, rejected", [
+    (".", "no answer"),
+    ("placeholder", "no answer"),
+    ("TBD", "no answer"),
+    ("Yes.", "no answer"),
+    ("LLM_API_KEY=sk-live-abcdefghijklmnop1234", "credential"),
+    ("The database is postgresql://admin:pw@db.internal:5432/app today.", "credential"),
+    ("Verify your Emory password at http://emory-login.example to continue.", "links to a page"),
+    ("Please confirm your password and student ID so I can check your record.", "password"),
+    ("ECHO", "instructions"),
+    ("A petition to drop after the deadline goes to the registrar.", None),
+    ("File the petition through the registrar: registrar.emory.edu/forms has it.", None),
+    ("Use https://registrar.emory.edu/forms to file the petition.", None),
+])
+def test_a_research_reply_must_be_an_answer(text, rejected):
+    from uuid import uuid4
+
+    from app.advising.research_types import EvidenceRecord
+    from app.generation.research_controller import SYSTEM
+    from app.generation.research_final import DecisionRejected, validate_final
+
+    if text == "ECHO":
+        text = SYSTEM[200:1700]
+    record = EvidenceRecord(
+        evidence_id="e1", source_id=str(uuid4()), source_revision=1,
+        source_kind="institutional_policy", source_name="Registrar", chunk_id=str(uuid4()),
+        locator_label="Petitions", exact_text=_CITED, text_digest="a" * 64, acquired_step=1,
+        content_completeness="complete", entity_refs=())
+    decision = _decision(outcome="information", blocks=(
+        DecisionBlock(kind="limitation", text=text),))
+
+    def finish():
+        validate_final(decision, None, [record], {"e1"}, {}, instructions=SYSTEM)
+
+    if rejected is None:
+        finish()
+        return
+    with pytest.raises(DecisionRejected, match=rejected):
+        finish()
+
+
 @pytest.mark.parametrize("decision, rejected", [
     # Whatever the model wrote, the student sees only the fixed sentence.
     (_decision(outcome="declined", completeness="partial", blocks=(
@@ -740,6 +784,46 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
         ("limitation", "There is no PSYC 219 in the Course Atlas."), ("fact", good.text)]
     session.rejected_decision = _decision(blocks=(unsupported,))
     assert session.salvage().blocks[0].text == "There is no PSYC 219 in the Course Atlas."
+    # A refusal that already says so is the whole answer, not a reply to drop.
+    refusal = DecisionBlock(kind="limitation",
+                            text="PSYC 219 does not exist, so it cannot count toward a major.")
+    session.rejected_decision = _decision(blocks=(refusal, unsupported))
+    assert session.salvage().blocks == (refusal,)
+
+
+@pytest.mark.parametrize("text, rejected", [
+    ("ENVS 667 does not exist in the Course Atlas, so it cannot count toward the CS BS.", None),
+    ("There is no ENVS 667; the CS BS lists CS 170.", None),
+    ("ENVS 667 isn't a current Emory course.", None),
+    ("ENVS 667 counts toward the CS BS.", "ENVS 667 is not a course"),
+    ("ENVS 667 is not listed in the CS BS requirements.", "ENVS 667 is not a course"),
+    # A real course the run never read stays gated, whatever the wording.
+    ("BIOL 141 does not count toward the CS BS.", "absent from"),
+])
+def test_a_course_that_does_not_exist_is_named_only_to_say_so(text, rejected):
+    from uuid import uuid4
+
+    from app.advising.research_types import EvidenceRecord
+    from app.generation.research_final import DecisionRejected, validate_final
+
+    record = EvidenceRecord(
+        evidence_id="e1", source_id=str(uuid4()), source_revision=1,
+        source_kind="institutional_catalog", source_name="Computer Science (BS)",
+        chunk_id=str(uuid4()), locator_label="Requirements",
+        exact_text="CS 170 is required.", text_digest="a" * 64, acquired_step=1,
+        content_completeness="complete", entity_refs=())
+    decision = _decision(outcome="information", blocks=(
+        DecisionBlock(kind="fact", text=text, evidence_ids=("e1",)),))
+
+    def finish():
+        validate_final(decision, None, [record], {"e1"}, {},
+                       absent_codes=frozenset({"ENVS 667"}))
+
+    if rejected is None:
+        finish()
+        return
+    with pytest.raises(DecisionRejected, match=rejected):
+        finish()
 
 
 @pytest.mark.parametrize("failure", ["TransientProviderError", "RateLimitError", "ToolConversationError"])

@@ -40,7 +40,7 @@ from app.generation.evidence import record_attempt
 from app.generation.operation import GenerationOperation
 from app.jobs.runtime import StagedArtifact, StagedRunResult
 from app.jobs.store import SafeJobError
-from app.llm.base import ProviderError, ProviderTimeoutError
+from app.llm.base import ProviderError, ProviderTimeoutError, provider_failure_detail
 from app.operations.budget import OperationBudgetError
 from app.retrieval.retrieve import retrieve
 from app.retrieval.types import Refusal
@@ -176,7 +176,7 @@ class ArtifactHandler:
             # A call cut short by the run's deadline is a slow run, not a broken connection.
             raise SafeJobError("deadline_exceeded", _TOO_SLOW) from exc
         except ProviderError as exc:
-            raise SafeJobError("provider_failed", "Model connection failed; check provider settings.") from exc
+            raise SafeJobError("provider_failed", provider_failure_detail(exc, "The model")) from exc
         finally:
             conn.close()
 

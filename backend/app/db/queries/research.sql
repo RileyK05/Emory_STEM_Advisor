@@ -120,6 +120,18 @@ FROM research_runs
 WHERE conversation_id = %(conversation_id)s
   AND conversation_request_id = %(request_id)s;
 
+-- A retried turn starts a new run. The run its earlier attempt left (failed,
+-- or still marked running by a worker that died) keeps its record and stops
+-- answering for the request.
+-- name: detach_research_run_from_request
+UPDATE research_runs
+SET conversation_request_id = NULL,
+    status = CASE WHEN status = 'running' THEN 'interrupted' ELSE status END,
+    stop_reason = CASE WHEN status = 'running' THEN 'attempt lost; retried'
+                       ELSE stop_reason END,
+    updated_at = now()
+WHERE run_id = %(run_id)s;
+
 -- name: update_research_state
 UPDATE research_runs
 SET state = %(state)s,

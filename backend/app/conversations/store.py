@@ -20,6 +20,9 @@ def _json_size(value) -> int:
 MAX_CONVERSATIONS_PER_WORKSPACE = 500
 
 
+# A busy model gets two more tries before the turn fails.
+TURN_MAX_ATTEMPTS = 3
+
 class ConversationStore:
     def __init__(self, conn, workspace_key: str,
                  max_conversations: int = MAX_CONVERSATIONS_PER_WORKSPACE):
@@ -212,7 +215,8 @@ class ConversationStore:
                 "job_id": job_id, "kind": "conversation.turn", "scope_key": self.workspace_key,
                 "idempotency_key": idempotency_key,
                 "payload": Jsonb({"conversationId": str(conversation_id), "requestId": str(request_id)}),
-                "max_attempts": 1, "available_at": now,
+                # Retried only when the model was busy; see ConversationTurnExecutor.
+                "max_attempts": TURN_MAX_ATTEMPTS, "available_at": now,
             }).fetchone()
             if job is None:
                 raise HTTPException(409, "conversation request identity is already in use")

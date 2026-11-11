@@ -113,16 +113,31 @@ def run_once(
         invoke_hook("on_cancelled", exc)
         return finished
 
+    def may_retry(exc: Exception, default: bool) -> bool:
+        # A kind that names its retryable failures retries nothing else.
+        codes = getattr(executor, "retryable_codes", None)
+        if callable(codes):
+            codes = codes(job)
+        if codes is None:
+            return default
+        return isinstance(exc, SafeJobError) and exc.retryable and exc.code in codes
+
     def finish_failed(exc: Exception, *, stage: str, retryable: bool) -> Job:
         if isinstance(exc, SafeJobError):
             error = {"type": exc.code, "message": exc.safe_message}
         else:
             error = {"type": "execution_failed", "message": "Job execution failed."}
-        logger.warning("job %s (%s) failed during %s: %s",
-                       job.job_id, job.kind, stage, type(exc).__name__)
+        # Server-written text only: a SafeJobError's message or an HTTP error's
+        # detail. Other exceptions can carry model output, so only their type.
+        detail = (f"{exc.code}: {exc.safe_message}" if isinstance(exc, SafeJobError)
+                  else f"HTTP {exc.status_code}: {exc.detail}"
+                  if isinstance(getattr(exc, "status_code", None), int)
+                  and isinstance(getattr(exc, "detail", None), str) else "")
+        logger.warning("job %s (%s) failed during %s: %s %s",
+                       job.job_id, job.kind, stage, type(exc).__name__, detail)
         finished = store._finish_failure(
             job, job.lease_token, error,
-            retryable=retryable,
+            retryable=retryable, retry_after=getattr(exc, "retry_after", None),
         )
         if finished.status is JobStatus.FAILED:
             invoke_hook("on_failure", exc)
@@ -142,7 +157,7 @@ def run_once(
                 return finish_cancelled(cancelled)
             return finish_failed(
                 exc, stage="execution",
-                retryable=not isinstance(exc, SafeJobError) or exc.retryable,
+                retryable=may_retry(exc, not isinstance(exc, SafeJobError) or exc.retryable),
             )
         context.stop_heartbeats()
         try:
@@ -167,9 +182,9 @@ def run_once(
         except LeaseLost:
             raise
         except SafeJobError as exc:
-            return finish_failed(exc, stage="publication", retryable=exc.retryable)
+            return finish_failed(exc, stage="publication", retryable=may_retry(exc, exc.retryable))
         except Exception as exc:  # noqa: BLE001 - publication boundary redacts failures
-            return finish_failed(exc, stage="publication", retryable=True)
+            return finish_failed(exc, stage="publication", retryable=may_retry(exc, True))
     finally:
         context.stop_heartbeats()
 

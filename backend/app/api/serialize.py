@@ -16,19 +16,7 @@ from app.api.schemas import (
 )
 from app.generation.answer import GeneratedAnswer
 from app.generation.claims import review_units
-from app.llm.base import ProviderError, RateLimitError, TransientProviderError
 from app.retrieval.types import CitedChunk, Retrieved, SeamResult
-
-
-def provider_failure_detail(exc: ProviderError, subject: str) -> str:
-    """A 503 detail that blames settings only when a retry would not help."""
-    if isinstance(exc, RateLimitError):
-        retry_after = getattr(exc, "retry_after", None)
-        return (f"{subject} is rate-limited"
-                + (f"; retry in {round(retry_after)}s." if retry_after else "; retry shortly."))
-    if isinstance(exc, TransientProviderError) or exc.retryable:
-        return f"{subject} did not respond in time or dropped the connection; retry shortly."
-    return f"{subject} connection failed; check provider settings."
 
 
 def _redact_context(context_block, cited: set[str]) -> list:

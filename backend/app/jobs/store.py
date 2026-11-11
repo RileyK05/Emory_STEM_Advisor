@@ -62,12 +62,15 @@ class JobCancelled(JobError):
 class SafeJobError(JobError):
     """An application-defined failure safe to show in job status/events."""
 
-    def __init__(self, code: str, safe_message: str, *, retryable: bool = True):
+    def __init__(self, code: str, safe_message: str, *, retryable: bool = True,
+                 retry_after: float | None = None):
         if not code or len(code) > 80 or not safe_message or len(safe_message) > 500:
             raise ValueError("safe job error code/message has invalid length")
         self.code = code
         self.safe_message = safe_message
         self.retryable = retryable
+        # Seconds the cause asked to wait (a provider's Retry-After), if any.
+        self.retry_after = retry_after
         super().__init__(safe_message)
 
 
@@ -369,11 +372,15 @@ class JobStore:
         self._append_event(conn, job_id, "cancelled", {"status": "cancelled"}, now)
         return Job.from_row(row)
 
-    def _finish_failure(self, job: Job, lease_token: UUID, error: Any, *, retryable: bool = True) -> Job:
+    def _finish_failure(self, job: Job, lease_token: UUID, error: Any, *, retryable: bool = True,
+                        retry_after: float | None = None) -> Job:
         safe_error = _bounded_json(error, MAX_ERROR_BYTES, "error")
         now = _timestamp(self._clock())
         retry = retryable and job.attempt_count < job.max_attempts
-        retry_at = now + timedelta(seconds=retry_delay(job.attempt_count))
+        delay = retry_delay(job.attempt_count)
+        if retry_after is not None and retry_after > 0:
+            delay = max(delay, min(float(retry_after), MAX_RETRY_AFTER_SECONDS))
+        retry_at = now + timedelta(seconds=delay)
         with self._transaction() as conn:
             row = conn.execute(
                 queries.get("finish_job_failure"),
@@ -433,6 +440,10 @@ class JobStore:
         """A guarded update matched no row: say why, defaulting to a lost lease."""
         self._check_lease(conn, job_id, lease_token)
         raise LeaseLost(str(job_id))
+
+
+# A provider's Retry-After is honoured up to this; a longer wait fails the job.
+MAX_RETRY_AFTER_SECONDS = 60.0
 
 
 def retry_delay(attempt: int, *, base_seconds: float = 1.0, cap_seconds: float = 300.0) -> float:

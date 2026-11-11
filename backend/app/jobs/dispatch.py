@@ -30,6 +30,10 @@ class KindDispatchingExecutor:
     def publish_success(self, conn, job: Job, value: Any) -> Any:
         return self._target(job).publish_success(conn, job, value)
 
+    def retryable_codes(self, job: Job) -> frozenset[str] | None:
+        """The failure codes this kind may retry; None leaves the default rule."""
+        return getattr(self._target(job), "retryable_codes", None)
+
     def on_failure(self, conn, job: Job, exc: Exception) -> None:
         hook = getattr(self._target(job), "on_failure", None)
         if callable(hook):
