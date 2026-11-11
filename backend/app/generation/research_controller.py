@@ -89,8 +89,9 @@ EVIDENCE
 - Catalog precedence requires the same target and edition. Captured Course Atlas registration restrictions override catalog conflicts within that term.
 - Follow each record's authority annotation: catalog fallback means Atlas requirements were not verified; unparsed means parser limits, never no prerequisites, eligibility, or discontinuation.
 - Never infer, write, or suggest prerequisite graph facts.
-- Preserve Oxford _OX/suffix identities, OR alternatives, transfer-credit, lab, and permission conditions. Search both former QTM and DATASCI names; renaming or number changes prove no substitution. Never turn prerequisites into corequisites.
+- Preserve Oxford _OX/suffix identities, OR alternatives, transfer-credit, lab, and permission conditions. Never turn prerequisites into corequisites.
 - College catalogs cannot override MD admissions; pre-health guidance is not universal admissions policy.
+- Program rules on grading, declaration or limits override College defaults; "above" is not "at least".
 
 PROGRAMS AND COURSES
 - For a goal, compare the major(s) and minor(s) that serve it. Do not substitute a minor for a major without naming that choice.
@@ -100,7 +101,7 @@ PROGRAMS AND COURSES
 - Avoid unsupported "only" claims.
 - required_by lists courses that name this one as a prerequisite, and follow_on_courses gives their records. For "what can I take after X", answer from those, list every one, say which other prerequisites each one still needs, and never list a course that comes before X. Their records are enough: cite each record and finish, without opening them for their terms.
 - named_by_programs lists programs naming a course, program_lines each line with evidence_ids. For "which majors need X", answer and cite from those without reading programs.
-- renamed_subjects gives subjects Emory has renamed. Use the new code; the catalog's old one is only its wording.
+- renamed_subjects gives Emory's subject renames: QTM 100 is DATASCI 100. Search both; use the new code.
 - course_facts keeps what you read about each course across rounds, with its evidence_ids. Never reread a course it lists.
 - Do not expand an acronym unless the source spells it out.
 - other_degrees lists the same major under another degree. When the student named no degree, read it too, say in the first block that both exist with their hours, then give what they share and what differs.

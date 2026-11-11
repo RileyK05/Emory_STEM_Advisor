@@ -8,7 +8,7 @@ artifact suite passed 10 of 23 on minimax.
 
 ## Implementation status (2026-11-10)
 
-Phases 1–3 are done, uncommitted. Each has its test rows. Where the build
+Phases 1–3 are done and committed (`84321db`). Each has its test rows. Where the build
 differs from the plan text below:
 
 - **Phase 1:**
@@ -42,6 +42,53 @@ differs from the plan text below:
   "There is no …" block had to be added. A kept refusal now counts as the
   answer. A code the run's own evidence names is never treated as absent, so a
   corpus without a master row for it isn't forced into "does not exist" wording.
+
+Phases 4–7 are done, uncommitted (prompt `research-49`):
+
+- **Phase 4:** the `renamed_subjects` prompt line now says QTM 100 is DATASCI
+  100, and the "prove no substitution" clause is gone. `test_programs.py`
+  already pins the item mapping, so there's no new row.
+- **Phase 5:** there were two causes.
+  - Term listings keep the code the Atlas printed that term. Fall 2025 lists
+    `QTM 190`, which the master calls DATASCI 190. `_offerings` now asks for
+    both codes and folds each listing back to the current one.
+  - A master row the import keeps `current` is never called no longer
+    offered. One check decides it for the offering note, the answer gate and
+    suggestions.
+  - Retired master rows are real courses. The Phase 3 check no longer calls
+    them nonexistent.
+  - The gate accepts "has not been offered since". It no longer tells the
+    model to drop a requisite alternative.
+  - The test fixture also exposed a SQL bug. `research_course_offering_terms`
+    joined snapshots on `source_id` alone, so a source holding several term
+    snapshots gave every row every term. It now joins on
+    `(source_id, capture_set_hash)`.
+- **Phase 6:** editions are compared only within one `source_category`, and
+  term listings (`course_offerings`) are skipped.
+- **Phase 7:**
+  - On a grading-basis question, `read_program` adds up to 6 of the program's
+    own S/U, letter-grade or pass/fail items to the page, wherever they sit.
+  - One prompt line gives program rules precedence over College defaults and
+    says "above" is not "at least".
+  - A fact block with a number next to hours, credits or GPA must cite a
+    passage stating that number, in digits or words. Clauses that say the
+    evidence doesn't establish something are exempt.
+  - `advising_sweep` has no fixed list, by design, so step 4 doesn't apply.
+- **Prompt budget:** the 15000-byte rows of
+  `test_context_compaction_preserves_exact_passages…` sit within about 20
+  bytes of the research prompt's size. A prompt edit that grows it drops every
+  exact passage there. Keep prompt edits byte-neutral, or recalibrate that row
+  on purpose.
+
+Drop-deadline conflict for Riley (Phase 6), current sources in the snapshot:
+- `emory-policy-changing-courses.md`: "A student may change courses within the
+  first eight days of the semester (the Add/Drop/Swap period). After the
+  conclusion of the Add/Drop/Swap period, students may petition to drop a course
+  through the fifteenth class day of the semester."
+- `academic-policies-and-requirements.md`: "A student may change courses within
+  the first two weeks of the semester (the Add/Drop/Swap period). After the
+  conclusion of the Add/Drop/Swap period, students may petition to drop a course
+  through the twenty-fifth class day of the semester."
 
 Not yet checked live: everything. Ask the QA bot to rerun NX, the
 "with 88"-style items, the `placeholder` items (HP04, R4_adv_ED08,

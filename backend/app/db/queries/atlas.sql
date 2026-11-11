@@ -3,6 +3,11 @@ SELECT code FROM courses
 WHERE collection_id = %(collection_id)s AND lifecycle = 'current'
 ORDER BY code;
 
+-- name: list_collection_retired_course_codes
+SELECT code FROM courses
+WHERE collection_id = %(collection_id)s AND lifecycle = 'retired'
+ORDER BY code;
+
 -- name: list_collection_course_requisite_texts
 SELECT requisites_raw FROM courses
 WHERE collection_id = %(collection_id)s

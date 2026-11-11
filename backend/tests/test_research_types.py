@@ -271,6 +271,42 @@ def test_a_research_reply_must_be_an_answer(text, rejected):
         finish()
 
 
+_AP_RULE = ("Students may apply no more than twelve hours of AP credit toward the degree, "
+            "and a 3.5 GPA is required to declare.")
+
+
+@pytest.mark.parametrize("text, rejected", [
+    ("The AP credit cap is 24 hours.", True),
+    ("The AP credit cap is 12 hours.", False),
+    ("Declaring needs a GPA above 3.0.", True),
+    ("Declaring needs a 3.5 GPA.", False),
+    ("AP credit applies toward the degree.", False),
+    ("The cited rule does not establish a 16 hour limit for transfer credit.", False),
+])
+def test_a_policy_number_comes_from_the_cited_passage(text, rejected):
+    from uuid import uuid4
+
+    from app.advising.research_types import EvidenceRecord
+    from app.generation.research_final import DecisionRejected, validate_final
+
+    record = EvidenceRecord(
+        evidence_id="e1", source_id=str(uuid4()), source_revision=1,
+        source_kind="institutional_policy", source_name="AP Credit", chunk_id=str(uuid4()),
+        locator_label="AP Credit", exact_text=_AP_RULE, text_digest="a" * 64, acquired_step=1,
+        content_completeness="complete", entity_refs=())
+    decision = _decision(outcome="information", blocks=(
+        DecisionBlock(kind="fact", text=text, evidence_ids=("e1",)),))
+
+    def finish():
+        validate_final(decision, None, [record], {"e1"}, {})
+
+    if rejected:
+        with pytest.raises(DecisionRejected, match="do not contain that number"):
+            finish()
+    else:
+        finish()
+
+
 @pytest.mark.parametrize("decision, rejected", [
     # Whatever the model wrote, the student sees only the fixed sentence.
     (_decision(outcome="declined", completeness="partial", blocks=(
@@ -763,7 +799,7 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
     session = ResearchSession(None, SimpleNamespace(sources={}, programs={}, collection_id=None),
         SimpleNamespace(evidence=lambda _run: [record]), SimpleNamespace(run_id=uuid4()),
         settings=None, config=None, embedder=None)
-    session._course_codes = frozenset()
+    session._course_codes = session._retired_codes = frozenset()
     good = DecisionBlock(kind="fact", text="You need 124 credit hours.", evidence_ids=("e1",))
     unsupported = DecisionBlock(kind="fact", text="You need a 3.0.", evidence_ids=("e9",))
     assert session.salvage() is None  # Nothing was proposed.

@@ -358,7 +358,7 @@ ORDER BY p.title, i.position;
 -- name: research_course_offering_terms
 SELECT DISTINCT r.raw_course_code AS code, s.term
 FROM atlas_offering_rows r
-JOIN atlas_offering_snapshots s USING (source_id)
+JOIN atlas_offering_snapshots s USING (source_id, capture_set_hash)
 JOIN sources src ON src.source_id = s.source_id
 WHERE src.collection_id = %(collection_id)s AND src.is_current
   AND r.review_status = 'eligible' AND r.raw_course_code = ANY(%(codes)s)
@@ -373,7 +373,7 @@ WHERE src.collection_id = %(collection_id)s AND src.is_current;
 -- name: research_course_offering_variants
 SELECT DISTINCT r.raw_course_code AS code
 FROM atlas_offering_rows r
-JOIN atlas_offering_snapshots s USING (source_id)
+JOIN atlas_offering_snapshots s USING (source_id, capture_set_hash)
 JOIN sources src ON src.source_id = s.source_id
 WHERE src.collection_id = %(collection_id)s AND src.is_current
   AND r.review_status = 'eligible'

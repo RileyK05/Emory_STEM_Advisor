@@ -20,7 +20,7 @@ from app.generation.answer import NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-48"
+RESEARCH_PROMPT_VERSION = "research-49"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
 # A fact block that asserts a course is required, listed or part of a program
@@ -55,7 +55,8 @@ def _program_requirement_mentions(records, cited: set[str]) -> set[str]:
     return mentioned
 
 
-_RETIRED_SAID = re.compile(r"no longer (?:offered|runs?|available)|not offered|retired|discontinued",
+_RETIRED_SAID = re.compile(r"no longer (?:offered|runs?|available)|not (?:been )?offered|retired|"
+                           r"discontinued",
                            re.IGNORECASE)
 
 
@@ -78,9 +79,70 @@ def retired_course_problems(decision: FinalDecision, recommended: set[str],
                 unsaid |= set(canonical_codes_in(clause)) & retired
     if unsaid:
         problems.append(
-            f"{', '.join(sorted(unsaid))} no longer offered: no Course Atlas term shows it. "
-            "Drop it, or say it is no longer offered in the same sentence, and name the current "
-            "course from the program list or requisites instead")
+            f"{', '.join(sorted(unsaid))}: no checked Course Atlas term shows it. Say in the same "
+            "sentence that it is not offered in any checked term; a student who completed it "
+            "still meets a requirement that names it. Keep it in a requisite or program list, "
+            "and name the current course that list gives for a student choosing now")
+    return problems
+
+
+# A cap, minimum or threshold: a number next to hours, credits or a GPA.
+_POLICY_NUMBER = re.compile(
+    r"(?<![\d.])(\d+(?:\.\d+)?)[\s-]*(?:semester[\s-]+|credit[\s-]+)?(?:hours?|credits?)\b"
+    r"|\bGPA\b[^.\d]{0,30}?(\d\.\d{1,2})(?!\d)"
+    r"|(?<![\d.])(\d\.\d{1,2})\s+(?:[a-z]+\s+)?GPA\b", re.IGNORECASE)
+_NUMBER = re.compile(r"(?<![\d.])\d+(?:\.\d+)?(?![\d])")
+_UNIT_WORDS = {word: n for n, word in enumerate((
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+    "nineteen"))}
+_TEN_WORDS = {word: 10 * n for n, word in enumerate((
+    "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"), start=2)}
+
+
+def _numbers_in(text: str) -> set[float]:
+    """Every number a passage states, in digits or in words ("twenty-four")."""
+    found = {float(number) for number in _NUMBER.findall(text)}
+    total, spelled = 0, False
+    for word in [*re.findall(r"[a-z]+", text.lower()), ""]:
+        if word in _UNIT_WORDS or word in _TEN_WORDS:
+            total += _UNIT_WORDS.get(word, 0) + _TEN_WORDS.get(word, 0)
+            spelled = True
+        elif word == "hundred" and spelled:
+            total *= 100
+        elif word == "and" and spelled:
+            continue
+        else:
+            if spelled:
+                found.add(float(total))
+            total, spelled = 0, False
+    return found
+
+
+def policy_number_problems(decision: FinalDecision, records: dict) -> list[str]:
+    """A fact stating a cap, minimum or GPA threshold cites a passage with that number.
+
+    A model that read the College default and the program rule can give the
+    wrong one's number, or none of them ("24 hours" when the rule says 12).
+    """
+    problems = []
+    for block in decision.blocks:
+        if block.kind != "fact":
+            continue
+        support = _numbers_in("\n".join(
+            records[e].exact_text for e in block.evidence_ids if e in records))
+        unsupported = set()
+        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
+            if NONSUPPORT_RE.search(clause):
+                continue
+            for match in _POLICY_NUMBER.finditer(clause):
+                number = next(group for group in match.groups() if group)
+                if float(number) not in support:
+                    unsupported.add(match.group(0).strip())
+        if unsupported:
+            problems.append(
+                "fact block states " + ", ".join(sorted(unsupported)) + " but its cited passages "
+                "do not contain that number; cite the passage that states it, or drop it")
     return problems
 
 
@@ -264,6 +326,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
             problems.append(
                 "fact block names course code(s) absent from its cited evidence: "
                 + ", ".join(sorted(missing)))
+    problems.extend(policy_number_problems(decision, records))
     for block in decision.blocks:
         if (block.kind not in {"fact", "judgment"} or not _ENTRY.search(block.text)
                 or _ENTRY_NEGATED.search(block.text)):

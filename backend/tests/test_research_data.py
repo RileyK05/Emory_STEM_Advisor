@@ -46,6 +46,7 @@ DEPARTMENT CONTACT Computer Science
 Requirements
 • CS 170
 • One from the following: CS 370, Math 111
+• Courses for the minor must be taken for a letter grade.
 """
 
 
@@ -421,25 +422,33 @@ def _atlas_terms(db, source_id, shown):
                 "observed_at": "2026-01-01T00:00:00Z", "capture_envelope_hash": hash_of})
 
 
-@pytest.mark.parametrize(("terms", "expected"), [
-    (["Fall 2026", "Spring 2024", "Fall 2024", "Spring 2027"], {
+@pytest.mark.parametrize(("terms", "lifecycle", "expected"), [
+    (["Fall 2026", "Spring 2024", "Fall 2024", "Spring 2027"], "retired", {
         "ECON 101": None,
         "ECON 201": "from Spring 2024 to Spring 2027, but ECON 201W, ECON_OX 201",
         "MATH 111": "from Spring 2024 to Spring 2027. It is no longer offered"}),
+    # The Atlas import kept the master row current, so a listing gap is not retirement.
+    (["Fall 2026", "Spring 2024", "Fall 2024", "Spring 2027"], "current", {
+        "ECON 101": None,
+        "ECON 201": "from Spring 2024 to Spring 2027, but ECON 201W, ECON_OX 201",
+        "MATH 111": None}),
     # Too few terms to tell a slower cycle from a retired course.
-    (["Fall 2026", "Spring 2024", "Spring 2027"],
+    (["Fall 2026", "Spring 2024", "Spring 2027"], "retired",
      {"ECON 101": None, "ECON 201": None, "MATH 111": None}),
 ])
-def test_course_read_states_what_the_atlas_terms_show(db, collection, tmp_path, terms, expected):
+def test_course_read_states_what_the_atlas_terms_show(
+        db, collection, tmp_path, terms, lifecycle, expected):
     from app.config import load_settings
     from app.generation.research_tools import ResearchSession
     from tests.fakes import FakeEmbedder
     from tests.helpers import lenient_config
 
     corpus, scope, store, run = _run(db, collection, tmp_path)
+    db.execute("UPDATE courses SET lifecycle = %s WHERE collection_id = %s AND code = 'MATH 111'",
+               (lifecycle, collection))
     _atlas_terms(db, corpus["policy"], {term: {"ECON 101": "eligible"} for term in terms[:-1]} | {
         terms[-1]: {"ECON 101": "eligible", "ECON 201W": "eligible", "ECON_OX 201": "eligible",
-                    "MATH 111": "held_placeholder"}})
+                    "MATH 111": "held_placeholder", "QTM 190": "eligible"}})
     session = ResearchSession(db, scope, store, run, settings=load_settings(),
                               config=lenient_config(), embedder=FakeEmbedder(8))
     read = session.registry().invoke(
@@ -454,6 +463,32 @@ def test_course_read_states_what_the_atlas_terms_show(db, collection, tmp_path, 
         SimpleNamespace(text="ECON 101, ECON 201 and MATH 111")])
     assert session._retired_courses(answer) == (
         {"MATH 111"} if expected["MATH 111"] else frozenset())
+    # A listing keeps the code the Atlas printed: QTM 190 is DATASCI 190.
+    assert session._offerings(["DATASCI 190"])[0] == {"DATASCI 190": [terms[-1]]}
+
+
+@pytest.mark.parametrize(("question", "read"), [
+    ("can i take the cs minor courses s/u", True),
+    ("what does the cs minor require", False),
+])
+def test_a_grading_question_reads_the_programs_own_grading_line(
+        db, collection, tmp_path, monkeypatch, question, read):
+    from app.config import load_settings
+    from app.generation import research_tools
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import lenient_config
+
+    corpus, scope, store, run = _run(db, collection, tmp_path)
+    monkeypatch.setattr(research_tools, "PROGRAM_PAGE_ITEMS", 1)
+    session = research_tools.ResearchSession(db, scope, store, run, settings=load_settings(),
+                                             config=lenient_config(), embedder=FakeEmbedder(8))
+    session.question = question
+    result = session.registry().invoke(
+        "advisor_read_program", {"handle": session.handle("program", corpus["minor"])},
+        session.tool_scope(lambda: None))
+    graded = [item for item in result.data["items"] if "letter grade" in item["text"]]
+    assert bool(graded and graded[0]["evidence_ids"]) is read
+    assert result.next_cursor
 
 
 @pytest.mark.parametrize("read", ["program", "courses", "document", "metadata"])
@@ -1894,6 +1929,8 @@ def test_research_reserves_a_finish_and_withholds_stale_or_cancelled_results(
     ("can i declare econ with 88 credit hours", {}),
     ("is the top 10 list out", {}),
     ("is XYZ 101 a real class", {"XYZ 101": []}),
+    # A retired master row is a real course, not one that does not exist.
+    ("can i still take math 111", {}),
 ])
 def test_a_named_course_that_does_not_exist_is_flagged(db, collection, tmp_path, question, unknown):
     from app.config import load_settings
@@ -1906,6 +1943,8 @@ def test_a_named_course_that_does_not_exist_is_flagged(db, collection, tmp_path,
                               config=lenient_config(), embedder=FakeEmbedder(8))
     db.execute("INSERT INTO course_campus_equivalents (collection_id, oxford_code, atlanta_code,"
                " basis) VALUES (%s, 'ECON_OX 998', 'ECON 998', 'course_record')", (collection,))
+    db.execute("UPDATE courses SET lifecycle = 'retired' WHERE collection_id = %s"
+               " AND code = 'MATH 111'", (collection,))
     session.question = question
     assert session.unknown_question_codes() == unknown
 

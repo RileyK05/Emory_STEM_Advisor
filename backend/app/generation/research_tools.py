@@ -349,6 +349,21 @@ def course_stem(code: str) -> str:
     return re.sub(r"[A-Z]+$", "", code.replace("_OX", ""))
 
 
+_FORMER_SUBJECTS = {new: old for old, new in SUBJECT_RENAMES.items()}
+
+
+def _former_code(code: str) -> str | None:
+    """The code a renamed subject's course had before: DATASCI 190 was QTM 190."""
+    subject, _, rest = code.partition(" ")
+    return f"{_FORMER_SUBJECTS[subject]} {rest}" if subject in _FORMER_SUBJECTS and rest else None
+
+
+def _current_code(code: str) -> str:
+    """A term listing's printed code under its subject's current name."""
+    subject, _, rest = code.partition(" ")
+    return f"{SUBJECT_RENAMES[subject]} {rest}" if subject in SUBJECT_RENAMES and rest else code
+
+
 def offering_note(code: str, checked: list[str], variants: list[str]) -> str:
     """Say what the Atlas terms show for a course that none of them list."""
     span = f"{checked[0]} to {checked[-1]}"
@@ -358,6 +373,14 @@ def offering_note(code: str, checked: list[str], variants: list[str]) -> str:
     return (f"{code} is in no Course Atlas term from {span}. It is no longer offered, even "
             "though a catalog record or a requisite may still name it.")
 
+
+# A grading-basis question, and a program line that states a grading rule.
+_GRADING_ASKED = re.compile(
+    r"(?<![a-z])s[/-]u(?![a-z])|pass[/-]fail|letter[- ]grade|satisfactory|grading basis",
+    re.IGNORECASE)
+_GRADING_LINE = re.compile(r"letter grade|(?<![A-Za-z])S/U(?![A-Za-z])|pass/fail|satisfactory",
+                           re.IGNORECASE)
+MAX_GRADING_ITEMS = 6
 
 _DEGREE_NAMED = re.compile(r"\b(?:b\.?a\.?|b\.?s\.?|bachelor)\b", re.IGNORECASE)
 
@@ -413,6 +436,8 @@ class ResearchSession:
         self.program_cursors = {}
         self.pending_policy_reads: tuple[str, ...] = ()
         self._course_codes: frozenset[str] | None = None
+        self._master_codes: frozenset[str] = frozenset()
+        self._retired_codes: frozenset[str] | None = None
         self.actions = []
         self.checks: dict[str, dict] = {}
         self.unavailable_preparation_check_ids: set[str] = set()
@@ -788,6 +813,12 @@ class ResearchSession:
                 ("This cursor belongs to a different program handle. Use the handle "
                  "returned with that cursor; cursors cannot be transferred.")
             ]) from None
+        if _GRADING_ASKED.search(self.question or ""):
+            # The program's own grading rule outranks the College default, so it
+            # is read with the first page wherever the program lists it.
+            shown = {i.position for i in items}
+            items = [*items, *[i for i in read.items if i.position not in shown
+                               and _GRADING_LINE.search(i.line.text)][:MAX_GRADING_ITEMS]]
         chunks = {c.chunk_id: c for supported in [*read.fields.values(), *(i.line for i in items)]
                   for c, _start, _end in supported.support}
         ids = self.acquire(list(chunks.values()), refs=(value.handle,), action="read_program",
@@ -925,9 +956,12 @@ class ResearchSession:
                 } for row in program_lines[r.code]]
                 if self.answer_in_hand:
                     self.line_facts[r.code] = data["program_lines"]
-            if r.code not in terms and len(checked) >= MIN_OFFERING_TERMS:
-                data["offering_note"] = offering_note(
-                    r.code, checked, variants.get(course_stem(r.code), []))
+            running = variants.get(course_stem(r.code), [])
+            # A master row the Atlas import keeps current is offered, even when
+            # no listing matches its code; it is never called retired.
+            if r.code not in terms and len(checked) >= MIN_OFFERING_TERMS and (
+                    running or r.lifecycle != "current"):
+                data["offering_note"] = offering_note(r.code, checked, running)
             self.course_facts.pop(r.code, None)  # The newest reads stay in a full prompt.
             self.course_facts[r.code] = {key: data[key] for key in COURSE_FACT_FIELDS if data.get(key)}
             self.course_facts[r.code]["offered_terms"] = sorted(
@@ -941,19 +975,31 @@ class ResearchSession:
             status="ok" if reads else "not_found")
 
     def _offerings(self, codes):
-        """Each course's Atlas terms, every term checked, and running variants by stem."""
-        terms: dict[str, list[str]] = {}
+        """Each course's Atlas terms, every term checked, and running variants by stem.
+
+        A listing keeps the code the Atlas printed that term, so a course under a
+        renamed subject is asked for under both: Fall 2025 lists QTM 190, which
+        is DATASCI 190.
+        """
+        former = {old: code for code in codes if (old := _former_code(code))}
+        found: dict[str, dict[str, None]] = {}
         for row in self.conn.execute(queries.get("research_course_offering_terms"), {
-                "collection_id": self.scope.collection_id, "codes": list(codes)}):
-            terms.setdefault(row["code"], []).append(row["term"])
+                "collection_id": self.scope.collection_id, "codes": [*codes, *former]}):
+            found.setdefault(former.get(row["code"], row["code"]), {})[row["term"]] = None
+        terms = {code: list(listed) for code, listed in found.items()}
         checked = sorted((row["term"] for row in self.conn.execute(
             queries.get("research_offering_terms_checked"),
             {"collection_id": self.scope.collection_id})), key=term_order)
         variants: dict[str, list[str]] = {}
+        unlisted = [code for code in codes if code not in terms]
+        stems = {course_stem(code) for code in unlisted}
+        stems |= {course_stem(old) for code in unlisted if (old := _former_code(code))}
         for row in self.conn.execute(queries.get("research_course_offering_variants"), {
-                "collection_id": self.scope.collection_id,
-                "stems": [course_stem(code) for code in codes if code not in terms]}):
-            variants.setdefault(course_stem(row["code"]), []).append(row["code"])
+                "collection_id": self.scope.collection_id, "stems": sorted(stems)}):
+            code = _current_code(row["code"])
+            listed = variants.setdefault(course_stem(code), [])
+            if code not in listed:
+                listed.append(code)
         self.conn.commit()
         return terms, checked, variants
 
@@ -969,14 +1015,33 @@ class ResearchSession:
         named |= {normalize_code(code) for code in decision.recommended_course_codes}
         named |= {code for cid in decision.candidate_ids if cid in candidates
                   for code in candidates[cid].course_codes}
-        named &= self._known_course_codes()
+        if named:
+            named &= self._known_course_codes() | self._retired_course_codes()
         if not named:
             return frozenset()
         terms, checked, variants = self._offerings(sorted(named))
-        if len(checked) < MIN_OFFERING_TERMS:
-            return frozenset()
         return frozenset(code for code in named
-                         if code not in terms and course_stem(code) not in variants)
+                         if self._not_offered(code, terms, checked, variants))
+
+    def _not_offered(self, code, terms, checked, variants) -> bool:
+        """No checked term shows the course or a variant, and its master row is not current.
+
+        The Atlas import keeps a master row current only when a term showed it.
+        A code with no master row (an Oxford alternative a requisite names) is
+        judged by the listings alone.
+        """
+        self._known_course_codes()
+        return (len(checked) >= MIN_OFFERING_TERMS and code not in terms
+                and course_stem(code) not in variants and code not in self._master_codes)
+
+    def _retired_course_codes(self) -> frozenset[str]:
+        """Master rows the Atlas import retired: real courses, no longer offered."""
+        if self._retired_codes is None:
+            self._retired_codes = frozenset(row["code"] for row in self.conn.execute(
+                queries.get("list_collection_retired_course_codes"),
+                {"collection_id": self.scope.collection_id}))
+            self.conn.commit()
+        return self._retired_codes
 
     def document(self, value, _scope):
         kind, identity = self.handles.get(value.handle, (None, None))
@@ -1193,8 +1258,7 @@ class ResearchSession:
             [code for group in groups for _id, code, _title in group.courses])
 
         def current(code):
-            return (len(checked) < MIN_OFFERING_TERMS or code in terms
-                    or course_stem(code) in variants)
+            return not self._not_offered(code, terms, checked, variants)
 
         suggestions = [{"topic": " > ".join(group.path), "courses": [
             {"code": code, "title": title} for _id, code, title in group.courses
@@ -1369,10 +1433,12 @@ class ResearchSession:
         if not named:
             return {}
         known = self._known_course_codes()
+        # A retired course is real; the retired-course gate says it is not offered.
+        real = known | self._retired_course_codes()
         # A subject no course has is a word ("with 88", "top 10"), unless the
         # student wrote it as a code, in capitals.
         subjects = {code.split(" ")[0] for code in known}
-        unknown = [code for code in named if code not in known and (
+        unknown = [code for code in named if code not in real and (
             code.split(" ")[0] in subjects
             or re.search(rf"(?<![A-Za-z]){re.escape(code.split(' ')[0])}(?![a-z])",
                          self.question or ""))]
@@ -1402,6 +1468,7 @@ class ResearchSession:
                 queries.get("list_collection_course_codes"),
                 {"collection_id": self.scope.collection_id}).fetchall()
             known = {row["code"] for row in rows}
+            self._master_codes = frozenset(known)
             known.update(
                 code for code in load_campus_equivalents(
                     self.conn, collection_id=self.scope.collection_id)

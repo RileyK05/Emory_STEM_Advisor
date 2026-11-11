@@ -12,6 +12,7 @@ Acceptance criteria:
 from datetime import date
 from uuid import uuid4
 
+import pytest
 from psycopg.types.json import Jsonb
 
 from app.advising.applicability import (
@@ -140,6 +141,27 @@ def test_conflicting_editions_and_cohort_scopes_detected():
     assert notice.level == "conflict"
     assert any("Multiple conflicting editions" in c for c in notice.conflicts)
     assert any("conflicting cohort applicability" in c for c in notice.conflicts)
+
+
+def _edition(category, edition, roles=()):
+    return {"source_id": uuid4(), "title": edition, "source_category": category,
+            "edition": edition, "document_roles": list(roles), "is_current": True}
+
+
+_CATALOG = _edition("institutional_catalog", "Catalog 2026-2027")
+
+
+@pytest.mark.parametrize(("rows", "conflict"), [
+    # Each term listing names its own term; they and the catalog agree.
+    ([_CATALOG, *(_edition("institutional_publication", term, ["course_offerings"])
+                  for term in ("Fall 2025 · Oxford College", "Spring 2026", "Spring 2027"))],
+     False),
+    ([_CATALOG, _edition("institutional_catalog", "Catalog 2025-2026")], True),
+    ([_CATALOG, _edition("career_reference", "May 2025")], False),
+])
+def test_only_editions_of_one_kind_of_source_conflict(rows, conflict):
+    notice = build_applicability_notice(rows, as_of=date(2026, 10, 1))
+    assert any("conflicting editions" in c for c in notice.conflicts) is conflict
 
 
 def test_evaluate_sources_applicability_db_integration(db):

@@ -136,6 +136,8 @@ def test_a_limitation_saying_the_evidence_lacks_a_code_is_allowed():
     ("CS 171 comes before CS 253. It is no longer offered.", (), True),
     ("CS 253 accepts CS 171, which is no longer offered.", (), False),
     ("CS 171 was retired, so start from CS 253.", (), False),
+    # A requisite's old alternative stays in the list, said to be unoffered.
+    ("CS 253 accepts CS 171, which has not been offered since Fall 2023.", (), False),
     ("CS 253 accepts CS 171, which is no longer offered.", ("CS 171",), True),
 ])
 def test_a_course_the_atlas_no_longer_shows_is_never_presented_as_current(
@@ -146,7 +148,7 @@ def test_a_course_the_atlas_no_longer_shows_is_never_presented_as_current(
     check = lambda: validate_final(decision, None, _evidence(), {"e1"}, {},
                                    known_course_codes=known, retired_courses=frozenset({"CS 171"}))
     if rejected:
-        with pytest.raises(DecisionRejected, match="no longer offered"):
+        with pytest.raises(DecisionRejected, match="no longer offered|not offered"):
             check()
     else:
         check()
