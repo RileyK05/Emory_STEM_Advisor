@@ -44,7 +44,7 @@ def test_reindex_callback_failure_keeps_last_good_index_and_error(db, collection
     state = _source(db, source_id)
     assert state["status"] == "indexed"
     assert state["index_revision"] == revision + 1
-    assert "replacement callback failed" in state["error_message"]
+    assert state["error_message"] == "The file could not be read or indexed."
     assert _chunks(db, source_id) == before
 
 

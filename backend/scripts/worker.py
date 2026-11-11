@@ -134,6 +134,7 @@ def main() -> None:
 
         if args.once:
             _drain_source_invalidations(connect_fn, args.worker_id)
+            store.recover_expired(limit=100)  # a crashed run's job is claimable now
             _reconcile_conversations(connect_fn)
             run_once(store, args.worker_id, executor, lease_seconds=args.lease_seconds)
             _reconcile_conversations(connect_fn)

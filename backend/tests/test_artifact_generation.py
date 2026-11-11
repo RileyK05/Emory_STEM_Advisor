@@ -96,11 +96,16 @@ def test_snapshot_source_legends_survive_markdown_word_html_exports():
                             locator_label="page 7", text_snapshot="Alpha facts.")
     spec = DocumentSpec.model_validate({**SPEC, "evidence": {"p1": [ref.model_dump(mode="json")]}})
     md = export_artifact(spec, "md").content.decode()
-    assert "page 7" in md and str(ref.chunk_id) in md
+    assert "page 7" in md
     html = export_artifact(spec, "html").content.decode()
     assert "&lt;file&gt;" in html
     doc = Document(io.BytesIO(export_artifact(spec, "docx").content))
-    assert any("page 7" in p.text and str(ref.chunk_id) in p.text for p in doc.paragraphs)
+    assert any("page 7" in p.text for p in doc.paragraphs)
+    # A reader sees where a fact came from, never the ids that bind it.
+    word = "\n".join(p.text for p in doc.paragraphs)
+    for exported in (md, html, word):
+        assert str(ref.chunk_id) not in exported and str(ref.source_id) not in exported
+        assert "p1:" not in exported
 
 
 def setup_runtime(db, collection, provider, tmp_path):
@@ -175,6 +180,14 @@ _TABLE = {"id": "t1", "type": "table", "headers": ["Course", "Credits"]}
     ("document", ["paragraph"], [{"blocks": [{"id": "p1", "type": "paragraph",
                                                "text": "Alpha facts.", "source_slots": ["1"]}]}],
      2, "Alpha facts."),
+    # One slot sent without its list is the same slot.
+    ("document", ["paragraph"], [{"blocks": [{"id": "p1", "type": "paragraph",
+                                               "text": "Alpha facts.", "source_slots": 1}]}],
+     2, "Alpha facts."),
+    # A year written as a number is a header's text.
+    ("document", ["table"], [{"blocks": [{**_TABLE, "headers": ["Course", 2026],
+                                           "rows": [["Alpha 101", "4"]], "source_slots": [1]}]}],
+     2, "2026"),
     # Credits written as a number are text in a table, and a null cell is empty.
     ("document", ["table"], [{"blocks": [{**_TABLE, "rows": [["Alpha 101", 4]],
                                            "source_slots": [1]}]}], 2, "Alpha 101"),
@@ -266,8 +279,11 @@ def test_empty_grounded_source_scope_never_calls_native_model(db, collection, tm
     assert db.execute("SELECT count(*) AS n FROM artifacts").fetchone()["n"] == 0
 
 
-def test_research_grounding_uses_the_runs_evidence_as_the_numbered_slots(db, collection, tmp_path):
+@pytest.mark.parametrize("stored", [True, False])
+def test_research_grounding_uses_the_runs_evidence_as_the_numbered_slots(
+        db, collection, tmp_path, stored):
     source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    atlas = import_atlas_sample(db, collection, tmp_path)
     scope = build_scope(db, collection_id=collection, workspace_key="development",
                         source_ids=[source])
     trace_id = write_trace(db, collection_id=collection, query="Alpha", config_version=1,
@@ -278,21 +294,25 @@ def test_research_grounding_uses_the_runs_evidence_as_the_numbered_slots(db, col
     run, _ = store.start(scope, run_id=uuid4(), prompt_version="test", config_version="1",
                          root_trace_id=trace_id)
     page = read_document(db, scope, source)
-    store.acquire(run.run_id, [Acquired(page.chunks[0], scope.sources[source])],
-                  action_kind="read", summary="read the note")
+    if stored:
+        store.acquire(run.run_id, [Acquired(page.chunks[0], scope.sources[source])],
+                      action_kind="read", summary="read the note")
     db.commit()
-    evidence_chunk = str(page.chunks[0].chunk_id)
 
     provider = ArtifactStageProvider(outline=outline(), sections={"s1": [section()]})
     client, run_store, executor = setup_runtime(db, collection, provider, tmp_path)
+    # A run that stored no passage is still grounded by the course record it names.
     run_id = start_run(client, "document", {
-        "prompt": "Alpha", "sourceIds": [str(source)],
+        "prompt": "Alpha" if stored else "A checklist for ECON 201",
+        "sourceIds": [str(source)] if stored else [str(source), str(atlas)],
         "researchRunId": str(run.run_id),
     }, "research-grounded")
     assert run_once(run_store, "research-slots", executor).status.value == "succeeded"
     artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
     record = client.get("/api/artifacts/" + artifact_id).json()
-    assert record["spec"]["evidence"]["s1:p1"][0]["chunk_id"] == evidence_chunk
+    cited = record["spec"]["evidence"]["s1:p1"][0]
+    assert (cited["chunk_id"] == str(page.chunks[0].chunk_id)) is stored
+    assert stored or cited["source_id"] == str(atlas)
 
 
 def test_workbook_rows_become_code_built_cells_and_formulas(db, collection, tmp_path):
@@ -341,6 +361,23 @@ def test_workbook_rows_become_code_built_cells_and_formulas(db, collection, tmp_
 
     workbook = openpyxl.load_workbook(io.BytesIO(exported.content), data_only=False)
     assert workbook["Credits"]["C2"].value == "=SUM(B2:B2)"
+
+
+@pytest.mark.parametrize(("brief", "title", "refused"), [
+    ("Compare courses for the Applied Math minor", "APPLIED MATHEMATICS (BS)", True),
+    ("Compare courses for the Applied Math minor", "APPLIED MATHEMATICS (MINOR)", False),
+    ("Plan my Economics major", "Economics (Minor)", True),
+    ("Compare the Economics major and minor", "Economics (Minor)", False),
+    ("Plan my Economics courses", "Economics (BA)", False),
+])
+def test_an_outline_keeps_the_program_kind_the_student_named(brief, title, refused):
+    from app.generation.artifact_pipeline import _check_program_kind
+
+    if refused:
+        with pytest.raises(ValueError, match="asked about a"):
+            _check_program_kind(brief, title)
+    else:
+        _check_program_kind(brief, title)
 
 
 def _plan_outline(selected, completed=(), program="Economics (Minor)"):
@@ -403,8 +440,10 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
     assert any(block.get("text") == "Macro theory." for block in spec["blocks"])
 
 
+@pytest.mark.parametrize("note", ["MATH 111 is scheduled here.", "Take this term lightly."])
 @pytest.mark.parametrize("kind", ["document", "workbook"])
-def test_a_plan_note_cannot_move_a_course_between_terms(db, collection, tmp_path, kind):
+def test_a_plan_note_cannot_move_a_course_between_terms(db, collection, tmp_path, kind, note):
+    """A note naming a course, or not copied from a slot, is dropped in the same call."""
     source = _econ(db, collection, tmp_path)
     draft = _plan_outline(["MATH 111", "MATH 112"])
     if kind == "workbook":
@@ -416,7 +455,7 @@ def test_a_plan_note_cannot_move_a_course_between_terms(db, collection, tmp_path
     provider = ArtifactStageProvider(
         outline=draft,
         sections={"term1": [{"note": "Limits."}],
-                  "term2": [{"note": "MATH 111 is scheduled here."}, {"note": "Series."}]},
+                  "term2": [{"note": note}]},
     )
     client, store, executor = setup_runtime(db, collection, provider, tmp_path)
     run_id = start_run(client, kind,
@@ -429,16 +468,14 @@ def test_a_plan_note_cannot_move_a_course_between_terms(db, collection, tmp_path
     from app.artifacts.checks import extract_planned_terms
 
     assert extract_planned_terms(spec) == {"MATH 111": 1, "MATH 112": 2}
-    assert "MATH 111 is scheduled here" not in json.dumps(spec)
+    assert note.rstrip(".") not in json.dumps(spec)
     assert "degraded_sections" not in spec.get("provenance", {})
     if kind == "document":
         lines = {block["items"][0]: block["id"] for block in spec["blocks"]
                  if block["type"] == "list"}
-        assert any(block.get("text") == "Series." for block in spec["blocks"])
     else:
         lines = {cell["value"]: f"{sheet['id']}/{cell['id']}"
                  for sheet in spec["sheets"] for cell in sheet["cells"] if cell["row"] == 2}
-        assert any(cell["value"] == "Series." for cell in spec["sheets"][1]["cells"])
     assert set(lines) == {"MATH 111 — Calculus I", "MATH 112 — Calculus II"}
     for line, element_id in lines.items():
         record = line.replace(" — ", ": ")

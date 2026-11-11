@@ -110,6 +110,23 @@ def test_advising_summary_pins_published_sequence_and_excludes_pending(db):
     assert all_heads == ["Guidance (Turn 2)", "Guidance (Turn 4)"]
 
 
+@pytest.mark.parametrize("asked", ["Is PHYS 444 a real class?", "is phys444 real?",
+                                   "Can Physics 444 count?"])
+def test_an_advising_summary_never_names_a_course_the_atlas_lacks(db, asked):
+    from app.artifacts.advising_summary import ABSENT_COURSE
+    from app.artifacts.checks import extract_artifact_text
+
+    store = ConversationStore(db, "workspace-test")
+    conv_id = UUID(store.create("Physics")["conversationId"])
+    _append_turn_pair(store, conv_id, 0, question=asked,
+                      answer="PHYS 444 does not exist; CS 170 does [1].")
+    spec = build_advising_summary_spec(db, conv_id, "workspace-test",
+                                       course_identity=({"CS 170", "CS 171"}, {}))
+    text = extract_artifact_text(spec.model_dump(mode="json"))
+    assert "444" not in text and ABSENT_COURSE in text
+    assert "CS 170" in text and "CS 171" in text
+
+
 def test_advising_summary_resolves_citations_and_evidence_map(db):
     workspace = "workspace-test"
     store = ConversationStore(db, workspace)

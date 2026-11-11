@@ -136,7 +136,7 @@ def create_app(
     allow_test_client: bool = False,
     readiness_connect=None,
 ) -> FastAPI:
-    from app.api.body_limit import MaxBodyMiddleware
+    from app.api.body_limit import MaxBodyMiddleware, NulTextMiddleware
     from app.auth.factory import build_auth_service
     from app.db.connection import connect
     from app.ops.readiness import ReadinessProbe
@@ -155,6 +155,8 @@ def create_app(
     state.provider_error = runtime.provider_error
     state.connection_profiles = runtime.connection_profiles
     state.connection_runtime = runtime.connection_runtime
+    # Added first so it runs inside the size limit: nothing oversized is buffered.
+    app.add_middleware(NulTextMiddleware)
     app.add_middleware(MaxBodyMiddleware, max_bytes=state.settings.request_max_bytes)
     state.override_conn = None
     state.database_ready = False

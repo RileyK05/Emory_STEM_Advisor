@@ -168,6 +168,14 @@ WHERE j.job_id = %(job_id)s AND j.status = 'running' AND j.lease_token = %(lease
   AND j.lease_expires_at > %(now)s
 RETURNING *;
 
+-- name: expire_worker_leases
+-- A stopping worker gives up its leases at once, so recovery requeues them
+-- without waiting out the lease.
+UPDATE jobs
+SET lease_expires_at = %(now)s, updated_at = %(now)s
+WHERE status = 'running' AND lease_owner = ANY(%(owners)s)
+RETURNING job_id;
+
 -- name: recover_expired_jobs
 WITH expired AS (
     SELECT job_id

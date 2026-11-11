@@ -138,13 +138,13 @@ def _add_sources_sheet(workbook: Workbook, spec: WorkbookSpec) -> None:
         number += 1
         name = f"Sources ({number})"
     legend = workbook.create_sheet(name)
-    legend.append(["Element", "Source", "Locator", "Chunk ID"])
+    legend.append(["Source", "Locator"])
     for row in source_legend(spec):
         legend.append(list(row))
         for cell in legend[legend.max_row]:
             cell.data_type = "s"
     legend.freeze_panes = "A2"
-    for column, width in {"A": 30, "B": 45, "C": 30, "D": 40}.items():
+    for column, width in {"A": 45, "B": 30}.items():
         legend.column_dimensions[column].width = width
 
 

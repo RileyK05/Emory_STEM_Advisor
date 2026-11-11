@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BeforeValidator, Field, ValidationError, model_validator
+from pydantic import BeforeValidator, Field, ValidationError, field_validator, model_validator
 
 from app.generation.artifact_candidate import ElementBinding
 from app.tools.registry import (
@@ -176,6 +176,14 @@ SECTION_INPUTS = {"document": StageDocumentSection, "html": StageHtmlSection,
 
 class StagePlanNote(ToolInputModel):
     note: str = Field(default="", max_length=_NOTE_CHARS)
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def _shorten(cls, value):
+        """The note is optional: a long one is cut at a word, never refused."""
+        if isinstance(value, str) and len(value) > _NOTE_CHARS:
+            return value[:_NOTE_CHARS].rsplit(" ", 1)[0]
+        return value
 
 
 class EditOperation(ToolInputModel):

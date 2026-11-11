@@ -8,7 +8,7 @@ from psycopg import errors
 from app.config import load_settings
 from app.db import queries
 from app.ingest.extract import UnsupportedContentType
-from app.ingest.pipeline import ingest_file
+from app.ingest.pipeline import INDEX_FAILED, ingest_file
 from app.retrieval.config import load_retrieval_config
 from tests.fakes import FakeEmbedder, whitespace_tokens
 from tests.fixtures.pdf import make_pdf
@@ -58,13 +58,20 @@ def _broken_tokens(_text):
     raise RuntimeError("tokenizer broke")
 
 
+def _too_long(_text):
+    raise ValueError("source chunk exceeds the embedding token limit")
+
+
+# A library's error is logged, never shown; the pipeline's own reason is.
 @pytest.mark.parametrize("raw, content_type, overrides, error, message", [
-    (b"\x00\x01\x02", "application/octet-stream", {}, UnsupportedContentType, ""),
+    (b"\x00\x01\x02", "application/octet-stream", {}, UnsupportedContentType, INDEX_FAILED),
     (b"alpha beta gamma\n", "text/plain", {"count_tokens": _broken_tokens}, RuntimeError,
-     "tokenizer broke"),
+     INDEX_FAILED),
     (b"alpha beta gamma\n", "text/plain", {"embedder": _BrokenEmbedder()}, RuntimeError,
-     "embedding down"),
-], ids=["extract", "chunking", "embedding"])
+     INDEX_FAILED),
+    (b"alpha beta gamma\n", "text/plain", {"count_tokens": _too_long}, ValueError,
+     "source chunk exceeds the embedding token limit"),
+], ids=["extract", "chunking", "embedding", "own-reason"])
 def test_failed_ingest_marks_the_source_failed(db, collection, tmp_path, raw, content_type,
                                                overrides, error, message):
     path = tmp_path / "doc"
@@ -74,7 +81,7 @@ def test_failed_ingest_marks_the_source_failed(db, collection, tmp_path, raw, co
     row = db.execute("SELECT status, error_message FROM sources WHERE collection_id = %(c)s",
                      {"c": collection}).fetchone()
     assert row["status"] == "failed"
-    assert row["error_message"] and message in row["error_message"]
+    assert row["error_message"] == message
 
 
 def test_raw_upload_goes_to_data_dir(db, collection, tmp_path):

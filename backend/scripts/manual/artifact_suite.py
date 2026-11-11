@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from app.advising.catalog import load_campus_equivalents
-from app.artifacts.checks import extract_artifact_text, extract_planned_terms
+from app.artifacts.checks import TERM_PATTERNS, extract_artifact_text, extract_planned_terms
 from app.atlas.requisites import canonical_codes_in
 from app.config import load_settings
 from app.db import queries
@@ -545,10 +545,36 @@ def _quality(conn, case, spec, collection_id, program_codes) -> dict:
         quality["terms"] = len(loads)
         quality["max_term_load"] = max(loads.values()) if loads else 0
         quality["completed_scheduled"] = sorted(
-            set(expected.get("completed_courses", [])) & set(terms))
+            set(expected.get("completed_courses", [])) & _scheduled_codes(spec, terms))
         mentions = Counter(code for code in canonical_codes_in(text))
         quality["repeated_codes"] = sum(1 for count in mentions.values() if count > 2)
     return quality
+
+
+_DONE_HEADING = re.compile(r"complet|taken|done|already", re.IGNORECASE)
+
+
+def _scheduled_codes(spec, terms) -> set[str]:
+    """Codes a term's own course list or table holds, not codes the plan only mentions.
+
+    "Completed: ECON 101" in a paragraph, or a "Completed courses" list, is not a
+    term slot. A workbook keeps the planned-terms reading.
+    """
+    if spec.get("kind") != "document":
+        return set(terms)
+    codes, in_term = set(), False
+    for block in spec.get("blocks", []):
+        if block.get("type") == "heading":
+            text = block.get("text", "")
+            in_term = (any(p.search(text) for p in TERM_PATTERNS)
+                       and not _DONE_HEADING.search(text))
+            continue
+        if not in_term:
+            continue
+        cells = [*block.get("items", []),
+                 *(cell for row in block.get("rows", []) for cell in row)]
+        codes.update(code for cell in cells for code in canonical_codes_in(cell))
+    return codes
 
 
 def _classify(case, result) -> str:

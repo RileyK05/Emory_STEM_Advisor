@@ -456,8 +456,9 @@ def test_worker_stop_claims_no_new_jobs_drains_in_flight_work_and_updates_readin
                 clock.advance(31)
                 runner_thread.join(timeout=5.0)
                 assert not runner_thread.is_alive()
-                assert store.recover_expired() == 1
+                # The stopping worker released the lease itself: nothing is left to recover.
                 assert store.get(first.job_id).status is JobStatus.QUEUED
+                assert store.recover_expired() == 0
                 allow_finish.set()
                 runner.join_threads(timeout=5.0)
 

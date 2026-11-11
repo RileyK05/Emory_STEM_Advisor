@@ -426,6 +426,8 @@ _RESTRICTION_WORDS_RE = re.compile(
     r"|eligib\w+|majors?|minors?|candidates?|seniors?|juniors?)\b", re.IGNORECASE)
 # "Math 112_OX" puts Oxford's suffix after the number; the code is MATH_OX 112.
 _OX_AFTER_NUMBER_RE = re.compile(r"\b([A-Za-z]{2,8})\s+(\d{3}[A-Z]{0,4})_OX\b")
+# "ECON _OX 100": a stray space before the campus mark, as twelve Atlas requisites print it.
+_SPACED_OX_RE = re.compile(r"\b([A-Za-z]{2,8})\s+_OX\b", re.IGNORECASE)
 # "BIOL/ENVS 247" names one cross-listed number under two subjects.
 _SHARED_NUMBER_RE = re.compile(
     r"\b([A-Z]{2,7}(?:_OX)?)/([A-Z]{2,7}(?:_OX)?)\s?(\d{3}[A-Z]{0,4})\b")
@@ -628,7 +630,8 @@ def canonical_codes_in(text: str) -> tuple[str, ...]:
     ("GER 300 level courses" names GER 300). The requirement parser treats
     both as structure, because there it must decide what is required.
     """
-    prepared = _OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", text)
+    prepared = _SPACED_OX_RE.sub(r"\1_OX", text)
+    prepared = _OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", prepared)
     prepared = _SHARED_NUMBER_RE.sub(r"\1 \3/\2 \3", prepared)
     prepared = _RUN_TOGETHER_RE.sub(r"\1 \2 ", prepared)
     codes: list[str] = []

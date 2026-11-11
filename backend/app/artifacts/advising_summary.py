@@ -15,12 +15,14 @@ Unresolved conditions remain explicit blockers.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException
 
+from app.artifacts.checks import invalid_course_codes
 from app.artifacts.models import (
     ArtifactReference,
     DocumentBlock,
@@ -30,8 +32,55 @@ from app.artifacts.models import (
     ParagraphBlock,
     TableBlock,
 )
+from app.atlas.records import normalize_code
+from app.atlas.requisites import canonical_codes_in
 from app.db import queries
 from app.util.digest import json_digest
+
+ABSENT_COURSE = "a course not in the current Course Atlas"
+# A course code as a turn may write it: "PHYS 444", "phys444", "ECON_OX 201W".
+_WRITTEN_CODE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]{2,8}(?:_OX)?\s?\d{3}[A-Za-z]?(?![A-Za-z0-9])",
+                           re.IGNORECASE)
+
+
+def _without_absent_codes(blocks, known_courses, campus_equivalents):
+    """Write each code the Course Atlas lacks as a description, in every block's text."""
+    absent = invalid_course_codes(
+        {code for block in blocks for text in _block_texts(block)
+         for code in canonical_codes_in(text)}, known_courses, campus_equivalents)
+    if not absent:
+        return blocks
+
+    def written(match) -> str:
+        # "phys444" only normalizes; "Physics 444" only reads as a course in prose.
+        codes = {normalize_code(match.group(0)), *canonical_codes_in(match.group(0))}
+        return ABSENT_COURSE if codes & absent else match.group(0)
+
+    def clean(text: str) -> str:
+        return _WRITTEN_CODE.sub(written, text)
+
+    cleaned = []
+    for block in blocks:
+        if isinstance(block, (HeadingBlock, ParagraphBlock)):
+            block = block.model_copy(update={"text": clean(block.text)})
+        elif isinstance(block, ListBlock):
+            block = block.model_copy(update={"items": [clean(item) for item in block.items]})
+        elif isinstance(block, TableBlock):
+            block = block.model_copy(update={
+                "headers": [clean(cell) for cell in block.headers],
+                "rows": [[clean(cell) for cell in row] for row in block.rows]})
+        cleaned.append(block)
+    return cleaned
+
+
+def _block_texts(block) -> list[str]:
+    if isinstance(block, (HeadingBlock, ParagraphBlock)):
+        return [block.text]
+    if isinstance(block, ListBlock):
+        return list(block.items)
+    if isinstance(block, TableBlock):
+        return [*block.headers, *(cell for row in block.rows for cell in row)]
+    return []
 
 
 def build_advising_summary_spec(
@@ -42,8 +91,14 @@ def build_advising_summary_spec(
     through_sequence: int | None = None,
     title: str | None = None,
     referenced_artifacts: list[dict[str, Any]] | None = None,
+    course_identity: tuple[set[str], dict[str, frozenset[str]]] | None = None,
 ) -> DocumentSpec:
-    """Build a deterministic DocumentSpec pinning published conversation turns."""
+    """Build a deterministic DocumentSpec pinning published conversation turns.
+
+    ``course_identity`` is the collection's (current course codes, campus
+    equivalents). With it, a code the Course Atlas does not have, quoted from a
+    saved turn, is written as a description so the export never names it.
+    """
     conv = conn.execute(queries.get("get_conversation"), {
         "conversation_id": conversation_id,
         "workspace_key": workspace_key,
@@ -252,6 +307,9 @@ def build_advising_summary_spec(
                       for r in rows], "artifacts": pinned_artifacts,
         }),
     }
+
+    if course_identity is not None:
+        blocks = _without_absent_codes(blocks, *course_identity)
 
     return DocumentSpec(
         title=doc_title,

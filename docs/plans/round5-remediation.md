@@ -80,6 +80,55 @@ Phases 4–7 are done, uncommitted (prompt `research-49`):
   exact passage there. Keep prompt edits byte-neutral, or recalibrate that row
   on purpose.
 
+Phases 8–9 are done, uncommitted. No research prompt change, so it stays
+`research-49`.
+
+- **8.1:** a research run's empty-evidence refusal now comes after the
+  database slots. Retrieval runs keep their early check. Still unknown: why the
+  plan_fresh-1 run stored no evidence. QA's diag would show it.
+- **8.2:** a plan note that names a course, or that isn't copied from a slot,
+  is dropped in the same call instead of refused.
+- **8.3:** a table header written as a number becomes text, and a lone
+  `source_slots` number is wrapped in a list. An over-long plan note is cut at
+  a word boundary. Cells were already coerced. Without QA's
+  `artifact/live-mm/run0/*.diag.json` the other refusals weren't matched
+  one by one.
+- **8.4 and 8.6:** code decides both. A question naming a code the master says
+  doesn't exist gets no artifact. With an artifact attached, "export",
+  "download", "convert", or "as a Word/PDF/Excel file" gets no new run. The
+  prompt names neither, because the compaction test leaves no prompt bytes
+  spare.
+- **8.5:** the prompt already said "say it is being made". A reply that asks
+  for an artifact and also says "here's your …", "is ready" or "I've made …" is
+  now refused. The frontend run card already says "Couldn't make this. Try
+  again." and offers Retry.
+- **8.7:** the summary export writes a code the current Atlas lacks as "a
+  course not in the current Course Atlas". This covers turn text, findings and
+  table cells, in any spelling (`PHYS 444`, `phys444`, `Physics 444`).
+- **8.8:** a request naming only "minor", or only "major", must get that kind
+  of program from the outline and the plan. The section message now says never
+  to write about print layout.
+- **Phase 9:**
+  - EMO-059: `--cases` now defaults to `DATA_DIR/eval/retrieval.jsonl`.
+  - EMO-071: one ASGI middleware returns 422 for a NUL in a JSON body string
+    or key, or in a query string. Uploads aren't read by it.
+  - EMO-070: the stored error is the pipeline's own `ValueError` text, or
+    "The file could not be read or indexed." The full exception is logged.
+  - EMO-074: a stopping worker whose drain runs out releases its leases
+    through lease recovery. `--once` recovers expired leases first.
+  - `ECON _OX 100`: the passage reader joins the stray space. The parser
+    already did.
+  - Exports: the Sources lists in Markdown, HTML, Word and the workbook show
+    each source name and locator once, with no element or chunk ids.
+  - Suite: `completed_scheduled` counts only codes in a term heading's own
+    list or table.
+  - EMO-060: the README counts and `.env.example` research defaults match
+    the development database and `config.py`.
+
+New decision for Riley: **deleting a failed upload (EMO-070).** No route
+deletes any source. Adding one means choosing what happens to evidence and
+citations that point at it, because history is kept for evidence.
+
 Drop-deadline conflict for Riley (Phase 6), current sources in the snapshot:
 - `emory-policy-changing-courses.md`: "A student may change courses within the
   first eight days of the semester (the Add/Drop/Swap period). After the

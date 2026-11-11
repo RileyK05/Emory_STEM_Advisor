@@ -1,6 +1,7 @@
 """Ingest orchestration. Never holds a transaction across extract or embed."""
 
 import hashlib
+import logging
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -22,6 +23,8 @@ from app.storage.catalog import record_storage_object
 from app.storage.factory import build_storage
 from app.storage.keys import raw_source_key
 from app.util.workspace import is_valid_workspace_key
+
+logger = logging.getLogger(__name__)
 
 # Called inside the transaction that inserts locators and chunks. Receives the
 # connection, the source id, and the inserted chunk ids in chunk_index order.
@@ -138,11 +141,28 @@ def _store_raw(collection_id: UUID, file_hash: str, raw: bytes, storage: Storage
     return key, obj
 
 
+INDEX_FAILED = "The file could not be read or indexed."
+
+
+def failure_message(exc: Exception) -> str:
+    """What a source's owner sees: this module's own reasons, never library internals.
+
+    The pipeline raises a plain ValueError with a sentence written for the
+    uploader. Anything else (a parser, a codec, the embedder) is logged in full
+    and shown as one fixed sentence.
+    """
+    if type(exc) is ValueError and str(exc):
+        return str(exc)[:500]
+    return INDEX_FAILED
+
+
 def _mark_failed(conn: Connection, source_id: UUID, index_revision: int, exc: Exception) -> None:
+    if failure_message(exc) == INDEX_FAILED:
+        logger.warning("source %s failed to index: %s: %s", source_id, type(exc).__name__, exc)
     conn.execute(
         queries.get("set_source_failed"),
         {"source_id": source_id, "index_revision": index_revision,
-         "error_message": f"{type(exc).__name__}: {exc}"},
+         "error_message": failure_message(exc)},
     )
     conn.commit()
 

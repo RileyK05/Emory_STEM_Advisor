@@ -1,7 +1,7 @@
 """Run the frozen retrieval eval set and print a summary.
 
 Usage (from backend/):
-    python -m scripts.eval_retrieval [--cases data/eval/retrieval.jsonl]
+    python -m scripts.eval_retrieval [--cases FILE]   # default DATA_DIR/eval/retrieval.jsonl
 """
 
 import argparse
@@ -16,18 +16,17 @@ from app.retrieval.config import load_retrieval_config
 from app.retrieval.evals import load_cases, run_eval
 from scripts._db import open_connection
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--cases", type=Path, default=REPO_ROOT / "data" / "eval" / "retrieval.jsonl"
-    )
+    parser.add_argument("--cases", type=Path, default=None,
+                        help="defaults to DATA_DIR/eval/retrieval.jsonl")
     parser.add_argument("--database-url", default=None)
     args = parser.parse_args()
 
     settings = load_settings()
+    if args.cases is None:
+        args.cases = Path(settings.data_dir) / "eval" / "retrieval.jsonl"
     config = load_retrieval_config(settings=settings)
     embedder = get_embedder(settings)
     cases = load_cases(args.cases)

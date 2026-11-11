@@ -46,8 +46,8 @@ def render_markdown(spec: DocumentSpec) -> str:
         from app.artifacts.evidence import source_legend
 
         chunks.append("## Sources")
-        for element, source, locator, chunk_id in source_legend(spec):
-            text = f"{element}: {source} · {locator} ({chunk_id})"
+        for source, locator in source_legend(spec):
+            text = f"{source} · {locator}"
             text = re.sub(r"([\\`*_{}\[\]<>#])", r"\\\1", text)
             chunks.append("- " + text.replace("\n", " ").replace("\r", " "))
     return "\n\n".join(chunks) + "\n"
@@ -98,8 +98,8 @@ def render_document_html(spec: DocumentSpec) -> str:
         from app.artifacts.evidence import source_legend
 
         body.append("<section><h2>Sources</h2><ul>" + "".join(
-            "<li>" + html.escape(f"{element}: {source} · {locator} ({chunk_id})") + "</li>"
-            for element, source, locator, chunk_id in source_legend(spec)
+            "<li>" + html.escape(f"{source} · {locator}") + "</li>"
+            for source, locator in source_legend(spec)
         ) + "</ul></section>")
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>'

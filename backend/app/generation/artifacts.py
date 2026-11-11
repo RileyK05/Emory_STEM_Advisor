@@ -25,7 +25,7 @@ from app.auth.capabilities import execution_settings
 from app.connections.models import required_data_scopes
 from app.connections.selection import resolve
 from app.db import queries
-from app.db.collections import resolve_collection
+from app.db.collections import UnknownCollection, resolve_collection
 from app.generation.artifact_pipeline import (
     ArtifactPipeline,
     ArtifactSlot,
@@ -139,14 +139,27 @@ class ArtifactHandler:
                 raise SafeJobError("invalid_summary", "A summary requires a document and saved turn boundary.")
             conn = self.connect()
             try:
+                from app.advising.catalog import load_campus_equivalents
                 from app.artifacts.advising_summary import build_advising_summary_spec
 
+                # The saved turns can quote a code the Course Atlas lacks (a student
+                # asking about a course that does not exist); the export never names it.
+                try:
+                    collection_id, _ = resolve_collection(conn, self.settings, inputs.collectionId)
+                except UnknownCollection:
+                    identity = None  # no course data to check a code against
+                else:
+                    identity = ({row["code"] for row in conn.execute(
+                        queries.get("list_collection_course_codes"),
+                        {"collection_id": collection_id})},
+                        load_campus_equivalents(conn, collection_id=collection_id))
                 spec = build_advising_summary_spec(
                     conn,
                     inputs.conversationId,
                     job.scope_key,
                     through_sequence=inputs.throughSequence,
                     title=inputs.prompt if inputs.prompt else None,
+                    course_identity=identity,
                 )
                 conn.commit()
                 context.check_cancelled()
@@ -237,9 +250,6 @@ class ArtifactHandler:
         if inputs.researchRunId is not None:
             grounding = load_research_grounding(
                 conn, job.scope_key, collection_id, inputs.researchRunId, inputs.sourceIds)
-            if not grounding.slots:
-                raise ArtifactTargetError("no_grounding",
-                                          "The research run has no evidence to ground this artifact.")
             slots = list(grounding.slots)
             trace_id = grounding.trace_id
         else:
@@ -255,8 +265,9 @@ class ArtifactHandler:
                 for chunk in chunks
             ]
             trace_id = outcome.trace.trace_id
-        if inputs.mode == "grounded" and not slots:
-            raise ArtifactTargetError("no_grounding", "No relevant selected sources support this artifact.")
+            if inputs.mode == "grounded" and not slots:
+                raise ArtifactTargetError("no_grounding",
+                                          "No relevant selected sources support this artifact.")
         program_titles = list_program_titles(conn, collection_id)
         try:
             slots, _program_title = add_database_slots(
@@ -266,6 +277,11 @@ class ArtifactHandler:
             )
         except Exception:  # noqa: BLE001 - extra facts are additive, never required grounding
             conn.rollback()
+        # Checked after the database slots: a program's lines or a course's
+        # record ground an artifact even when research stored no passage.
+        if not slots and inputs.researchRunId is not None:
+            raise ArtifactTargetError("no_grounding",
+                                      "The research run has no evidence to ground this artifact.")
         return Grounding(slots=slots, trace_id=trace_id, collection_id=collection_id)
 
     def _select_connection(self, conn, job, inputs):

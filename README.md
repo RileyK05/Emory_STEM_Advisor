@@ -201,8 +201,9 @@ Notes:
   so on a clean rebuild this is a no-op.
 - Rebuild the atlas and simgraph (`scripts.import_atlas`, `scripts.build_simgraph`)
   only if the atlas changed.
-- Last measured on the development database: 218 current of 372 total sources,
-  152 programs. A clean rebuild should reach the same counts.
+- Last measured on the development database (2026-11-11): 374 current of 593
+  total sources, 155 programs, and 6,014 courses (4,969 current). A clean rebuild
+  should reach the same counts.
 
 ## Continuous integration
 

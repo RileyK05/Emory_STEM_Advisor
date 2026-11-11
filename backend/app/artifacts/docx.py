@@ -100,8 +100,8 @@ def export_docx(spec: DocumentSpec) -> bytes:
         from app.artifacts.evidence import source_legend
 
         document.add_paragraph("Sources", style="Heading 1")
-        for element, source, locator, chunk_id in source_legend(spec):
-            document.add_paragraph(f"{element}: {source} · {locator} ({chunk_id})")
+        for source, locator in source_legend(spec):
+            document.add_paragraph(f"{source} · {locator}")
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()

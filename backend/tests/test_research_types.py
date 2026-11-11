@@ -884,12 +884,12 @@ def test_a_provider_dropout_keeps_what_the_run_already_proposed(monkeypatch, fai
     salvaged = _decision()
     scope = SimpleNamespace(programs={})
     session = SimpleNamespace(salvage=lambda: salvaged, question="What does PSYC 110 require?",
-                              scope=scope, artifact_references=())
+                              scope=scope, artifact_references=(), unknown_question_codes=dict)
     decision, *_ = controller.run(session, None, None)
     assert decision is session.decision is salvaged
     # A salvaged reply still hands on the student's request for something to keep.
     session = SimpleNamespace(salvage=lambda: salvaged, question="Plan my Psychology BS.",
-                              scope=scope, artifact_references=())
+                              scope=scope, artifact_references=(), unknown_question_codes=dict)
     decision, *_ = controller.run(session, None, None)
     assert decision.artifact.kind == "document"
 
@@ -1070,5 +1070,42 @@ def test_research_hands_the_students_request_to_the_artifact_pipeline(
     result = _with_requested_artifact(_decision(**decision), question, _PROGRAMS, referenced=False)
     assert (result.artifact and (result.artifact.kind, result.artifact.purpose))         == (expected or None)
     revised = _with_requested_artifact(_decision(**decision), question, _PROGRAMS, referenced=True)
+    unknown = _with_requested_artifact(_decision(**decision), question, _PROGRAMS,
+                                       referenced=False, unknown_codes={"MATH 967": []})
+    assert unknown.artifact is None  # never for a course that does not exist
     assert (revised.artifact is None) == (not decision.get("artifact") and expected is not None
                                           or expected is None)
+
+
+@pytest.mark.parametrize(("question", "kept"), [
+    # Another format for the attached artifact is the panel's export, not a new run.
+    ("Export it to Word.", False),
+    ("Can I get this as a PDF?", False),
+    ("Download the checklist.", False),
+    ("Add the summer term to it.", True),
+])
+def test_an_attached_artifact_in_another_format_makes_no_new_run(question, kept):
+    from app.generation.research_controller import _with_requested_artifact
+
+    request = ArtifactRequest(kind="document", title="Plan", brief="Add summer.")
+    result = _with_requested_artifact(_decision(artifact=request), question, _PROGRAMS,
+                                      referenced=True)
+    assert (result.artifact is not None) is kept
+
+
+@pytest.mark.parametrize(("text", "rejected"), [
+    ("Here's your checklist for the Psychology BS.", True),
+    ("Your checklist is ready in the panel.", True),
+    ("I've created a plan covering the core courses.", True),
+    ("A checklist of the Psychology BS core is being made.", False),
+])
+def test_a_reply_never_says_its_artifact_is_ready(text, rejected):
+    from app.generation.research_final import answer_content_problems
+
+    decision = _decision(outcome="information", blocks=(DecisionBlock(kind="limitation", text=text),),
+                         artifact=ArtifactRequest(kind="document", title="Plan", brief="Plan."))
+    problems = answer_content_problems(decision, instructions=None, evidence=[])
+    assert any("still being made" in p for p in problems) is rejected
+    unasked = decision.model_copy(update={"artifact": None})
+    assert not any("still being made" in p
+                   for p in answer_content_problems(unasked, instructions=None, evidence=[]))

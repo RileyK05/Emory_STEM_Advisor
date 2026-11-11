@@ -279,6 +279,11 @@ _SUMMARY_ASK = re.compile(
     r"|\b(?:turn|put|make)\b[^.?!]{0,20}\b(?:chat|conversation)\b[^.?!]{0,20}"
     r"\b(?:into|as)\b[^.?!]{0,15}\b(?:document|doc)\b",
     re.IGNORECASE)
+# A new format for an attached artifact: the panel exports it, so no new run.
+_EXPORT_ASK = re.compile(
+    r"\b(?:export|download|convert)\b"
+    r"|\b(?:as|to|into)\s+(?:an?\s+)?(?:word|docx|pdf|excel|xlsx|markdown)\b",
+    re.IGNORECASE)
 _SHEET_ASK = re.compile(r"\b(?:spreadsheet|workbook|excel|sheet|csv)\b", re.IGNORECASE)
 _PAGE_ASK = re.compile(r"\b(?:web ?page|webpage|html|website|interactive)\b", re.IGNORECASE)
 _PROGRAM_NAME = re.compile(
@@ -336,14 +341,17 @@ def _artifact_for(question: str):
     return ArtifactRequest(kind=kind, title=text[:200], brief=text[:4_000])
 
 
-def _with_requested_artifact(decision, question, titles, *, referenced: bool):
+def _with_requested_artifact(decision, question, titles, *, referenced: bool,
+                             unknown_codes=()):
     """Hand the student's request to the artifact pipeline when research left it out.
 
     A summary of the conversation is built from the saved turns, so a document made
-    for one takes that purpose. No artifact is made for a program that does not exist,
-    for a declined or clarifying answer, or when the turn revised an attached one.
+    for one takes that purpose. No artifact is made for a program or course that
+    does not exist, for a declined or clarifying answer, when the turn revised an
+    attached one, or when it asks for an attached one in another format.
     """
-    if _missing_program(question, titles) is not None:
+    if (_missing_program(question, titles) is not None or unknown_codes
+            or referenced and _EXPORT_ASK.search(question or "")):
         return decision.model_copy(update={"artifact": None}) if decision.artifact else decision
     artifact = decision.artifact
     if (artifact is not None and _SUMMARY_ASK.search(question or "")
@@ -463,7 +471,8 @@ class ResearchController:
             decision = _with_requested_artifact(
                 decision, session.question,
                 [pin.title for pin in session.scope.programs.values()],
-                referenced=bool(session.artifact_references))
+                referenced=bool(session.artifact_references),
+                unknown_codes=session.unknown_question_codes())
             session.decision = decision
             system, user, model = session.last_call
             return decision, _aggregate_usage(usages), system, user, model
@@ -761,7 +770,8 @@ class ResearchController:
                             "completeness": "partial", "unresolved_questions": tuple(unresolved[:8])})
                     session.decision = _with_requested_artifact(
                         session.decision, question, program_titles,
-                        referenced=bool(session.artifact_references))
+                        referenced=bool(session.artifact_references),
+                        unknown_codes=session.unknown_question_codes())
                     return session.decision, _aggregate_usage(usages), prepared.messages[0].content, user, result.model
             if not repairing:
                 hint = ""

@@ -49,6 +49,8 @@ _SUBJECTS = {"CS", "CS_OX", "MATH", "MATH_OX", "PHYS", "PHYS_OX", "BIOL",
     ("This course requires PHYS 461or equivalent transfer credit.",
      ("PHYS 461",)),
     ("Math 112_OX as corequisite", ("MATH_OX 112",)),
+    # Twelve Atlas requisites put a space before the campus mark.
+    ("ECON 101 or ECON _OX 101 as prerequisite", ("ECON 101", "ECON_OX 101")),
     ("[(BIOL 142 and BIOl 142L) or BIOL_OX142] and (BIOL 360 or NBB 301).",
      ("BIOL 142", "BIOL 142L", "BIOL_OX 142", "BIOL 360", "NBB 301")),
     ("Prerequisite: Mathematics 111.", ("MATH 111",)),

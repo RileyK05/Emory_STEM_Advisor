@@ -472,3 +472,12 @@ class WorkerRunner:
         finally:
             self.request_stop()
             self._drain_threads(threads)
+            if any(thread.is_alive() for thread in threads):
+                # The drain ran out: requeue now rather than when the leases expire.
+                owners = [self.worker_id] if self.concurrency == 1 else [
+                    f"{self.worker_id}-{index}" for index in range(self.concurrency)]
+                try:
+                    self.store.release_leases(owners)
+                except Exception as exc:  # noqa: BLE001 - recovery still requeues them later
+                    if self._on_error is not None:
+                        self._on_error(self.worker_id, exc)

@@ -211,7 +211,18 @@ def answer_content_problems(decision: FinalDecision, *, instructions: str | None
             break
     if _CREDENTIAL_ASK.search(written):
         problems.append("the reply asks the student for a password or credentials; remove it")
+    # The answer is published before the artifact run starts, and that run can fail.
+    if decision.artifact is not None and _ARTIFACT_READY.search(written):
+        problems.append("the reply says the artifact is ready; it is still being made, so say "
+                        "it is being made")
     return problems
+
+
+_ARTIFACT_READY = re.compile(
+    r"\bhere(?:['’]s| is| are) your\b"
+    r"|\b(?:is|are) (?:now )?(?:ready|attached)\b"
+    r"|\bI(?:['’]ve| have) (?:made|created|built|attached|prepared|put together)\b",
+    re.IGNORECASE)
 
 
 _INSTRUCTION_SHINGLES: dict[int, set[tuple[str, ...]]] = {}

@@ -53,6 +53,10 @@ def test_read_endpoints_and_basic_error_statuses(db, collection, tmp_path):
     assert invalid.status_code == 422
     assert "sk-test-never-echo" not in invalid.text
     assert "input" not in invalid.json()["detail"][0]
+    # Postgres text cannot hold NUL: request text with one is refused, never a 500.
+    assert client.post("/api/query", json={"query": "a\x00b"}).status_code == 422
+    assert client.post("/api/query", json={"query": "q", "collectionId": "x\x00"}).status_code == 422
+    assert client.get("/api/sources", params={"collection": "a\x00"}).status_code == 422
 
 
 @pytest.mark.parametrize(("mode", "role"), [

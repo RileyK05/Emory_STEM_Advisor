@@ -293,6 +293,21 @@ class JobStore:
             ).fetchall()
             return len(rows)
 
+    def release_leases(self, owners: list[str]) -> int:
+        """Requeue the running jobs these workers hold, through lease recovery.
+
+        A thread still executing one is fenced like any expired lease: its
+        publication finds no lease and is withheld.
+        """
+        now = _timestamp(self._clock())
+        with self._transaction() as conn:
+            expired = conn.execute(queries.get("expire_worker_leases"),
+                                   {"owners": list(owners), "now": now}).fetchall()
+            if not expired:
+                return 0
+            return len(conn.execute(queries.get("recover_expired_jobs"),
+                                    {"now": now, "limit": len(expired)}).fetchall())
+
     def events(self, job_id: UUID, *, after_event_id: int = 0, limit: int = 100) -> list[JobEvent]:
         if after_event_id < 0:
             raise ValueError("after_event_id must be non-negative")

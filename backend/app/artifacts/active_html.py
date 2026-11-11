@@ -23,8 +23,8 @@ def render_active_html(spec):
     legend = ""
     if spec.evidence:
         legend = '<section aria-label="Sources"><h2>Sources</h2><ul>' + "".join(
-            "<li>" + html.escape(f"{element}: {source} · {locator} ({chunk_id})") + "</li>"
-            for element, source, locator, chunk_id in source_legend(spec)
+            "<li>" + html.escape(f"{source} · {locator}") + "</li>"
+            for source, locator in source_legend(spec)
         ) + "</ul></section>"
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
