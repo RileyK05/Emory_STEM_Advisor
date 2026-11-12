@@ -65,7 +65,7 @@ export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
         onChange={(event) => chat.setDraft(event.target.value)}
         onKeyDown={onKeyDown}
         disabled={!chat.advisingModelConfigured}
-        placeholder="Ask about courses, prerequisites, or program requirements…"
+        placeholder="Ask about courses, or ask for a plan, checklist or spreadsheet…"
       />
       <div className="composer-bar">
         <button type="submit" className="send-button" aria-label="Send" disabled={!canSend}>

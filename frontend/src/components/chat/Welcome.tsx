@@ -1,8 +1,8 @@
 const SAVED_SUGGESTIONS = [
   'What do I need before taking Organic Chemistry?',
-  'What are the requirements for the Biology major?',
-  'Which math courses lead to linear algebra?',
-  'Compare the Computer Science BA and BS.',
+  'Make a checklist for the Biology BS.',
+  'Make a four-semester plan for the Computer Science BS.',
+  'Make a spreadsheet tracking my Biology BS credits, with totals.',
 ];
 
 // The demo corpus is a small sample (an onboarding guide, a linear algebra primer, a lab manual).
@@ -24,8 +24,8 @@ export function Welcome({ demo, onSuggest }: Props) {
       <p className="welcome-kicker">Emory STEM Advisor</p>
       <h2 id="welcome-title">What are you planning?</h2>
       <p className="welcome-lede">
-        Ask about courses, prerequisites, and program requirements. Answers cite their sources, and you can ask for a
-        plan, checklist or table to keep.
+        Ask about courses, prerequisites, and program requirements. Answers cite their sources. To keep something, ask
+        for a plan, checklist, spreadsheet, comparison or printable page by name.
       </p>
       <div className="suggestions">
         {(demo ? DEMO_SUGGESTIONS : SAVED_SUGGESTIONS).map((text) => (

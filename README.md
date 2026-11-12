@@ -59,6 +59,21 @@ turns in the same chat; source selection and fresh citation checks still apply.
 Long chats use paged history. API and worker processes must both load the same configuration;
 restart them after changing it. See the [working-space contract](docs/architecture.md).
 
+### Make an artifact
+
+Ask for the file by name and name the program. Good examples:
+
+- "Make a checklist for the Computer Science BS."
+- "Make a four-semester plan for the Biology BS."
+- "Make a spreadsheet tracking my Biology BS credits, with totals."
+- "Make a one-page web page roadmap of the Computer Science BS."
+- "Compare the Computer Science BA and BS in a document I can keep."
+
+The answer appears first; the artifact card starts queued and fills in when the
+worker finishes. If the card never appears, the model answered without asking
+for a file: name the artifact and the program. If the card stays queued, the
+worker is not running; the API alone only queues work.
+
 ## Run backend checks against real Postgres
 
 Tests use a disposable Postgres service, separate from the development database:
