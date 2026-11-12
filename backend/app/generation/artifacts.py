@@ -300,7 +300,7 @@ class ArtifactHandler:
             conn.rollback()
         # Checked after the database slots: a program's lines or a course's
         # record ground an artifact even when research stored no passage.
-        if not slots and inputs.researchRunId is not None:
+        if not slots and inputs.mode == "grounded" and inputs.researchRunId is not None:
             raise ArtifactTargetError("no_grounding",
                                       "The research run has no evidence to ground this artifact.")
         return Grounding(slots=slots, trace_id=trace_id, collection_id=collection_id)

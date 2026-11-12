@@ -32,6 +32,7 @@ from app.advising.sequence import CourseRequirement, SequencePlan, pack_terms, p
 from app.artifacts.checks import (
     ArtifactCheckFinding,
     check_generated_artifact,
+    content_elements,
     extract_planned_terms,
     invalid_course_codes,
 )
@@ -383,9 +384,10 @@ class ArtifactPipeline:
             "limits": {"max_sections": self.settings.artifact_max_sections,
                        "max_workbook_rows": _MAX_WORKBOOK_ROWS},
             "course_codes": {"available": available, "not_in_collection": missing},
-            "slots": [{"slot": index, "source": slot.source_name,
-                       "locator": slot.locator_label, "excerpt": slot.text[:160]}
-                      for index, slot in self._outline_slots()],
+            "slots": [] if self.inputs.mode == "authoring" else [
+                {"slot": index, "source": slot.source_name,
+                 "locator": slot.locator_label, "excerpt": slot.text[:160]}
+                for index, slot in self._outline_slots()],
             "programs": candidates,
         }
         messages = _stage_messages(
@@ -1122,7 +1124,8 @@ class ArtifactPipeline:
 
     def _section_payload(self, section, repair: str | None) -> dict:
         slots = []
-        for index in getattr(section, "source_slots", []) or []:
+        for index in ([] if self.inputs.mode == "authoring"
+                      else getattr(section, "source_slots", []) or []):
             if 1 <= index <= len(self.grounding.slots):
                 slot = self.grounding.slots[index - 1]
                 slots.append({"slot": index, "source": slot.source_name,
@@ -1389,7 +1392,8 @@ class ArtifactPipeline:
             plan_terms=plan_terms,
             plan_term_sections=term_sections,
             section_texts=self.section_texts,
-            skip_elements=self._skip_elements(),
+            skip_elements=(set(content_elements(spec)) if self.inputs.mode == "authoring"
+                           else self._skip_elements()),
         )
 
     def _skip_elements(self) -> set[str]:
