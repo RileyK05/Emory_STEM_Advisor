@@ -81,9 +81,10 @@ is asked to revise:
 - K6 findings name their section by the course code, not by the subject alone,
   so the repair loop can target the term that owns the violation.
 - Research's artifact hint now matches bare noun requests ("Spreadsheet
-  comparing …"), "Plan the rest of my … BA", and revisions of a plan; it no
-  longer treats "How should I plan my semester?", "Tell me about the CS major"
-  or "the major requirements" as a program name.
+  comparing …") and "Plan the rest of my … BA"; it no longer treats "How should
+  I plan my semester?", "Tell me about the CS major" or "the major
+  requirements" as a program name. A summary is still a new artifact when an
+  artifact is attached.
 - A fake program is found in lower case and with `B.S.`/`Minor`/all-caps
   spellings, while a real title with an acronym, an "Honors" modifier or a
   spelling variant is not called missing. A resemblance alone (`Competitive
