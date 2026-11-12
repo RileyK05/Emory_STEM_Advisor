@@ -1964,7 +1964,11 @@ in a final advisor section with the planner's reasons. The model may add one
 short course-code-free excerpt from the section's evidence. If the outline stage
 exhausts its bounded calls on a term-plan request, the matched program's required
 lines and the deterministic planner build the plan instead; provenance records
-`outline_fallback`. Workbooks receive
+`outline_fallback`. Common document, workbook and page requests start from a
+base template (checklist, comparison, report, page, tracker, prerequisite
+sheet); the outline call sees it, and if that call exhausts, the template
+becomes the outline. Provenance records `template` and `template_fallback`.
+Workbooks receive
 rows as data; code assigns cell identities, headers, widths, and the only
 formulas (declared total columns). HTML sections are fragments assembled and
 sanitized once. Sections are written from the outline alone (every heading and

@@ -18,7 +18,7 @@ from app.config import load_settings
 from app.db.connection import connect, connection_dsn
 from app.generation.artifact_candidate import validate_candidate
 from app.generation.artifacts import build_artifact_handlers
-from app.generation.native_tools import SECTION_TOOL
+from app.generation.native_tools import OUTLINE_TOOL, SECTION_TOOL
 from app.jobs.runtime import RunExecutor
 from app.jobs.store import JobStore
 from app.jobs.worker import run_once
@@ -140,6 +140,23 @@ def test_an_authoring_page_publishes_without_corpus_evidence(db, collection, tmp
     spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
     assert spec["provenance"]["generation_mode"] == "authoring"
     assert spec["evidence"] == {}
+
+
+@pytest.mark.parametrize(("kind", "text", "template"), [
+    ("document", "Make a checklist of everything the NBB BS requires.", "checklist"),
+    ("document", "Compare the Computer Science BA and BS.", "comparison"),
+    ("document", "Give me a guide to the Physics minor.", "report"),
+    ("workbook", "Spreadsheet comparing the Mathematics BA and BS.", "comparison_sheet"),
+    ("workbook", "Spreadsheet of the CHEM prerequisite chain.", "prerequisite"),
+    ("workbook", "Track my Biology BS credits with totals.", "tracker"),
+    ("html", "Make a one-page web page roadmap.", "page"),
+    ("document", "Write me an essay about guilt.", None),
+])
+def test_common_artifacts_get_a_base_template(kind, text, template):
+    from app.generation.artifact_templates import choose_template
+
+    chosen = choose_template(kind, text)
+    assert (chosen.id if chosen else None) == template
 
 
 def test_http_job_worker_artifact_revision_and_download_end_to_end(db, collection, tmp_path):
@@ -489,6 +506,41 @@ def test_a_plan_outline_falls_back_to_the_programs_required_lines(db, collection
     assert spec["title"] == "Economics (Minor): Term plan"
     assert spec["provenance"]["program_title"] == "Economics (Minor)"
     assert spec["provenance"]["outline_fallback"] is True
+
+
+def test_a_checklist_outline_falls_back_to_the_base_template(db, collection, tmp_path):
+    """A model that cannot outline a checklist still gets its base sections."""
+    source = _econ(db, collection, tmp_path)
+
+    class NoOutline(ArtifactStageProvider):
+        def generate(self, request):
+            if request.tools and request.tools[0].name == OUTLINE_TOOL:
+                return GenerationResult(text="I could not outline it.",
+                                        finish_reason="stop",
+                                        usage=Usage(100, 20, source="provider"))
+            return super().generate(request)
+
+    provider = NoOutline(sections={
+        "requirements": [section("ECON 201 — Intermediate Macroeconomics")],
+        "choices": [section("One elective from the Economics list.")],
+        "notes": [section("Take ECON 201 before the electives.")],
+    })
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "document", {
+        "prompt": "Make a checklist for the Economics minor covering ECON 201.\n\n"
+                  "Published answer:\nUse the program's requirements.",
+        "requestText": "Make a checklist for the Economics minor.",
+        "sourceIds": [str(source)],
+    }, "checklist-template")
+    finished = run_once(store, "checklist-template", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    headings = [block.get("text") for block in spec["blocks"]
+                if block.get("type") == "heading"]
+    assert headings == ["Requirements", "Choices and electives", "Notes and next steps"]
+    assert spec["provenance"]["template"] == "checklist"
+    assert spec["provenance"]["template_fallback"] is True
 
 
 def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, tmp_path):

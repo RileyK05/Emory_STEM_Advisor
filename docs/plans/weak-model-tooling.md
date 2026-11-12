@@ -45,20 +45,36 @@ already code-built; the per-term note is optional. The artifact records
 `outline_fallback: true` in provenance. A text-only model that cannot call a
 tool can therefore still publish a correct, ordered term plan.
 
+### Common artifacts start from a base template
+
+`app/generation/artifact_templates.py` defines the base structure for the
+common requests: checklist, comparison document, report/guide, HTML page,
+credit tracker, comparison sheet and prerequisite sheet. The outline call gets
+the template as a hint. If the outline call still exhausts, the template becomes
+the outline. Each section prompt carries the template's fill pattern, so a weak
+model is told exactly what belongs in each section instead of inventing a
+layout. Provenance records `template` and, when the fallback was used,
+`template_fallback`.
+
 ## Verification
 
-- Full backend suite: 1,746 passed, 2 skipped; `ruff check .` clean.
+- Full backend suite: 1,755 passed, 2 skipped; `ruff check .` clean.
 - Offline artifact benchmark: 70/70.
+- Live on `deepseek-v4.1-flash`: A04 checklist, A06 comparison document, A09
+  credit tracker, A10 comparison workbook, A11 prerequisite workbook, A13 HTML
+  roadmap and A14 printable requirements page all pass with the templates.
 - The plan-outline fallback test drives a provider that never calls a tool and
-  still publishes a term plan. The visual-review tests cover the reviewer
-  selection, the current-HTML request, and the rejection retry text.
+  still publishes a term plan. The checklist fallback test drives a provider
+  that only fails the outline and still publishes the three template sections.
+  The visual-review tests cover the reviewer selection, the current-HTML request,
+  and the rejection retry text.
 
 ## Next
 
 - Split a section that repeatedly truncates into smaller stage calls instead of
   only doubling the output allowance.
-- A deterministic checklist outline from program items, so a weak model is only
-  asked for short section text.
+- Prefill checklist sections from program items, so a model that cannot call a
+  tool at all still gets a checklist.
 - Render document and workbook previews to images and review them with the same
   vision connection.
 - Record per-stage model-call outcomes in the artifact provenance so a weak-model
