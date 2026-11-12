@@ -82,6 +82,28 @@ class BenchmarkResult:
         return all(c.ok for c in self.checks)
 
 
+_ABSENT_SAID = re.compile(
+    r"\b(?:does(?: not|n['’]t) exist|no such (?:course|class)|"
+    r"(?:is|are)(?: not|n['’]t) (?:a |an )?(?:current |real |valid )?(?:emory )?"
+    r"(?:course|class)(?:es)?|not (?:in|found in|listed in) the course atlas|"
+    r"there (?:is|are) no)\b",
+    re.IGNORECASE,
+)
+
+
+def _names_only_as_absent(text: str, code: str) -> bool:
+    """True when every clause naming `code` says it is not a course."""
+    clauses = re.split(r"[;\n]|(?<=[.!?])\s+", text or "")
+    seen = False
+    for clause in clauses:
+        if code not in set(canonical_codes_in(clause)):
+            continue
+        seen = True
+        if not _ABSENT_SAID.search(clause):
+            return False
+    return seen
+
+
 def evaluate_checks(
     conn,
     case: dict[str, Any],
@@ -155,9 +177,15 @@ def evaluate_checks(
     else:
         if expected.get("no_hallucinated_course"):
             bad = expected["no_hallucinated_course"]
-            turn_codes = set(canonical_codes_in(turn.get("text") or ""))
-            k4_ok = bad not in turn_codes
-            k4_detail = f"{bad} absent as expected" if k4_ok else f"{bad} named in turn text"
+            turn_text = turn.get("text") or ""
+            if bad not in set(canonical_codes_in(turn_text)):
+                k4_ok, k4_detail = True, f"{bad} absent as expected"
+            elif _names_only_as_absent(turn_text, bad):
+                # Saying "BIOL 999 is not a course" is an honest refusal, not
+                # presenting the code as a real course.
+                k4_ok, k4_detail = True, f"{bad} named only to say it does not exist"
+            else:
+                k4_ok, k4_detail = False, f"{bad} named in turn text"
         else:
             k4_ok = True
             k4_detail = "N/A"
