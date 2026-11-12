@@ -27,9 +27,8 @@ that the live sample has been rerun.
 
 ## Verification
 
-- Backend focused suites: artifact, sequence, summary, research types/data, artifact API, conversations.
+- Full backend suite: 1,735 passed, 2 skipped; `ruff check .` clean.
 - Frontend `typecheck`, `format:check`, unit suite, and `test:integration` (5/5 with the Chrome path).
-- `ruff check .` clean.
 - Offline artifact benchmark 70/70.
 
 ## Remaining
