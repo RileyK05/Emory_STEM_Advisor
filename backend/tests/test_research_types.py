@@ -237,6 +237,12 @@ _CITED = "See the registrar page for the petition."
     ("Yes.", "no answer"),
     ("Never share your password with anyone.", None),
     ("LLM_API_KEY=sk-live-abcdefghijklmnop1234", "credential"),
+    ("AKIAIOSFODNN7EXAMPLE and its secret", "credential"),
+    ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature", "credential"),
+    ("ghp_abcdefghijklmnopqrstuvwxyz0123456789", "credential"),
+    ("TODO: fill in the answer about alpha [1].", "no answer"),
+    ("Lorem ipsum dolor sit amet, alpha [1].", "no answer"),
+    ("<script>alert(1)</script>", "HTML markup"),
     ("The database is postgresql://admin:pw@db.internal:5432/app today.", "credential"),
     ("Verify your Emory password at http://emory-login.example to continue.", "links to a page"),
     ("Please confirm your password and student ID so I can check your record.", "password"),
@@ -275,6 +281,60 @@ def test_a_research_reply_must_be_an_answer(text, rejected):
 
 _AP_RULE = ("Students may apply no more than twelve hours of AP credit toward the degree, "
             "and a 3.5 GPA is required to declare.")
+
+
+@pytest.mark.parametrize("transform", [
+    lambda text: "\u200b".join(text),
+    lambda text: text.translate(str.maketrans({"a": "а", "e": "е", "o": "о", "p": "р",
+                                               "c": "с", "x": "х"})),
+    lambda text: " ".join("x" if index % 7 == 0 else word
+                          for index, word in enumerate(text.split())),
+])
+def test_an_obfuscated_prompt_echo_is_still_refused(transform):
+    from app.advising.research_types import DecisionBlock
+    from app.generation.research_controller import SYSTEM
+    from app.generation.research_final import DecisionRejected, validate_final
+
+    decision = _decision(outcome="information", blocks=(
+        DecisionBlock(kind="limitation", text=transform(SYSTEM[200:1700])),))
+    with pytest.raises(DecisionRejected, match="instructions"):
+        validate_final(decision, None, [], set(), {}, instructions=SYSTEM)
+
+
+@pytest.mark.parametrize("text", [
+    "You may take one S/U course with approval.",
+    "The program has no special grading rule; the College default applies.",
+])
+def test_a_grading_answer_must_cite_the_program_rule(text):
+    from uuid import uuid4
+
+    from app.advising.research_types import EvidenceRecord
+    from app.generation.research_final import DecisionRejected, validate_final
+
+    rule = EvidenceRecord(
+        evidence_id="e1", source_id=str(uuid4()), source_revision=1,
+        source_kind="institutional_catalog", source_name="BIOLOGY (BS)",
+        chunk_id=str(uuid4()), locator_label="Requirements",
+        exact_text="All courses for the major must be taken for a letter grade.",
+        text_digest="a" * 64, acquired_step=1, content_completeness="complete",
+        entity_refs=())
+    college = EvidenceRecord(
+        evidence_id="e2", source_id=str(uuid4()), source_revision=1,
+        source_kind="institutional_policy", source_name="College",
+        chunk_id=str(uuid4()), locator_label="S/U", exact_text="S/U is allowed.",
+        text_digest="b" * 64, acquired_step=1, content_completeness="complete",
+        entity_refs=())
+    decision = _decision(outcome="information", blocks=(
+        DecisionBlock(kind="fact", text=text, evidence_ids=("e2",)),))
+    with pytest.raises(DecisionRejected, match="grading"):
+        validate_final(decision, None, [rule, college], {"e1", "e2"}, {},
+                       grading_rules=(("BIOLOGY (BS)",
+                                       rule.exact_text, "e1"),))
+    correct = decision.model_copy(update={"blocks": (DecisionBlock(
+        kind="fact", text="All Biology major courses must be taken for a letter grade.",
+        evidence_ids=("e1",)),)})
+    validate_final(correct, None, [rule, college], {"e1", "e2"}, {},
+                   grading_rules=(("BIOLOGY (BS)", rule.exact_text, "e1"),))
 
 
 @pytest.mark.parametrize("text, rejected", [
@@ -1014,6 +1074,11 @@ def test_compare_keeps_all_mention_refs_for_retained_codes():
     ("A semester-by-semester spreadsheet for the Economics and Human Health BA.", True),
     ("A one-page roadmap of the Applied Mathematics minor.", True),
     ("Spreadsheet comparing the Mathematics BA and BS requirements side by side.", True),
+    ("Plan four years for the Biology BS.", True),
+    ("Premed plan for a Chemistry BA.", True),
+    ("I need a schedule for next year.", True),
+    ("What should my semesters look like?", True),
+    ("Lay out the Biology BS for me.", True),
     ("Summarize this conversation into a document I can keep.", True),
     ("Turn this chat into a document I can print.", True),
     ("What does CS 253 require?", False),
@@ -1099,7 +1164,14 @@ def test_research_hands_the_students_request_to_the_artifact_pipeline(
     revised = _with_requested_artifact(_decision(**decision), question, _PROGRAMS, referenced=True)
     unknown = _with_requested_artifact(_decision(**decision), question, _PROGRAMS,
                                        referenced=False, unknown_codes={"MATH 967": []})
-    assert unknown.artifact is None  # never for a course that does not exist
+    # A degree-named request keeps its artifact and lets the outline drop the
+    # one fake code; a code-only request makes no artifact at all.
+    from app.generation.research_controller import _DEGREE_TOKEN, _missing_program
+
+    unknown_expected = (expected if expected and _DEGREE_TOKEN.search(question)
+                        and _missing_program(question, _PROGRAMS) is None else None)
+    assert (unknown.artifact and (unknown.artifact.kind, unknown.artifact.purpose)) \
+        == (unknown_expected or None)
     if expected and expected[1] == "summary":
         # A summary of the saved turns is new even when an artifact is attached.
         assert revised.artifact is not None
@@ -1132,6 +1204,8 @@ def test_an_attached_artifact_in_another_format_makes_no_new_run(question, kept)
     ("Your plan is ready.", True),
     ("Here is your answer: take MATH 111.", False),
     ("Your registration is ready to submit.", False),
+    ("Your plan is being written as a document.", False),
+    ("I'm making the checklist now.", False),
     ("A checklist of the Psychology BS core is being made.", False),
 ])
 def test_a_reply_never_says_its_artifact_is_ready(text, rejected):

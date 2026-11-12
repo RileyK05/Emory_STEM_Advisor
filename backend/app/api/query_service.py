@@ -343,6 +343,13 @@ def query_response(
         if isinstance(exc, ProviderError):
             raise HTTPException(503, provider_failure_detail(exc, "Research model")) from exc
         if isinstance(exc, (OperationBudgetError, ToolConversationError, ToolLedgerError)):
-            detail = str(exc) if str(exc) == FAILED_ANSWER else "Research could not finish safely: " + str(exc)
+            message = str(exc)
+            if isinstance(exc, OperationBudgetError) and exc.code == "deadline_exceeded":
+                detail = "The question took too long to answer. Try a shorter version."
+            elif message in {FAILED_ANSWER,
+                             "The question took too long to answer. Try a shorter version."}:
+                detail = message
+            else:
+                detail = "Research could not finish safely: " + message
             raise HTTPException(422, detail) from exc
         raise

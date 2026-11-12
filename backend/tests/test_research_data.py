@@ -112,6 +112,7 @@ def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, c
         # Without a job store the run cannot be admitted; the answer still publishes.
         job_store=jobs if admits else None, settings=load_settings(),
         collection_name=f"c-{collection}",
+        request_text="Make a plan for the student's next four semesters.",
     )
 
     published = ConversationTurnExecutor.publish_success(db, job, result)
@@ -133,6 +134,7 @@ def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, c
     payload = runs[0]["payload"]
     assert payload["kind"] == "document"
     assert payload["inputs"]["mode"] == "grounded"
+    assert payload["inputs"]["requestText"] == "Make a plan for the student's next four semesters."
     assert payload["inputs"]["researchRunId"] == str(run.run_id)
     assert "Published answer:" in payload["inputs"]["prompt"]
     # The run must find the collection the turn answered from.
@@ -488,6 +490,7 @@ def test_a_grading_question_reads_the_programs_own_grading_line(
         session.tool_scope(lambda: None))
     graded = [item for item in result.data["items"] if "letter grade" in item["text"]]
     assert bool(graded and graded[0]["evidence_ids"]) is read
+    assert bool(session.grading_rules) is read
     assert result.next_cursor
 
 
@@ -1928,6 +1931,8 @@ def test_research_reserves_a_finish_and_withholds_stale_or_cancelled_results(
     # student wrote it as a code.
     ("can i declare econ with 88 credit hours", {}),
     ("is the top 10 list out", {}),
+    ("I'm a junior WITH 88 credit hours", {}),
+    ("we meet in ROOM 204", {}),
     ("is XYZ 101 a real class", {"XYZ 101": []}),
     # A retired master row is a real course, not one that does not exist.
     ("can i still take math 111", {}),

@@ -1,6 +1,8 @@
 """Validate research references and render server-owned citation numbers."""
 
 import re
+import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -20,7 +22,7 @@ from app.generation.answer import NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-49"
+RESEARCH_PROMPT_VERSION = "research-50"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
 # A fact block that asserts a course is required, listed or part of a program
@@ -130,6 +132,28 @@ def _numbers_in(text: str) -> set[float]:
     return found
 
 
+_GRADING_TEXT = re.compile(
+    r"(?<![A-Za-z])s[/-]u(?![A-Za-z])|pass[/-]fail|letter[- ]grade|"
+    r"satisfactory|grading basis|\bgrading\b", re.IGNORECASE)
+
+
+def grading_rule_problems(decision: FinalDecision,
+                          rules: Sequence[tuple[str, str, str]]) -> list[str]:
+    """A grading answer must cite the program's own rule when one was read."""
+    if not rules:
+        return []
+    written = "\n".join(block.text for block in decision.blocks)
+    if not _GRADING_TEXT.search(written):
+        return []
+    cited = {eid for block in decision.blocks for eid in block.evidence_ids}
+    for title, text, evidence_id in rules:
+        if evidence_id in cited:
+            return []
+    title, text, _evidence_id = rules[0]
+    return [(f"the answer discusses grading but does not cite {title}'s own rule "
+             f"({text[:300]}); use that rule instead of the College default")]
+
+
 def policy_number_problems(decision: FinalDecision, records: dict) -> list[str]:
     """A fact stating a cap, minimum or GPA threshold cites a passage with that number.
 
@@ -188,21 +212,42 @@ _ABSENT_SAID = re.compile(
 # like a secret; none of it may reach a student.
 _STUB = re.compile(r"(?:placeholder|lorem ipsum|todo|tbd|n/?a|answer|text|none|null)?",
                    re.IGNORECASE)
+_STUB_START = re.compile(r"^(?:placeholder|lorem ipsum|todo|tbd)\b", re.IGNORECASE)
 _MIN_ANSWER_LETTERS = 12
-_ECHO_SHINGLE = 8
-_ECHO_LIMIT = 3
+_ECHO_SHINGLE = 5
+_ECHO_MIN_SHARED = 5
+_ECHO_RATIO = 0.25
+_ZERO_WIDTH = str.maketrans("", "", "\u200b\u200c\u200d\u200e\u200f\u2060\ufeff")
+_CONFUSABLES = str.maketrans({
+    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O",
+    "Р": "P", "С": "C", "Т": "T", "Х": "X", "У": "Y",
+    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
+    "і": "i", "ј": "j", "ѕ": "s",
+})
 _SECRET = re.compile(
     r"\bsk-[A-Za-z0-9_-]{16,}|\b[A-Z][A-Z0-9_]{2,}_(?:API_)?KEY\s*=|"
     r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"\bAKIA[0-9A-Z]{16}\b|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|"
+    r"\bgh[pousr]_[A-Za-z0-9]{36}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}|"
+    r"\bAIza[0-9A-Za-z_-]{35}\b|"
     r"Traceback \(most recent call last\):|File \"[^\"]+\", line \d+")
+_MARKUP = re.compile(
+    r"<\s*script\b|javascript:|\bon(?:click|error|load|mouseover|mouseout|focus|blur|"
+    r"submit|change|input|keydown|keyup)\s*=", re.IGNORECASE)
 _URL = re.compile(r"\bhttps?://[^\s)\]>\"']+|\bwww\.[^\s)\]>\"']+", re.IGNORECASE)
 _CREDENTIAL_ASK = re.compile(
     r"\b(?:verify|enter|provide|send|confirm|share|submit|type)\b[^.!?\n]{0,60}"
     r"\b(?:password|passcode|credentials)\b", re.IGNORECASE)
 
 
+def _normalize_match_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text or "")
+    text = text.translate(_ZERO_WIDTH).translate(_CONFUSABLES)
+    return text.casefold()
+
+
 def _shingles(text: str) -> set[tuple[str, ...]]:
-    words = re.findall(r"[a-z0-9]+", text.lower())
+    words = re.findall(r"[a-z0-9]+", _normalize_match_text(text))
     return {tuple(words[i:i + _ECHO_SHINGLE]) for i in range(len(words) - _ECHO_SHINGLE + 1)}
 
 
@@ -213,15 +258,20 @@ def answer_content_problems(decision: FinalDecision, *, instructions: str | None
     texts = [block.text for block in decision.blocks]
     problems = []
     if any(not re.search(r"[A-Za-z]", text) or _STUB.fullmatch(text.strip(" .,:;!?-*#\"'"))
-           for text in texts) or sum(len(re.findall(r"[A-Za-z]", t)) for t in texts) < (
-               _MIN_ANSWER_LETTERS):
+           or _STUB_START.match(text.strip()) for text in texts) or sum(
+               len(re.findall(r"[A-Za-z]", t)) for t in texts) < (_MIN_ANSWER_LETTERS):
         problems.append("a block has no answer in it; write the answer itself in plain sentences")
     written = "\n".join(texts)
-    if instructions and len(_shingles(written) & _instruction_shingles(instructions)) >= (
-            _ECHO_LIMIT):
+    reply_shingles = _shingles(written)
+    prompt_shingles = _instruction_shingles(instructions) if instructions else set()
+    shared = len(reply_shingles & prompt_shingles)
+    if (shared >= _ECHO_MIN_SHARED
+            and shared / max(1, len(reply_shingles)) >= _ECHO_RATIO):
         problems.append("the reply repeats the advisor's instructions; answer the student instead")
     if _SECRET.search(written):
         problems.append("the reply contains credential, key or error text; remove it")
+    if _MARKUP.search(written):
+        problems.append("the reply contains HTML markup; answer in plain text")
     known = "\n".join(
         f"{record.source_name}\n{record.source_url or ''}\n{record.exact_text}"
         for record in evidence).lower()
@@ -236,6 +286,10 @@ def answer_content_problems(decision: FinalDecision, *, instructions: str | None
     if (decision.artifact is not None or artifact_expected) and _ARTIFACT_READY.search(written):
         problems.append("the reply says the artifact is ready; it is still being made, so say "
                         "it is being made")
+    if (decision.artifact is None and not artifact_expected
+            and _ARTIFACT_PROGRESS.search(written)):
+        problems.append("the reply says an artifact is being made, but no artifact was "
+                        "requested; make the request or answer without promising one")
     return problems
 
 
@@ -258,6 +312,12 @@ _ARTIFACT_READY = re.compile(
     r"(?:your |the )?(?:[a-z]+\s+){0,3}"
     r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\b",
     re.IGNORECASE)
+_ARTIFACT_PROGRESS = re.compile(
+    r"\b(?:the|your) (?:[a-z]+\s+){0,3}"
+    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\s+"
+    r"(?:is|are)\s+being\s+(?:made|written|prepared|created|built)\b"
+    r"|\bI(?:['’]m| am)\s+(?:making|writing|preparing|creating|building)\b",
+    re.IGNORECASE)
 
 
 _INSTRUCTION_SHINGLES: dict[int, set[tuple[str, ...]]] = {}
@@ -279,7 +339,8 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
                    retired_courses: frozenset[str] = frozenset(),
                    instructions: str | None = None,
                    absent_codes: frozenset[str] = frozenset(),
-                   artifact_expected: bool = False) -> None:
+                   artifact_expected: bool = False,
+                   grading_rules: Sequence[tuple[str, str, str]] = ()) -> None:
     candidates = {c.id: c for c in state.candidates} if state else {}
     records = {e.evidence_id: e for e in evidence}
     problems = (validate_decision_limits(decision) + validate_fact_support(decision)
@@ -287,6 +348,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
                                            evidence=evidence,
                                            artifact_expected=artifact_expected)
                    if decision.blocks else [])
+                + grading_rule_problems(decision, grading_rules)
                 + validate_evidence_references(decision, supplied & records.keys())
                 + validate_candidate_references(decision, set(candidates)))
     if not decision.blocks:

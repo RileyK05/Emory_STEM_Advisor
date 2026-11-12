@@ -38,6 +38,16 @@ _PROSE_SUBJECTS = frozenset({
     "WINTER", "YEAR", "AY", "TERM", "SECTION", "CLASS", "PAGE", "CHAPTER", "TABLE",
     "FIGURE", "CREDIT", "CREDITS", "LEVEL", "COURSE", "COURSES", "BEFORE", "AFTER",
     "TAKING", "NEED", "NEEDS", "TAKE", "TOOK",
+    # Shouted or ordinary words that are not course subjects when followed by a
+    # number ("WITH 88 credit hours", "ROOM 204", "TOP 10").
+    "WITH", "WITHOUT", "ROOM", "HAVE", "HAS", "HAD", "TOP", "MORE", "MOST", "NOW",
+    "ANOTHER", "TAKEN", "DONE", "ABOUT", "OVER", "UNDER", "NEXT", "LAST", "THIS",
+    "THAT", "THESE", "THOSE", "THAN", "THEN", "THERE", "HERE", "WHERE", "WHEN",
+    "WHY", "WHO", "WHOM", "WHOSE", "WILL", "WOULD", "SHOULD", "COULD", "CAN",
+    "MAY", "MIGHT", "MUST", "DO", "DOES", "DID", "BE", "BEEN", "BEING", "AM",
+    "GET", "GOT", "GIVE", "GIVEN", "MAKE", "MADE", "PLAN", "PLANS", "SEMESTER",
+    "SEMESTERS", "YEARS", "MONTH", "MONTHS", "WEEK", "WEEKS", "DAY", "DAYS",
+    "HOUR", "HOURS", "MINUTE", "MINUTES", "TOTAL", "PER", "FROM", "INTO", "THROUGH",
 })
 # Reverse-intent questions ask what a completed course opens, not what it needs.
 # Keep downstream graph hits out of ordinary forward prerequisite questions.

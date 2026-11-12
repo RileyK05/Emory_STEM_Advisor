@@ -441,6 +441,7 @@ class ResearchSession:
         self.actions = []
         self.checks: dict[str, dict] = {}
         self.unavailable_preparation_check_ids: set[str] = set()
+        self.grading_rules: list[tuple[str, str, str]] = []
         self.entity_evidence: dict[str, set[str]] = {}
         self.active: list[str] = []
         self.supplied: set[str] = set()
@@ -828,6 +829,20 @@ class ResearchSession:
         records = {e.chunk_id: e.evidence_id for e in self.store.evidence(self.run.run_id)}
         def evidence(supported):
             return list(dict.fromkeys(records[str(c.chunk_id)] for c, _s, _e in supported.support))
+        for item in items:
+            if _GRADING_LINE.search(item.line.text):
+                ids = evidence(item.line)
+                if ids:
+                    rule = (read.pin.title, item.line.text, ids[0])
+                    if rule not in self.grading_rules:
+                        self.grading_rules.append(rule)
+        for field in read.fields.values():
+            if _GRADING_LINE.search(field.text):
+                ids = evidence(field)
+                if ids:
+                    rule = (read.pin.title, field.text, ids[0])
+                    if rule not in self.grading_rules:
+                        self.grading_rules.append(rule)
         positions = self.program_positions.setdefault(value.handle, set())
         self.program_sizes[value.handle] = len(read.items)
         self.program_cursors[value.handle] = cursor
@@ -1341,7 +1356,7 @@ class ResearchSession:
                            self.artifact_references, self._known_course_codes(),
                            self._retired_courses(value.decision), self.instructions,
                            frozenset(self.unknown_question_codes()),
-                           self.artifact_requested)
+                           self.artifact_requested, tuple(self.grading_rules))
         except DecisionRejected as exc:
             self.rejected_decision = value.decision
             opened = self._open_courses(value.decision.recommended_course_codes)
@@ -1389,7 +1404,7 @@ class ResearchSession:
             try:
                 validate_final(single, self.state, records, known, {}, self.entity_evidence,
                                None, self._known_course_codes(), retired, self.instructions,
-                               unknown, self.artifact_requested)
+                               unknown, self.artifact_requested, tuple(self.grading_rules))
             except DecisionRejected:
                 continue
             if used + size > MAX_DECISION_TEXT_BYTES:
