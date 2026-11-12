@@ -161,7 +161,8 @@ def test_an_answer_without_a_stage_tool_never_publishes(db, collection, tmp_path
     assert finished.status.value == "failed"
     assert finished.error["type"] == "invalid_output"
     assert client.get("/api/artifacts").json() == []
-    assert db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"] == 1
+    # The stage asks twice for the required tool before giving up.
+    assert db.execute("SELECT count(*) AS n FROM model_calls").fetchone()["n"] == 3
 
 
 def test_a_long_outline_purpose_is_shortened_not_refused():

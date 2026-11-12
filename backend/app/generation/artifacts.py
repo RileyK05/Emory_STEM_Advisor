@@ -196,6 +196,11 @@ class ArtifactHandler:
             # Controller and ledger text only: never model output or slot text.
             logger.warning("artifact job %s stopped its tool conversation: %s %s",
                            job.job_id, exc, " ".join(getattr(exc, "__notes__", ())))
+            if "did not call the required tool" in str(exc):
+                raise SafeJobError(
+                    "invalid_output",
+                    "The model did not return a complete artifact. Try again or ask for a "
+                    "smaller version.") from exc
             raise SafeJobError("tool_failed", "Native tool execution could not be completed safely.") from exc
         except OperationBudgetError as exc:
             if exc.code == "deadline_exceeded":
