@@ -27,7 +27,7 @@ that the live sample has been rerun.
 
 ## Verification
 
-- Full backend suite: 1,735 passed, 2 skipped; `ruff check .` clean.
+- Full backend suite: 1,737 passed, 2 skipped; `ruff check .` clean.
 - Frontend `typecheck`, `format:check`, unit suite, and `test:integration` (5/5 with the Chrome path).
 - Offline artifact benchmark 70/70.
 - Live smoke on `deepseek-v4.1-flash`: A01 (Biology BS plan), A02 (plan with completed courses), A03 (Oxford plan), A04 (checklist), A09 (workbook tracker), A10 (comparison workbook), A13 (HTML page), A14 (HTML requirements), and A29 (fake program) all pass. A01's final run was turn 38.7 s / artifact run 18.2 s with every content check green.
