@@ -578,7 +578,10 @@ class ArtifactPipeline:
                 ).fetchall()
                 required.update(_required_program_codes(items, self._course_exists))
             self.conn.commit()
-            selected = list(dict.fromkeys([*selected, *sorted(required - set(completed))]))
+            if required:
+                # For a full plan from scratch, code owns the course list. The
+                # outline model's free selection can add unrelated electives.
+                selected = sorted(required - set(completed))
         if (not completed and not canonical_codes_in(self.request_text)
                 and len(allowed) >= 8 and len(selected) < min(6, len(allowed))):
             raise ValueError(
