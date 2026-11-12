@@ -340,8 +340,8 @@ def plan_sequence(
     """
     if len(courses) > _MAX_COURSES or len(selected_codes) > _MAX_SELECTED or len(completed_codes) > _MAX_COMPLETED:
         raise ValueError("sequence input exceeds the supported size")
-    selected = set(selected_codes)
-    completed = set(completed_codes)
+    selected = {normalize_code(code) or code for code in selected_codes}
+    completed = {normalize_code(code) or code for code in completed_codes}
     if len(selected) != len(selected_codes) or len(completed) != len(completed_codes):
         # Duplicate input is harmless but is an avoidable source of ambiguity.
         selected_codes = tuple(sorted(selected))
