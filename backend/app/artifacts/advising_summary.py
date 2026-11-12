@@ -48,16 +48,28 @@ def _without_absent_codes(blocks, known_courses, campus_equivalents):
     absent = invalid_course_codes(
         {code for block in blocks for text in _block_texts(block)
          for code in canonical_codes_in(text)}, known_courses, campus_equivalents)
-    if not absent:
+    resolved = {code: alias for code in absent
+                for alias in [_suffix_alias(code, known_courses)]
+                if alias is not None}
+    absent -= set(resolved)
+    if not absent and not resolved:
         return blocks
 
     def written(match) -> str:
         # "phys444" only normalizes; "Physics 444" only reads as a course in prose.
         codes = {normalize_code(match.group(0)), *canonical_codes_in(match.group(0))}
+        for code in codes:
+            if code in resolved:
+                return resolved[code]
         return ABSENT_COURSE if codes & absent else match.group(0)
 
     def clean(text: str) -> str:
-        return _WRITTEN_CODE.sub(written, text)
+        cleaned = _WRITTEN_CODE.sub(written, text)
+        # A list of missing codes becomes one readable phrase.
+        missing = re.escape(ABSENT_COURSE)
+        return re.sub(
+            rf"{missing}(?:\s*(?:,\s*(?:and\s+)?|\band\s+){missing})+",
+            "and other courses not in the current Course Atlas", cleaned)
 
     cleaned = []
     for block in blocks:
@@ -71,6 +83,16 @@ def _without_absent_codes(blocks, known_courses, campus_equivalents):
                 "rows": [[clean(cell) for cell in row] for row in block.rows]})
         cleaned.append(block)
     return cleaned
+
+
+def _suffix_alias(code: str, known_courses) -> str | None:
+    """The one current code with the same stem, e.g. PHYS 495 -> PHYS 495R."""
+    stem = re.sub(r"[A-Z]+$", "", code.replace("_OX", "").strip())
+    candidates = sorted(candidate for candidate in known_courses
+                        if re.sub(r"[A-Z]+$", "",
+                                  candidate.replace("_OX", "").strip()) == stem
+                        and candidate != code)
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def _block_texts(block) -> list[str]:
