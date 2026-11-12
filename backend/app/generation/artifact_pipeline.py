@@ -58,6 +58,7 @@ from app.generation.native_tools import (
     SECTION_INPUTS,
     SECTION_TOOL,
     EditOperation,
+    OutlineChart,
     OutlineColumn,
     OutlineSection,
     OutlineSheet,
@@ -110,6 +111,7 @@ _TRANSIENT_RETRIES = 2
 _TERM_PLAN_REQUEST = re.compile(
     r"\b(?:plans?|planning|semesters?|four[- ]year|schedules?)\b", re.IGNORECASE)
 _CHECKLIST_REQUEST = re.compile(r"\bcheck[- ]?lists?\b", re.IGNORECASE)
+_COMPARISON_REQUEST = re.compile(r"\bcompar(?:e|es|ed|ing|ison|isons)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -271,6 +273,10 @@ class ArtifactPipeline:
         self.plan_records: dict[str, int] = {}
         self.program_title: str | None = None
         self.program_allowed: set[str] | None = None
+        # A revision keeps the base artifact's plan context: K5 and K6 must still
+        # apply to the revised page, and a workbook keeps its charts.
+        self._prior_plan = False
+        self._prior_completed: list[str] = []
         self.known_courses: set[str] = set()
         self.campus_equivalents: dict[str, frozenset[str]] = {}
         self.section_payloads: dict[str, StageSection] = {}
@@ -455,6 +461,12 @@ class ArtifactPipeline:
         if value.program:
             title, _program_id, _allowed = self._match_program(value.program)
             _check_program_kind(self.brief, title)
+            # A checklist, tracker or report about one named program is checked
+            # against that program's lines. A comparison covers two, so its
+            # single `program` field cannot stand for both.
+            if (not _COMPARISON_REQUEST.search(self.brief)
+                    and _choose_program_title(self.brief, [title])):
+                self.program_title = title
 
     def _match_program(self, requested: str) -> tuple[str, int | None, set[str]]:
         row = self.conn.execute(
@@ -635,8 +647,17 @@ class ArtifactPipeline:
 
     def _run_edits(self):
         title, sections, payloads = self._prior_outline()
+        prior_provenance = (self.prior or {}).get("provenance") or {}
+        self.program_title = str(prior_provenance.get("program_title") or "") or None
+        self._prior_plan = bool(prior_provenance.get("plan"))
+        try:
+            completed = json.loads(prior_provenance.get("completed_courses") or "[]")
+        except (TypeError, ValueError):
+            completed = []
+        self._prior_completed = [str(code) for code in completed] if isinstance(completed, list) else []
         if self.kind == "workbook":
-            self.outline = StageOutline(title=title, sheets=sections)
+            self.outline = StageOutline(title=title, sheets=sections,
+                                        charts=_prior_charts(self.prior, sections))
         else:
             self.outline = StageOutline(title=title, sections=sections)
         payload = {
@@ -714,9 +735,10 @@ class ArtifactPipeline:
                     evidence=_evidence_for_blocks(
                         spec.get("evidence", {}), [block.get("id") for block in blocks]),
                     text="\n".join(_block_text(block) for block in blocks),
+                    # Kept content already passed the checks when it was made.
+                    # Its headings are structure, not claims that need a citation.
                     skip_elements={block["id"] for block in blocks
-                                   if block.get("type") == "heading"
-                                   and block.get("id") == f"{section_id}:h"},
+                                   if block.get("type") == "heading"},
                 )
         elif kind == "workbook":
             for sheet in spec.get("sheets", []):
@@ -750,6 +772,8 @@ class ArtifactPipeline:
 
     def _apply_edits(self, value: StageEdits):
         current = self._current_sections()
+        prior_sheets = ({sheet.id: sheet for sheet in current}
+                        if self.kind == "workbook" else {})
         by_id = {self._section_id(section): section for section in current}
         operations: dict[str, EditOperation] = {}
         inserts: dict[str, list[EditOperation]] = {}
@@ -815,6 +839,17 @@ class ArtifactPipeline:
             self.outline.title = value.title
             if not self.outline.sheets:
                 raise ValueError("edits would remove every sheet")
+            for sheet in self.outline.sheets:
+                prior = prior_sheets.get(sheet.id)
+                if prior is not None:
+                    sheet.columns = _inherit_columns(prior.columns, sheet.columns)
+            names = [sheet.name.casefold() for sheet in self.outline.sheets]
+            if len(names) != len(set(names)):
+                raise ValueError("sheet names must be unique")
+            for sheet in self.outline.sheets:
+                keys = [column.key for column in sheet.columns]
+                if len(keys) != len(set(keys)):
+                    raise ValueError(f"sheet {sheet.id} has duplicate column keys")
         else:
             self.outline.sections = [section for section in new_sections
                                      if isinstance(section, OutlineSection)]
@@ -1157,6 +1192,16 @@ class ArtifactPipeline:
                 _check_binding_slots(row.source_slots, section.source_slots)
             elif row.source_slots:
                 raise ValueError("authoring cannot invent corpus references")
+            for position, column in enumerate(section.columns):
+                if column.type == "total":
+                    continue
+                raw = row.values[position]
+                if raw in (None, ""):
+                    continue
+                # A number column holds numbers. Checking here turns a bad cell
+                # into a refusal the model can correct, instead of an assembly
+                # error after the stage has already been accepted.
+                _coerce_cell(raw, column.type)
             total_cells += max(1, sum(1 for item in row.values if item not in (None, "")))
         if total_cells > _MAX_WORKBOOK_CELLS:
             raise ValueError(f"use at most {_MAX_WORKBOOK_CELLS} data cells in the workbook")
@@ -1206,9 +1251,10 @@ class ArtifactPipeline:
 
     def _check(self, spec) -> list[ArtifactCheckFinding]:
         payload = spec.model_dump(mode="json")
-        plan_terms = extract_planned_terms(payload) if self.plan is not None else None
+        plan_terms = (extract_planned_terms(payload)
+                      if self.plan is not None or self._prior_plan else None)
         term_sections = {}
-        if self.plan is not None:
+        if plan_terms:
             for index, section in enumerate(self._current_sections(), 1):
                 if getattr(section, "courses", []):
                     heading = getattr(section, "heading", getattr(section, "name", ""))
@@ -1222,7 +1268,7 @@ class ArtifactPipeline:
             known_courses=self.known_courses,
             campus_equivalents=self.campus_equivalents,
             program_title=self.program_title,
-            completed_courses=self.outline.completed_courses if self.outline else (),
+            completed_courses=self._completed_courses(),
             plan_terms=plan_terms,
             plan_term_sections=term_sections,
             section_texts=self.section_texts,
@@ -1263,6 +1309,30 @@ class ArtifactPipeline:
             return self._assemble_workbook()
         return self._assemble_html()
 
+    def _provenance(self) -> dict:
+        """Scalar metadata a later revision needs to re-check the same artifact."""
+        provenance = dict((self.prior or {}).get("provenance") or {})
+        if self.plan is not None:
+            provenance.update({
+                "plan": True,
+                "program_title": self.program_title or "",
+                "completed_courses": json.dumps(list(self.outline.completed_courses)),
+            })
+        elif self._prior_plan:
+            provenance.update({
+                "plan": True,
+                "program_title": self.program_title or "",
+                "completed_courses": json.dumps(self._prior_completed),
+            })
+        elif self.program_title:
+            provenance["program_title"] = self.program_title
+        return provenance
+
+    def _completed_courses(self) -> list[str]:
+        if self.outline is not None and self.outline.completed_courses:
+            return list(self.outline.completed_courses)
+        return list(self._prior_completed)
+
     def _assemble_document(self):
         blocks: list[dict] = []
         evidence: dict[str, list[dict]] = {}
@@ -1296,7 +1366,7 @@ class ArtifactPipeline:
         title = self.outline.title if self.outline else "Artifact"
         spec = validate_spec("document", {
             "kind": "document", "title": title, "blocks": blocks,
-            "evidence": evidence,
+            "evidence": evidence, "provenance": self._provenance(),
         })
         self._skip = skipped
         return spec
@@ -1346,7 +1416,7 @@ class ArtifactPipeline:
                 })
         spec = validate_spec("workbook", {
             "kind": "workbook", "title": title, "sheets": sheets,
-            "charts": charts, "evidence": evidence,
+            "charts": charts, "evidence": evidence, "provenance": self._provenance(),
         })
         self._skip = skipped
         return spec
@@ -1432,6 +1502,7 @@ class ArtifactPipeline:
         title = self.outline.title if self.outline else "Page"
         spec = validate_spec("html", {
             "kind": "html", "title": title, "html": page, "evidence": evidence,
+            "provenance": self._provenance(),
         })
         self._skip = set()
         return spec
@@ -1789,12 +1860,25 @@ def _columns_from_sheet(sheet: dict) -> list:
                           key=lambda cell: cell.get("column", 0))
     if not header_cells:
         return [OutlineColumn(key="c1", header="Item", type="text")]
+    cells = sheet.get("cells", [])
     columns = []
     for cell in header_cells:
+        position = cell.get("column")
         value = cell.get("value")
         if cell.get("formula") is not None:
             value = None
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
+        # A prior sheet's column type is part of what the student keeps. A
+        # formula column is the code-built total; numeric data is a number.
+        data = [item for item in cells
+                if item.get("column") == position and item.get("row") != 1]
+        if any(item.get("formula") is not None for item in data):
+            column_type = "total"
+        elif (any(isinstance(item.get("value"), (int, float))
+                  and not isinstance(item.get("value"), bool) for item in data)
+              and not any(item.get("value") is not None
+                          and not (isinstance(item.get("value"), (int, float))
+                                   and not isinstance(item.get("value"), bool))
+                          for item in data)):
             column_type = "number"
         else:
             column_type = "text"
@@ -1802,6 +1886,69 @@ def _columns_from_sheet(sheet: dict) -> list:
             key=f"c{len(columns) + 1}", header=str(value or f"Column {len(columns) + 1}")[:80],
             type=column_type))
     return columns
+
+
+def _inherit_columns(prior: list, columns: list) -> list:
+    """Keep a prior sheet's column types when an edit rewrites the sheet.
+
+    A revision's model sees headings, not the column schema, so it often writes
+    a total or credit column as text. The prior type is the student's data.
+    """
+    by_key = {column.key: column for column in prior}
+    by_header = {column.header.casefold(): column for column in prior}
+    inherited = []
+    for position, column in enumerate(columns):
+        match = by_header.get(column.header.casefold()) or by_key.get(column.key)
+        if match is None and len(columns) == len(prior):
+            match = prior[position]
+        if match is not None:
+            column = column.model_copy(update={
+                "key": match.key or column.key, "type": match.type})
+        inherited.append(column)
+    return inherited
+
+
+def _range_column(value) -> int | None:
+    """The 1-based column a range such as "B1:B9" starts in."""
+    match = re.match(r"([A-Z]+)", str(value or "").upper())
+    if match is None:
+        return None
+    position = 0
+    for letter in match.group(1):
+        position = position * 26 + (ord(letter) - 64)
+    return position
+
+
+def _prior_charts(spec: dict | None, sheets: list) -> list:
+    """Rebuild a prior workbook's charts from its stored ranges and headers.
+
+    A revision edits sheets, not charts. Keeping the chart means matching its
+    value and category columns back to the current outline's columns by header.
+    """
+    by_id = {str(sheet.get("id")): sheet for sheet in (spec or {}).get("sheets", [])}
+    outlines = {sheet.id: sheet for sheet in sheets}
+    charts = []
+    for chart in (spec or {}).get("charts", []):
+        sheet_id = str(chart.get("sheet_id") or "")
+        prior, outline = by_id.get(sheet_id), outlines.get(sheet_id)
+        if prior is None or outline is None:
+            continue
+        headers = {cell.get("column"): str(cell.get("value") or "")
+                   for cell in prior.get("cells", []) if cell.get("row") == 1}
+        value_key = next((column.key for column in outline.columns
+                          if column.header == headers.get(_range_column(chart.get("data_range")))), None)
+        category_key = next((column.key for column in outline.columns
+                             if column.header == headers.get(
+                                 _range_column(chart.get("categories_range")))), None)
+        if value_key is None or category_key is None:
+            continue
+        charts.append(OutlineChart(
+            sheet_id=sheet_id,
+            type=chart.get("type") if chart.get("type") in {"bar", "line", "pie"} else "bar",
+            title=str(chart.get("title") or "Chart")[:200],
+            value_column=value_key, category_column=category_key,
+        ))
+    return charts
 
 
 def _sheet_text(sheet: dict) -> str:

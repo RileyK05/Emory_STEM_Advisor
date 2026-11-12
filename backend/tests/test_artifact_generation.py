@@ -435,9 +435,182 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
         return
     assert "degraded_sections" not in spec.get("provenance", {})
     assert spec["title"] == "Economics (Minor): Term plan"
+    assert spec["provenance"]["plan"] is True
+    assert spec["provenance"]["program_title"] == "Economics (Minor)"
     course = next(block for block in spec["blocks"] if block["type"] == "list")
     assert course["items"] == ["ECON 201 — Intermediate Macroeconomics"]
     assert any(block.get("text") == "Macro theory." for block in spec["blocks"])
+
+
+def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    provider = ArtifactStageProvider(
+        outline={
+            "title": "Credits", "sections": [],
+            "sheets": [{
+                "id": "s1", "name": "Credits", "row_purpose": "One course per row.",
+                "columns": [
+                    {"key": "course", "header": "Course", "type": "text"},
+                    {"key": "credits", "header": "Credits", "type": "number"},
+                    {"key": "total", "header": "Total", "type": "total"},
+                ],
+                "source_slots": [1],
+            }],
+            "charts": [{
+                "sheet_id": "s1", "type": "bar", "title": "Credits",
+                "value_column": "credits", "category_column": "course",
+            }],
+        },
+        sections={"s1": [{
+            "rows": [{"values": ["Alpha 101", 4, None], "source_slots": [1]}],
+        }]},
+    )
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "workbook", {"prompt": "Alpha facts", "sourceIds": [str(source)]},
+                       "workbook-revision-base")
+    assert run_once(store, "workbook-revision-base", executor).status.value == "succeeded"
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    prior = client.get(f"/api/artifacts/{artifact_id}").json()
+
+    # The revising model sees headings, not the column schema, and calls every
+    # column text. The prior sheet's types are the student's data.
+    revise_provider = ArtifactStageProvider(
+        edits=[{
+            "title": "Credits",
+            "operations": [{
+                "action": "replace", "section_id": "s1",
+                "sheet": {
+                    "id": "s1", "name": "Credits", "row_purpose": "One course per row.",
+                    "columns": [
+                        {"key": "c1", "header": "Course", "type": "text"},
+                        {"key": "c2", "header": "Credits", "type": "text"},
+                        {"key": "c3", "header": "Total", "type": "text"},
+                    ],
+                    "source_slots": [1],
+                },
+            }],
+        }],
+        sections={"s1": [{"rows": [
+            {"values": ["Alpha 101", 4, None], "source_slots": [1]},
+            {"values": ["Alpha 102", 3, None], "source_slots": [1]},
+        ]}]},
+    )
+    revise_client, revise_store, revise_executor = setup_runtime(
+        db, collection, revise_provider, tmp_path)
+    start_run(revise_client, "workbook", {
+        "prompt": "Alpha facts: add a second course row and update the total.",
+        "sourceIds": [str(source)],
+        "artifactId": artifact_id, "expectedRevisionId": prior["revisionId"],
+    }, "workbook-revision")
+    finished = run_once(revise_store, "workbook-revision", revise_executor)
+    assert finished.status.value == "succeeded", finished.error
+    revised = revise_client.get(f"/api/artifacts/{artifact_id}").json()
+    spec = revised["spec"]
+    cells = {(cell["row"], cell["column"]): cell for cell in spec["sheets"][0]["cells"]}
+    assert cells[(3, 3)]["formula"] == "=SUM(B2:B3)"
+    assert spec["charts"][0]["data_range"] == "B1:B3"
+    assert spec["charts"][0]["categories_range"] == "A1:A3"
+    assert revised["parentRevisionId"] == prior["revisionId"]
+
+
+def test_an_html_revision_can_add_a_section_and_keep_the_page(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    provider = ArtifactStageProvider(
+        outline={
+            "title": "Page", "sections": [{
+                "id": "body", "heading": "Page", "purpose": "One page.",
+                "block_types": ["paragraph"], "source_slots": [1],
+            }], "sheets": [], "charts": [],
+        },
+        sections={"body": [{"html": "<p>Alpha facts.</p>", "source_slots": [1]}]},
+    )
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "html", {"prompt": "Alpha facts", "sourceIds": [str(source)]},
+                       "html-revision-base")
+    assert run_once(store, "html-revision-base", executor).status.value == "succeeded"
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    prior = client.get(f"/api/artifacts/{artifact_id}").json()
+
+    revise_provider = ArtifactStageProvider(
+        edits=[{
+            "title": "Page",
+            "operations": [
+                {"action": "keep", "section_id": "body"},
+                {"action": "insert_after", "section_id": "body",
+                 "section": {"id": "electives", "heading": "Electives",
+                             "purpose": "Electives.", "block_types": ["paragraph"],
+                             "source_slots": [1]}},
+            ],
+        }],
+        sections={"electives": [{"html": "<p>Choose an elective.</p>",
+                                "source_slots": [1]}]},
+    )
+    revise_client, revise_store, revise_executor = setup_runtime(
+        db, collection, revise_provider, tmp_path)
+    start_run(revise_client, "html", {
+        "prompt": "Alpha facts: add an electives section.", "sourceIds": [str(source)],
+        "artifactId": artifact_id, "expectedRevisionId": prior["revisionId"],
+    }, "html-revision")
+    finished = run_once(revise_store, "html-revision", revise_executor)
+    assert finished.status.value == "succeeded", finished.error
+    revised = revise_client.get(f"/api/artifacts/{artifact_id}").json()
+    assert "Alpha facts." in revised["spec"]["html"]
+    assert "Choose an elective." in revised["spec"]["html"]
+    assert revised["parentRevisionId"] == prior["revisionId"]
+
+
+def test_a_workbook_row_whose_number_column_is_not_a_number_is_refused(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    provider = ArtifactStageProvider(
+        outline={
+            "title": "Credits", "sections": [],
+            "sheets": [{
+                "id": "s1", "name": "Credits", "row_purpose": "One course per row.",
+                "columns": [
+                    {"key": "course", "header": "Course", "type": "text"},
+                    {"key": "credits", "header": "Credits", "type": "number"},
+                ],
+                "source_slots": [1],
+            }],
+            "charts": [],
+        },
+        sections={"s1": [
+            {"rows": [{"values": ["Alpha 101", "4 credits"], "source_slots": [1]}]},
+            {"rows": [{"values": ["Alpha 101", 4], "source_slots": [1]},
+                      {"values": ["Alpha 102", None], "source_slots": [1]}]},
+        ]},
+    )
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    start_run(client, "workbook", {"prompt": "Alpha facts", "sourceIds": [str(source)]},
+              "workbook-bad-number")
+    finished = run_once(store, "workbook", executor)
+    assert finished.status.value == "succeeded", finished.error
+    assert any("is not a number" in str(message)
+               for request in provider.requests for message in request.messages)
+
+
+def test_a_plan_order_violation_names_its_section(db, collection, tmp_path):
+    _econ(db, collection, tmp_path)
+    from app.artifacts.checks import check_generated_artifact
+    from app.artifacts.storage import validate_spec
+
+    spec = validate_spec("document", {"kind": "document", "title": "Plan", "blocks": [
+        {"id": "t1:h", "type": "heading", "level": 2, "text": "Term 1"},
+        {"id": "t1:c", "type": "list", "items": [
+            "ECON 201 — Intermediate Macroeconomics",
+            "ECON 101 — Principles of Macroeconomics",
+        ]},
+    ]})
+    findings = check_generated_artifact(
+        db, collection_id=collection, spec=spec,
+        known_courses={"ECON 201", "ECON 101"}, campus_equivalents={},
+        plan_terms={"ECON 201": 1, "ECON 101": 1},
+        plan_term_sections={1: "t1"},
+        section_texts={"t1": "ECON 201 — Intermediate Macroeconomics ECON 101 — "
+                            "Principles of Macroeconomics"})
+    k6 = [finding for finding in findings if finding.check == "K6"]
+    assert k6 and k6[0].section_id == "t1"
+    assert "ECON 201" in k6[0].message
 
 
 @pytest.mark.parametrize("note", ["MATH 111 is scheduled here.", "Take this term lightly."])

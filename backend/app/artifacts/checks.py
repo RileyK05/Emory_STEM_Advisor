@@ -338,7 +338,9 @@ def check_generated_artifact(
         violations = plan_order_violations(conn, collection_id, plan_terms,
                                            completed_courses, campus_equivalents)
         for violation in violations:
-            code = violation.split(" ", 1)[0]
+            # "MATH 111 (term 2) before/with MATH 110": the course is the
+            # code before the term, not its subject alone.
+            code = violation.split(" (term ", 1)[0]
             section_id = _section_for_text(code, section_texts)
             if section_id is None and plan_term_sections:
                 term = plan_terms.get(code)
