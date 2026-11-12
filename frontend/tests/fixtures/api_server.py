@@ -152,7 +152,7 @@ def main() -> None:
                     "requestId": getattr(provider_call_context, "request_id", None),
                 })
             if provider.fail_next:
-                provider.fail_next = False
+                provider.fail_next -= 1
                 provider.calls += 1
                 raise RuntimeError("test-only provider failure")
             if slow_call["armed"]:
@@ -235,8 +235,8 @@ def main() -> None:
             return {"armed": True}
 
         @app.post("/__test/fail-next-provider")
-        async def fail_next_provider_for_test():
-            provider.fail_next = True
+        async def fail_next_provider_for_test(attempts: int = 1):
+            provider.fail_next = max(1, min(attempts, 10))
             return {"armed": True}
 
         @app.post("/__test/slow-next-provider")

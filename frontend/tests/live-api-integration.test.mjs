@@ -256,7 +256,8 @@ test('real reindex failure retains the last-good source revision and citations',
     assert.ok(afterFailure, `Reindexed source disappeared: ${JSON.stringify(sourceListAfterFailure)}`);
     assert.equal(afterFailure.status, 'indexed');
     assert.ok(afterFailure.indexRevision > source.indexRevision);
-    assert.match(afterFailure.errorMessage, /test-only reindex failure/);
+    assert.match(afterFailure.errorMessage, /could not be read or indexed|reindex/i);
+    assert.doesNotMatch(afterFailure.errorMessage, /Exception|Traceback|Error:/);
 
     const queryResult = await page.evaluate(async ({ sourceId }) => {
       const response = await fetch('/api/query', {
@@ -355,7 +356,7 @@ test('real saved conversations retain citation snapshots, sequence follow-ups, a
 
     await openSidebar(page, 'New chat');
     await page.evaluate(async () => {
-      const response = await fetch('/__test/fail-next-provider', { method: 'POST' });
+      const response = await fetch('/__test/fail-next-provider?attempts=3', { method: 'POST' });
       if (!response.ok) throw new Error('Could not arm the test-only provider failure.');
     });
     await send(page, 'What safety briefing must students complete before opening the observatory dome?');
@@ -380,9 +381,10 @@ test('real saved conversations retain citation snapshots, sequence follow-ups, a
     await page.getByRole('button', { name: 'Stop answering' }).waitFor();
     const providerStateAfterFailure = await page.evaluate(async () => (await (await fetch('/__test/provider-calls')).json()));
     const callsAfterFailure = providerStateAfterFailure.calls;
-    // The follow-up's research searches, reads and finishes; the failed turn stops at its first call.
-    assert.ok(callsAfterFailure <= callsBeforeFollowUp + 4,
-      'the follow-up researches once and the failed turn makes one provider attempt');
+    // The follow-up's research searches, reads and finishes; the failed turn
+    // makes its three bounded provider attempts.
+    assert.ok(callsAfterFailure <= callsBeforeFollowUp + 6,
+      'the follow-up researches once and the failed turn exhausts its retry budget');
     await page.waitForTimeout(300);
     const providerStateAfterSettle = await page.evaluate(async () => (await (await fetch('/__test/provider-calls')).json()));
     assert.equal(providerStateAfterSettle.calls, callsAfterFailure,
