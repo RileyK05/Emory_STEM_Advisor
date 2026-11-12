@@ -24,15 +24,17 @@ that the live sample has been rerun.
 | EMO-079 answer guard | The echo check normalises NFKC/confusables/zero-width characters and uses 5-word shingles with an overlap ratio; AWS, JWT, GitHub, Slack and Google key shapes are refused; a block that starts with TODO/TBD/lorem is a stub; script/event markup is refused. |
 | EMO-063 shouted prose | `WITH 88` and `ROOM 204` no longer mint fake subjects; the all-caps path still accepts a made-up subject such as `XYZ 101`. |
 | A26 fake-code wording | K4's no-artifact branch accepts a fake code in the turn text only when every clause naming it says it is not a course; an artifact that presents the code still fails. |
+| A27/A28 container files | A direct page or spreadsheet request from a student's own text still builds the file when research declines the content. It runs in authoring mode (no corpus citations), strips scripts, handlers and external formulas at render, and the reply says what was removed. A27/A28 now pass; K7 treats a `generation_mode=authoring` artifact as having no corpus evidence by design. |
 | EMO-078 stale integration tests | The reindex test asserts the safe stored message; the failed-draft test arms three provider failures, matching the new retry budget. |
 
 ## Verification
 
-- Full backend suite: 1,737 passed, 2 skipped; `ruff check .` clean.
+- Full backend suite: 1,744 passed, 2 skipped; `ruff check .` clean.
 - Frontend `typecheck`, `format:check`, unit suite, and `test:integration` (5/5 with the Chrome path).
 - Offline artifact benchmark 70/70.
 - Live smoke on `deepseek-v4.1-flash`: A01 (Biology BS plan), A02 (plan with completed courses), A03 (Oxford plan), A04 (checklist), A09 (workbook tracker), A10 (comparison workbook), A13 (HTML page), A14 (HTML requirements), and A29 (fake program) all pass. A01 published with every content check green; its fastest smoke was turn 38.7 s / artifact run 18.2 s, while later provider-latency runs took 96-104 s and missed only K1's 90 s turn bar.
-- A26 now passes: K4 allows a fake code in the turn text when every clause naming it says it is not a course. A27/A28 (non-advising page/spreadsheet with malicious content) remain declined by scope rather than producing a corpus-cited artifact.
+- A26 now passes: K4 allows a fake code in the turn text when every clause naming it says it is not a course. A27/A28 also pass: the page and workbook are built without corpus citations, with the script, event handler and external formula removed.
+- The authoring path is tested at the artifact pipeline (provenance `generation_mode=authoring`, empty evidence), at the research handoff (a declined page/sheet ask still gets an artifact; an essay does not), and at the worker (the payload carries `mode=authoring`).
 
 ## Remaining
 
@@ -43,7 +45,7 @@ that the live sample has been rerun.
 - EMO-080 depends on the outline model actually selecting the second program's
   and premed courses; the pipeline now accepts them.
 - A26 needs no wording decision: the benchmark's K4 now accepts a fake code
-  only when the clause says it is not a course. A27/A28 need a scope decision
-  about non-advising page/spreadsheet artifacts.
+  only when the clause says it is not a course. A27/A28 need no scope decision:
+  the inert container file is made, and only its non-advising content is refused.
 - The live seed-11 suite and the frozen benchmark have not been rerun on this
   code.

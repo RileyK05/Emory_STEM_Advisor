@@ -302,7 +302,7 @@ def query_response(
             request = decision.artifact
             artifact = ArtifactRequestInfo(
                 kind=request.kind, title=request.title, brief=request.brief,
-                purpose=request.purpose,
+                purpose=request.purpose, grounding=request.grounding,
                 revises=ArtifactRevisesInfo(
                     artifactId=str(request.revises.artifact_id),
                     revisionId=str(request.revises.revision_id),

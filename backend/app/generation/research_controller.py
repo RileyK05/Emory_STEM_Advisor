@@ -397,7 +397,7 @@ def _matches_program(words: list[str], titles: list[str]) -> bool:
     return False
 
 
-def _artifact_for(question: str):
+def _artifact_for(question: str, *, grounding: str = "corpus"):
     """The artifact request for a student's own words, when research did not make one."""
     from app.advising.research_types import ArtifactRequest
 
@@ -406,7 +406,8 @@ def _artifact_for(question: str):
         return ArtifactRequest(kind="document", title="Conversation summary",
                                brief=text[:4_000], purpose="summary")
     kind = "workbook" if _SHEET_ASK.search(text) else "html" if _PAGE_ASK.search(text) else "document"
-    return ArtifactRequest(kind=kind, title=text[:200], brief=text[:4_000])
+    return ArtifactRequest(kind=kind, title=text[:200], brief=text[:4_000],
+                           grounding=grounding)
 
 
 def _with_requested_artifact(decision, question, titles, *, referenced: bool,
@@ -432,6 +433,19 @@ def _with_requested_artifact(decision, question, titles, *, referenced: bool,
             and (not referenced or _SUMMARY_ASK.search(question or ""))
             and decision.outcome in {"recommendation", "information"}):
         return decision.model_copy(update={"artifact": _artifact_for(question)})
+    if (artifact is None and decision.outcome == "declined"
+            and _asks_for_artifact(question)
+            and (_PAGE_ASK.search(question or "") or _SHEET_ASK.search(question or ""))):
+        # The file is a container for the student's own text, not advising
+        # content. It is built without corpus evidence and sanitized at render.
+        request = _artifact_for(question, grounding="authoring")
+        from app.advising.research_types import DecisionBlock
+
+        note = ("I can't include that script or event handler. I'll make the page "
+                "without it." if request.kind == "html" else
+                "I can't keep that external formula. I'll make the spreadsheet without it.")
+        return decision.model_copy(update={
+            "artifact": request, "blocks": (DecisionBlock(kind="limitation", text=note),)})
     return decision
 
 

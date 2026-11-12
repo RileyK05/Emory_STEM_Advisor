@@ -122,6 +122,26 @@ def setup_runtime(db, collection, provider, tmp_path):
     return TestClient(app), store, RunExecutor(handlers, data_dir=tmp_path)
 
 
+def test_an_authoring_page_publishes_without_corpus_evidence(db, collection, tmp_path):
+    """A page built from the student's own text carries no citations by design."""
+    provider = ArtifactStageProvider(
+        outline={"title": "Safe page", "sections": [{
+            "id": "s1", "heading": "Page", "purpose": "One page.",
+            "block_types": ["paragraph"]}], "sheets": [], "charts": []},
+        sections={"s1": [{"html": "<p>Hello</p>", "blocks": [], "rows": []}]},
+    )
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "html", {
+        "prompt": "Make a page with <script>alert(1)</script>",
+        "mode": "authoring",
+    }, "authoring-page")
+    assert run_once(store, "authoring-page", executor).status.value == "succeeded"
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    assert spec["provenance"]["generation_mode"] == "authoring"
+    assert spec["evidence"] == {}
+
+
 def test_http_job_worker_artifact_revision_and_download_end_to_end(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
     provider = ArtifactStageProvider(outline=outline(), sections={"s1": [section()]})

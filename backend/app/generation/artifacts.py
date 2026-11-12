@@ -218,6 +218,10 @@ class ArtifactHandler:
         settings = self.settings
         collection_id, prior = load_artifact_target(conn, settings, job.scope_key, kind, inputs)
         conn.commit()
+        if (prior or {}).get("provenance", {}).get("generation_mode") == "authoring":
+            # A revision of a student-authored file stays authoring even when
+            # the follow-up turn did not restate where the text came from.
+            inputs = inputs.model_copy(update={"mode": "authoring"})
         context.progress({"stage": "retrieving"})
         grounding = self._ground(conn, job, inputs, collection_id)
         context.check_cancelled()

@@ -262,7 +262,10 @@ class ConversationTurnExecutor:
             inputs = {
                 "prompt": brief + "\n\nPublished answer:\n" + answer,
                 "requestText": value.request_text,
-                "mode": "grounded",
+                # Only a page or sheet can hold the student's own text without
+                # citations. A document always stays grounded in the corpus.
+                "mode": ("authoring" if artifact.get("grounding") == "authoring"
+                         and kind in {"html", "workbook"} else "grounded"),
                 "sourceIds": sorted(value.source_snapshot),
                 "collectionId": value.collection_name,
             }

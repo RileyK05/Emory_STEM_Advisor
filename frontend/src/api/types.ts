@@ -296,6 +296,7 @@ export interface ArtifactRequestInfo {
   brief: string;
   purpose?: 'create' | 'revise' | 'summary';
   revises?: { artifactId: string; revisionId: string } | null;
+  grounding?: 'corpus' | 'authoring';
 }
 
 export interface ResearchDecisionInfo {

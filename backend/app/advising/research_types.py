@@ -282,6 +282,11 @@ class ArtifactRequest(_Strict):
     brief: str = Field(min_length=1, max_length=4_000)
     purpose: Literal["create", "revise", "summary"] = "create"
     revises: ArtifactRevisionReference | None = None
+    # Advising artifacts are built from the corpus. A page or sheet that only
+    # holds the student's own text is built without citations ("authoring").
+    grounding: Literal["corpus", "authoring"] = Field(
+        default="corpus",
+        description="corpus for advising content; authoring for the student's own text")
 
     @model_validator(mode="after")
     def valid_purpose(self):

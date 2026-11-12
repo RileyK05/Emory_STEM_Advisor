@@ -220,13 +220,19 @@ def evaluate_checks(
     # K7: Evidence: non-empty and resolves to cited passages
     if spec is not None:
         art_evidence = spec.get("evidence", {})
+        provenance = spec.get("provenance") or {}
         turn_citations = {c.get("chunkId") for c in turn.get("citations", [])}
         all_refs: list[str] = []
         for ref_list in art_evidence.values():
             for ref in ref_list:
                 if isinstance(ref, dict):
                     all_refs.append(str(ref.get("chunk_id") or ref.get("chunkId") or ""))
-        if not art_evidence:
+        if provenance.get("generation_mode") == "authoring":
+            # A page or sheet built from the student's own text has no corpus
+            # evidence by design; grounded artifacts still need it.
+            k7_ok = True
+            k7_detail = "N/A"
+        elif not art_evidence:
             k7_ok = False
             k7_detail = "artifact evidence is empty"
         elif turn_citations and not any(r in turn_citations for r in all_refs if r):

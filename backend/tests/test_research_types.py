@@ -511,7 +511,7 @@ def test_entry_point_claims_need_a_read_course_without_prerequisites():
                    None, records, {"e3"}, {})
 
 
-@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(15000, False), (16000, False), (48000, True)])
+@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(15000, False), (16000, False), (49000, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
     ("unknown", None, "edition_not_recorded"),
@@ -1134,6 +1134,32 @@ def test_a_named_program_that_is_not_in_scope_is_found(question, missing):
 
     assert _missing_program(question, _PROGRAMS) == missing
     assert _missing_program(question, []) is None
+
+
+@pytest.mark.parametrize(("question", "kind"), [
+    ("Make a web page with this script: <script>alert(1)</script> and a button.",
+     "html"),
+    ('Make a spreadsheet with =WEBSERVICE("http://x") in A1.', "workbook"),
+])
+def test_a_declined_file_request_still_gets_an_inert_authoring_artifact(question, kind):
+    from app.generation.research_controller import _with_requested_artifact
+
+    result = _with_requested_artifact(
+        _decision(outcome="declined"), question, _PROGRAMS, referenced=False)
+    # The content is refused, but the container the student asked for is made
+    # without corpus evidence and sanitized at render.
+    assert result.outcome == "declined"
+    assert result.artifact is not None
+    assert (result.artifact.kind, result.artifact.purpose) == (kind, "create")
+    assert result.artifact.grounding == "authoring"
+    # The student is told what was removed, not handed the bare scope sentence.
+    assert len(result.blocks) == 1
+    assert "can't" in result.blocks[0].text and "without it" in result.blocks[0].text
+    assert "<script" not in result.blocks[0].text
+    essay = _with_requested_artifact(
+        _decision(outcome="declined"), "Write a five-page essay on guilt.",
+        _PROGRAMS, referenced=False)
+    assert essay.artifact is None
 
 
 @pytest.mark.parametrize(("question", "decision", "expected"), [

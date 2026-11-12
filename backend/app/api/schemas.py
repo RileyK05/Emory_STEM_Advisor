@@ -104,6 +104,7 @@ class ArtifactRequestInfo(BaseModel):
     brief: str
     purpose: Literal["create", "revise", "summary"] = "create"
     revises: ArtifactRevisesInfo | None = None
+    grounding: Literal["corpus", "authoring"] = "corpus"
 
 
 class ResearchDecisionInfo(BaseModel):

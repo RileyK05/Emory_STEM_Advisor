@@ -79,7 +79,14 @@ def _scope(db, collection, source_ids=None, **kwargs):
 
 
 @pytest.mark.parametrize("admits", [True, False])
-def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, collection, admits):
+@pytest.mark.parametrize(("grounding", "kind", "mode"), [
+    ("corpus", "document", "grounded"),
+    ("authoring", "html", "authoring"),
+    # A document always stays grounded, even if the request says authoring.
+    ("authoring", "document", "grounded"),
+])
+def test_published_turn_with_artifact_request_queues_one_run(
+        db, migrated_dsn, collection, admits, grounding, kind, mode):
     from app.config import load_settings
     from app.conversations.store import ConversationStore
     from app.conversations.worker import ConversationTurnExecutor, ConversationTurnResult
@@ -98,8 +105,9 @@ def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, c
         _scope(db, collection), run_id=uuid4(), prompt_version="test", config_version="6",
         conversation_id=conversation_id, request_id=request_id)
     artifact = {
-        "kind": "document", "title": "Four-semester plan",
+        "kind": kind, "title": "Four-semester plan",
         "brief": "Make a plan for the student's next four semesters.", "purpose": "create",
+        "grounding": grounding,
     }
     research = {"runId": str(run.run_id), "outcome": "information", "completeness": "complete",
                 "blocks": [], "artifact": artifact, "unresolvedQuestions": []}
@@ -128,12 +136,12 @@ def test_published_turn_with_artifact_request_queues_one_run(db, migrated_dsn, c
         return
     queued = turn["artifactRun"]
     assert (queued["kind"], queued["title"], queued["purpose"]) == (
-        "document", "Four-semester plan", "create")
+        kind, "Four-semester plan", "create")
     assert queued["runId"]
     assert len(runs) == 1
     payload = runs[0]["payload"]
-    assert payload["kind"] == "document"
-    assert payload["inputs"]["mode"] == "grounded"
+    assert payload["kind"] == kind
+    assert payload["inputs"]["mode"] == mode
     assert payload["inputs"]["requestText"] == "Make a plan for the student's next four semesters."
     assert payload["inputs"]["researchRunId"] == str(run.run_id)
     assert "Published answer:" in payload["inputs"]["prompt"]

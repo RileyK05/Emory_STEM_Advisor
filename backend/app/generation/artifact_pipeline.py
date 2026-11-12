@@ -1436,6 +1436,9 @@ class ArtifactPipeline:
     def _provenance(self) -> dict:
         """Scalar metadata a later revision needs to re-check the same artifact."""
         provenance = dict((self.prior or {}).get("provenance") or {})
+        # The artifact benchmark uses this to tell a corpus-cited artifact
+        # from a file that only holds the student's own text.
+        provenance["generation_mode"] = self.inputs.mode
         if self.plan is not None:
             provenance.update({
                 "plan": True,
