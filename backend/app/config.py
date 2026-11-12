@@ -156,6 +156,9 @@ class Settings:
     # Optional visual feedback for HTML artifacts: render the draft, send the
     # screenshot to a vision-capable profile, and allow one bounded correction.
     visual_artifact_review_enabled: bool = False
+    # The statically configured provider accepts images. When routing is
+    # enabled, the reviewer is chosen by the vision capability instead.
+    llm_vision: bool = False
     screenshot_renderer: str = "disabled"  # disabled | playwright
     screenshot_timeout_seconds: int = 30
     screenshot_width: int = 1280
@@ -459,6 +462,7 @@ def load_settings() -> Settings:
         artifact_operation_token_budget=_int("ARTIFACT_OPERATION_TOKEN_BUDGET", 300_000),
         conversation_context_max_bytes=_int("CONVERSATION_CONTEXT_MAX_BYTES", 512_000),
         visual_artifact_review_enabled=_bool("VISUAL_ARTIFACT_REVIEW_ENABLED", False),
+        llm_vision=_bool("LLM_VISION", False),
         screenshot_renderer=os.environ.get("SCREENSHOT_RENDERER", "disabled"),
         screenshot_timeout_seconds=_int("SCREENSHOT_TIMEOUT_SECONDS", 30),
         screenshot_width=_int("SCREENSHOT_WIDTH", 1280),

@@ -50,6 +50,7 @@ from app.db import queries
 from app.generation.artifact_candidate import ElementBinding
 from app.generation.controller import (
     GenerationCancelled,
+    ToolCallLimitExceeded,
     ToolConversationController,
     ToolConversationError,
 )
@@ -276,6 +277,7 @@ class ArtifactPipeline:
             "profile_revision": selection.profile_revision if selection else None,
         })
         self.outline: StageOutline | None = None
+        self.outline_fallback = False
         self.edits: StageEdits | None = None
         self.plan: SequencePlan | None = None
         self.plan_records: dict[str, int] = {}
@@ -308,7 +310,14 @@ class ArtifactPipeline:
                         if self._section_id(section) not in self.kept]
         else:
             self.context.progress({"stage": "outlining"})
-            self._run_outline()
+            try:
+                self._run_outline()
+            except (ToolCallLimitExceeded, ToolConversationError):
+                # A weak model can fail to outline a plan it cannot invent. The
+                # program's required lines and the term packer are deterministic,
+                # so build the plan without it.
+                if not self.plan_requested or not self._fallback_plan_outline():
+                    raise
             sections = self._current_sections()
             to_write = list(sections)
         self._write_sections(to_write)
@@ -420,6 +429,36 @@ class ArtifactPipeline:
         if self.outline is None:
             raise SafeJobError("invalid_output", "The model did not return a complete outline.")
         return result
+
+    def _fallback_plan_outline(self) -> bool:
+        """Build a term plan from the program's own lines when outlining fails."""
+        requested = _program_named_in(self.request_text, self.program_titles)
+        if requested is None:
+            return False
+        try:
+            title, program_id, _allowed = self._match_program(requested)
+        except ValueError:
+            return False
+        if program_id is None:
+            return False
+        items = self.conn.execute(
+            queries.get("list_program_items"), {"program_id": program_id}
+        ).fetchall()
+        self.conn.commit()
+        required = _required_program_codes(items, self._course_exists)
+        if not required:
+            return False
+        value = StageOutline(
+            title=f"{title}: Term plan", program=title,
+            selected_courses=required, sections=[], sheets=[], charts=[],
+        )
+        try:
+            self._validate_outline(value)
+        except (ValueError, ValidationError):
+            return False
+        self.outline = value
+        self.outline_fallback = True
+        return True
 
     def _stage_outline(self, value: StageOutline) -> StageAck:
         try:
@@ -1439,6 +1478,8 @@ class ArtifactPipeline:
         # The artifact benchmark uses this to tell a corpus-cited artifact
         # from a file that only holds the student's own text.
         provenance["generation_mode"] = self.inputs.mode
+        if self.outline_fallback:
+            provenance["outline_fallback"] = True
         if self.plan is not None:
             provenance.update({
                 "plan": True,
@@ -1952,6 +1993,22 @@ def _required_program_codes(items, course_exists) -> list[str]:
             if course_exists(code) and code not in codes:
                 codes.append(code)
     return codes
+
+
+def _program_named_in(text: str, titles: list[str]) -> str | None:
+    """The one program whose full title appears in the request, if unambiguous."""
+    words = set(re.findall(r"[a-z0-9]+", text.casefold()))
+    matches = sorted(
+        ((len(title_words), title) for title in titles
+         for title_words in [set(re.findall(r"[a-z0-9]+", title.casefold()))]
+         if title_words and title_words <= words),
+        reverse=True,
+    )
+    if not matches:
+        return None
+    if len(matches) > 1 and matches[0][0] == matches[1][0]:
+        return None
+    return matches[0][1]
 
 
 def _check_program_kind(brief: str, title: str) -> None:

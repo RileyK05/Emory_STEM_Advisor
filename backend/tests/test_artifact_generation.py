@@ -463,6 +463,34 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
     assert any(block.get("text") == "Macro theory." for block in spec["blocks"])
 
 
+def test_a_plan_outline_falls_back_to_the_programs_required_lines(db, collection, tmp_path):
+    """A model that cannot outline a plan still gets a deterministic plan."""
+    source = _econ(db, collection, tmp_path)
+
+    class TextOnly:
+        def generate(self, request):
+            return GenerationResult(text="I could not outline it.", finish_reason="stop",
+                                    usage=Usage(100, 20, source="provider"))
+
+    client, store, executor = setup_runtime(db, collection, TextOnly(), tmp_path)
+    run_id = start_run(client, "document", {
+        "prompt": "Make a plan for the Economics minor covering ECON 201.\n\n"
+                  "Published answer:\nUse the program's required courses.",
+        "requestText": "Make a plan for the Economics minor.",
+        "sourceIds": [str(source)],
+    }, "plan-outline-fallback")
+    finished = run_once(store, "plan-outline-fallback", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    headings = [block.get("text") for block in spec["blocks"]
+                if block.get("type") == "heading"]
+    assert headings and headings[0].startswith("Term ")
+    assert spec["title"] == "Economics (Minor): Term plan"
+    assert spec["provenance"]["program_title"] == "Economics (Minor)"
+    assert spec["provenance"]["outline_fallback"] is True
+
+
 def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
     provider = ArtifactStageProvider(

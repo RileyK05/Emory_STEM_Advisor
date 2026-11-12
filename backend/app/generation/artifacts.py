@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.artifacts.models import HtmlArtifactSpec
 from app.artifacts.storage import SPEC_TYPES, ArtifactStore
 from app.artifacts.visual_review import (
+    MAX_REVIEW_HTML_CHARS,
     ScreenshotUnavailable,
     apply_visual_review,
     build_visual_review_request,
@@ -346,11 +347,45 @@ class ArtifactHandler:
 
         release_borrow(conn)
 
+    def _visual_reviewer(self, conn, job, inputs, provider, active, selection):
+        """The connection that can see the screenshot, independent of the writer.
+
+        A weak generator does not need vision: any enabled, evaluated profile
+        that declares the capability can review the rendered page. When routing
+        is off, the statically configured provider is used only if `LLM_VISION`
+        says it accepts images.
+        """
+        if selection is not None and "vision" in selection.profile.capabilities:
+            return provider, active, selection
+        if getattr(self.settings, "routing_enabled", False):
+            authoring = inputs.mode == "authoring"
+            try:
+                reviewer = resolve(
+                    self.settings, conn, query=inputs.prompt or "visual artifact review",
+                    job_kind="artifact_visual_review",
+                    data_scope=("user_supplied_data" if authoring
+                                else "institutional_corpus"),
+                    required_data_scopes=required_data_scopes(
+                        job.scope_key, authoring=authoring),
+                    required_capabilities=frozenset({"vision"}),
+                    profiles=self.profiles, runtime=self.runtime,
+                )
+            except Exception:  # noqa: BLE001 - the review is advisory
+                return None
+            return (reviewer.provider, reviewer.settings, reviewer) if reviewer else None
+        if getattr(self.settings, "llm_vision", False):
+            return provider, active, selection
+        return None
+
     def _visual_review(self, conn, job, context, inputs, spec, grounding, prior,
                        provider, active, selection, operation):
-        """One screenshot-backed critique, with an optional validated revision."""
-        if selection is None or "vision" not in selection.profile.capabilities:
-            return spec
+        """One screenshot-backed critique, with one bounded validated revision."""
+        reviewer = self._visual_reviewer(conn, job, inputs, provider, active, selection)
+        if reviewer is None:
+            return spec.model_copy(update={"provenance": {
+                **spec.provenance, "visual_review": "no_vision",
+            }})
+        review_provider, review_settings, review_selection = reviewer
         context.progress({"stage": "visual_review"})
         try:
             image = render_screenshot(spec, active)
@@ -358,29 +393,42 @@ class ArtifactHandler:
             return spec.model_copy(update={"provenance": {
                 **spec.provenance, "visual_review": "unavailable",
             }})
-        request = build_visual_review_request(spec, image, active)
-        try:
-            result = self._call_once(conn, job, context, grounding, provider, active,
-                                     selection, operation, request)
-            review = parse_visual_review(result, image)
-        except Exception:  # noqa: BLE001 - visual review is advisory, never publication authority
-            return spec.model_copy(update={"provenance": {
-                **spec.provenance, "visual_review": "unavailable",
-            }})
-        if review.revised_html:
+        rejection: str | None = None
+        for attempt in range(2):
+            request = build_visual_review_request(
+                spec, image, review_settings, rejection=rejection)
             try:
-                return apply_visual_review(spec, review)
-            except (ValueError, ValidationError):
+                result = self._call_once(conn, job, context, grounding, review_provider,
+                                         review_settings, review_selection, operation,
+                                         request)
+                review = parse_visual_review(result, image)
+            except Exception:  # noqa: BLE001 - visual review is advisory, never publication authority
                 return spec.model_copy(update={"provenance": {
-                    **spec.provenance, "visual_review": "invalid_revision",
+                    **spec.provenance, "visual_review": "unavailable",
                 }})
-        status = "issues" if review.issues else "passed"
-        return spec.model_copy(update={"provenance": {
-            **spec.provenance,
-            "visual_review": status,
-            "visual_issue_count": len(review.issues),
-            "screenshot_sha256": review.screenshot_sha256,
-        }})
+            can_revise = review.revised_html and len(spec.html) <= MAX_REVIEW_HTML_CHARS
+            if can_revise:
+                try:
+                    return apply_visual_review(spec, review)
+                except (ValueError, ValidationError) as exc:
+                    # A weak reviewer can produce invalid markup. Tell it what was
+                    # rejected and allow one corrected revision.
+                    rejection = str(exc)
+                    if attempt == 0:
+                        continue
+                    return spec.model_copy(update={"provenance": {
+                        **spec.provenance,
+                        "visual_review": "invalid_revision",
+                        "screenshot_sha256": review.screenshot_sha256,
+                    }})
+            status = "issues" if review.issues else "passed"
+            return spec.model_copy(update={"provenance": {
+                **spec.provenance,
+                "visual_review": status,
+                "visual_issue_count": len(review.issues),
+                "screenshot_sha256": review.screenshot_sha256,
+            }})
+        return spec
 
     def _call_once(self, conn, job, context, grounding, provider, active, selection,
                    operation, request):

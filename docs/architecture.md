@@ -1961,7 +1961,10 @@ terminal tool, so a rejected stage returns its reason to the model in the same
 conversation. Term plans are ordered by `advising.sequence.plan_sequence`. Code
 renders each course with its own course record citation and puts blocked courses
 in a final advisor section with the planner's reasons. The model may add one
-short course-code-free excerpt from the section's evidence. Workbooks receive
+short course-code-free excerpt from the section's evidence. If the outline stage
+exhausts its bounded calls on a term-plan request, the matched program's required
+lines and the deterministic planner build the plan instead; provenance records
+`outline_fallback`. Workbooks receive
 rows as data; code assigns cell identities, headers, widths, and the only
 formulas (declared total columns). HTML sections are fragments assembled and
 sanitized once. Sections are written from the outline alone (every heading and
@@ -2581,10 +2584,15 @@ layers. Where code does not yet meet one, the requirement still applies.
   read-only root filesystem, and JavaScript disabled; only the bounded PNG
   returns. The app sends it to a connection profile that declares the `vision`
   capability and allows one bounded, schema-validated HTML correction. The
-  screenshot is not persisted or published; the visual verdict and screenshot
-  digest are artifact provenance. A missing browser image, a missing vision
-  capability, or a failed review leaves the original candidate publishable; no
-  browser runs in the API or worker process.
+  writer does not need vision: with routing enabled, any evaluated profile that
+  declares it can review; with routing disabled, `LLM_VISION=true` marks the
+  statically configured provider. The request includes the current HTML, so a
+  revision can keep facts and course codes the screenshot cannot show, and a
+  rejected revision is retried once with its validation reason. The screenshot
+  is not persisted or published; the visual verdict and screenshot digest are
+  artifact provenance. A missing browser image, a missing vision capability, or
+  a failed review leaves the original candidate publishable; no browser runs in
+  the API or worker process.
 
 ### Product, access, and deployment
 

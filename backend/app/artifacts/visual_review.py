@@ -18,6 +18,9 @@ from app.config import Settings
 from app.llm.base import GenerationRequest, GenerationResult, ImageMessage
 
 MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024
+# A review model is given the current HTML so its revision can preserve the
+# content it cannot see in the screenshot. Larger pages are issues-only.
+MAX_REVIEW_HTML_CHARS = 24_000
 _SCREENSHOT_POLICY = (
     "default-src 'none'; img-src data:; style-src 'unsafe-inline'; "
     "script-src 'none'; font-src data:; connect-src 'none'; "
@@ -150,24 +153,37 @@ def render_screenshot(spec: HtmlArtifactSpec, settings: Settings) -> bytes:
 
 
 def build_visual_review_request(
-    spec: HtmlArtifactSpec, image: bytes, settings: Settings
+    spec: HtmlArtifactSpec, image: bytes, settings: Settings, *, rejection: str | None = None
 ) -> GenerationRequest:
+    truncated = len(spec.html) > MAX_REVIEW_HTML_CHARS
+    shown_html = spec.html[:MAX_REVIEW_HTML_CHARS]
+    if truncated:
+        shown_html += "\n<!-- current HTML truncated; return issues only -->"
     prompt = (
         "You are reviewing a rendered screenshot of an HTML artifact. "
         "Return only the requested JSON. List visual problems that a student "
         "would notice: broken layout, clipped or overlapping text, unreadable "
         "contrast, missing labels, empty charts, poor hierarchy, or content "
-        "that does not match the intended title. If you can fix them without "
-        "changing the facts or evidence, return the complete corrected HTML in "
-        "revised_html. Never add scripts, iframes, forms, external URLs, or "
-        "network resources. Keep the same content and source references. "
+        "that does not match the intended title. The current HTML is included "
+        "below the screenshot. If you return revised_html, start from that "
+        "HTML and keep every heading, course code, number, list item and "
+        "source reference; change only layout, styling or markup. If you can "
+        "fix the problems without changing the facts or evidence, return the "
+        "complete corrected HTML in revised_html. Never add scripts, iframes, "
+        "forms, external URLs, or network resources. If the current HTML is "
+        "marked truncated, return issues only and no revised_html. "
         "If the render is acceptable, return an empty issues list."
     )
+    if rejection:
+        prompt += (" The previous revision was rejected: "
+                   f"{rejection[:400]}. Return a complete corrected HTML, or issues only.")
     return GenerationRequest(
         [
             {"role": "system", "content": prompt},
             ImageMessage(
-                content=f"Artifact title: {spec.title}\nReview this rendered screenshot.",
+                content=(f"Artifact title: {spec.title}\n"
+                         "The screenshot is this exact revision.\n"
+                         f"<current_html>\n{shown_html}\n</current_html>"),
                 mime_type="image/png",
                 data=base64.b64encode(image).decode("ascii"),
             ),

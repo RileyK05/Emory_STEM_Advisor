@@ -49,6 +49,24 @@ def test_image_message_maps_to_each_provider_envelope():
     assert compatible[0]["content"][1]["type"] == "image_url"
 
 
+def test_a_static_provider_can_review_without_routing_when_it_has_vision():
+    from types import SimpleNamespace
+
+    from app.generation.artifacts import ArtifactHandler
+
+    provider = object()
+    settings = replace(load_settings(), routing_enabled=False, llm_vision=True)
+    handler = SimpleNamespace(settings=settings, profiles=None, runtime=None)
+    job = SimpleNamespace(scope_key="development")
+    inputs = SimpleNamespace(mode="grounded")
+    assert ArtifactHandler._visual_reviewer(
+        handler, None, job, inputs, provider, settings, None) == (provider, settings, None)
+    settings = replace(settings, llm_vision=False)
+    handler = SimpleNamespace(settings=settings, profiles=None, runtime=None)
+    assert ArtifactHandler._visual_reviewer(
+        handler, None, job, inputs, provider, settings, None) is None
+
+
 def test_visual_review_schema_and_revision_preserve_evidence():
     settings = replace(load_settings(), llm_max_output_tokens=512)
     spec = HtmlArtifactSpec(
@@ -63,6 +81,12 @@ def test_visual_review_schema_and_revision_preserve_evidence():
     request = build_visual_review_request(spec, image, settings)
     assert request.response_schema["required"] == ["issues"]
     assert isinstance(request.messages[1], ImageMessage)
+    # The reviewer sees the current HTML, so a revision can keep its content.
+    assert "<h1>Course map</h1>" in request.messages[1].content
+    retry = build_visual_review_request(
+        spec, image, settings, rejection="scripts are not allowed")
+    assert "rejected" in retry.messages[0]["content"]
+    assert "scripts are not allowed" in retry.messages[0]["content"]
     assert screenshot_document(spec).startswith("<!doctype html>")
     assert "script-src 'none'" in screenshot_document(spec)
 
