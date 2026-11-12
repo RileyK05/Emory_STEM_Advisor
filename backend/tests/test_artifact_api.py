@@ -1,6 +1,7 @@
 """Native file round-trips and revision privacy/CAS against real Postgres."""
 
 import io
+import json
 from datetime import date
 from uuid import uuid4
 
@@ -8,6 +9,7 @@ import pytest
 from openpyxl import load_workbook
 
 from app.artifacts.models import DocumentSpec, HtmlArtifactSpec
+from app.artifacts.projection import prompt_references
 from app.artifacts.storage import (
     ArtifactNotFound,
     ArtifactStore,
@@ -139,3 +141,27 @@ def test_artifact_count_and_revision_caps_are_enforced(db, tmp_path, cap_kind):
         db.commit()
         reclaimed = store.create(HtmlArtifactSpec(title="Two", html="<p>two</p>"))
         assert reclaimed["spec"]["title"] == "Two"
+
+
+def test_attached_artifact_prompt_projection_keeps_the_plan_but_drops_sources():
+    full = {
+        "artifactId": str(uuid4()), "revisionId": str(uuid4()),
+        "spec": {
+            "kind": "document", "title": "Biology BS: Term plan",
+            "page_layout": {"widthInches": 8.5},
+            "blocks": [
+                {"id": "term1:h", "type": "heading", "level": 2, "text": "Term 1"},
+                {"id": "term1:c", "type": "list",
+                 "items": ["BIOL 141 — Foundations", "CHEM 150 — General Chemistry"]},
+            ],
+            "evidence": {"term1:c": [{"chunkId": str(uuid4()),
+                                      "textSnapshot": "x" * 60_000}]},
+        },
+    }
+    projected = prompt_references([full])
+    item = projected[0]
+    assert item["title"] == "Biology BS: Term plan"
+    assert [block["type"] for block in item["blocks"]] == ["heading", "list"]
+    assert "BIOL 141" in item["blocks"][1]["items"][0]
+    assert "evidence" not in item and "page_layout" not in item
+    assert len(json.dumps(projected)) < len(json.dumps([full])) // 10

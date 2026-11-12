@@ -42,6 +42,8 @@ class ConversationTurnResult:
     settings: Any = None
     # The name the turn resolved its collection from; artifact runs resolve by name.
     collection_name: str | None = None
+    # The student's turn text, so an artifact can tell a plan request from prose.
+    request_text: str = ""
 
 
 def _request_ids(job: Job) -> tuple[UUID, UUID]:
@@ -92,8 +94,10 @@ def _report_stage(context, event) -> None:
 
 
 def _history_context(snapshot: dict, effective: dict) -> str:
-    references = json.dumps(effective.get("artifactReferences", []), ensure_ascii=False,
-                            separators=(",", ":"))
+    references = json.dumps(
+        effective.get("artifactPromptReferences",
+                      effective.get("artifactReferences", [])),
+        ensure_ascii=False, separators=(",", ":"))
     return (snapshot.get("context", {}).get("historyContext", "")
             + "\nExact referenced artifact revisions:\n" + references)
 
@@ -189,6 +193,7 @@ class ConversationTurnExecutor:
                 operation_ids[-1] if operation_ids else None, tuple(selected_profiles),
                 job_store=self.job_store, settings=self.settings,
                 collection_name=effective.get("collectionId"),
+                request_text=query_request.query,
             )
         finally:
             conn.close()
@@ -256,6 +261,7 @@ class ConversationTurnExecutor:
                 raise ValueError("artifact brief is empty")
             inputs = {
                 "prompt": brief + "\n\nPublished answer:\n" + answer,
+                "requestText": value.request_text,
                 "mode": "grounded",
                 "sourceIds": sorted(value.source_snapshot),
                 "collectionId": value.collection_name,

@@ -18,6 +18,7 @@ from app.api.schemas import (
     QueryRequest,
 )
 from app.api.serialize import public_payload
+from app.artifacts.projection import prompt_references
 from app.artifacts.storage import ArtifactStore
 from app.auth.dependencies import get_principal, get_workspace_key
 from app.auth.models import Principal
@@ -150,16 +151,17 @@ def _load_references(conn, settings, workspace, body):
     return references
 
 
-def _history_context(store, conversation_id, settings, references) -> str:
+def _history_context(store, conversation_id, settings, references) -> tuple[str, list[dict]]:
     """The transcript the research model reads, within the conversation context budget."""
     rows = store.context(conversation_id)
-    artifact_bytes = len(json.dumps(references, ensure_ascii=False,
+    projected = prompt_references(references)
+    artifact_bytes = len(json.dumps(projected, ensure_ascii=False,
                                     separators=(",", ":")).encode("utf-8"))
     history = research_history_prompt(rows, max_bytes=min(
         6000, settings.conversation_context_max_bytes - artifact_bytes))
     if len(history.encode("utf-8")) + artifact_bytes > settings.conversation_context_max_bytes:
         raise HTTPException(422, "conversation and artifact revisions exceed the context budget")
-    return history
+    return history, projected
 
 
 def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, store):
@@ -178,7 +180,8 @@ def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, s
     source_snapshot = {source_id: revision for source_id, revision in available_revisions.items()
                        if source_ids is None or source_id in {str(item) for item in source_ids}}
     references = _load_references(conn, settings, workspace, body)
-    history_context = _history_context(store, conversation_id, settings, references)
+    history_context, prompt_reference_list = _history_context(
+        store, conversation_id, settings, references)
     conn.commit()
     return {
         "request": body.model_dump(mode="json", exclude_unset=True),
@@ -188,6 +191,7 @@ def _prepare_stream_snapshot(conversation_id, body, conn, settings, workspace, s
             "collectionUuid": str(collection_id),
             "sourceIds": [str(item) for item in source_ids] if source_ids is not None else None,
             "artifactReferences": references,
+            "artifactPromptReferences": prompt_reference_list,
             "sourceSnapshot": source_snapshot,
         },
         "context": {"historyContext": history_context},

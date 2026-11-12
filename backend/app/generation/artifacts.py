@@ -35,7 +35,7 @@ from app.generation.artifact_pipeline import (
     list_program_titles,
     load_research_grounding,
 )
-from app.generation.controller import ToolConversationError
+from app.generation.controller import ToolCallLimitExceeded, ToolConversationError
 from app.generation.evidence import record_attempt
 from app.generation.operation import GenerationOperation
 from app.jobs.runtime import StagedArtifact, StagedRunResult
@@ -54,6 +54,9 @@ _TOO_SLOW = "This took too long to make. Try again, or ask for a shorter version
 class ArtifactGenerationInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     prompt: str = Field(min_length=1, max_length=20_000)
+    # The student's own turn text, before the research model rewrites it as a
+    # brief. A plan request must be recognized from these words.
+    requestText: str | None = Field(default=None, max_length=20_000)
     sourceIds: list[UUID] | None = Field(default=None, max_length=500)
     collectionId: str | None = Field(default=None, max_length=200)
     mode: Literal["grounded", "authoring"] = "grounded"
@@ -176,6 +179,19 @@ class ArtifactHandler:
             return self._generate(conn, job, context, kind, inputs)
         except ArtifactTargetError as exc:
             raise SafeJobError(exc.code, str(exc)) from exc
+        except ToolCallLimitExceeded as exc:
+            notes = " ".join(getattr(exc, "__notes__", ()))
+            logger.warning("artifact job %s exhausted a stage: %s %s",
+                           job.job_id, exc, notes)
+            if "advisor_stage_outline" in notes:
+                raise SafeJobError(
+                    "outline_exhausted",
+                    "This plan was too complex to outline; try one program or one goal at a time."
+                ) from exc
+            raise SafeJobError(
+                "section_exhausted",
+                "This artifact was too complex to finish; try a shorter version."
+            ) from exc
         except (ToolConversationError, ToolLedgerError) as exc:
             # Controller and ledger text only: never model output or slot text.
             logger.warning("artifact job %s stopped its tool conversation: %s %s",
