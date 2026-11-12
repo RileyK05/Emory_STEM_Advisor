@@ -826,6 +826,22 @@ def test_a_transient_provider_failure_is_retried(db, collection, tmp_path, monke
     assert any("Alpha facts." in block.get("text", "") for block in spec["blocks"])
 
 
+def test_a_section_reply_in_prose_is_asked_for_the_tool(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    prose = GenerationResult(text="I wrote the section in the reply instead.",
+                             finish_reason="stop", usage=Usage(100, 30, source="provider"))
+    provider = ArtifactStageProvider(
+        outline=outline(), sections={"s1": [prose, section()]})
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "document",
+                       {"prompt": "Alpha", "sourceIds": [str(source)]}, "prose-section")
+    assert run_once(store, "prose-section", executor).status.value == "succeeded"
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    assert any("Alpha facts." in block.get("text", "") for block in spec["blocks"])
+    assert "did not call the required tool" in message_text(provider.requests[-1].messages[-1])
+
+
 def test_a_blocked_course_goes_in_the_advisor_section(db, collection, tmp_path):
     source = _econ(
         db, collection, tmp_path,

@@ -57,6 +57,10 @@ _CONTINUE_AFTER_OUTPUT_LIMIT = (
     "content you already have, and keep any hidden reasoning brief."
 )
 _TRUNCATED_FINISH_REASONS = frozenset({"length", "max_tokens", "incomplete"})
+_CONTINUE_WITH_TERMINAL_TOOL = (
+    "You did not call the required tool. Call it now with the content you already have. "
+    "Do not explain, apologize or repeat yourself."
+)
 _sleep = time.sleep  # Tests replace this with a FakeClock's sleep.
 
 
@@ -185,6 +189,18 @@ class ToolConversationController:
                 if result.tool_calls:
                     raise ToolConversationError("provider did not complete the tool request")
                 return replace(result, usage=_aggregate_usage(usages))
+            if not result.tool_calls and terminal_tool_names:
+                # A stage reply in prose is the same kind of miss as a truncated
+                # one: keep it and ask for the terminal tool instead of failing
+                # the whole artifact without a correction.
+                if truncated_count < self.max_output_continuations:
+                    truncated_count += 1
+                    if result.text:
+                        messages.append(TextMessage("assistant", result.text))
+                    messages.append(TextMessage("user", _CONTINUE_WITH_TERMINAL_TOOL))
+                    continuing = True
+                    continue
+                raise ToolConversationError("provider did not call the required tool")
             if result.tool_calls and finish_reason in {
                 "content_filter", "error", "failed",
             }:
