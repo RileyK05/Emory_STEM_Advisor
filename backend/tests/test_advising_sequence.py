@@ -1,6 +1,6 @@
 import pytest
 
-from app.advising.sequence import CourseRequirement, plan_sequence
+from app.advising.sequence import CourseRequirement, pack_terms, plan_sequence
 from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef, parse_requisites
 
 
@@ -277,6 +277,16 @@ def test_parse_status_and_raw_required_text_must_agree_but_recommendations_are_i
     }
 
 
+def test_a_renamed_subject_satisfies_its_old_prerequisite():
+    courses = {
+        "DATASCI 150": course("DATASCI 150"),
+        "DATASCI 210": course("DATASCI 210", prereq=CourseRef("QTM 150"), status="parsed"),
+    }
+    plan = plan_sequence(courses, ["DATASCI 150", "DATASCI 210"])
+    assert plan.stages == (("DATASCI 150",), ("DATASCI 210",))
+    assert plan.blockers == ()
+
+
 def test_input_size_is_bounded():
     try:
         plan_sequence({}, [f"X {index}" for index in range(201)])
@@ -284,3 +294,52 @@ def test_input_size_is_bounded():
         assert "size" in str(exc)
     else:
         raise AssertionError("oversized input should fail")
+
+
+def test_term_packing_splits_a_stage_by_credit_cap():
+    courses = {f"BIO {100 + index}": course(f"BIO {100 + index}") for index in range(6)}
+    plan = plan_sequence(courses, list(courses))
+    packed = pack_terms(plan, credits={code: 4.0 for code in courses},
+                        max_credits=8, max_courses=5, max_terms=8)
+
+    assert packed.unscheduled == ()
+    assert [len(term) for term in packed.terms] == [2, 2, 2]
+    assert packed.credits == (8.0, 8.0, 8.0)
+
+
+def test_term_packing_keeps_a_prerequisite_in_an_earlier_term():
+    courses = {
+        "MATH 111": course("MATH 111"),
+        "CS 170": course("CS 170", prereq=CourseRef("MATH 111"), status="parsed"),
+        "CS 253": course("CS 253", prereq=CourseRef("CS 170"), status="parsed"),
+        "BIO 100": course("BIO 100"),
+    }
+    plan = plan_sequence(courses, list(courses))
+    packed = pack_terms(plan, credits={code: 3.0 for code in courses},
+                        max_credits=9, max_courses=5, max_terms=8)
+
+    positions = {code: index for index, term in enumerate(packed.terms) for code in term}
+    assert packed.unscheduled == ()
+    assert positions["MATH 111"] < positions["CS 170"] < positions["CS 253"]
+    assert positions["BIO 100"] == 0
+
+
+def test_term_packing_keeps_corequisites_in_one_term():
+    courses = {
+        "BIO 100": course("BIO 100", coreq=CourseRef("CHEM 100"), status="parsed"),
+        "CHEM 100": course("CHEM 100"),
+        "MATH 100": course("MATH 100"),
+    }
+    plan = plan_sequence(courses, list(courses))
+    packed = pack_terms(plan, credits={"BIO 100": 3.0, "CHEM 100": 1.0, "MATH 100": 3.0},
+                        max_credits=4, max_courses=2, max_terms=4)
+    terms = [set(term) for term in packed.terms]
+    assert any({"BIO 100", "CHEM 100"} <= term for term in terms)
+    assert packed.unscheduled == ()
+
+
+def test_term_packing_reports_a_course_that_cannot_fit():
+    plan = plan_sequence({"BIO 100": course("BIO 100")}, ["BIO 100"])
+    packed = pack_terms(plan, credits={"BIO 100": 20.0}, max_credits=16, max_terms=1)
+    assert packed.terms == ()
+    assert packed.unscheduled == ("BIO 100",)

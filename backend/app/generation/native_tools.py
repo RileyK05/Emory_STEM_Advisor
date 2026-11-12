@@ -100,6 +100,7 @@ class StageOutline(ToolInputModel):
         default_factory=list, max_length=20)
     charts: list[OutlineChart] = Field(default_factory=list, max_length=20)
     program: str | None = Field(default=None, max_length=200)
+    programs: list[str] = Field(default_factory=list, max_length=6)
     selected_courses: list[str] = Field(default_factory=list, max_length=40)
     completed_courses: list[str] = Field(default_factory=list, max_length=100)
 

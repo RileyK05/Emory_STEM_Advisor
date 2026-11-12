@@ -173,6 +173,7 @@ def program_requirement_check(
     artifact_text: str,
     campus_equivalents: dict[str, frozenset[str]],
     completed_courses=(),
+    additional_courses=(),
 ) -> tuple[bool, str, set[str]]:
     """K5's program-truth check, exactly as the benchmark applies it."""
     program_row = conn.execute(
@@ -193,6 +194,7 @@ def program_requirement_check(
     artifact_codes = set(_course_codes_in(artifact_text))
     unsupported = artifact_codes - allowed
     unsupported -= set(completed_courses)
+    unsupported -= set(additional_courses)
     ok = len(unsupported) == 0 or len(unsupported) <= len(artifact_codes) * 0.4
     detail = f"{len(artifact_codes) - len(unsupported)}/{len(artifact_codes)} courses in program requirements"
     return ok, detail, unsupported
@@ -303,6 +305,7 @@ def check_generated_artifact(
     campus_equivalents: dict[str, frozenset[str]],
     program_title: str | None = None,
     completed_courses=(),
+    additional_courses=(),
     plan_terms: dict[str, int] | None = None,
     plan_term_sections: dict[int, str] | None = None,
     section_texts: dict[str, str] | None = None,
@@ -324,7 +327,8 @@ def check_generated_artifact(
 
     if program_title:
         ok, _detail, unsupported = program_requirement_check(
-            conn, collection_id, program_title, text, campus_equivalents, completed_courses)
+            conn, collection_id, program_title, text, campus_equivalents, completed_courses,
+            additional_courses)
         if not ok:
             for code in sorted(unsupported):
                 findings.append(ArtifactCheckFinding(

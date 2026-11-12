@@ -6,6 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from app.atlas.records import normalize_code
 from app.atlas.requisites import (
     AllOf,
     AnyOf,
@@ -52,6 +53,11 @@ class SequencePlan:
     stages: tuple[tuple[str, ...], ...]
     blockers: tuple[SequenceBlocker, ...]
     complete: bool
+    # (course, prerequisite) pairs among selected courses. The stages give the
+    # order; a term packer needs the exact edge to overlap adjacent stages.
+    prerequisites: tuple[tuple[str, str], ...] = ()
+    # Selected courses that must be taken in the same term (lecture + lab).
+    corequisites: tuple[tuple[str, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -185,6 +191,8 @@ def _same_course(
     right_code = next(iter(right.dependencies))
     if left_code == right_code:
         return True
+    if normalize_code(left_code) == normalize_code(right_code):
+        return True
     if not campus_equivalents:
         return False
     return right_code in campus_equivalents.get(left_code, ())
@@ -204,20 +212,21 @@ def _evaluate(
     if req is None:
         return _Evaluation(True)
     if isinstance(req, CourseRef):
-        if req.code in completed or req.code in completed_aliases:
+        canonical = normalize_code(req.code) or req.code
+        names = tuple(dict.fromkeys((req.code, canonical)))
+        if any(name in completed or name in completed_aliases for name in names):
             return _Evaluation(True)
-        # A requirement may name the other campus's offering of the course the
-        # student selected. The student's own course is the one that satisfies
-        # it, and it is the one the plan reports.
-        matched = req.code if req.code in selected else (
-            (selected_aliases or {}).get(req.code))
+        # A requirement may name the other campus's offering, or the old subject
+        # of the course the student selected (QTM 150 -> DATASCI 150). The
+        # student's own course is the one that satisfies it.
+        matched = next((name for name in names if name in selected), None)
+        if matched is None:
+            matched = next(((selected_aliases or {}).get(name) for name in names
+                            if (selected_aliases or {}).get(name)), None)
         if matched is None:
             return _Evaluation(False, blockers=(SequenceBlocker(owner, "missing_prerequisite", (req.code,)),))
-        target = courses.get(matched)
-        if target is None and matched != req.code:
-            # The student's course is the other campus's offering of the one
-            # the requirement names: the same course, one record.
-            target = courses.get(req.code)
+        target = next((courses.get(name) for name in (matched, req.code, canonical)
+                       if courses.get(name) is not None), None)
         if target is None:
             return _Evaluation(False, blockers=(SequenceBlocker(req.code, "unknown_course"),))
         if target.lifecycle != "current":
@@ -548,4 +557,121 @@ def plan_sequence(
             deps.difference_update(ready)
 
     ordered_blockers = tuple(sorted(blockers, key=lambda item: (item.code, item.reason, item.alternatives)))
-    return SequencePlan(tuple(stages), ordered_blockers, not ordered_blockers)
+    edges = tuple(sorted(
+        (code, dependency)
+        for code, dependencies in prereq_dependencies.items()
+        for dependency in dependencies
+        if dependency in known_selected
+    ))
+    staged = {code for stage in stages for code in stage}
+    corequisites = tuple(sorted(
+        tuple(sorted(code for code in bundle if code in staged))
+        for bundle in bundles.values()
+        if len([code for code in bundle if code in staged]) > 1
+    ))
+    return SequencePlan(tuple(stages), ordered_blockers, not ordered_blockers, edges,
+                        corequisites)
+
+
+@dataclass(frozen=True)
+class TermPacking:
+    """A deterministic term assignment for a plan's selected courses."""
+
+    terms: tuple[tuple[str, ...], ...]
+    unscheduled: tuple[str, ...]
+    credits: tuple[float, ...]
+
+
+def pack_terms(
+    plan: SequencePlan,
+    *,
+    credits: Mapping[str, float] | None = None,
+    seasons: Mapping[str, frozenset[str]] | None = None,
+    completed: Sequence[str] = (),
+    max_credits: float = 16.0,
+    max_courses: int = 5,
+    max_terms: int = 8,
+) -> TermPacking:
+    """Pack prerequisite stages into terms with a credit and course cap.
+
+    The stages still decide the order. A course can move into a term as soon as
+    its own selected prerequisites are in an earlier term, which lets two
+    adjacent stages overlap without ever putting a course before its
+    prerequisite. A course's known offered seasons are a preference; when no
+    season-matching course can fill a term, a ready course is used anyway so a
+    sparse offering record cannot deadlock the plan.
+    """
+    stage_of = {code: index for index, stage in enumerate(plan.stages) for code in stage}
+    if not stage_of:
+        return TermPacking((), (), ())
+    bundle_of: dict[str, tuple[str, ...]] = {}
+    for bundle in plan.corequisites:
+        for code in bundle:
+            bundle_of[code] = tuple(bundle)
+    units = sorted({bundle_of.get(code, (code,)) for code in stage_of},
+                   key=lambda unit: (min(stage_of[code] for code in unit), unit))
+    unit_of = {code: unit for unit in units for code in unit}
+    dependencies = {unit: set() for unit in units}
+    for code, dependency in plan.prerequisites:
+        if code in unit_of and dependency in unit_of:
+            left, right = unit_of[code], unit_of[dependency]
+            if left != right:
+                dependencies[left].add(right)
+    credit_value = credits or {}
+    offered = seasons or {}
+    done_codes = set(completed)
+    done_units: set[tuple[str, ...]] = set()
+    remaining = set(units)
+    terms: list[tuple[str, ...]] = []
+    term_credits: list[float] = []
+    cycle = ("Fall", "Spring")
+
+    def credits_of(unit) -> float:
+        return sum(float(credit_value.get(code, 3.0)) for code in unit)
+
+    def offered_in(unit, season: str) -> bool:
+        return all(_offered_in(code, offered, season) for code in unit)
+
+    for index in range(max(0, max_terms)):
+        season = cycle[index % len(cycle)]
+        eligible = sorted(
+            (unit for unit in remaining
+             if dependencies[unit] <= done_units and not set(unit) & done_codes),
+            key=lambda unit: (min(stage_of[code] for code in unit), unit),
+        )
+        chosen: list[tuple[str, ...]] = []
+        used = 0.0
+        for unit in eligible:
+            if not offered_in(unit, season):
+                continue
+            value = credits_of(unit)
+            if len(chosen) + len(unit) > max_courses or used + value > max_credits:
+                continue
+            chosen.append(unit)
+            used += value
+        if not chosen:
+            # A course offered only in an unmodelled season would otherwise
+            # never be scheduled. Season is a preference, not a hard block.
+            for unit in eligible:
+                value = credits_of(unit)
+                if len(chosen) + len(unit) > max_courses or used + value > max_credits:
+                    continue
+                chosen.append(unit)
+                used += value
+        if not chosen:
+            break
+        codes = tuple(sorted(code for unit in chosen for code in unit))
+        terms.append(codes)
+        term_credits.append(used)
+        done_codes.update(codes)
+        done_units.update(chosen)
+        remaining.difference_update(chosen)
+        if not remaining:
+            break
+    unscheduled = tuple(sorted(code for unit in remaining for code in unit))
+    return TermPacking(tuple(terms), unscheduled, tuple(term_credits))
+
+
+def _offered_in(code: str, seasons: Mapping[str, frozenset[str]], season: str) -> bool:
+    known = seasons.get(code)
+    return not known or season.casefold() in known

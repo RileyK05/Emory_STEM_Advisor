@@ -238,6 +238,7 @@ def test_a_model_that_never_corrects_fails_cleanly_with_usage_accounted(db, coll
                      "prompt": "Alpha", "sourceIds": [str(source)]}}, max_attempts=1)
     finished = run_once(store, "native-tools", executor)
     assert finished.status.value == "failed"
+    assert finished.error["type"] == "section_exhausted"
     assert db.execute("SELECT count(*) AS n FROM artifacts").fetchone()["n"] == 0
     calls = db.execute("SELECT prompt_tokens, completion_tokens FROM model_calls").fetchall()
     assert len(calls) == 1 + 2 + 1  # outline + one refusal + repeated refusal
@@ -611,6 +612,56 @@ def test_a_plan_order_violation_names_its_section(db, collection, tmp_path):
     k6 = [finding for finding in findings if finding.check == "K6"]
     assert k6 and k6[0].section_id == "t1"
     assert "ECON 201" in k6[0].message
+
+
+def test_a_plan_request_is_not_turned_into_a_checklist_by_the_model_brief(db, collection, tmp_path):
+    source = _econ(db, collection, tmp_path)
+    provider = ArtifactStageProvider(
+        outline=_plan_outline(["ECON 201"], completed=["ECON 101"]),
+        sections={"term1": [{"note": "Macro theory."}]},
+    )
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "document", {
+        "prompt": "Checklist for the Economics minor\n\nPublished answer:\nECON 201 follows ECON 101.",
+        "requestText": "Plan ECON 201 with ECON 101 done.",
+        "sourceIds": [str(source)],
+    }, "plan-not-checklist")
+    assert run_once(store, "plan", executor).status.value == "succeeded"
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    headings = [block.get("text") for block in spec["blocks"] if block.get("type") == "heading"]
+    assert "Term 1" in headings
+    assert spec["title"] == "Economics (Minor): Term plan"
+
+
+@pytest.mark.parametrize(("text", "credits", "courses", "terms"), [
+    ("Plan my Biology BS.", 16.0, 5, None),
+    ("No more than 12 credits in any term, 3 courses a term, finish in 4 semesters.",
+     12.0, 3, 4),
+    ("A four-year plan with at most 15 credit hours.", 15.0, 5, 8),
+    ("Make a 3-year spreadsheet plan.", 16.0, 5, 6),
+])
+def test_the_student_term_limits_are_read(text, credits, courses, terms):
+    from app.generation.artifact_pipeline import (
+        _requested_course_cap,
+        _requested_credit_cap,
+        _requested_terms,
+    )
+
+    assert _requested_credit_cap(text) == credits
+    assert _requested_course_cap(text) == courses
+    assert _requested_terms(text) == terms
+
+
+@pytest.mark.parametrize(("written", "printed"), [
+    ("BIO 141 and QTM 150", "BIOL 141 and DATASCI 150"),
+    ("PSYCH 110", "PSYC 110"),
+    ("MATH_OX 111 stays Oxford", "MATH_OX 111 stays Oxford"),
+])
+def test_artifact_text_prints_the_atlas_course_code(written, printed):
+    from app.atlas.display import canonicalize_codes
+
+    assert canonicalize_codes(written) == printed
 
 
 @pytest.mark.parametrize("note", ["MATH 111 is scheduled here.", "Take this term lightly."])
