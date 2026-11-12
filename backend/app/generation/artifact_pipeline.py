@@ -1542,7 +1542,8 @@ class ArtifactPipeline:
                 if refs:
                     evidence[f"{section.id}/{cell_id}"] = refs
         total_columns = [position for position, column in enumerate(columns, 1)
-                         if column.type == "total"]
+                         if column.type == "total"
+                         or column.header.strip().casefold() == "total"]
         if self.total_requested and not total_columns:
             position = len(columns) + 1
             sources = [source_position for source_position, column in enumerate(columns, 1)
