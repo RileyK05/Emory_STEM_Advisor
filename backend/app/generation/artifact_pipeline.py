@@ -254,6 +254,8 @@ class ArtifactPipeline:
         # turn "plan" into "checklist". The student's own words decide.
         request_text = (inputs.requestText or brief).strip() or brief
         self.request_text = request_text
+        self.total_requested = (kind == "workbook"
+                                and bool(re.search(r"\btotals?\b", request_text, re.IGNORECASE)))
         self.plan_requested = (kind in {"document", "workbook"} and inputs.mode == "grounded"
                                and not _CHECKLIST_REQUEST.search(request_text)
                                and bool(_TERM_PLAN_REQUEST.search(request_text)))
@@ -1541,6 +1543,24 @@ class ArtifactPipeline:
                     evidence[f"{section.id}/{cell_id}"] = refs
         total_columns = [position for position, column in enumerate(columns, 1)
                          if column.type == "total"]
+        if self.total_requested and not total_columns:
+            position = len(columns) + 1
+            sources = [source_position for source_position, column in enumerate(columns, 1)
+                       if column.type == "number"]
+            if sources:
+                header_id = f"{section.id}:h{position}"
+                cells.append({"id": header_id, "row": 1, "column": position,
+                              "value": "Total", "style": {"bold": True}})
+                skipped.add(f"{section.id}/{header_id}")
+                letters = [_column_letters(source) for source in sources]
+                formula = "=" + "+".join(
+                    f"SUM({letter}2:{letter}{max(last_row, 2)})" for letter in letters)
+                cell_id = f"{section.id}:t{position}"
+                cells.append({"id": cell_id, "row": max(last_row, 2), "column": position,
+                              "formula": formula})
+                if payload.rows and payload.rows[-1].source_slots:
+                    evidence[f"{section.id}/{cell_id}"] = _slot_refs(
+                        payload.rows[-1].source_slots, self.grounding.slots)
         for position in total_columns:
             sources = [source_position for source_position, column in enumerate(columns, 1)
                        if column.type == "number" and source_position != position]

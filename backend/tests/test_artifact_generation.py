@@ -560,6 +560,38 @@ def test_an_html_revision_can_add_a_section_and_keep_the_page(db, collection, tm
     assert revised["parentRevisionId"] == prior["revisionId"]
 
 
+def test_a_workbook_that_asks_for_totals_gets_a_code_built_total_column(db, collection, tmp_path):
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    provider = ArtifactStageProvider(
+        outline={
+            "title": "Credits", "sections": [],
+            "sheets": [{
+                "id": "s1", "name": "Credits", "row_purpose": "One course per row.",
+                "columns": [
+                    {"key": "course", "header": "Course", "type": "text"},
+                    {"key": "credits", "header": "Credits", "type": "number"},
+                ],
+                "source_slots": [1],
+            }],
+            "charts": [],
+        },
+        sections={"s1": [{"rows": [
+            {"values": ["Alpha 101", 4], "source_slots": [1]},
+            {"values": ["Alpha 102", 3], "source_slots": [1]},
+        ]}]},
+    )
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "workbook",
+                       {"prompt": "Alpha facts with totals", "sourceIds": [str(source)]},
+                       "workbook-totals")
+    assert run_once(store, "workbook", executor).status.value == "succeeded"
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    cells = {(cell["row"], cell["column"]): cell for cell in spec["sheets"][0]["cells"]}
+    assert cells[(1, 3)]["value"] == "Total"
+    assert cells[(3, 3)]["formula"] == "=SUM(B2:B3)"
+
+
 def test_a_workbook_row_whose_number_column_is_not_a_number_is_refused(db, collection, tmp_path):
     source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
     provider = ArtifactStageProvider(
