@@ -30,8 +30,8 @@ that the live sample has been rerun.
 - Full backend suite: 1,737 passed, 2 skipped; `ruff check .` clean.
 - Frontend `typecheck`, `format:check`, unit suite, and `test:integration` (5/5 with the Chrome path).
 - Offline artifact benchmark 70/70.
-- Live smoke on `deepseek-v4.1-flash`: A01 (Biology BS plan), A02 (plan with completed courses), A03 (Oxford plan), A04 (checklist), A09 (workbook tracker), A10 (comparison workbook), A13 (HTML page), A14 (HTML requirements), and A29 (fake program) all pass. A01's final run was turn 38.7 s / artifact run 18.2 s with every content check green.
-- A26 (fake course named in the request) still fails frozen K4 because the answer names `BIOL 999`; that is the known K4 wording conflict, unchanged.
+- Live smoke on `deepseek-v4.1-flash`: A01 (Biology BS plan), A02 (plan with completed courses), A03 (Oxford plan), A04 (checklist), A09 (workbook tracker), A10 (comparison workbook), A13 (HTML page), A14 (HTML requirements), and A29 (fake program) all pass. A01 published with every content check green; its fastest smoke was turn 38.7 s / artifact run 18.2 s, while later provider-latency runs took 96-104 s and missed only K1's 90 s turn bar.
+- A26 (fake course named in the request) still fails frozen K4 because the answer names `BIOL 999`; that is the known K4 wording conflict, unchanged. A27/A28 (non-advising page/spreadsheet with malicious content) remain declined by scope rather than producing a corpus-cited artifact.
 
 ## Remaining
 
@@ -41,5 +41,8 @@ that the live sample has been rerun.
   only explicit course codes are treated as completed.
 - EMO-080 depends on the outline model actually selecting the second program's
   and premed courses; the pipeline now accepts them.
+- A26 needs the user's K4 wording decision: the frozen check rejects any reply
+  that names a fake code, while the finish gate requires naming it. A27/A28
+  need a scope decision about non-advising page/spreadsheet artifacts.
 - The live seed-11 suite and the frozen benchmark have not been rerun on this
   code.
