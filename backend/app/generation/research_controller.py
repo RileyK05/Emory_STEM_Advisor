@@ -266,7 +266,10 @@ _ARTIFACT_ASK = re.compile(
     r"\b(?:plan|checklist|schedule|spreadsheet|workbook|sheet|document|doc|handout|report|"
     r"page|comparison|table|roadmap)s?\b"
     r"|\b(?:printable|print it|i can (?:print|keep)|export|download)\b"
-    r"|\bplan (?:out )?my\b"
+    r"|\bplan (?:out )?(?:the rest of )?(?:my|our|the)\b[^.?!]{0,40}?"
+    r"\b(?:BS|BA|BBA|B\.S\.|B\.A\.|major|minor|co-major)(?![A-Za-z])"
+    # A bare thing at the front: "Spreadsheet comparing the Mathematics BA and BS."
+    r"|^\s*(?:spreadsheet|workbook|checklist|roadmap|handout|worksheet|comparison)s?\b"
     # A request that is only the thing itself: "A semester-by-semester spreadsheet for ...".
     r"|^\s*(?:an?|one)\s+(?:(?!(?:about|of|for|on|in|to|with)\b)[\w-]+\s+){0,4}?"
     r"(?:spreadsheet|workbook|checklist|roadmap|handout|worksheet)\b"
@@ -284,12 +287,30 @@ _EXPORT_ASK = re.compile(
     r"\b(?:export|download|convert)\b"
     r"|\b(?:as|to|into)\s+(?:an?\s+)?(?:word|docx|pdf|excel|xlsx|markdown)\b",
     re.IGNORECASE)
-_SHEET_ASK = re.compile(r"\b(?:spreadsheet|workbook|excel|sheet|csv)\b", re.IGNORECASE)
+# "sheet" alone is a cheat sheet as often as a spreadsheet; only a spreadsheet
+# word makes a workbook.
+_SHEET_ASK = re.compile(r"\b(?:spreadsheet|workbook|excel|csv|worksheet)\b", re.IGNORECASE)
 _PAGE_ASK = re.compile(r"\b(?:web ?page|webpage|html|website|interactive)\b", re.IGNORECASE)
-_PROGRAM_NAME = re.compile(
-    r"((?:[A-Z][\w'’&-]*(?:\s+(?:and|of|in|for|&)\s+(?=[A-Z])|\s+))*[A-Z][\w'’&-]*)"
-    r"\s+(?:BS|BA|BBA|B\.S\.|B\.A\.|minor|major|co-major)\b")
+_DEGREE_TOKEN = re.compile(
+    r"(?<![A-Za-z])(?:BS|BA|BBA|B\.S\.|B\.A\.|minor|major|co-major)(?![A-Za-z])",
+    re.IGNORECASE)
 _NAME_STOPWORDS = frozenset({"and", "of", "in", "for", "the", "&"})
+_REQUEST_LEAD = frozenset({
+    "make", "makes", "me", "a", "an", "the", "plan", "plans", "planning", "for",
+    "my", "our", "build", "create", "draft", "generate", "give", "want", "need",
+    "can", "could", "would", "should", "may", "you", "please", "help", "with",
+    "of", "to", "in", "on", "and", "or", "i", "i'm", "im", "we", "already",
+    "took", "finished", "compare", "comparison", "what", "which", "how", "does",
+    "do", "is", "are", "tell", "about", "explain", "describe", "show", "list",
+    "difference", "between", "any", "all", "requirements", "requirement",
+    "interested", "curious", "considering", "wondering",
+})
+_PROGRAM_MODIFIERS = frozenset({"honors", "honours", "with", "program", "degree"})
+_DEGREE_FOLLOWERS = frozenset({
+    "requirement", "requirements", "degree", "program", "programs", "declaration",
+    "advisor", "advisors", "office", "sheet", "worksheet", "checklist", "class",
+    "classes", "course", "courses", "credit", "credits", "hour", "hours", "gpa",
+})
 
 
 def _asks_for_artifact(question) -> bool:
@@ -305,28 +326,65 @@ def _missing_program(question, titles) -> str | None:
     """A degree program the student named that no program in scope matches.
 
     Conservative on purpose: a name of one word, or with an acronym ("CS and Math"),
-    is not judged, and a word matches a title word by its first three letters
-    ("Math" and "Mathematics"), so a real program is never called missing.
+    is not judged, and a word matches a title word exactly or through a known
+    short form ("Math" and "Mathematics", "Behaviour" and "Behavioral"), so a
+    real program is never called missing. The degree word may be written in any
+    case ("bs", "B.S.", "Minor").
     """
     titles = list(titles)
-    match = _PROGRAM_NAME.search(question or "")
-    if match is None or not titles:
+    text = question or ""
+    if not titles:
         return None
-    name = match.group(1)
-    words = [word for word in re.findall(r"[A-Za-z]+", name.lower())
-             if word not in _NAME_STOPWORDS]
-    if len(words) < 2 or any(word.isupper() and len(word) <= 4 for word in re.findall(r"[A-Za-z]+", name)):
-        return None
-    # Words before the name can be part of the sentence ("my Emory Biology BS", "a
-    # Junior Physics BS student"), so any tail of the name that matches a title is enough.
-    for start in range(len(words)):
-        tail = words[start:]
-        for title in titles:
-            have = re.findall(r"[a-z]+", title.lower())
-            if all(any(h.startswith(w[:3]) or w.startswith(h[:3]) for h in have if len(h) >= 3)
-                   for w in tail):
-                return None
-    return name
+    # The last degree phrase is usually the program the request turns on.
+    for match in reversed(list(_DEGREE_TOKEN.finditer(text))):
+        if match.group(0).casefold() in {"major", "minor", "co-major"}:
+            following = re.match(r"[A-Za-z]+", text[match.end():].lstrip())
+            if following and following.group(0).casefold() in _DEGREE_FOLLOWERS:
+                continue  # "the major requirements", not a program named "major"
+        window = re.findall(r"[A-Za-z][\w'’&-]*", text[:match.start()])[-10:]
+        while window and window[0].casefold() in _REQUEST_LEAD:
+            window.pop(0)
+        raw = [word for word in window]
+        content = [word for word in raw if word.casefold() not in _NAME_STOPWORDS]
+        if len(content) < 2:
+            continue
+        # An acronym ("CS", "BBA") can be part of a real title, so drop it only
+        # when another word remains to judge. "CS and Math" then leaves one word
+        # and is not judged, while "BBA + Quantitative Science" still matches.
+        content = [word for word in content
+                   if not (word.isupper() and len(word) <= 4)]
+        if len(content) < 2:
+            continue
+        words = [word.casefold() for word in content]
+        meaningful = [word for word in words if word not in _PROGRAM_MODIFIERS] or words
+        if _matches_program(meaningful, titles):
+            return None
+        return " ".join(window).strip(" ,.;:")
+    return None
+
+
+_PROGRAM_WORD_ALIASES = {
+    "math": "mathematics", "maths": "mathematics", "stat": "statistics",
+    "stats": "statistics", "bio": "biology", "chem": "chemistry",
+    "phys": "physics", "econ": "economics", "psych": "psychology",
+    "neuro": "neuroscience", "neurosciences": "neuroscience",
+    "behaviour": "behavioral", "behavior": "behavioral",
+    "behavioural": "behavioral", "sciences": "science", "comp": "computer",
+    "sci": "science",
+}
+
+def _program_word(word: str) -> str:
+    return _PROGRAM_WORD_ALIASES.get(word.casefold(), word.casefold())
+
+
+def _matches_program(words: list[str], titles: list[str]) -> bool:
+    words = [_program_word(word) for word in words]
+    for title in titles:
+        have = [_program_word(word) for word in re.findall(r"[a-z]+", title.casefold())]
+        for start in range(len(words)):
+            if all(word in have for word in words[start:]):
+                return True
+    return False
 
 
 def _artifact_for(question: str):
@@ -358,7 +416,8 @@ def _with_requested_artifact(decision, question, titles, *, referenced: bool,
             and artifact.kind == "document" and artifact.purpose == "create"):
         return decision.model_copy(update={"artifact": artifact.model_copy(
             update={"purpose": "summary", "revises": None})})
-    if (artifact is None and _asks_for_artifact(question) and not referenced
+    if (artifact is None and _asks_for_artifact(question)
+            and (not referenced or _SUMMARY_ASK.search(question or ""))
             and decision.outcome in {"recommendation", "information"}):
         return decision.model_copy(update={"artifact": _artifact_for(question)})
     return decision
@@ -482,6 +541,7 @@ class ResearchController:
              before_provider_call=None):
         settings = session.settings
         session.question = question
+        session.artifact_requested = _asks_for_artifact(question)
         session.history_context = history_context
         session.instructions = SYSTEM + (
             WORKSPACE_SYSTEM if getattr(session, "workspace", None) else "")

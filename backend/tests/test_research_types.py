@@ -227,7 +227,7 @@ def test_research_finish_rejects_unrenderable_or_unexecuted_references(decision,
         validate_final(decision, None, [], set(), {})
 
 
-_CITED = "See the registrar page at registrar.emory.edu/forms for the petition."
+_CITED = "See the registrar page for the petition."
 
 
 @pytest.mark.parametrize("text, rejected", [
@@ -235,6 +235,7 @@ _CITED = "See the registrar page at registrar.emory.edu/forms for the petition."
     ("placeholder", "no answer"),
     ("TBD", "no answer"),
     ("Yes.", "no answer"),
+    ("Never share your password with anyone.", None),
     ("LLM_API_KEY=sk-live-abcdefghijklmnop1234", "credential"),
     ("The database is postgresql://admin:pw@db.internal:5432/app today.", "credential"),
     ("Verify your Emory password at http://emory-login.example to continue.", "links to a page"),
@@ -257,7 +258,8 @@ def test_a_research_reply_must_be_an_answer(text, rejected):
         evidence_id="e1", source_id=str(uuid4()), source_revision=1,
         source_kind="institutional_policy", source_name="Registrar", chunk_id=str(uuid4()),
         locator_label="Petitions", exact_text=_CITED, text_digest="a" * 64, acquired_step=1,
-        content_completeness="complete", entity_refs=())
+        content_completeness="complete", entity_refs=(),
+        source_url="https://registrar.emory.edu/forms")
     decision = _decision(outcome="information", blocks=(
         DecisionBlock(kind="limitation", text=text),))
 
@@ -278,8 +280,11 @@ _AP_RULE = ("Students may apply no more than twelve hours of AP credit toward th
 @pytest.mark.parametrize("text, rejected", [
     ("The AP credit cap is 24 hours.", True),
     ("The AP credit cap is 12 hours.", False),
+    ("The minor needs twenty-four credit hours.", True),
+    ("The minor needs twelve credit hours.", False),
     ("Declaring needs a GPA above 3.0.", True),
     ("Declaring needs a 3.5 GPA.", False),
+    ("Declaring needs a 10.5 GPA.", True),
     ("AP credit applies toward the degree.", False),
     ("The cited rule does not establish a 16 hour limit for transfer credit.", False),
 ])
@@ -830,6 +835,7 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
 @pytest.mark.parametrize("text, rejected", [
     ("ENVS 667 does not exist in the Course Atlas, so it cannot count toward the CS BS.", None),
     ("There is no ENVS 667; the CS BS lists CS 170.", None),
+    ("There is no reason ENVS 667 is offered.", "ENVS 667 is not a course"),
     ("ENVS 667 isn't a current Emory course.", None),
     ("ENVS 667 counts toward the CS BS.", "ENVS 667 is not a course"),
     ("ENVS 667 is not listed in the CS BS requirements.", "ENVS 667 is not a course"),
@@ -1005,6 +1011,7 @@ def test_compare_keeps_all_mention_refs_for_retained_codes():
     ("I took MATH_OX 111 at Oxford. Plan my Chemistry BS from here.", True),
     ("A semester-by-semester spreadsheet for the Economics and Human Health BA.", True),
     ("A one-page roadmap of the Applied Mathematics minor.", True),
+    ("Spreadsheet comparing the Mathematics BA and BS requirements side by side.", True),
     ("Summarize this conversation into a document I can keep.", True),
     ("Turn this chat into a document I can print.", True),
     ("What does CS 253 require?", False),
@@ -1012,6 +1019,9 @@ def test_compare_keeps_all_mention_refs_for_retained_codes():
     ("How do I make the dean's list?", False),
     ("A question about the plan.", False),
     ("My plan is to take CS 170.", False),
+    ("How should I plan my semester?", False),
+    ("Can you help me plan my courses?", False),
+    ("Make me a cheat sheet for CHEM 150.", True),
     ("What does the checklist say about CS 170?", False),
     ("Can you summarize what CS 170 covers?", False),
 ])
@@ -1022,12 +1032,26 @@ def test_research_is_told_when_the_student_asks_for_something_to_keep(question, 
 
 
 _PROGRAMS = ["NEUROSCIENCE AND BEHAVIORAL BIOLOGY (BS)", "APPLIED MATHEMATICS (MINOR)",
-             "MATHEMATICS AND COMPUTER SCIENCE (BS)", "PSYCHOLOGY (BS)"]
+             "MATHEMATICS AND COMPUTER SCIENCE (BS)", "PSYCHOLOGY (BS)",
+             "CHEMISTRY (BS)"]
 
 
 @pytest.mark.parametrize(("question", "missing"), [
     ("Make me a plan for the Underwater Basket Weaving BS.", "Underwater Basket Weaving"),
+    ("make me a plan for the underwater basket weaving bs.", "underwater basket weaving"),
+    ("Make me a plan for the Underwater Basket Weaving B.S.", "Underwater Basket Weaving"),
+    ("Make me a plan for the Underwater Basket Weaving Minor.", "Underwater Basket Weaving"),
+    ("MAKE ME A PLAN FOR THE UNDERWATER BASKET WEAVING BS.",
+     "UNDERWATER BASKET WEAVING"),
+    ("Make a plan for the Chemistry Honors BS.", None),
+    ("What are the major requirements for Biology?", None),
+    ("What are the minor requirements for Chemistry?", None),
+    ("Tell me about the CS major.", None),
+    ("Tell me about the Underwater Basket Weaving BS.", "Underwater Basket Weaving"),
+    ("Make me a plan for the Competitive Astrology BS.", "Competitive Astrology"),
+    ("Make me a plan for the Quantum Gastronomy BS.", "Quantum Gastronomy"),
     ("Plan my Neuroscience and Behavioral Biology BS from here.", None),
+    ("Plan my Neuroscience and Behaviour Biology BS from here.", None),
     ("A roadmap of the Applied Math minor.", None),        # a word and its prefix
     ("Plan my CS and Math BS.", None),                       # an acronym is not judged
     ("Plan my Astrology BS.", None),                         # one word is not judged
@@ -1050,6 +1074,7 @@ def test_a_named_program_that_is_not_in_scope_is_found(question, missing):
     ("Plan my Psychology BS.", {}, ("document", "create")),
     ("A semester-by-semester spreadsheet for the Psychology BS.", {}, ("workbook", "create")),
     ("Make a web page roadmap of the Psychology BS.", {}, ("html", "create")),
+    ("Make me a cheat sheet for CHEM 150.", {}, ("document", "create")),
     ("Summarize this chat.", {}, ("document", "summary")),
     # A summary asked for as a document is built from the saved turns.
     ("Summarize this conversation into a document I can keep.",
@@ -1073,8 +1098,12 @@ def test_research_hands_the_students_request_to_the_artifact_pipeline(
     unknown = _with_requested_artifact(_decision(**decision), question, _PROGRAMS,
                                        referenced=False, unknown_codes={"MATH 967": []})
     assert unknown.artifact is None  # never for a course that does not exist
-    assert (revised.artifact is None) == (not decision.get("artifact") and expected is not None
-                                          or expected is None)
+    if expected and expected[1] == "summary":
+        # A summary of the saved turns is new even when an artifact is attached.
+        assert revised.artifact is not None
+    else:
+        assert (revised.artifact is None) == (not decision.get("artifact")
+                                             and expected is not None or expected is None)
 
 
 @pytest.mark.parametrize(("question", "kept"), [
@@ -1097,6 +1126,10 @@ def test_an_attached_artifact_in_another_format_makes_no_new_run(question, kept)
     ("Here's your checklist for the Psychology BS.", True),
     ("Your checklist is ready in the panel.", True),
     ("I've created a plan covering the core courses.", True),
+    ("I have prepared the checklist of core courses.", True),
+    ("Your plan is ready.", True),
+    ("Here is your answer: take MATH 111.", False),
+    ("Your registration is ready to submit.", False),
     ("A checklist of the Psychology BS core is being made.", False),
 ])
 def test_a_reply_never_says_its_artifact_is_ready(text, rejected):
@@ -1109,3 +1142,8 @@ def test_a_reply_never_says_its_artifact_is_ready(text, rejected):
     unasked = decision.model_copy(update={"artifact": None})
     assert not any("still being made" in p
                    for p in answer_content_problems(unasked, instructions=None, evidence=[]))
+    # Code can attach the artifact after this reply was validated. It still
+    # cannot say the artifact is ready.
+    expected = answer_content_problems(unasked, instructions=None, evidence=[],
+                                       artifact_expected=True)
+    assert any("still being made" in p for p in expected) is rejected

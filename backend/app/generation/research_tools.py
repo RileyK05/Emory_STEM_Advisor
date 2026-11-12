@@ -449,6 +449,8 @@ class ResearchSession:
         self.question = None
         # The advisor's fixed instructions, so a reply that repeats them is refused.
         self.instructions = None
+        # The student asked for something to keep; a reply must not call it ready.
+        self.artifact_requested = False
         self.history_context = None
         self.execution_id = None
         self.new_evidence = 0
@@ -1338,7 +1340,8 @@ class ResearchSession:
                            self.supplied, finishable_checks, self.entity_evidence,
                            self.artifact_references, self._known_course_codes(),
                            self._retired_courses(value.decision), self.instructions,
-                           frozenset(self.unknown_question_codes()))
+                           frozenset(self.unknown_question_codes()),
+                           self.artifact_requested)
         except DecisionRejected as exc:
             self.rejected_decision = value.decision
             opened = self._open_courses(value.decision.recommended_course_codes)
@@ -1386,7 +1389,7 @@ class ResearchSession:
             try:
                 validate_final(single, self.state, records, known, {}, self.entity_evidence,
                                None, self._known_course_codes(), retired, self.instructions,
-                               unknown)
+                               unknown, self.artifact_requested)
             except DecisionRejected:
                 continue
             if used + size > MAX_DECISION_TEXT_BYTES:

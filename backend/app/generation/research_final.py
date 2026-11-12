@@ -89,9 +89,19 @@ def retired_course_problems(decision: FinalDecision, recommended: set[str],
 # A cap, minimum or threshold: a number next to hours, credits or a GPA.
 _POLICY_NUMBER = re.compile(
     r"(?<![\d.])(\d+(?:\.\d+)?)[\s-]*(?:semester[\s-]+|credit[\s-]+)?(?:hours?|credits?)\b"
-    r"|\bGPA\b[^.\d]{0,30}?(\d\.\d{1,2})(?!\d)"
-    r"|(?<![\d.])(\d\.\d{1,2})\s+(?:[a-z]+\s+)?GPA\b", re.IGNORECASE)
-_NUMBER = re.compile(r"(?<![\d.])\d+(?:\.\d+)?(?![\d])")
+    r"|\bGPA\b[^.\d]{0,30}?(\d+(?:\.\d{1,2})?)(?!\d)"
+    r"|(?<![\d.])(\d+(?:\.\d{1,2})?)\s+(?:[a-z]+\s+)?GPA\b", re.IGNORECASE)
+_WORD_NUMBER_TEXT = (
+    r"(?:(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
+    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)(?:[-\s]+(?:one|two|"
+    r"three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|"
+    r"fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|"
+    r"sixty|seventy|eighty|ninety|hundred))*|\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)")
+_POLICY_WORD_NUMBER = re.compile(
+    rf"\b({_WORD_NUMBER_TEXT})\s+(?=(?:credit|semester)\s+hours?\b|\bcredits?\b)",
+    re.IGNORECASE)
+_NUMBER = re.compile(r"(?<![\d.,])(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?![\d])")
 _UNIT_WORDS = {word: n for n, word in enumerate((
     "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
     "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
@@ -102,7 +112,7 @@ _TEN_WORDS = {word: 10 * n for n, word in enumerate((
 
 def _numbers_in(text: str) -> set[float]:
     """Every number a passage states, in digits or in words ("twenty-four")."""
-    found = {float(number) for number in _NUMBER.findall(text)}
+    found = {float(number.replace(",", "")) for number in _NUMBER.findall(text)}
     total, spelled = 0, False
     for word in [*re.findall(r"[a-z]+", text.lower()), ""]:
         if word in _UNIT_WORDS or word in _TEN_WORDS:
@@ -139,6 +149,11 @@ def policy_number_problems(decision: FinalDecision, records: dict) -> list[str]:
                 number = next(group for group in match.groups() if group)
                 if float(number) not in support:
                     unsupported.add(match.group(0).strip())
+            # "twenty-four credit hours": the number itself can be written out.
+            for match in _POLICY_WORD_NUMBER.finditer(clause):
+                for number in _numbers_in(match.group(1)):
+                    if number not in support:
+                        unsupported.add(f"{number:g}")
         if unsupported:
             problems.append(
                 "fact block states " + ", ".join(sorted(unsupported)) + " but its cited passages "
@@ -161,7 +176,9 @@ class DecisionRejected(ValueError):
 _ABSENT_SAID = re.compile(
     r"\b(?:does(?: not|n['’]t) exist|no such (?:course|class)|"
     r"(?:is|are)(?: not|n['’]t) (?:a |an )?(?:current |real |valid )?(?:emory )?"
-    r"(?:course|class)(?:es)?\b|there (?:is|are) no|"
+    r"(?:course|class)(?:es)?\b|"
+    r"there (?:is|are) no (?:[A-Z][A-Z0-9]{1,7}(?:_OX)?\s?\d{3}[A-Z]?|"
+    r"such (?:course|class)|course|class)\b|"
     r"not (?:in|found in|listed in) the course atlas|no record of)", re.IGNORECASE)
 
 
@@ -189,7 +206,8 @@ def _shingles(text: str) -> set[tuple[str, ...]]:
 
 
 def answer_content_problems(decision: FinalDecision, *, instructions: str | None,
-                            evidence: list[EvidenceRecord]) -> list[str]:
+                            evidence: list[EvidenceRecord],
+                            artifact_expected: bool = False) -> list[str]:
     """Reject a reply that is empty, echoes the instructions, or carries a secret or link."""
     texts = [block.text for block in decision.blocks]
     problems = []
@@ -203,25 +221,41 @@ def answer_content_problems(decision: FinalDecision, *, instructions: str | None
         problems.append("the reply repeats the advisor's instructions; answer the student instead")
     if _SECRET.search(written):
         problems.append("the reply contains credential, key or error text; remove it")
-    known = "\n".join(f"{record.source_name}\n{record.exact_text}" for record in evidence).lower()
+    known = "\n".join(
+        f"{record.source_name}\n{record.source_url or ''}\n{record.exact_text}"
+        for record in evidence).lower()
     for url in _URL.findall(written):
         bare = re.sub(r"^https?://", "", url.rstrip(".,;:!?").lower()).rstrip("/")
         if bare not in known:
             problems.append("the reply links to a page no evidence names; remove the link")
             break
-    if _CREDENTIAL_ASK.search(written):
+    if _asks_for_credentials(written):
         problems.append("the reply asks the student for a password or credentials; remove it")
     # The answer is published before the artifact run starts, and that run can fail.
-    if decision.artifact is not None and _ARTIFACT_READY.search(written):
+    if (decision.artifact is not None or artifact_expected) and _ARTIFACT_READY.search(written):
         problems.append("the reply says the artifact is ready; it is still being made, so say "
                         "it is being made")
     return problems
 
 
+def _asks_for_credentials(text: str) -> bool:
+    for match in _CREDENTIAL_ASK.finditer(text):
+        prefix = text[max(0, match.start() - 24):match.start()].lower()
+        if re.search(r"\b(?:never|not|don['’]t|avoid|no need to)\b", prefix):
+            continue  # safety advice, not a request
+        return True
+    return False
+
+
 _ARTIFACT_READY = re.compile(
-    r"\bhere(?:['’]s| is| are) your\b"
-    r"|\b(?:is|are) (?:now )?(?:ready|attached)\b"
-    r"|\bI(?:['’]ve| have) (?:made|created|built|attached|prepared|put together)\b",
+    r"\bhere(?:['’]s| is| are) your (?:[a-z]+\s+){0,3}"
+    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\b"
+    r"|\b(?:the|your) (?:[a-z]+\s+){0,3}"
+    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\s+"
+    r"(?:is|are) (?:now )?(?:ready|attached)\b"
+    r"|\bI(?:['’]ve| have) (?:made|created|built|attached|prepared|put together) "
+    r"(?:your |the )?(?:[a-z]+\s+){0,3}"
+    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\b",
     re.IGNORECASE)
 
 
@@ -243,12 +277,15 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
                    known_course_codes: frozenset[str] | None = None,
                    retired_courses: frozenset[str] = frozenset(),
                    instructions: str | None = None,
-                   absent_codes: frozenset[str] = frozenset()) -> None:
+                   absent_codes: frozenset[str] = frozenset(),
+                   artifact_expected: bool = False) -> None:
     candidates = {c.id: c for c in state.candidates} if state else {}
     records = {e.evidence_id: e for e in evidence}
     problems = (validate_decision_limits(decision) + validate_fact_support(decision)
                 + (answer_content_problems(decision, instructions=instructions,
-                                           evidence=evidence) if decision.blocks else [])
+                                           evidence=evidence,
+                                           artifact_expected=artifact_expected)
+                   if decision.blocks else [])
                 + validate_evidence_references(decision, supplied & records.keys())
                 + validate_candidate_references(decision, set(candidates)))
     if not decision.blocks:
