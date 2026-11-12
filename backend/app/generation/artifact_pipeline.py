@@ -549,9 +549,10 @@ class ArtifactPipeline:
         titles = []
         allowed: set[str] = set()
         first_allowed: set[str] = set()
+        program_ids: list = []
         for requested_program in dict.fromkeys(
                 [value.program, *value.programs]):
-            title, _program_id, program_allowed = self._match_program(requested_program)
+            title, program_id, program_allowed = self._match_program(requested_program)
             if not program_allowed:
                 raise ValueError(
                     f"program {requested_program!r} was not found; use one of the supplied "
@@ -559,9 +560,23 @@ class ArtifactPipeline:
             _check_program_kind(self.brief, title)
             titles.append(title)
             allowed |= program_allowed
+            program_ids.append(program_id)
             if not first_allowed:
                 first_allowed = program_allowed
         title = " and ".join(dict.fromkeys(titles))[:200]
+        if not completed and not canonical_codes_in(self.request_text):
+            # A full plan from scratch: include the program's required course
+            # lines, not only the subset the research brief happened to mention.
+            required = set()
+            for program_id in program_ids:
+                if program_id is None:
+                    continue
+                items = self.conn.execute(
+                    queries.get("list_program_items"), {"program_id": program_id}
+                ).fetchall()
+                required.update(_required_program_codes(items, self._course_exists))
+            self.conn.commit()
+            selected = list(dict.fromkeys([*selected, *sorted(required - set(completed))]))
         if (not completed and not canonical_codes_in(self.request_text)
                 and len(allowed) >= 8 and len(selected) < min(6, len(allowed))):
             raise ValueError(
@@ -582,6 +597,14 @@ class ArtifactPipeline:
             if code in selected:
                 raise ValueError(f"{code} is completed and cannot also be selected")
         plan = self._plan_sequence(selected, completed)
+        # A selected course's prerequisites are part of the plan even when the
+        # outline did not name them; they were read into `courses` above.
+        planned_codes = [code for stage in plan.stages for code in stage]
+        selected = list(dict.fromkeys([*selected, *planned_codes]))
+        self.extra_courses.update(
+            code for code in planned_codes
+            if code not in first_allowed and not (
+                self.campus_equivalents.get(code, frozenset()) & first_allowed))
         self._replace_plan_shape(value, plan, selected, completed)
         # The program's record names the page; a model-written title could invent a focus.
         value.title = f"{title}: Term plan"[:200]
@@ -659,7 +682,8 @@ class ArtifactPipeline:
             if season:
                 self.plan_seasons[row["code"]] = (
                     self.plan_seasons.get(row["code"], frozenset()) | {season})
-        return plan_sequence(courses, selected, completed, self.campus_equivalents)
+        plan_selected = selected
+        return plan_sequence(courses, plan_selected, completed, self.campus_equivalents)
 
     def _replace_plan_shape(self, value: StageOutline, plan: SequencePlan,
                             selected: list[str], completed: list[str]):
@@ -1896,6 +1920,28 @@ def _strict_term_limit(text: str) -> bool:
     return bool(re.search(
         r"\b(?:finish|complete|graduate)\b[^.?!]{0,25}\b(?:in|within)\b"
         r"[^.?!]{0,25}\b(?:semesters?|terms?|years?)\b", text or "", re.IGNORECASE))
+
+
+def _required_program_codes(items, course_exists) -> list[str]:
+    """Course codes on a program's required lines, not its elective/notes lines."""
+    codes: list[str] = []
+    for item in items:
+        if item["choose"] is not None:
+            continue
+        text = str(item["text"] or "")
+        if re.search(r"(?i)\b(?:prerequisites?|cross[- ]listed|may be counted|"
+                     r"ap score|transfer|notes?)\b", text):
+            continue
+        choices = [str(code) for code in (item["courses"] or []) if code]
+        if not choices:
+            continue
+        # "BIOL 495 (Honors) or BIOL 499R" is one requirement, not both.
+        if re.search(r"\bor\b", text, re.IGNORECASE) and len(choices) > 1:
+            choices = choices[:1]
+        for code in choices:
+            if course_exists(code) and code not in codes:
+                codes.append(code)
+    return codes
 
 
 def _check_program_kind(brief: str, title: str) -> None:
