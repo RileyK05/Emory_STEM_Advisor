@@ -99,6 +99,9 @@ is asked to revise:
 
 The live seed-11 suite has not been rerun since these changes. The frozen
 benchmark and the suite still need a run on the same commit before P3.2.
+A live A01 check after the changes published with every content check green
+(artifact run 10.3s); its research turn took 167s, so the case still misses
+K1's 90s bar on provider latency, not on the artifact pipeline.
 
 ## Evidence
 
