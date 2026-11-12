@@ -47,19 +47,59 @@ Review fixes after the first live rerun (17 cases, 1 passed):
   that are not current Atlas courses (program text names retired or absent
   courses), and the section prompt says to name those by title.
 
-Seen in the 5-case random check, not fixed:
+Seen in the 5-case random check, addressed later:
 
-- A summary is built in code from the saved turns (no model call), so a K4
-  finding there has no repair round (summary-1: PHYS 444, PHYS 499).
+- A summary named codes the Atlas lacks (summary-1: PHYS 444, PHYS 499). The
+  code-built summary now writes such a code as a description (8.7).
 - compare-4 compared the Applied Mathematics BS when the student asked about
-  the minor, and wrote "Print readiness…" text into the document. No K-check
-  catches either.
+  the minor. The outline now keeps the major/minor the student named, and the
+  section prompt forbids print-layout text (8.8).
 
 Not done:
 
 - **2.6** (do not repeat a course code that is not in the Atlas). It contradicts behavior the code already has on purpose: salvage writes "There is no PSYC 219 in the Course Atlas." (`test_research_types.py`), and research's `no_current_course_note` tells the model to name the code. Rejecting answers that name it would fight both. K4 (frozen) still fails any reply that names the fake code, so A26-style cases can fail K4 while behaving as designed. Needs a decision: change the existing wording to avoid the code, or ask for a K4 change.
 - Phase 3 (workbook column keys, code-written course rows): only if truncation and column-count refusals remain after the Phase 4 run.
 - Phase 4: the live suite has not been run on this code.
+## Review pass (2026-11-11)
+
+The offline gates pass (`ruff`, the full backend suite, frontend typecheck/unit).
+This pass fixed defects found by reading the pipeline against the artifacts it
+is asked to revise:
+
+- A workbook revision now keeps its total formulas and charts. The prior
+  sheet's column types are restored (a formula column is a total, a numeric
+  column is a number), and charts are rebuilt from their stored ranges and
+  header names. A replaced sheet whose model-written columns are all text no
+  longer loses either.
+- A number column is checked when its section is accepted. A cell like
+  `"4 credits"` is a refusal the model can correct, not an assembly error after
+  the stage succeeded.
+- A plan revision keeps the base artifact's program and completed courses in
+  `provenance`, so K5 and K6 still run on the revised page.
+- A checklist or tracker whose outline names the program gets K5 too, except
+  for comparisons, where one `program` field cannot stand for both.
+- K6 findings name their section by the course code, not by the subject alone,
+  so the repair loop can target the term that owns the violation.
+- Research's artifact hint now matches bare noun requests ("Spreadsheet
+  comparing …"), "Plan the rest of my … BA", and revisions of a plan; it no
+  longer treats "How should I plan my semester?", "Tell me about the CS major"
+  or "the major requirements" as a program name.
+- A fake program is found in lower case and with `B.S.`/`Minor`/all-caps
+  spellings, while a real title with an acronym, an "Honors" modifier or a
+  spelling variant is not called missing. A resemblance alone (`Competitive
+  Astrology` against Astronomy) is not a match. A cheat sheet stays a document,
+  not a workbook.
+- A reply cannot call an artifact ready when code later attaches one, and the
+  ready check no longer rejects "Here is your answer" or a registration that
+  is ready to submit.
+- Policy numbers written as words ("twenty-four credit hours") and multi-digit
+  GPAs are checked against the cited passage. A cited record's `source_url`
+  may be linked, and "Never share your password" is safety advice, not a
+  credential request.
+
+The live seed-11 suite has not been rerun since these changes. The frozen
+benchmark and the suite still need a run on the same commit before P3.2.
+
 ## Evidence
 
 ### Results by family
