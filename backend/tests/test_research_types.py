@@ -282,6 +282,8 @@ _AP_RULE = ("Students may apply no more than twelve hours of AP credit toward th
     ("The AP credit cap is 12 hours.", False),
     ("The minor needs twenty-four credit hours.", True),
     ("The minor needs twelve credit hours.", False),
+    ("You need twenty-four hours of AP credit.", True),
+    ("You need twelve hours of AP credit.", False),
     ("Declaring needs a GPA above 3.0.", True),
     ("Declaring needs a 3.5 GPA.", False),
     ("Declaring needs a 10.5 GPA.", True),

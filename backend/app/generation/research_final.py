@@ -99,7 +99,8 @@ _WORD_NUMBER_TEXT = (
     r"fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|"
     r"sixty|seventy|eighty|ninety|hundred))*|\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)")
 _POLICY_WORD_NUMBER = re.compile(
-    rf"\b({_WORD_NUMBER_TEXT})\s+(?=(?:credit|semester)\s+hours?\b|\bcredits?\b)",
+    rf"\b({_WORD_NUMBER_TEXT})\s+(?=(?:credit|semester)\s+hours?\b|\bcredits?\b|"
+    rf"hours?\s+of\s+(?:[a-z]+\s+){{0,2}}credits?\b)",
     re.IGNORECASE)
 _NUMBER = re.compile(r"(?<![\d.,])(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?![\d])")
 _UNIT_WORDS = {word: n for n, word in enumerate((
