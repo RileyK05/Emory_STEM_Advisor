@@ -3,6 +3,8 @@ import html
 
 from app.artifacts.evidence import source_legend
 from app.artifacts.inert_html import render_inert_markup
+from app.artifacts.markdown import document_kicker
+from app.artifacts.theme import themed_page
 
 OUTER_POLICY = "frame-src 'self'; object-src 'none'; base-uri 'self'"
 INNER_POLICY = (
@@ -18,7 +20,10 @@ def render_active_html(spec):
     inner = (
         '<!doctype html><html><head><meta charset="utf-8">'
         '<meta http-equiv="Content-Security-Policy" content="' + INNER_POLICY + '">'
-        '</head><body>' + render_inert_markup(spec.html) + '</body></html>'
+        '</head><body style="margin:0">'
+        + themed_page(render_inert_markup(spec.html), title=spec.title,
+                      kicker=document_kicker(spec))
+        + '</body></html>'
     )
     legend = ""
     if spec.evidence:

@@ -90,8 +90,87 @@ class TableBlock(DocumentBlockBase):
         return self
 
 
+_VISUAL_ID = r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+
+
+class DiagramNode(SpecModel):
+    id: str = Field(min_length=1, max_length=64, pattern=_VISUAL_ID)
+    label: str = Field(min_length=1, max_length=200)
+    group: str | None = Field(default=None, max_length=64)
+    status: Literal["done", "next", "planned", "blocked"] | None = None
+
+
+class DiagramEdge(SpecModel):
+    source: str = Field(min_length=1, max_length=64)
+    target: str = Field(min_length=1, max_length=64)
+
+
+class DiagramGroup(SpecModel):
+    id: str = Field(min_length=1, max_length=64, pattern=_VISUAL_ID)
+    label: str = Field(min_length=1, max_length=120)
+    # A short fact under the row's label, such as a term's credit total.
+    note: str | None = Field(default=None, max_length=60)
+
+
+class DiagramBlock(DocumentBlockBase):
+    """A directed flow: nodes in ordered columns, edges between them.
+
+    Columns (`groups`) read left to right. The pipeline builds a course map's
+    edges from the prerequisite graph; a model never supplies them.
+    """
+
+    type: Literal["diagram"] = "diagram"
+    title: str = Field(min_length=1, max_length=200)
+    caption: str | None = Field(default=None, max_length=1_000)
+    groups: list[DiagramGroup] = Field(default_factory=list, max_length=16)
+    nodes: list[DiagramNode] = Field(min_length=1, max_length=80)
+    edges: list[DiagramEdge] = Field(default_factory=list, max_length=200)
+
+    @model_validator(mode="after")
+    def consistent_graph(self) -> DiagramBlock:
+        ids = [node.id for node in self.nodes]
+        if len(ids) != len(set(ids)):
+            raise ValueError("diagram node IDs must be unique")
+        if len({group.id for group in self.groups}) != len(self.groups):
+            raise ValueError("diagram group IDs must be unique")
+        groups = {group.id for group in self.groups}
+        if any(node.group is not None and node.group not in groups for node in self.nodes):
+            raise ValueError("diagram node refers to an unknown group")
+        known = set(ids)
+        if any(edge.source not in known or edge.target not in known for edge in self.edges):
+            raise ValueError("diagram edge refers to an unknown node")
+        if any(edge.source == edge.target for edge in self.edges):
+            raise ValueError("diagram edge cannot point to its own node")
+        return self
+
+
+class ChartSeries(SpecModel):
+    name: str = Field(min_length=1, max_length=120)
+    values: list[Annotated[float, Field(ge=0, le=1_000_000)]] = Field(max_length=40)
+
+
+class ChartBlock(DocumentBlockBase):
+    """A small bar chart of counts the pipeline computed, never model figures."""
+
+    type: Literal["chart"] = "chart"
+    chart_type: Literal["bar", "stacked_bar"] = "bar"
+    title: str = Field(min_length=1, max_length=200)
+    caption: str | None = Field(default=None, max_length=1_000)
+    categories: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(
+        min_length=1, max_length=40)
+    series: list[ChartSeries] = Field(min_length=1, max_length=8)
+    unit: str | None = Field(default=None, max_length=40)
+
+    @model_validator(mode="after")
+    def aligned_series(self) -> ChartBlock:
+        if any(len(series.values) != len(self.categories) for series in self.series):
+            raise ValueError("every chart series needs one value per category")
+        return self
+
+
 DocumentBlock = Annotated[
-    ParagraphBlock | HeadingBlock | ListBlock | TableBlock | CodeBlock | QuoteBlock,
+    ParagraphBlock | HeadingBlock | ListBlock | TableBlock | CodeBlock | QuoteBlock
+    | DiagramBlock | ChartBlock,
     Field(discriminator="type"),
 ]
 

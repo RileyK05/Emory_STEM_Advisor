@@ -3,6 +3,11 @@ SELECT code FROM courses
 WHERE collection_id = %(collection_id)s AND lifecycle = 'current'
 ORDER BY code;
 
+-- name: list_course_titles
+SELECT code, title FROM courses
+WHERE collection_id = %(collection_id)s AND lifecycle = 'current'
+  AND code = ANY(%(codes)s);
+
 -- name: list_collection_retired_course_codes
 SELECT code FROM courses
 WHERE collection_id = %(collection_id)s AND lifecycle = 'retired'

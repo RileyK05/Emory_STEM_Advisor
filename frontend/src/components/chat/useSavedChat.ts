@@ -57,6 +57,7 @@ export function useSavedChat(): ChatController {
   const busyRef = useRef(new Map<string, symbol>());
   const abandoningRef = useRef(new Set<string>());
   const creatingRef = useRef(false);
+  const lastChoice = useRef<{ query: string; makeArtifact: boolean } | null>(null);
   const eventCursor = useRef<Record<string, number>>({});
   const pollingRequests = useRef(new Map<string, { epoch: number; promise: Promise<void> }>());
   const settledUnknownRequests = useRef(new Set<string>());
@@ -331,9 +332,18 @@ export function useSavedChat(): ChatController {
     }
   };
 
-  const send = async (attachments: Attachment[], onAccepted?: () => void, queryText?: string) => {
+  const send = async (
+    attachments: Attachment[],
+    onAccepted?: () => void,
+    queryText?: string,
+    makeArtifactChoice?: boolean,
+  ) => {
     const query = (queryText ?? draft).trim();
     if (!query) return;
+    // A retry of the same question keeps the "Make a file" choice it was sent with.
+    const makeArtifact =
+      makeArtifactChoice ?? (lastChoice.current?.query === query ? lastChoice.current.makeArtifact : false);
+    lastChoice.current = { query, makeArtifact };
     setError(null);
     setNotice(null);
     const target = await ensureConversation(query);
@@ -352,6 +362,7 @@ export function useSavedChat(): ChatController {
       query,
       requestId,
       expectedSequence: record.lastSequence,
+      makeArtifact,
       // A first question over all sources needs no explicit scope; a follow-up with an unchanged
       // scope omits it so the server inherits the conversation's saved scope.
       ...(scopeChanged.current && !(record.lastSequence === 0 && scope === null) ? { sourceIds: scope } : {}),
@@ -545,7 +556,8 @@ export function useSavedChat(): ChatController {
     setDraft: (text) => setDrafts((current) => ({ ...current, [draftKey]: text })),
     advisingModelConfigured,
     busy: currentBusy || abandoning || loadingConversation || !!conversation?.pendingRequestId,
-    send: (attachments, onAccepted) => void send(attachments, onAccepted),
+    send: (attachments, onAccepted, options) =>
+      void send(attachments, onAccepted, undefined, options?.makeArtifact ?? false),
     retry,
     retryPending,
     changeScope: (next) => {

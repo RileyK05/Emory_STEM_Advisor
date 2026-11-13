@@ -7,11 +7,14 @@ import re
 
 from docx import Document as WordDocument
 from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Inches, Pt, RGBColor
 
 from .models import (
+    ChartBlock,
     CodeBlock,
+    DiagramBlock,
     DocumentSpec,
     HeadingBlock,
     ListBlock,
@@ -19,6 +22,7 @@ from .models import (
     QuoteBlock,
     TableBlock,
 )
+from .visuals import chart_rows, diagram_columns, diagram_edges_text
 
 
 def _add_inline(paragraph, text: str) -> None:
@@ -45,11 +49,41 @@ def _add_inline(paragraph, text: str) -> None:
         paragraph.add_run(text[position:])
 
 
+# The shared theme's navy, as the HTML renderer uses it.
+NAVY = RGBColor(0x01, 0x21, 0x69)
+
+
+def _shade(cell, fill: str) -> None:
+    shading = OxmlElement("w:shd")
+    shading.set(qn("w:val"), "clear")
+    shading.set(qn("w:color"), "auto")
+    shading.set(qn("w:fill"), fill)
+    cell._tc.get_or_add_tcPr().append(shading)
+
+
+def _add_table(document, headers, rows) -> None:
+    table = document.add_table(rows=1, cols=len(headers))
+    table.style = "Table Grid"
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for cell, text in zip(table.rows[0].cells, headers, strict=True):
+        _add_inline(cell.paragraphs[0], text)
+        _shade(cell, "012169")
+        for run in cell.paragraphs[0].runs:
+            run.bold = True
+            run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    for row in rows:
+        cells = table.add_row().cells
+        for cell, text in zip(cells, row, strict=True):
+            _add_inline(cell.paragraphs[0], text)
+
+
 def export_docx(spec: DocumentSpec) -> bytes:
     document = WordDocument()
+    document.styles["Normal"].font.name = "Calibri"
+    document.styles["Normal"].font.size = Pt(11)
     for name in ("Title", "Subtitle", *(f"Heading {level}" for level in range(1, 10))):
         style = document.styles[name]
-        style.font.color.rgb = RGBColor(0, 0, 0)
+        style.font.color.rgb = NAVY
         properties = style.element.pPr
         if properties is not None:
             for border in list(properties.findall(qn("w:pBdr"))):
@@ -85,17 +119,26 @@ def export_docx(spec: DocumentSpec) -> bytes:
             run.font.name = "Consolas"
             run.font.size = Pt(9)
         elif isinstance(block, TableBlock):
-            table = document.add_table(rows=1, cols=len(block.headers))
-            table.style = "Light Shading Accent 1"
-            table.alignment = WD_TABLE_ALIGNMENT.CENTER
-            for cell, text in zip(table.rows[0].cells, block.headers, strict=True):
-                _add_inline(cell.paragraphs[0], text)
-                for run in cell.paragraphs[0].runs:
-                    run.bold = True
-            for row in block.rows:
-                cells = table.add_row().cells
-                for cell, text in zip(cells, row, strict=True):
-                    _add_inline(cell.paragraphs[0], text)
+            _add_table(document, block.headers, block.rows)
+        elif isinstance(block, DiagramBlock):
+            # Word gets the same facts as text: who sits in each column, then each arrow.
+            document.add_paragraph().add_run(block.title).bold = True
+            columns = diagram_columns(block)
+            _add_table(document, [label for label, _nodes in columns],
+                       [[", ".join(node.label for node in nodes) for _label, nodes in columns]])
+            edges = diagram_edges_text(block)
+            if edges:
+                document.add_paragraph("Connections:")
+                for edge in edges:
+                    document.add_paragraph(edge, style="List Bullet")
+            if block.caption:
+                document.add_paragraph(block.caption)
+        elif isinstance(block, ChartBlock):
+            document.add_paragraph().add_run(block.title).bold = True
+            headers, rows = chart_rows(block)
+            _add_table(document, headers, rows)
+            if block.caption:
+                document.add_paragraph(block.caption)
     if spec.evidence:
         from app.artifacts.evidence import source_legend
 

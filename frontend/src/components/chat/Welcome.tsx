@@ -24,8 +24,8 @@ export function Welcome({ demo, onSuggest }: Props) {
       <p className="welcome-kicker">Emory STEM Advisor</p>
       <h2 id="welcome-title">What are you planning?</h2>
       <p className="welcome-lede">
-        Ask about courses, prerequisites, and program requirements. Answers cite their sources. To keep something, ask
-        for a plan, checklist, spreadsheet, comparison or printable page by name.
+        Ask about courses, prerequisites, and program requirements. Answers cite their sources. To keep something, tick
+        “Make a file” before sending, and you get a plan, checklist, spreadsheet, comparison or page.
       </p>
       <div className="suggestions">
         {(demo ? DEMO_SUGGESTIONS : SAVED_SUGGESTIONS).map((text) => (

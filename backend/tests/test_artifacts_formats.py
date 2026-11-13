@@ -51,6 +51,43 @@ def test_markdown_keeps_structure_and_html_escapes_markup():
     assert "&lt;script&gt;" in safe
 
 
+def test_diagrams_and_charts_render_in_every_format_and_stay_inert():
+    from docx import Document as WordDocument
+
+    from app.artifacts.inert_html import render_inert_markup
+    from app.artifacts.visuals import diagram_html
+
+    spec = DocumentSpec.model_validate({"title": "Plan", "blocks": [
+        {"id": "d", "type": "diagram", "title": "Course map",
+         "groups": [{"id": "t1", "label": "Term 1"}, {"id": "t2", "label": "Term 2"}],
+         "nodes": [{"id": "a", "label": "MATH 111", "group": "t1", "status": "next"},
+                   {"id": "b", "label": 'MATH 112 "II"', "group": "t2"}],
+         "edges": [{"source": "a", "target": "b"}]},
+        {"id": "c", "type": "chart", "chart_type": "stacked_bar", "title": "Lines",
+         "categories": ["Math (BS)"], "series": [{"name": "Named", "values": [3]},
+                                                {"name": "Not yet", "values": [5]}]},
+    ]})
+    page = render_document_html(spec)
+    assert page.count("<svg") == 2 and "MATH 111 → MATH 112" in page.replace("&quot;", '"')
+    markdown = render_markdown(spec)
+    assert "flowchart TB" in markdown and "n1 --> n2" in markdown and "#quot;II#quot;" in markdown
+    assert "| Math (BS) | 3 | 5 |" in markdown
+    word = WordDocument(io.BytesIO(export_docx(spec)))
+    assert [[cell.text for cell in row.cells] for row in word.tables[1].rows] == [
+        ["", "Named", "Not yet"], ["Math (BS)", "3", "5"]]
+    # The page sanitizer keeps the drawing and nothing that links, loads or runs.
+    kept = render_inert_markup(diagram_html(spec.blocks[0]))
+    assert "<rect" in kept and 'marker-end="url(#arrow)"' in kept
+    hostile = render_inert_markup(
+        '<svg onload="x()"><a href="https://e.test"><rect fill="url(https://e.test/x)"/></a>'
+        '<foreignObject><p>inside</p></foreignObject><use href="#a"/></svg><title>T</title>')
+    assert hostile == "<svg><rect></rect></svg>T"
+    with pytest.raises(ValueError, match="unknown node"):
+        DocumentSpec.model_validate({"title": "x", "blocks": [
+            {"id": "d", "type": "diagram", "title": "t", "nodes": [{"id": "a", "label": "A"}],
+             "edges": [{"source": "a", "target": "z"}]}]})
+
+
 def test_docx_export_keeps_supported_content_and_page_layout():
     from docx import Document as WordDocument
 

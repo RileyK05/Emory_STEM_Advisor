@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { CloseIcon, KindIcon, SendIcon } from '../icons';
 import type { Attachment, ChatController } from './model';
@@ -11,6 +11,8 @@ interface Props {
 
 export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
   const textarea = useRef<HTMLTextAreaElement>(null);
+  // Applies to the next message only; it clears once that message is accepted.
+  const [makeArtifact, setMakeArtifact] = useState(false);
   const canSend = chat.advisingModelConfigured && !chat.busy && chat.draft.trim().length > 0;
 
   // Grow with the text, up to a cap where it starts to scroll.
@@ -22,7 +24,7 @@ export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
   }, [chat.draft]);
 
   const submit = () => {
-    if (canSend) chat.send(attachments);
+    if (canSend) chat.send(attachments, () => setMakeArtifact(false), { makeArtifact });
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -65,9 +67,21 @@ export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
         onChange={(event) => chat.setDraft(event.target.value)}
         onKeyDown={onKeyDown}
         disabled={!chat.advisingModelConfigured}
-        placeholder="Ask about courses, or ask for a plan, checklist or spreadsheet…"
+        placeholder="Ask about courses, plans or what to take next…"
       />
       <div className="composer-bar">
+        <label
+          className="file-toggle"
+          title="Also make a document, spreadsheet or page from this answer, such as a plan, checklist or course map"
+        >
+          <input
+            type="checkbox"
+            checked={makeArtifact}
+            onChange={(event) => setMakeArtifact(event.target.checked)}
+            disabled={!chat.advisingModelConfigured}
+          />
+          Make a file
+        </label>
         <button type="submit" className="send-button" aria-label="Send" disabled={!canSend}>
           <SendIcon />
         </button>

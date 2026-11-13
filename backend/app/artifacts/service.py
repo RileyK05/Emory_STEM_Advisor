@@ -9,8 +9,9 @@ from typing import Any
 
 from .docx import export_docx
 from .errors import ArtifactError
-from .markdown import render_document_html, render_markdown
+from .markdown import document_kicker, render_document_html, render_markdown
 from .models import DocumentSpec, HtmlArtifactSpec, WorkbookSpec
+from .theme import themed_page
 from .xlsx import (
     IsolatedLibreOfficeRunner,
     export_xlsx,
@@ -114,5 +115,8 @@ def preview_artifact(spec: DocumentSpec | WorkbookSpec | HtmlArtifactSpec) -> di
     if isinstance(spec, WorkbookSpec):
         return {"kind": "workbook", **formula_preview(spec)}
     if isinstance(spec, HtmlArtifactSpec):
-        return {"kind": "html", "title": spec.title, "html": spec.html, "sandboxRequired": True}
+        # The page sits in the shared look; the preview still sanitizes it.
+        return {"kind": "html", "title": spec.title,
+                "html": themed_page(spec.html, title=spec.title, kicker=document_kicker(spec)),
+                "sandboxRequired": True}
     raise ArtifactError("invalid_spec", "Unsupported artifact spec")

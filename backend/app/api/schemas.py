@@ -11,6 +11,9 @@ class QueryRequest(BaseModel):
     collectionId: str | None = Field(default=None, max_length=200)
     sourceIds: list[UUID] | None = Field(default=None, max_length=500)
     studentCohort: str | None = Field(default=None, max_length=200)
+    # The composer's "make a file" box. Unset keeps the wording-based guess, so
+    # API callers that never send it behave as before.
+    makeArtifact: bool | None = None
 
     @field_validator("query")
     @classmethod

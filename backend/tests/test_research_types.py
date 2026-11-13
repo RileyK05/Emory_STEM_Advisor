@@ -892,6 +892,30 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
                             text="PSYC 219 does not exist, so it cannot count toward a major.")
     session.rejected_decision = _decision(blocks=(refusal, unsupported))
     assert session.salvage().blocks == (refusal,)
+    # A code with a same-course match is pointed there, not refused.
+    session._course_codes = frozenset({"PSYC 219W"})
+    session.rejected_decision = _decision(blocks=(unsupported,))
+    assert session.salvage().blocks[0].text == (
+        "PSYC 219 is not in the Course Atlas; the course there is PSYC 219W.")
+
+
+@pytest.mark.parametrize("question, renamed", [
+    ("can i take QTM 110 next fall", {"QTM 110": "DATASCI 110"}),
+    ("is qtm 110 and 150 hard", {"QTM 110": "DATASCI 110", "QTM 150": "DATASCI 150"}),
+    ("is QTM 110 the same as DATASCI 110", {}),
+    ("is QTM_OX 110 offered", {}),  # Oxford kept the old subject name
+    ("can i take QTM 999", {}),  # not a course: the absent-code gate answers it
+])
+def test_a_former_subject_code_is_pointed_to_its_current_code(question, renamed):
+    from types import SimpleNamespace
+
+    from app.generation.research_tools import ResearchSession
+
+    session = ResearchSession(None, SimpleNamespace(sources={}, programs={}, collection_id=None),
+        None, SimpleNamespace(run_id=uuid4()), settings=None, config=None, embedder=None)
+    session._course_codes = frozenset({"DATASCI 110", "DATASCI 150"})
+    session.question = question
+    assert session.renamed_question_codes() == renamed
 
 
 @pytest.mark.parametrize("text, rejected", [
@@ -899,6 +923,7 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
     ("There is no ENVS 667; the CS BS lists CS 170.", None),
     ("There is no reason ENVS 667 is offered.", "ENVS 667 is not a course"),
     ("ENVS 667 isn't a current Emory course.", None),
+    ("ENVS 667 isn't in the Course Atlas; the CS BS lists CS 170.", None),
     ("ENVS 667 counts toward the CS BS.", "ENVS 667 is not a course"),
     ("ENVS 667 is not listed in the CS BS requirements.", "ENVS 667 is not a course"),
     # A real course the run never read stays gated, whatever the wording.
@@ -1204,6 +1229,33 @@ def test_research_hands_the_students_request_to_the_artifact_pipeline(
     else:
         assert (revised.artifact is None) == (not decision.get("artifact")
                                              and expected is not None or expected is None)
+
+
+@pytest.mark.parametrize(("question", "requested", "artifact", "referenced", "expected"), [
+    # Checked: a file whatever the wording; the words still pick its kind.
+    ("What does the Psychology BS require?", True, None, False, ("document", "create")),
+    ("Psychology BS courses in a spreadsheet, please", True, None, False, ("workbook", "create")),
+    ("What can I take after PSYC 110?", True, None, True, ("document", "create")),
+    # Unchecked: no file, even when the words or the research model asked for one...
+    ("Plan my Psychology BS.", False, None, False, None),
+    ("Plan my Psychology BS.", False, "create", False, None),
+    # ...except a revision of the file the student attached.
+    ("Add the summer term to it.", False, "revise", True, ("document", "revise")),
+    # The box never overrides the refusal for a program that does not exist.
+    ("Make me a plan for the Underwater Basket Weaving BS.", True, None, False, None),
+])
+def test_the_make_a_file_box_decides_whether_an_artifact_is_made(
+        question, requested, artifact, referenced, expected):
+    from app.advising.research_types import ArtifactRevisionReference
+    from app.generation.research_controller import _with_requested_artifact
+
+    request = None if artifact is None else ArtifactRequest(
+        kind="document", title="Plan", brief="Plan.", purpose=artifact,
+        revises=ArtifactRevisionReference(artifact_id=uuid4(), revision_id=uuid4())
+        if artifact == "revise" else None)
+    result = _with_requested_artifact(_decision(artifact=request), question, _PROGRAMS,
+                                      referenced=referenced, requested=requested)
+    assert (result.artifact and (result.artifact.kind, result.artifact.purpose)) == expected
 
 
 @pytest.mark.parametrize(("question", "kept"), [

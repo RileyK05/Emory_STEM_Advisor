@@ -187,6 +187,12 @@ class StagePlanNote(ToolInputModel):
         return value
 
 
+class StagePick(ToolInputModel):
+    """Numbers of supplied catalog sentences; the model chooses, it never writes."""
+
+    picks: list[int] = Field(default_factory=list, max_length=4)
+
+
 class EditOperation(ToolInputModel):
     action: Literal["keep", "replace", "insert_after", "delete"]
     section_id: str = Field(min_length=1, max_length=32, pattern=_ID_PATTERN)

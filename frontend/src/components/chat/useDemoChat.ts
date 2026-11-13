@@ -15,7 +15,7 @@ export function useDemoChat(): ChatController {
   // Answers that arrive after "New chat" belong to a cleared transcript.
   const generation = useRef(0);
 
-  const send = () => {
+  const send = (makeArtifact = false) => {
     const query = draft.trim();
     if (!query || sending) return;
     const epoch = generation.current;
@@ -42,7 +42,7 @@ export function useDemoChat(): ChatController {
       setEntries((current) => current.map((item) => (item.key === assistantKey ? entry : item)));
     };
     getClient()
-      .query({ query, ...(scope !== null ? { sourceIds: scope } : {}) })
+      .query({ query, makeArtifact, ...(scope !== null ? { sourceIds: scope } : {}) })
       .then((res) =>
         settle({
           ...base,
@@ -80,8 +80,8 @@ export function useDemoChat(): ChatController {
     setDraft,
     advisingModelConfigured: true,
     busy: sending,
-    send: (_attachments, onAccepted) => {
-      send();
+    send: (_attachments, onAccepted, options) => {
+      send(options?.makeArtifact ?? false);
       onAccepted?.();
     },
     retry: (text) => {

@@ -364,6 +364,11 @@ def _current_code(code: str) -> str:
     return f"{SUBJECT_RENAMES[subject]} {rest}" if subject in SUBJECT_RENAMES and rest else code
 
 
+def _identity_stem(code: str) -> str:
+    """The stem under a subject's current name: QTM_OX 100 and DATASCI_OX 100 share one."""
+    return _current_code(course_stem(code))
+
+
 def offering_note(code: str, checked: list[str], variants: list[str]) -> str:
     """Say what the Atlas terms show for a course that none of them list."""
     span = f"{checked[0]} to {checked[-1]}"
@@ -1346,11 +1351,22 @@ class ResearchSession:
                 raise DecisionRejected(
                     "the student named no degree and this major also exists as a "
                     f"{', '.join(sorted(unsaid))}; say in the first block that both exist")
-            unnamed = set(self.unknown_question_codes()) - named
+            unknown = self.unknown_question_codes()
+            unnamed = {code for code, near in unknown.items() if not near} - named
             if unnamed:
                 raise DecisionRejected(
                     "the student asked about a course that does not exist; say so plainly, "
                     f"naming it: {', '.join(sorted(unnamed))}")
+            # A code with a same-course match on another campus, suffix or subject
+            # name is a correction to offer, not a question to refuse.
+            unpointed = sorted(code for code, near in unknown.items()
+                               if near and (code not in named or not set(near) & named))
+            if unpointed:
+                raise DecisionRejected(
+                    "the student named a code the Course Atlas does not have; name it, say it "
+                    "is not in the Course Atlas, and point to the course it most likely means, "
+                    "then answer about that course: "
+                    + "; ".join(f"{code} -> {', '.join(unknown[code])}" for code in unpointed))
             validate_final(value.decision, self.state, self.store.evidence(self.run.run_id),
                            self.supplied, finishable_checks, self.entity_evidence,
                            self.artifact_references, self._known_course_codes(),
@@ -1393,7 +1409,8 @@ class ResearchSession:
         records = self.store.evidence(self.run.run_id)
         known = self.supplied | {record.evidence_id for record in records}
         retired = self._retired_courses(proposal)
-        unknown = frozenset(self.unknown_question_codes())
+        nearest = self.unknown_question_codes()
+        unknown = frozenset(nearest)
         kept, used = [], 0
         for block in proposal.blocks:
             single = proposal.model_copy(update={
@@ -1413,7 +1430,10 @@ class ResearchSession:
             used += size
         # What the master already settles is not lost with the block that said it.
         named = {code for block in kept for code in canonical_codes_in(block.text)}
-        absent = [DecisionBlock(kind="limitation", text=f"There is no {code} in the Course Atlas.")
+        absent = [DecisionBlock(kind="limitation", text=(
+                      f"{code} is not in the Course Atlas; the course there is "
+                      f"{' or '.join(nearest[code])}." if nearest[code]
+                      else f"There is no {code} in the Course Atlas."))
                   for code in sorted(unknown - named)]
         # A kept block that already says the course does not exist is the answer.
         if not absent and not named & unknown and not any(block.kind == "fact" for block in kept):
@@ -1466,8 +1486,20 @@ class ResearchSession:
         # campus; a code paired with a current course is real, even when that
         # campus's own record is retired.
         equivalents = load_campus_equivalents(self.conn, collection_id=self.scope.collection_id)
-        return {code: sorted(k for k in known if course_stem(k) == course_stem(code))[:6]
+        return {code: sorted(k for k in known if _identity_stem(k) == _identity_stem(code))[:6]
                 for code in unknown if not equivalents.get(code, frozenset()) & known}
+
+    def renamed_question_codes(self) -> dict[str, str]:
+        """Codes the student wrote under a subject's former name, with the current code."""
+        written = (self.question or "").upper()
+        # QTM_OX is Oxford's own subject, which kept the old name.
+        candidates = {former: code for code in course_codes_in_query(written)
+                      if (former := _former_code(code)) and code not in written
+                      and re.search(rf"(?<![A-Z_]){former.split(' ')[0]}(?![A-Z_])", written)}
+        if not candidates:
+            return {}
+        known = self._known_course_codes()
+        return {former: code for former, code in candidates.items() if code in known}
 
     def _known_course_codes(self) -> frozenset[str]:
         """The collection's course identities, for the identity check.

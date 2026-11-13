@@ -262,6 +262,7 @@ def query_response(
         decision, usage, system, user, model = ResearchController().run(
             session, provider, operation, ledger=ledger, check_cancelled=guard,
             on_progress=on_progress, question=body.query, history_context=history_context,
+            artifact_choice=getattr(body, "makeArtifact", None),
             selection_identity={"profile": str(selection.profile_id), "revision": selection.profile_revision}
             if selection else {"provider": settings.llm_provider, "model": settings.llm_model_id},
             on_attempt=lambda prepared, result, error: audit.record(result, error, prepared),

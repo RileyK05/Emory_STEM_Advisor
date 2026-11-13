@@ -63,6 +63,18 @@ Phases 4–7 are done, uncommitted (prompt `research-49`):
     joined snapshots on `source_id` alone, so a source holding several term
     snapshots gave every row every term. It now joins on
     `(source_id, capture_set_hash)`.
+- **Follow-up (2026-11-12, Riley's request): correct, don't refuse.**
+  - A question code with a same-course match is no longer answered with "There
+    is no X". The match can be on the other campus, a suffix, or a renamed
+    subject: BIOL_OX 360 → BIOL 360; DATASCI_OX 100 → QTM_OX 100, since Oxford
+    kept the QTM name.
+  - Instead, the finish gate requires the reply to say the code is not in the
+    Course Atlas, name the matching course, and answer about it. A salvaged
+    reply opens the same way.
+  - "There is no X" stays only for codes with no match.
+  - A question that writes `QTM N` gets a `renamed_courses` context entry
+    pointing to `DATASCI N`.
+  - None of this is in the system prompt, so the prompt budget is unchanged.
 - **Phase 6:** editions are compared only within one `source_category`, and
   term listings (`course_offerings`) are skipped.
 - **Phase 7:**

@@ -2,24 +2,53 @@
 import base64
 import binascii
 import html
+import re
 from html.parser import HTMLParser
 
+# Static SVG shapes and text, as the diagram and chart renderers draw them. No
+# element that loads, links, animates or embeds is kept (use, image, a,
+# foreignObject, animate, set), and no attribute that holds a URL.
+_SVG = frozenset({
+    "svg", "g", "defs", "marker", "rect", "path", "line", "polyline", "polygon",
+    "circle", "ellipse", "text", "tspan",
+})
 _ALLOWED = frozenset({
     "h1", "h2", "h3", "h4", "h5", "h6", "p", "blockquote", "pre", "code",
     "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption",
     "ul", "ol", "li", "dl", "dt", "dd", "div", "span", "b", "strong",
     "em", "i", "u", "small", "mark", "sub", "sup", "br", "hr",
-    "details", "summary", "figure", "figcaption", "img",
+    "details", "summary", "figure", "figcaption", "img", "section", "header", "article",
+    "title", *_SVG,  # title: see below
 })
 _DROP_CONTENT = frozenset({
     "script", "style", "iframe", "frame", "frameset", "object", "embed",
-    "portal", "template", "noscript", "svg", "math",
+    "portal", "template", "noscript", "math", "foreignobject",
 })
 _VOID = frozenset({"br", "hr", "img"})
 _ATTRIBUTES = frozenset({
     "id", "class", "title", "lang", "dir", "role", "style", "colspan", "rowspan",
     "scope", "start", "reversed", "open", "alt", "width", "height",
 })
+_SVG_ATTRIBUTES = frozenset({
+    "xmlns", "viewbox", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry",
+    "d", "points", "fill", "stroke", "stroke-width", "stroke-dasharray", "opacity",
+    "font-size", "font-weight", "font-family", "text-anchor", "transform",
+    "refx", "refy", "markerwidth", "markerheight", "orient", "marker-end",
+})
+# A reference may name a marker in the same drawing and nothing else.
+_LOCAL_REFERENCE = re.compile(r"url\(#[A-Za-z0-9_-]+\)")
+_SVG_NAMESPACE = "http://www.w3.org/2000/svg"
+
+
+def _svg_value(key, value):
+    lowered = value.casefold()
+    if key == "xmlns":
+        return value if value == _SVG_NAMESPACE else None
+    if "url(" in lowered:
+        return value if _LOCAL_REFERENCE.fullmatch(value.strip()) else None
+    if "javascript:" in lowered or "expression(" in lowered:
+        return None
+    return value
 
 
 def _image(value):
@@ -53,7 +82,9 @@ class _InertParser(HTMLParser):
             if tag not in {"embed", "frame"}:
                 self.suppressed.append(tag)
             return
-        if tag not in _ALLOWED:
+        if tag not in _ALLOWED or (tag == "title" and "svg" not in self.open_tags):
+            # A page-level <title> would hide its text; inside a drawing it is the
+            # accessible name.
             return
         clean = []
         seen = set()
@@ -63,6 +94,10 @@ class _InertParser(HTMLParser):
             seen.add(key)
             if key in _ATTRIBUTES or key.startswith("aria-"):
                 clean.append((key, value))
+            elif tag in _SVG and key in _SVG_ATTRIBUTES:
+                safe = _svg_value(key, value)
+                if safe is not None:
+                    clean.append((key, safe))
             elif tag == "img" and key == "src":
                 safe = _image(value)
                 if safe:

@@ -467,10 +467,22 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
     spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
     headings = [block.get("text") for block in spec["blocks"]
                 if block.get("type") == "heading"]
-    assert headings == (["Term 1"] if planned else ["Facts"])
+    assert headings == (["Term 1", "Course map"] if planned
+                        else ["At a glance", "Requirements", "Next steps"])
     if not planned:
-        assert spec["blocks"][-1]["text"] == "ECON 201 — Intermediate Macroeconomics"
+        # A checklist is the program's own lines, built by code, not the draft's sections.
+        lists = [block["items"] for block in spec["blocks"] if block["type"] == "list"]
+        assert lists[0] == ["☐ Econ 101 and Econ 201", "☐ Math 111 or Math 112"]
         return
+    # The map is the planner's own: the completed prerequisite, then what to take next.
+    diagram = next(block for block in spec["blocks"] if block["type"] == "diagram")
+    assert [(group["label"], [node["label"] for node in diagram["nodes"]
+                              if node["group"] == group["id"]])
+            for group in diagram["groups"]] == [
+        ("Done", ["ECON 101"]),
+        ("Term 1", ["ECON 201 Intermediate Macroeconomics"])]
+    assert [(edge["source"], edge["target"]) for edge in diagram["edges"]] == [
+        ("ECON-101", "ECON-201")]
     assert "degraded_sections" not in spec.get("provenance", {})
     assert spec["title"] == "Economics (Minor): Term plan"
     assert spec["provenance"]["plan"] is True
@@ -478,6 +490,31 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
     course = next(block for block in spec["blocks"] if block["type"] == "list")
     assert course["items"] == ["ECON 201 — Intermediate Macroeconomics"]
     assert any(block.get("text") == "Macro theory." for block in spec["blocks"])
+
+
+def test_a_whatif_request_charts_the_program_lines_a_students_courses_name(
+        db, collection, tmp_path):
+    """The model names the program and courses; the counts and lines come from code."""
+    source = _econ(db, collection, tmp_path)
+    draft = {"title": "Switch", "sections": [], "sheets": [], "charts": [],
+             "program": "Economics (Minor)", "completed_courses": ["ECON 101", "ECON 201"]}
+    client, store, executor = setup_runtime(
+        db, collection, ArtifactStageProvider(outline=draft), tmp_path)
+    run_id = start_run(client, "document", {
+        "prompt": "What if I switched to the Economics minor? I took ECON 101 and ECON 201.",
+        "sourceIds": [str(source)]}, "whatif")
+    finished = run_once(store, "whatif", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    chart = next(block for block in spec["blocks"] if block["type"] == "chart")
+    assert chart["categories"] == ["Economics (Minor)"]
+    assert {series["name"]: series["values"] for series in chart["series"]} == {
+        "Your courses are named": [1], "Some named": [0], "Not yet": [1]}
+    table = next(block for block in spec["blocks"] if block["type"] == "table")
+    assert [row[1:] for row in table["rows"]] == [
+        ["Named", "ECON 101, ECON 201"], ["Not yet", "—"]]
+    assert spec["provenance"]["whatif_programs"] == '["Economics (Minor)"]'
 
 
 def test_a_plan_outline_falls_back_to_the_programs_required_lines(db, collection, tmp_path):
@@ -508,8 +545,82 @@ def test_a_plan_outline_falls_back_to_the_programs_required_lines(db, collection
     assert spec["provenance"]["outline_fallback"] is True
 
 
-def test_a_checklist_outline_falls_back_to_the_base_template(db, collection, tmp_path):
-    """A model that cannot outline a checklist still gets its base sections."""
+def test_catalog_sentences_offered_for_picking_are_whole_and_not_already_shown():
+    """A model's only part in a built template is choosing among these by number."""
+    from app.generation.artifact_builders import sentence_candidates
+
+    chunk = SimpleNamespace(text=(
+        "Requirements. The minor gives students a grounding in economic reasoning. "
+        "Students must earn a C or better in every course counted toward the minor. "
+        "Short one. Students must earn a C or better in every course counted toward the minor."))
+    offered = sentence_candidates([chunk, chunk], skip=[
+        "The minor gives students a grounding in economic reasoning."])
+    assert [text for text, _chunk in offered] == [
+        "Students must earn a C or better in every course counted toward the minor."]
+
+
+_MATH_MINOR = """Mathematics (Minor)
+DEGREE AWARDED N/A
+Requirements
+• Math 111 and Math 112
+• Econ 301
+"""
+
+
+@pytest.mark.parametrize(("kind", "prompt", "title", "headings"), [
+    ("document", "Give me a guide to the Economics minor and ECON 201.", "Economics (Minor): Program overview",
+     ["At a glance", "Requirements", "Prerequisite map", "Next steps"]),
+    ("document", "Compare the Economics minor and the Mathematics minor, with ECON 301.",
+     "Economics (Minor) vs Mathematics (Minor)",
+     ["At a glance", "Courses each program names", "Economics (Minor) requirements",
+      "Mathematics (Minor) requirements", "Next steps"]),
+    ("html", "Make a web page about the Economics minor and ECON 201.",
+     "Economics (Minor): Program overview", None),
+    ("workbook", "Track my Economics minor courses, like ECON 201.", "Economics (Minor): Credit tracker", None),
+])
+def test_common_artifacts_are_built_from_program_records_not_written(
+        db, collection, tmp_path, kind, prompt, title, headings):
+    source = import_atlas_sample(db, collection, tmp_path, text=ATLAS_SAMPLE)
+    import_programs(db, collection_id=collection, path=_write_programs(
+        tmp_path, ("Economics (Minor)", ECON_MINOR), ("Mathematics (Minor)", _MATH_MINOR)))
+    db.commit()
+    provider = ArtifactStageProvider(sections={"catalog": [{"picks": [1]}]})
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, kind, {"prompt": prompt, "sourceIds": [str(source)]}, "built")
+    finished = run_once(store, "built", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    assert spec["title"] == title
+    # The programs were named plainly: no outline, and no model-written section.
+    assert not any(request.tools[0].name == OUTLINE_TOOL for request in provider.requests)
+    if kind == "workbook":
+        cells = {(cell["row"], cell["column"]): cell.get("value")
+                 for cell in spec["sheets"][0]["cells"]}
+        assert [cells[(row, 1)] for row in (2, 3, 4)] == ["ECON 101", "ECON 201", "MATH 111"]
+        assert cells[(2, 5)] == "Not started"
+        # No record states credits, so there are none to show and no total.
+        assert (2, 3) not in cells and "Total" not in cells.values()
+        return
+    if kind == "html":
+        assert '<section class="card">' in spec["html"] and "<svg" in spec["html"]
+        return
+    assert [block["text"] for block in spec["blocks"] if block["type"] == "heading"
+            and block["level"] == 2] == headings
+    if title.endswith("overview"):
+        diagram = next(block for block in spec["blocks"] if block["type"] == "diagram")
+        assert [[node["label"].split(" ", 2)[0] + " " + node["label"].split(" ", 2)[1]
+                 for node in diagram["nodes"] if node["group"] == group["id"]]
+                for group in diagram["groups"]] == [["MATH 111"], ["ECON 101"], ["ECON 201"]]
+    else:
+        chart = next(block for block in spec["blocks"] if block["type"] == "chart")
+        assert {series["name"]: series["values"] for series in chart["series"]} == {
+            "Named by both": [2, 2], "Only this program": [2, 1]}
+
+
+def test_a_checklist_is_built_from_the_programs_lines_without_the_model(
+        db, collection, tmp_path):
+    """A model that cannot outline at all still gets the whole checklist."""
     source = _econ(db, collection, tmp_path)
 
     class NoOutline(ArtifactStageProvider):
@@ -538,9 +649,12 @@ def test_a_checklist_outline_falls_back_to_the_base_template(db, collection, tmp
     spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
     headings = [block.get("text") for block in spec["blocks"]
                 if block.get("type") == "heading"]
-    assert headings == ["Requirements", "Choices and electives", "Notes and next steps"]
-    assert spec["provenance"]["template"] == "checklist"
-    assert spec["provenance"]["template_fallback"] is True
+    assert headings == ["At a glance", "Requirements", "Next steps"]
+    assert spec["title"] == "Economics (Minor): Requirements checklist"
+    assert (spec["provenance"]["built_template"], spec["provenance"]["artifact_label"]) == (
+        "checklist", "Requirements checklist")
+    # The program was named plainly, so no model call was needed at all.
+    assert not provider.requests
 
 
 def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, tmp_path):

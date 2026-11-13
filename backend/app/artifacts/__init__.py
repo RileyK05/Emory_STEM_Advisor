@@ -4,7 +4,9 @@ from .docx import export_docx
 from .errors import ArtifactError, ArtifactLimitError, UnsupportedFeatureError
 from .markdown import render_document_html, render_markdown
 from .models import (
+    ChartBlock,
     CodeBlock,
+    DiagramBlock,
     DocumentSpec,
     HeadingBlock,
     HtmlArtifactSpec,
@@ -34,7 +36,9 @@ from .xlsx import (
 __all__ = (
     "ArtifactError",
     "ArtifactLimitError",
+    "ChartBlock",
     "CodeBlock",
+    "DiagramBlock",
     "DocumentSpec",
     "ExportResult",
     "HeadingBlock",

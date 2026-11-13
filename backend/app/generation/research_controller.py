@@ -411,8 +411,12 @@ def _artifact_for(question: str, *, grounding: str = "corpus"):
 
 
 def _with_requested_artifact(decision, question, titles, *, referenced: bool,
-                             unknown_codes=()):
+                             unknown_codes=(), requested: bool | None = None):
     """Hand the student's request to the artifact pipeline when research left it out.
+
+    `requested` is the composer's "make a file" box. Checked, a file is made
+    whatever the wording; unchecked, none is, except a revision of an attached
+    one. Unset (an API caller that never sends it), the wording decides.
 
     A summary of the conversation is built from the saved turns, so a document made
     for one takes that purpose. No artifact is made for a program or course that
@@ -422,19 +426,22 @@ def _with_requested_artifact(decision, question, titles, *, referenced: bool,
     missing = _missing_program(question, titles)
     if (missing is not None
             or unknown_codes and not _DEGREE_TOKEN.search(question or "")
-            or referenced and _EXPORT_ASK.search(question or "")):
+            or referenced and _EXPORT_ASK.search(question or "")
+            or requested is False and decision.artifact is not None
+            and decision.artifact.purpose != "revise"):
         return decision.model_copy(update={"artifact": None}) if decision.artifact else decision
+    asked = _asks_for_artifact(question) if requested is None else requested
     artifact = decision.artifact
     if (artifact is not None and _SUMMARY_ASK.search(question or "")
             and artifact.kind == "document" and artifact.purpose == "create"):
         return decision.model_copy(update={"artifact": artifact.model_copy(
             update={"purpose": "summary", "revises": None})})
-    if (artifact is None and _asks_for_artifact(question)
-            and (not referenced or _SUMMARY_ASK.search(question or ""))
+    if (artifact is None and asked
+            and (not referenced or requested or _SUMMARY_ASK.search(question or ""))
             and decision.outcome in {"recommendation", "information"}):
         return decision.model_copy(update={"artifact": _artifact_for(question)})
     if (artifact is None and decision.outcome == "declined"
-            and _asks_for_artifact(question)
+            and asked
             and (_PAGE_ASK.search(question or "") or _SHEET_ASK.search(question or ""))):
         # The file is a container for the student's own text, not advising
         # content. It is built without corpus evidence and sanitized at render.
@@ -560,17 +567,21 @@ class ResearchController:
                 decision, session.question,
                 [pin.title for pin in session.scope.programs.values()],
                 referenced=bool(session.artifact_references),
-                unknown_codes=session.unknown_question_codes())
+                unknown_codes=session.unknown_question_codes(),
+                requested=getattr(session, "artifact_choice", None))
             session.decision = decision
             system, user, model = session.last_call
             return decision, _aggregate_usage(usages), system, user, model
 
     def _run(self, session, provider, operation, *, usages, ledger, check_cancelled,
              on_progress, on_attempt, question, history_context=None, selection_identity=None,
-             before_provider_call=None):
+             before_provider_call=None, artifact_choice=None):
         settings = session.settings
         session.question = question
-        session.artifact_requested = _asks_for_artifact(question)
+        # The student's checkbox decides; without one, the wording does.
+        session.artifact_choice = artifact_choice
+        session.artifact_requested = (_asks_for_artifact(question) if artifact_choice is None
+                                      else artifact_choice)
         session.history_context = history_context
         session.instructions = SYSTEM + (
             WORKSPACE_SYSTEM if getattr(session, "workspace", None) else "")
@@ -860,7 +871,8 @@ class ResearchController:
                     session.decision = _with_requested_artifact(
                         session.decision, question, program_titles,
                         referenced=bool(session.artifact_references),
-                        unknown_codes=session.unknown_question_codes())
+                        unknown_codes=session.unknown_question_codes(),
+                        requested=getattr(session, "artifact_choice", None))
                     return session.decision, _aggregate_usage(usages), prepared.messages[0].content, user, result.model
             if not repairing:
                 hint = ""
@@ -912,13 +924,23 @@ class ResearchController:
                    if (conflicts := source_conflicts(question)) else {}),
                 **({"no_current_course": unknown, "no_current_course_note": (
                     "The Course Atlas has no current course with these exact codes. Open with a "
-                    "limitation block, which takes no citations: \"There is no\" and the code. "
-                    "Then offer only the real codes listed.")}
+                    "limitation block, which takes no citations, naming the code. With no codes "
+                    "listed, say \"There is no\" and the code. With codes listed, the student "
+                    "most likely means that course (another campus, suffix or subject name): say "
+                    "the code is not in the Course Atlas, point to the listed course, and answer "
+                    "about it.")}
                    if (unknown := session.unknown_question_codes()
                        if hasattr(session, "unknown_question_codes") else None) else {}),
+                **({"renamed_courses": renamed, "renamed_courses_note": (
+                    "The student wrote a subject's former name. Say once that the course is now "
+                    "the listed code, then answer about it; the old code is not missing.")}
+                   if (renamed := session.renamed_question_codes()
+                       if hasattr(session, "renamed_question_codes") else None) else {}),
                 **({"artifact_requested": "The student asked for a plan, checklist, "
                     "sheet or page to keep: set finish.decision.artifact."}
-                   if _asks_for_artifact(question) else {}),
+                   if (_asks_for_artifact(question)
+                       if getattr(session, "artifact_choice", None) is None
+                       else session.artifact_choice) else {}),
                 "finish_required": finishing, "instruction": hint,
                 "state_update_requested": state_required,
                 "source_read_requested": read_required,

@@ -43,7 +43,7 @@ _WRITTEN_CODE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]{2,8}(?:_OX)?\s?\d{3}[A-Za
                            re.IGNORECASE)
 
 
-def _without_absent_codes(blocks, known_courses, campus_equivalents):
+def without_absent_codes(blocks, known_courses, campus_equivalents):
     """Write each code the Course Atlas lacks as a description, in every block's text."""
     absent = invalid_course_codes(
         {code for block in blocks for text in _block_texts(block)
@@ -331,7 +331,7 @@ def build_advising_summary_spec(
     }
 
     if course_identity is not None:
-        blocks = _without_absent_codes(blocks, *course_identity)
+        blocks = without_absent_codes(blocks, *course_identity)
 
     return DocumentSpec(
         title=doc_title,

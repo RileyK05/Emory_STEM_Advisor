@@ -92,6 +92,11 @@ const STAGE_LABELS: Record<string, string> = {
 export const streamStageLabel = (stage: string | null) => (stage && STAGE_LABELS[stage]) || 'Thinking…';
 
 /** What the chat UI needs from either the saved (HTTP) or the demo (mock) engine. */
+export interface SendOptions {
+  /** The composer's "Make a file" box: ask for an artifact with this message. */
+  makeArtifact: boolean;
+}
+
 export interface ChatController {
   /** Chats are saved and listed; false in demo mode. */
   saved: boolean;
@@ -112,7 +117,7 @@ export interface ChatController {
   advisingModelConfigured: boolean;
   /** Sending is not possible right now (a turn is in flight, or the chat is loading). */
   busy: boolean;
-  send: (attachments: Attachment[], onAccepted?: () => void) => void;
+  send: (attachments: Attachment[], onAccepted?: () => void, options?: SendOptions) => void;
   /** Retry sending a failed question. */
   retry?: (text: string) => void;
   /** Abandon a slow pending turn and resend the question. */

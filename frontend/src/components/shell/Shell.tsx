@@ -122,8 +122,15 @@ export function Shell({ onLogout }: { onLogout?: () => void }) {
         if (id === chat.activeId) leaveChat();
         chat.archive?.(id);
       }),
-    send: (items) => {
-      chat.send(items, () => setAttachments([]));
+    send: (items, onAccepted, options) => {
+      chat.send(
+        items,
+        () => {
+          setAttachments([]);
+          onAccepted?.();
+        },
+        options,
+      );
     },
   };
   const showPanel = workspace.panelOpen && Boolean(workspace.record || workspace.runs.length);

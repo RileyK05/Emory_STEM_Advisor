@@ -75,6 +75,8 @@ export interface QueryRequest {
   /** Omitted/null searches the collection; [] means explicitly search no sources. */
   sourceIds?: string[] | null;
   studentCohort?: string | null;
+  /** The composer's "Make a file" box. Omitted: the server reads the wording. */
+  makeArtifact?: boolean | null;
 }
 
 // Native authoring artifacts are immutable revisions.
@@ -90,7 +92,7 @@ export type WorkbookCellStyle = {
 export type NativeArtifactSpec = DocumentSpec | WorkbookSpec | HtmlArtifactSpec;
 export interface DocumentBlock {
   id: string;
-  type: 'paragraph' | 'heading' | 'list' | 'table' | 'code' | 'quote';
+  type: 'paragraph' | 'heading' | 'list' | 'table' | 'code' | 'quote' | 'diagram' | 'chart';
   text?: string;
   level?: number;
   ordered?: boolean;
@@ -98,6 +100,21 @@ export interface DocumentBlock {
   headers?: string[];
   rows?: string[][];
   language?: string | null;
+  // diagram and chart: drawn by the server into the preview HTML.
+  title?: string;
+  caption?: string | null;
+  groups?: { id: string; label: string }[];
+  nodes?: {
+    id: string;
+    label: string;
+    group?: string | null;
+    status?: 'done' | 'next' | 'planned' | 'blocked' | null;
+  }[];
+  edges?: { source: string; target: string }[];
+  chart_type?: 'bar' | 'stacked_bar';
+  categories?: string[];
+  series?: { name: string; values: number[] }[];
+  unit?: string | null;
 }
 export interface DocumentSpec {
   kind: 'document';
@@ -462,6 +479,7 @@ export interface ConversationTurnRequest {
   expectedSequence: number;
   artifactReferences?: ArtifactRevisionReference[];
   studentCohort?: string | null;
+  makeArtifact?: boolean | null;
 }
 
 export interface ConversationTerminalResponse {

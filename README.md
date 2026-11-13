@@ -61,18 +61,24 @@ restart them after changing it. See the [working-space contract](docs/architectu
 
 ### Make an artifact
 
-Ask for the file by name and name the program. Good examples:
+Tick **Make a file** under the message box, then ask, naming the program. The
+box decides whether a file is made; the words pick its kind. Good examples:
 
-- "Make a checklist for the Computer Science BS."
-- "Make a four-semester plan for the Biology BS."
-- "Make a spreadsheet tracking my Biology BS credits, with totals."
-- "Make a one-page web page roadmap of the Computer Science BS."
-- "Compare the Computer Science BA and BS in a document I can keep."
+- "A checklist for the Computer Science BS."
+- "A four-semester plan for the Biology BS."
+- "A spreadsheet tracking my Biology BS credits."
+- "A web page guide to the Computer Science BS."
+- "Compare the Computer Science BA and BS."
+- "What if I switched to the Math BS? I've taken MATH 111 and CS 170."
+
+Checklists, guides, comparisons and trackers are built from the program's
+records, plans get a course map, and what-if questions get a chart of the
+requirement lines your courses appear on. API callers that do not send
+`makeArtifact` keep the older wording-based detection.
 
 The answer appears first; the artifact card starts queued and fills in when the
-worker finishes. If the card never appears, the model answered without asking
-for a file: name the artifact and the program. If the card stays queued, the
-worker is not running; the API alone only queues work.
+worker finishes. If the card stays queued, the worker is not running; the API
+alone only queues work.
 
 ## Run backend checks against real Postgres
 

@@ -50,6 +50,13 @@ def extract_artifact_text(spec: dict) -> str:
                 texts.extend(block.get("headers", []))
                 for row in block.get("rows", []):
                     texts.extend(row)
+            elif btype in {"diagram", "chart"}:
+                # A drawing shows words too: K4 and K10 read its labels.
+                texts.extend(filter(None, [block.get("title"), block.get("caption")]))
+                texts.extend(group.get("label", "") for group in block.get("groups", []))
+                texts.extend(node.get("label", "") for node in block.get("nodes", []))
+                texts.extend(block.get("categories", []))
+                texts.extend(series.get("name", "") for series in block.get("series", []))
     elif kind == "workbook":
         for sheet in spec.get("sheets", []):
             texts.append(sheet.get("name", ""))

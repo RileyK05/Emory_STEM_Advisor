@@ -930,7 +930,7 @@ async function setupPage({
       const refusal = body.sourceIds?.length === 0;
       const status = failed ? 'failed' : refusal ? 'refusal' : 'answer';
       const sameName = sameNameCitation && /shared notes/i.test(body.query ?? '');
-      const wantsArtifact = !failed && !refusal && /make|plan/i.test(body.query ?? '');
+      const wantsArtifact = !failed && !refusal && (body.makeArtifact ?? /make|plan/i.test(body.query ?? ''));
       const answer = failed
         ? (nextConversationTurnFailureText ?? "The advisor couldn't answer that. Try again.")
         : refusal
@@ -1935,8 +1935,9 @@ async function setupPage({
 
 const message = (page) => page.getByLabel('Message', { exact: true });
 
-async function send(page, text) {
+async function send(page, text, { makeFile = false } = {}) {
   await message(page).fill(text);
+  if (makeFile) await page.getByRole('checkbox', { name: 'Make a file' }).check();
   await page.getByRole('button', { name: 'Send', exact: true }).click();
 }
 
@@ -2687,9 +2688,11 @@ test('admin triages missing evidence and saves a redacted candidate', async () =
 test('a demo make-a-plan turn opens the artifact panel and auto-attaches the revision', async () => {
   const { context, page } = await setupPage();
   try {
-    await send(page, 'make a plan for next semester');
+    // Wording alone no longer makes a file; the box does, and clears once sent.
+    await send(page, 'make a plan for next semester', { makeFile: true });
     const panel = page.getByRole('complementary', { name: 'Artifact' });
     await panel.locator('.artifact-card').waitFor();
+    assert.equal(await page.getByRole('checkbox', { name: 'Make a file' }).isChecked(), false);
     await panel.locator('.canvas-title').getByText('Generated draft').waitFor({ timeout: 6000 });
     await page.getByRole('button', { name: 'Remove Generated draft from this message' }).waitFor();
     await page.getByRole('button', { name: 'Close artifact', exact: true }).click();
@@ -2842,7 +2845,7 @@ test("an answer's artifact run survives a status outage and opens the exact revi
     faults: { 'GET /api/runs/demo-artifact-run': [503, 'temporary job status outage'] },
   });
   try {
-    await send(page, 'make a plan for next semester');
+    await send(page, 'make a plan for next semester', { makeFile: true });
     await page.getByText(/Status check failed, retrying: .*temporary job status outage/).waitFor();
     await page.locator('.canvas-title').getByText('Generated draft').waitFor({ timeout: 6000 });
     await revisionShown(page, 'published-r1');
@@ -2916,7 +2919,7 @@ test('a saved chat keeps its old artifact run closed and only a new answer opens
     await page.getByText('Here is the saved plan.', { exact: true }).waitFor();
     assert.equal(await page.locator('.artifact-panel').count(), 0);
     // A new answer that starts a run in that chat opens the panel.
-    await send(page, 'make a shorter plan');
+    await send(page, 'make a shorter plan', { makeFile: true });
     await page.locator('.canvas-title').getByText('Generated draft').waitFor();
   } finally {
     await context.close();
@@ -3203,7 +3206,7 @@ test("artifact run fails: panel card says \"Couldn't make this. Try again.\" and
     failDemoArtifactRun: true,
   });
   try {
-    await send(page, 'make a plan for next semester');
+    await send(page, 'make a plan for next semester', { makeFile: true });
     const status = page.getByRole('status');
     await status.getByText("Couldn't make this. Try again.", { exact: true }).waitFor();
     const retryBtn = status.getByRole('button', { name: 'Retry', exact: true });

@@ -15,12 +15,15 @@ test('mock answers an explicit empty source scope without building a context', a
   assert.deepEqual(result.trace.contextBlock, []);
 });
 
-test('mock make-a-plan answer starts an artifact run', async () => {
-  const result = await new mock.MockClient().query({ query: 'make a plan for next semester' });
-  assert.equal(result.type, 'answer');
-  if (result.type === 'answer') {
-    assert.equal(result.artifactRun?.runId, 'demo-run-1');
-    assert.equal(result.artifactRun?.kind, 'document');
+test('mock starts an artifact run when the box is ticked, or the wording asks without one', async () => {
+  for (const [request, expected] of [
+    [{ query: 'make a plan for next semester' }, 'demo-run-1'],
+    [{ query: 'What is a vector basis?', makeArtifact: true }, 'demo-run-1'],
+    [{ query: 'make a plan for next semester', makeArtifact: false }, undefined],
+  ]) {
+    const result = await new mock.MockClient().query(request);
+    assert.equal(result.type, 'answer');
+    if (result.type === 'answer') assert.equal(result.artifactRun?.runId, expected, JSON.stringify(request));
   }
 });
 

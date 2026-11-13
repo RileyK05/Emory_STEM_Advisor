@@ -204,7 +204,8 @@ _ABSENT_SAID = re.compile(
     r"(?:course|class)(?:es)?\b|"
     r"there (?:is|are) no (?:[A-Z][A-Z0-9]{1,7}(?:_OX)?\s?\d{3}[A-Z]?|"
     r"such (?:course|class)|course|class)\b|"
-    r"not (?:in|found in|listed in) the course atlas|no record of)", re.IGNORECASE)
+    r"(?:not|(?:is|are)n['’]t) (?:in|found in|listed in) the course atlas|no record of)",
+    re.IGNORECASE)
 
 
 # What an answer is made of, checked before what it claims. A model that is

@@ -1472,12 +1472,16 @@ Out-of-scope and unknown identifiers both raise `NotInScope`.
   the exact `{artifactId, revisionId}` the turn referenced. Create forbids a
   revision, revise requires one, and summary requires a document with no
   revision; an unreferenced revision rejects the finish as `rejected_finish`.
-  When a valid finish omits an explicitly requested artifact, the controller
+  Whether a file is wanted comes from the request's `makeArtifact` flag, the
+  composer's "Make a file" box: true always asks for one, false drops any
+  artifact except a revision of a referenced one. A request without the flag
+  (an API caller) falls back to reading the wording.
+  When a valid finish omits a requested artifact, the controller
   asks for one correction if the budget allows. If the finish still has none,
   the controller makes the request from the student's own words (kind from
   the wording, the question as title and brief), but never for a declined,
   clarifying or insufficient-evidence answer, for a turn that referenced an
-  artifact, or for a degree program no program in scope matches. In that last
+  artifact without the box ticked, or for a degree program no program in scope matches. In that last
   case the finish is asked once to say so, and any artifact it carries is
   dropped. A document made for a request to summarize the conversation takes
   the `summary` purpose, which is built from the saved turns.
@@ -2558,6 +2562,28 @@ layers. Where code does not yet meet one, the requirement still applies.
   Keep originals and immutable revisions with provenance.
 - Typed document blocks cover paragraphs, lists, tables, and headings; typed
   workbook structures cover sheets, cells, formulas, styles, and basic charts.
+  Two visual blocks, `diagram` (nodes in ordered rows, directed edges) and
+  `chart` (bar or stacked bar), are drawn by fixed code as inert SVG in HTML,
+  as Mermaid and tables in Markdown, and as tables in Word. The writer model
+  cannot emit them: a term plan gets a course map built from the sequence
+  planner's prerequisite pairs, and a major-switch ("what if") request gets a
+  chart and line tables from `match_reported_courses`, which says where a
+  course is named, never that a requirement is met.
+- Common grounded artifacts are code-built templates
+  (`generation/artifact_builders.py`), not free generation, so a weak model
+  only has to name the program. A requirements checklist, program overview
+  (with a prerequisite map from the sequence planner), two-program comparison
+  and credit tracker are filled from the program's header facts and raw
+  lines, each block citing the chunks behind it. The model's one remaining
+  part is to pick up to three existing catalog sentences by number for a
+  "From the catalog" box; the artifact is complete without it. Credits shown
+  to a student are only those a course record states. A program overview is
+  built only for a guide, report or page request; a narrower question about a
+  program, or a request whose program cannot be resolved, uses the
+  outline-and-write path.
+- One server-owned theme (`artifacts/theme.py`: Emory navy and gold, card
+  sections, checklists, light and dark) styles the document preview, HTML
+  export and pages; Word exports use the same navy headings and table headers.
   Preserve real newlines, literal heading text, currency, and worksheet order.
   Intent distinguishes creating, inspecting, summarizing, and editing, including
   mixed requests such as a document containing a table. Format/count constraints

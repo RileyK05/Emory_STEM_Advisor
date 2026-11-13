@@ -1381,6 +1381,42 @@ textarea.code {
   margin-left: -4px;
 }
 
+/* "Make a file": a pill-shaped checkbox that asks for an artifact with this message. */
+.file-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px 5px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.file-toggle input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.file-toggle:has(input:checked) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.file-toggle:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.file-toggle:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .send-button {
   margin-left: auto;
   display: grid;

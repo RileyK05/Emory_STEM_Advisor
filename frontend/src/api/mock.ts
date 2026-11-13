@@ -235,7 +235,9 @@ export class MockClient implements AdvisorClient {
       }
     }
 
-    if (response.type === 'answer' && (q.includes('make') || q.includes('plan'))) {
+    // The "Make a file" box decides, as on the server; without it, the wording does.
+    const wantsFile = req.makeArtifact ?? (q.includes('make') || q.includes('plan'));
+    if (response.type === 'answer' && wantsFile) {
       response = {
         ...response,
         artifactRun: {

@@ -1944,6 +1944,8 @@ def test_research_reserves_a_finish_and_withholds_stale_or_cancelled_results(
     ("is XYZ 101 a real class", {"XYZ 101": []}),
     # A retired master row is a real course, not one that does not exist.
     ("can i still take math 111", {}),
+    # Oxford kept the QTM name; the DATASCI spelling points to its course.
+    ("is DATASCI_OX 100 offered at oxford", {"DATASCI_OX 100": ["QTM_OX 100"]}),
 ])
 def test_a_named_course_that_does_not_exist_is_flagged(db, collection, tmp_path, question, unknown):
     from app.config import load_settings
@@ -1955,7 +1957,8 @@ def test_a_named_course_that_does_not_exist_is_flagged(db, collection, tmp_path,
     session = ResearchSession(db, scope, store, run, settings=load_settings(),
                               config=lenient_config(), embedder=FakeEmbedder(8))
     db.execute("INSERT INTO course_campus_equivalents (collection_id, oxford_code, atlanta_code,"
-               " basis) VALUES (%s, 'ECON_OX 998', 'ECON 998', 'course_record')", (collection,))
+               " basis) VALUES (%s, 'ECON_OX 998', 'ECON 998', 'course_record'),"
+               " (%s, 'QTM_OX 100', 'DATASCI 100', 'course_record')", (collection, collection))
     db.execute("UPDATE courses SET lifecycle = 'retired' WHERE collection_id = %s"
                " AND code = 'MATH 111'", (collection,))
     session.question = question

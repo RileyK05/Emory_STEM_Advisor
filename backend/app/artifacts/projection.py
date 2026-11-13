@@ -61,6 +61,14 @@ def _document_blocks(blocks) -> list[dict]:
                         "headers": [_clip(cell, 80) for cell in block.get("headers") or []],
                         "rows": [[_clip(cell, 80) for cell in row]
                                  for row in (block.get("rows") or [])[:_MAX_TABLE_ROWS]]})
+        elif btype == "diagram":
+            out.append({"type": "diagram", "title": _clip(block.get("title"), 200),
+                        "nodes": [_clip(node.get("label"), 80)
+                                  for node in (block.get("nodes") or [])[:_MAX_ITEMS]]})
+        elif btype == "chart":
+            out.append({"type": "chart", "title": _clip(block.get("title"), 200),
+                        "categories": [_clip(category, 80) for category in
+                                       (block.get("categories") or [])[:_MAX_ITEMS]]})
         else:
             out.append({"type": btype, "text": _clip(block.get("text"), _MAX_TEXT)})
     return out
