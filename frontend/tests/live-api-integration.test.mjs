@@ -323,9 +323,7 @@ test('real saved conversations retain citation snapshots, sequence follow-ups, a
     const callStarted = await waitForJson(page, '/__test/provider-call-started', (state) => state?.started);
     await page.locator('.message-pending').waitFor();
     assert.equal(failedFirstEventRead, true, 'event polling recovers after a GET failure');
-    assert.equal(await message(page).inputValue(),
-      'What must students complete before opening the observatory dome?',
-      'the sent draft remains until the turn reaches a saved terminal state');
+    assert.equal(await message(page).inputValue(), '', 'the box empties once the turn is accepted');
     await page.reload();
     await page.locator('.message-pending').waitFor();
     await message(page).fill('A new draft while generation is pending.');
@@ -377,7 +375,9 @@ test('real saved conversations retain citation snapshots, sequence follow-ups, a
     }).find((body) => body?.requestId === failedRequest.requestId);
     assert.equal(failedJobSnapshot.jobId, failedPostResponse?.jobId,
       'the inspected job is the exact job bound by this stream POST');
-    assert.equal(await message(page).inputValue(), 'What safety briefing must students complete before opening the observatory dome?');
+    // The box emptied on send; the question returns once the client sees no answer is coming.
+    await page.waitForFunction((text) => document.querySelector('.composer textarea').value === text,
+      'What safety briefing must students complete before opening the observatory dome?');
     await page.getByRole('button', { name: 'Stop answering' }).waitFor();
     const providerStateAfterFailure = await page.evaluate(async () => (await (await fetch('/__test/provider-calls')).json()));
     const callsAfterFailure = providerStateAfterFailure.calls;

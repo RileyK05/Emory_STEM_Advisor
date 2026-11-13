@@ -89,6 +89,58 @@ def _embed_in_batches(texts, embedder, *, deadline, batch_size: int, enforce: bo
     return np.vstack(batches).astype(np.float32)
 
 
+def _text_key(text: str) -> bytes:
+    return hashlib.sha256(text.encode("utf-8")).digest()
+
+
+def _reusable_vectors(conn: Connection, keys: list[bytes], *, model: str, source_id: UUID,
+                      workspace_key: str | None) -> dict[bytes, np.ndarray]:
+    """Vectors this model already made for the same exact text in another readable source."""
+    if not keys:
+        return {}
+    rows = conn.execute(queries.get("reusable_chunk_embeddings"), {
+        "model": model, "keys": sorted(set(keys)), "source_id": source_id,
+        "workspace_key": workspace_key,
+    }).fetchall()
+    conn.commit()
+    return {bytes(row["text_sha256"]): _as_array(row["embedding"]) for row in rows}
+
+
+def _as_array(value) -> np.ndarray:
+    # pgvector's registered type reads back as its own Vector class.
+    if hasattr(value, "to_numpy"):
+        value = value.to_numpy()
+    return np.asarray(value, dtype=np.float32)
+
+
+def _embed_reusing(conn: Connection, texts: list[str], embedder, *, model: str,
+                   source_id: UUID, workspace_key: str | None, deadline: float,
+                   batch_size: int, enforce: bool) -> tuple[np.ndarray, list[bytes]]:
+    """Embed only text no readable source has embedded with this model, each once.
+
+    A re-captured Atlas or a re-scraped program page repeats most of its previous
+    version's text. Same model and same text give the same vector, so those
+    chunks copy it instead of running the model. Returns the vectors in `texts`
+    order and each text's key.
+    """
+    keys = [_text_key(text) for text in texts]
+    if not texts:
+        return _embed_in_batches(texts, embedder, deadline=deadline,
+                                 batch_size=batch_size, enforce=enforce), keys
+    known = _reusable_vectors(conn, keys, model=model, source_id=source_id,
+                              workspace_key=workspace_key)
+    missing: dict[bytes, str] = {}
+    for key, text in zip(keys, texts, strict=True):
+        if key not in known:
+            missing.setdefault(key, text)
+    if missing:
+        fresh = _embed_in_batches(list(missing.values()), embedder, deadline=deadline,
+                                  batch_size=batch_size, enforce=enforce)
+        known.update(zip(missing, fresh, strict=True))
+    vectors = _validate_vectors(np.vstack([known[key] for key in keys]), len(keys))
+    return vectors, keys
+
+
 def _source_id(collection_id: UUID, file_hash: str,
                workspace_key: str | None = None) -> UUID:
     if workspace_key is None:
@@ -169,7 +221,7 @@ def _mark_failed(conn: Connection, source_id: UUID, index_revision: int, exc: Ex
 
 def _replace_index(conn: Connection, source_id: UUID, index_revision: int, version: str,
                    extracted, spans, chunk_texts: list[str], chunk_ids: list[UUID],
-                   vectors: np.ndarray, embed_model: str,
+                   vectors: np.ndarray, text_keys: list[bytes], embed_model: str,
                    on_chunk_transaction: OnChunkTransaction | None,
                    origin_key: str | None, collection_id: UUID,
                    workspace_key: str | None, provenance=None,
@@ -230,6 +282,7 @@ def _replace_index(conn: Connection, source_id: UUID, index_revision: int, versi
             cursor.executemany(queries.get("upsert_chunk_embedding"), [{
                 "chunk_id": chunk_ids[chunk_index], "model": embed_model,
                 "dim": int(vector.shape[0]), "embedding": vector,
+                "text_sha256": text_keys[chunk_index],
             } for chunk_index, vector in enumerate(vectors)])
         conn.execute(queries.get("set_source_indexed"), {
             "source_id": source_id, "index_revision": index_revision,
@@ -394,15 +447,17 @@ def ingest_file(
         # previous index stays intact if embedding fails. Bounded batches make
         # the configured deadline observable during embedding instead of after
         # one uninterruptible allocation.
-        vectors = _embed_in_batches(
-            embedding_texts, embedder, deadline=deadline,
+        vectors, text_keys = _embed_reusing(
+            conn, embedding_texts, embedder, model=embed_model, source_id=source_id,
+            workspace_key=workspace_key, deadline=deadline,
             batch_size=settings.upload_embed_batch_size,
             enforce=enforce_upload_budget,
         )
         if enforce_upload_budget and time.monotonic() >= deadline:
             raise ValueError("source indexing exceeded the upload time limit")
         _replace_index(conn, source_id, index_revision, version, extracted, spans, chunk_texts,
-                       chunk_ids, vectors, embed_model, on_chunk_transaction, origin_key,
+                       chunk_ids, vectors, text_keys, embed_model, on_chunk_transaction,
+                       origin_key,
                        collection_id, workspace_key, provenance, file_hash)
     except Exception as exc:
         _mark_failed(conn, source_id, index_revision, exc)

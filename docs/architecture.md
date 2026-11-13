@@ -328,10 +328,16 @@ One row per chunk per model: `(chunk_id, model, dim, embedding vector)`, with
 `CHECK (vector_dims(embedding) = dim)`. Vectors are L2-normalized and checked
 (dimension, unit norm within 1e-3) before they are written. A chunk with no
 row for the current model is dormant, not an error. Re-embedding under a new
-model adds rows beside the old ones. There is no ANN index; choosing an
-exact/ANN strategy requires measured scoped latency and recall (see
-[the scaling plan](plans/scale-6000.md)), and different models and dimensions
-must remain isolated.
+model adds rows beside the old ones. 768-dimension vectors have an HNSW cosine
+index (migration 087); different models and dimensions must remain isolated.
+
+Each row also records `text_sha256`, a hash of the exact text it embedded
+(heading prefix included). Ingest copies an existing vector for the same model
+and text instead of running the model, and embeds a text that repeats within a
+source only once. Only vectors from sources the ingesting owner can read count
+(shared sources, or the same workspace). The source being re-indexed never
+counts: re-indexing recomputes its vectors on purpose. Rows written before
+migration 090 have no hash until their source is indexed again.
 
 ### courses / prereq_mentions / prereq_nodes
 

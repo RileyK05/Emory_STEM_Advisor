@@ -60,6 +60,7 @@ def test_embedding_results_order_by_score_then_source_and_chunk_with_a_stable_li
         for chunk_id, chunk_index in chunks:
             db.execute(queries.get("upsert_chunk_embedding"), {
                 "chunk_id": chunk_id, "model": _MODEL, "dim": 8, "embedding": vector,
+                "text_sha256": None,
             })
             expected.append((float(vector[0]), str(source), chunk_index, chunk_id))
     expected.sort(key=lambda item: (-item[0], item[1], item[2]))
@@ -110,6 +111,7 @@ def test_second_model_rows_never_appear_for_first(db, collection, tmp_path):
             "model": "other-model",
             "dim": 4,
             "embedding": embed_other_model("alpha beta gamma", 4),
+            "text_sha256": None,
         },
     )
     db.commit()

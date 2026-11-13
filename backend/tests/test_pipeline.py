@@ -2,6 +2,7 @@
 
 from uuid import uuid4
 
+import numpy as np
 import pytest
 from psycopg import errors
 
@@ -82,6 +83,59 @@ def test_failed_ingest_marks_the_source_failed(db, collection, tmp_path, raw, co
                      {"c": collection}).fetchone()
     assert row["status"] == "failed"
     assert row["error_message"] == message
+
+
+class _RecordingEmbedder(FakeEmbedder):
+    def __init__(self):
+        super().__init__(dim=8)
+        self.seen: list[str] = []
+
+    def embed_documents(self, texts):
+        self.seen.extend(texts)
+        return super().embed_documents(texts)
+
+
+def _block(word):
+    # One line-range locator's worth of lines, so each block is its own chunk.
+    return "".join(f"{word} line {i}\n" for i in range(40))
+
+
+def _chunk_texts(db, source_id):
+    return [row["text"] for row in db.execute(queries.get("list_chunks_for_source"),
+                                              {"source_id": source_id}).fetchall()]
+
+
+@pytest.mark.parametrize("first_workspace, second_workspace, reused", [
+    (None, None, True),
+    (None, "ws-a", True),
+    ("ws-a", "ws-a", True),
+    ("ws-a", "ws-b", False),
+], ids=["shared", "upload-copies-shared", "same-workspace", "never-another-workspace"])
+def test_ingest_embeds_only_text_no_readable_source_has_embedded(
+    db, collection, tmp_path, first_workspace, second_workspace, reused,
+):
+    first_path = tmp_path / "first.txt"
+    first_path.write_text(_block("kept") + _block("old"), encoding="utf-8")
+    first = _ingest(db, collection, first_path, "text/plain", workspace_key=first_workspace)
+    second_path = tmp_path / "second.txt"
+    second_path.write_text(_block("kept") + _block("new") + _block("new"), encoding="utf-8")
+    embedder = _RecordingEmbedder()
+    second = _ingest(db, collection, second_path, "text/plain", embedder=embedder,
+                     workspace_key=second_workspace)
+
+    second_texts = _chunk_texts(db, second)
+    shared = set(_chunk_texts(db, first)) & set(second_texts)
+    assert shared, "the fixture repeats a chunk"
+    # Each needed text is embedded once, even when the source repeats it.
+    assert sorted(embedder.seen) == sorted(set(second_texts) - (shared if reused else set()))
+    stored = db.execute(
+        "SELECT c.text, e.embedding FROM chunk_embeddings e JOIN chunks c USING (chunk_id) "
+        "WHERE c.source_id = %(s)s AND e.model = %(m)s", {"s": second, "m": _MODEL},
+    ).fetchall()
+    assert len(stored) == len(second_texts)
+    for row in stored:
+        assert np.allclose(row["embedding"].to_numpy(),
+                           FakeEmbedder(dim=8).embed_documents([row["text"]])[0])
 
 
 def test_raw_upload_goes_to_data_dir(db, collection, tmp_path):

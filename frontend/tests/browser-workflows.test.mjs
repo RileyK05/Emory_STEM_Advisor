@@ -2811,6 +2811,7 @@ test('saved conversation exposes pending requests for explicit abandonment', asy
     });
     await send(page, 'Cancel this newly submitted turn.');
     await lateReadStarted;
+    assert.equal(await message(page).inputValue(), '', 'the box empties once the message is accepted');
     assert.equal(await stop.isEnabled(), true, 'polling does not disable cancellation');
     await stop.click();
     await page.getByText(/^Stopped\./).waitFor();

@@ -343,6 +343,10 @@ export function useSavedChat(): ChatController {
     }
   };
 
+  /** A sent message that got no answer goes back in the box, unless the student has typed since. */
+  const restoreDraft = (key: string, text: string) =>
+    setDrafts((current) => (current[key]?.trim() ? current : { ...current, [key]: text }));
+
   const send = async (
     attachments: Attachment[],
     onAccepted?: () => void,
@@ -386,6 +390,9 @@ export function useSavedChat(): ChatController {
     try {
       await getClient().startConversationTurnStream(id, request);
       onAccepted?.();
+      // The message now shows in the transcript, so the box empties. Text typed
+      // while the request was in flight is a newer draft and stays.
+      setDrafts((current) => (current[keyForDraft] === sentText ? { ...current, [keyForDraft]: '' } : current));
       scopeChanged.current = false;
       if (!isCurrent(id, epoch)) return;
       await loadConversation(id, epoch);
@@ -394,9 +401,9 @@ export function useSavedChat(): ChatController {
         const latest = await getClient().getConversation(id, request.expectedSequence, CONVERSATION_PAGE_SIZE);
         if (!isCurrent(id, epoch)) return;
         const terminal = latest.turns.find((turn) => turn.requestId === requestId && turn.role === 'assistant');
-        if (terminal?.status === 'answer' || terminal?.status === 'refusal') {
-          setDrafts((current) => (current[keyForDraft] === sentText ? { ...current, [keyForDraft]: '' } : current));
-        } else if (terminal?.status === 'failed' || terminal?.status === 'abandoned') {
+        // No answer, including a job that failed before its turn was published.
+        if (terminal?.status !== 'answer' && terminal?.status !== 'refusal') restoreDraft(keyForDraft, sentText);
+        if (terminal?.status === 'failed' || terminal?.status === 'abandoned') {
           setNotice(
             terminal.status === 'abandoned'
               ? 'Your turn was stopped; your draft is kept.'
@@ -406,6 +413,7 @@ export function useSavedChat(): ChatController {
       }
     } catch (cause) {
       if (!isCurrent(id, epoch)) return;
+      restoreDraft(keyForDraft, sentText);
       setError(errorMessage(cause));
       if (statusOf(cause) !== 429) {
         setNotice(
@@ -482,6 +490,9 @@ export function useSavedChat(): ChatController {
       releaseBusy(id, pendingOwner);
       setStreamPreview(null);
       setNotice('Stopped. If that answer finishes later, it will be discarded.');
+      // Students usually stop to reword, so the stopped question returns to the box.
+      const stopped = currentRecord.turns.find((turn) => turn.requestId === requestId && turn.role === 'user');
+      if (stopped) restoreDraft(id, stopped.text);
       await loadConversation(id, terminalEpoch);
       await refreshList();
     } catch (cause) {

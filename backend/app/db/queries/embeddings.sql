@@ -1,9 +1,25 @@
 -- name: upsert_chunk_embedding
-INSERT INTO chunk_embeddings (chunk_id, model, dim, embedding)
-VALUES (%(chunk_id)s, %(model)s, %(dim)s, %(embedding)s)
+INSERT INTO chunk_embeddings (chunk_id, model, dim, embedding, text_sha256)
+VALUES (%(chunk_id)s, %(model)s, %(dim)s, %(embedding)s, %(text_sha256)s)
 ON CONFLICT (chunk_id, model) DO UPDATE SET
-    dim       = EXCLUDED.dim,
-    embedding = EXCLUDED.embedding;
+    dim         = EXCLUDED.dim,
+    embedding   = EXCLUDED.embedding,
+    text_sha256 = EXCLUDED.text_sha256;
+
+-- Vectors one model already made for identical text, so ingest need not run the
+-- model again. Only sources the ingesting owner can read count (shared ones, or
+-- the same workspace). The source being indexed is excluded: re-indexing a source
+-- recomputes its vectors on purpose.
+-- name: reusable_chunk_embeddings
+SELECT DISTINCT ON (e.text_sha256) e.text_sha256, e.embedding
+FROM chunk_embeddings e
+JOIN chunks c  ON c.chunk_id = e.chunk_id
+JOIN sources s ON s.source_id = c.source_id
+WHERE e.model = %(model)s
+  AND e.text_sha256 = ANY(%(keys)s::bytea[])
+  AND s.source_id <> %(source_id)s
+  AND (s.workspace_key IS NULL OR s.workspace_key = %(workspace_key)s)
+ORDER BY e.text_sha256, e.chunk_id;
 
 -- name: set_hnsw_ef_search
 SELECT set_config('hnsw.ef_search', %(ef_search)s::text, true);

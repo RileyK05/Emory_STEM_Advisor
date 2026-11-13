@@ -95,6 +95,22 @@
 - **`EMBEDDING_THREADS` caps torch threads.** The worker defaults it to cores ÷
   concurrency.
 
+### Embeddings
+
+- **Ingest reuses vectors for text it has already embedded** (migration 090).
+  Each vector stores a hash of its exact text, and a chunk whose text another
+  readable source already embedded with the same model copies that vector. A
+  text repeated within one source is embedded once. The dev data holds 52.9k
+  vectors for 38.2k distinct texts.
+  - This dev history saves little: the Atlas and offering formats changed
+    between versions (credits, campus equivalents, instructors and meeting
+    times were added). Only 1% of current Atlas chunks and 43% of program
+    chunks match an older version. Once the formats stay the same, a
+    re-capture skips the model for every unchanged course.
+  - Rows written before 090 have no hash, so each source's next import embeds
+    as before and records them. Backfilling them in SQL took 84 s under a table
+    lock, too long for a startup migration.
+
 ## Follow-ups, not done (each needs a decision or a live check)
 
 1. **Run the QA bot and compare against this baseline.** Calls per run, tokens,
@@ -124,3 +140,15 @@
     pg_prewarm it. A cold vector search takes 367 ms against 2-4 ms warm.
 12. **Cache auth `resolve()` per session for 5-10 s.** Each poll costs an auth
     query; the tradeoff is a few seconds of revocation lag.
+13. **Keep superseded versions out of the vector index.** 27.9k of the 52.9k
+    vectors (53%) belong to non-current sources. They take up half of the
+    167 MB HNSW index, and the nearest-neighbour step spends candidates on them
+    before the current-source filter drops them. They can't simply be deleted,
+    because admin source review and `scripts.reconcile_source_origins` can make
+    an old version current again. Instead, add a `searchable` flag kept in step
+    with `is_current`, and use a partial HNSW index on it. This needs an index
+    rebuild.
+14. **A smaller embedding model.** `granite-embedding-30m-english` (384 dims) is
+    about 4× less compute per chunk and half the storage. It needs a retrieval
+    eval and a full re-embed. halfvec would also halve storage, but it needs
+    pgvector 0.7, and the bundled pgserver ships 0.6.2.
