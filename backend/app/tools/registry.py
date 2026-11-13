@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import types
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Annotated, Any, Union, get_args, get_origin
@@ -173,8 +174,42 @@ class ToolSpec:
         return ToolDefinition(
             name=self.tool_id,
             description=self.description,
-            input_schema=self.input_model.model_json_schema(),
+            input_schema=provider_schema(self.input_model),
         )
+
+
+_SCHEMAS: dict[type, dict] = {}
+
+
+def _without_titles(node):
+    """Drop pydantic's generated `title` labels; a property named "title" stays."""
+    if isinstance(node, list):
+        return [_without_titles(item) for item in node]
+    if not isinstance(node, dict):
+        return node
+    out = {}
+    for key, value in node.items():
+        if key in {"properties", "$defs", "definitions", "patternProperties"} and isinstance(
+                value, dict):
+            out[key] = {name: _without_titles(schema) for name, schema in value.items()}
+        elif key == "title" and isinstance(value, str):
+            continue
+        else:
+            out[key] = _without_titles(value)
+    return out
+
+
+def provider_schema(model: type) -> dict:
+    """A tool's input schema as providers see it, built once per model class.
+
+    Every research round sends every tool's schema, so it is generated once and
+    copied per use (callers may narrow it). The generated titles repeat each
+    field name and cost about a sixth of the schema bytes.
+    """
+    schema = _SCHEMAS.get(model)
+    if schema is None:
+        schema = _SCHEMAS[model] = _without_titles(model.model_json_schema())
+    return deepcopy(schema)
 
 
 class ToolRegistry:

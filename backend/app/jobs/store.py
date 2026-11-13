@@ -190,6 +190,7 @@ class JobStore:
         job = Job.from_row(row)
         if created:
             self._append_event(conn, job.job_id, "queued", {"status": "queued"}, now)
+            conn.execute(queries.get("notify_job_queued"), {"kind": job.kind})
         return job
 
     def get(self, job_id: UUID) -> Job:

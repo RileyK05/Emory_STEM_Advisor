@@ -43,7 +43,12 @@ from app.atlas.equivalence import is_oxford
 from app.atlas.records import SUBJECT_RENAMES, normalize_code
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
-from app.generation.research_final import DecisionRejected, declined_decision, validate_final
+from app.generation.research_final import (
+    DecisionRejected,
+    declined_decision,
+    normalize_decision,
+    validate_final,
+)
 from app.programs.rules import RuleValidationError
 from app.retrieval.retrieve import retrieve
 from app.retrieval.seams.keyword import expand_program_names
@@ -903,7 +908,7 @@ class ResearchSession:
             queries.get("research_courses_requiring"), {
                 "collection_id": self.scope.collection_id, "codes": [r.code for r in reads]})}
         # A program names one campus's code; the course a student read may be the other's.
-        equivalents = load_campus_equivalents(self.conn, collection_id=self.scope.collection_id)
+        equivalents = self._equivalents()
         sharing = {code: r.code for r in reads
                    for code in (r.code, *equivalents.get(r.code, ()))}
         named_by: dict[str, list] = {}
@@ -1148,7 +1153,7 @@ class ResearchSession:
         if not codes:
             return []
         said = set(course_codes_in_query(f"{self.question or ''}\n{self.history_context or ''}"))
-        equivalents = load_campus_equivalents(self.conn, collection_id=self.scope.collection_id)
+        equivalents = self._equivalents()
         said |= {other for code in said for other in equivalents.get(code, ())}
         return [code for code in codes
                 if (normal := normalize_code(code)) is not None and normal not in said]
@@ -1198,8 +1203,7 @@ class ResearchSession:
         # their alternatives. Discovery does not mean the student selected each
         # alternative; only their explicit selections belong in the plan.
         plan = plan_sequence(courses, value.selected_codes, value.completed_codes,
-                             load_campus_equivalents(self.conn,
-                                                     collection_id=self.scope.collection_id))
+                             self._equivalents())
         requirement_blockers = {
             course["code"]: course["blocker_reason"] for course in context["courses"]
         }
@@ -1229,7 +1233,7 @@ class ResearchSession:
         if read is None or self.program_cursors[value.handle]:
             return ResearchResult(status="conflict", limitations=[
                 "Read the whole program first, following every cursor."])
-        equivalents = load_campus_equivalents(self.conn, collection_id=self.scope.collection_id)
+        equivalents = self._equivalents()
         release = self.conn.execute(queries.get("get_current_rule_release"),
                                     {"program_id": read.pin.program_id}).fetchone()
         self.conn.commit()
@@ -1332,6 +1336,8 @@ class ResearchSession:
             return ResearchResult(data={"accepted": True})
         finishable_checks = {check_id: check for check_id, check in self.checks.items()
                              if check_id not in self.unavailable_preparation_check_ids}
+        value = value.model_copy(update={
+            "decision": normalize_decision(value.decision, self.supplied)})
         try:
             if self.audit_matched_lines_only:
                 self._refuse_met_claims(value.decision)
@@ -1485,7 +1491,7 @@ class ResearchSession:
         # The Atlas's campus equivalence names the same course on the other
         # campus; a code paired with a current course is real, even when that
         # campus's own record is retired.
-        equivalents = load_campus_equivalents(self.conn, collection_id=self.scope.collection_id)
+        equivalents = self._equivalents()
         return {code: sorted(k for k in known if _identity_stem(k) == _identity_stem(code))[:6]
                 for code in unknown if not equivalents.get(code, frozenset()) & known}
 
@@ -1500,6 +1506,13 @@ class ResearchSession:
             return {}
         known = self._known_course_codes()
         return {former: code for former, code in candidates.items() if code in known}
+
+    def _equivalents(self) -> dict[str, frozenset[str]]:
+        """The Atlas campus equivalence, loaded once per run (it changes only on import)."""
+        if getattr(self, "_campus_equivalents", None) is None:
+            self._campus_equivalents = load_campus_equivalents(
+                self.conn, collection_id=self.scope.collection_id)
+        return self._campus_equivalents
 
     def _known_course_codes(self) -> frozenset[str]:
         """The collection's course identities, for the identity check.
@@ -1520,8 +1533,7 @@ class ResearchSession:
             known = {row["code"] for row in rows}
             self._master_codes = frozenset(known)
             known.update(
-                code for code in load_campus_equivalents(
-                    self.conn, collection_id=self.scope.collection_id)
+                code for code in self._equivalents()
                 if is_oxford(code)
             )
             # Catalog-named Oxford codes in current requisite text are real

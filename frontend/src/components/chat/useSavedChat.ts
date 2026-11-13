@@ -25,6 +25,16 @@ function savedScope(record: ConversationRecord): SourceScope | undefined {
  * whose progress the chat follows until the saved, cited turn replaces it. A request
  * is never replayed by the browser: reconnecting only reads stored events.
  */
+/**
+ * How long to wait before the next progress check. Early progress matters most, so the first ten
+ * seconds poll quickly; a long answer is then checked less often, which cuts requests and
+ * database reads per open answer by about two thirds without delaying its arrival by much.
+ */
+export function pollDelay(elapsedMs: number): number {
+  if (elapsedMs < 10_000) return 750;
+  return elapsedMs < 30_000 ? 1500 : 2500;
+}
+
 export function useSavedChat(): ChatController {
   const { scope, setScope } = useApp();
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -107,6 +117,7 @@ export function useSavedChat(): ChatController {
         eventCursor.current[key] = 0;
         return emptyPreview(requestId);
       });
+      const startedPolling = Date.now();
       try {
         while (isCurrent(id, epoch) && ownsPoll()) {
           try {
@@ -149,7 +160,7 @@ export function useSavedChat(): ChatController {
             if (!isCurrent(id, epoch) || !ownsPoll()) return;
             setNotice('Reconnecting to the answer in progress… Your question will not be sent twice.');
           }
-          await new Promise((resolve) => window.setTimeout(resolve, 750));
+          await new Promise((resolve) => window.setTimeout(resolve, pollDelay(Date.now() - startedPolling)));
         }
       } finally {
         if (ownsPoll()) pollingRequests.current.delete(key);

@@ -8,6 +8,10 @@ INSERT INTO jobs (
 ON CONFLICT (scope_key, idempotency_key) DO NOTHING
 RETURNING *;
 
+-- name: notify_job_queued
+-- Delivered when the enqueue commits; idle workers wake instead of polling.
+SELECT pg_notify('advisor_jobs', %(kind)s);
+
 -- name: get_job_by_idempotency
 SELECT * FROM jobs WHERE scope_key = %(scope_key)s AND idempotency_key = %(idempotency_key)s;
 

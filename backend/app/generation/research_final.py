@@ -332,6 +332,28 @@ def _instruction_shingles(instructions: str) -> set[tuple[str, ...]]:
     return _INSTRUCTION_SHINGLES[key]
 
 
+def normalize_decision(decision: FinalDecision, supplied) -> FinalDecision:
+    """Fix in code the slips that need no model round, before validation.
+
+    Two shapes cost a whole correction round each and have one safe reading:
+    a judgment block with evidence but no candidate is a sourced statement, so
+    it becomes a fact (a stricter kind: every check on facts still applies);
+    and a citation of evidence this request never supplied is one the model
+    cannot have read, so it is dropped (a fact left without support is still
+    rejected).
+    """
+    blocks, changed = [], False
+    for block in decision.blocks:
+        evidence = tuple(e for e in block.evidence_ids if e in supplied)
+        kind = ("fact" if block.kind == "judgment" and not block.candidate_ids and evidence
+                else block.kind)
+        if evidence != tuple(block.evidence_ids) or kind != block.kind:
+            block = block.model_copy(update={"evidence_ids": evidence, "kind": kind})
+            changed = True
+        blocks.append(block)
+    return decision.model_copy(update={"blocks": tuple(blocks)}) if changed else decision
+
+
 def validate_final(decision: FinalDecision, state: ResearchState | None,
                    evidence: list[EvidenceRecord], supplied: set[str],
                    checks: dict[str, dict], entity_evidence: dict[str, set[str]] | None = None,

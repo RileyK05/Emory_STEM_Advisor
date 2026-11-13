@@ -252,8 +252,10 @@ class ArtifactHandler:
         if pipeline.fallback_sections:
             provenance["degraded_sections"] = len(pipeline.fallback_sections)
         spec = spec.model_copy(update={"provenance": provenance})
+        # A page code built from fixed blocks has nothing for a vision model to fix.
         if (kind == "html" and isinstance(spec, HtmlArtifactSpec)
-                and self.settings.visual_artifact_review_enabled):
+                and self.settings.visual_artifact_review_enabled
+                and not pipeline.built_programs):
             spec = self._visual_review(
                 conn, job, context, inputs, spec, grounding, prior,
                 provider, active, selection, operation,

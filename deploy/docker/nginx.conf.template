@@ -9,6 +9,16 @@ server {
     # Matches REQUEST_MAX_BYTES (21 MiB default) with a small allowance.
     client_max_body_size 21m;
 
+    # Compress the bundle and the API's JSON here, where it costs the Python
+    # processes nothing. Conversation records with evidence run to hundreds of KB.
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_types application/json application/javascript text/css text/plain
+               text/markdown image/svg+xml;
+
     # Proxy the API so the browser sees one origin. Container Apps terminates
     # TLS at the ingress, so the public scheme is always HTTPS.
     location /api/ {

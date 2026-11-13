@@ -411,11 +411,16 @@ LIMIT %(limit)s;
 -- Research store transactions (research_store).
 
 -- Serializes evidence-ID assignment and step ordinals for one run.
+-- The lock leaves out the scope manifest (about 40 KB, fixed for the run);
+-- `get_research_run_manifest` reads it once per run where a step needs it.
 -- name: lock_research_run
-SELECT run_id, workspace_key, collection_id, scope_manifest, status, state_revision
+SELECT run_id, workspace_key, collection_id, status, state_revision
 FROM research_runs
 WHERE run_id = %(run_id)s
 FOR UPDATE;
+
+-- name: get_research_run_manifest
+SELECT scope_manifest FROM research_runs WHERE run_id = %(run_id)s;
 
 -- Replay: the step a tool execution already recorded, with its issued IDs.
 -- name: get_research_step_for_tool_execution

@@ -197,6 +197,17 @@ class ResearchStore:
             raise RunNotFound(run_id)
         return _record(row)
 
+    def _manifest(self, run_id: UUID) -> dict:
+        """The run's scope manifest, read once: a run's scope never changes."""
+        cache = self.__dict__.setdefault("_manifests", {})
+        if run_id not in cache:
+            row = self.conn.execute(queries.get("get_research_run_manifest"),
+                                    {"run_id": run_id}).fetchone()
+            if row is None:
+                raise RunNotFound(run_id)
+            cache[run_id] = row["scope_manifest"]
+        return cache[run_id]
+
     def _lock_any(self, run_id: UUID):
         row = self.conn.execute(queries.get("lock_research_run"), {"run_id": run_id}).fetchone()
         if row is None or row["workspace_key"] != self.workspace_key:
@@ -343,7 +354,8 @@ class ResearchStore:
         each other or with the database, is InvalidResearchRecord. A pinned source
         that has since changed revision or classification is ScopeChanged.
         """
-        pinned = manifest_source_pins(run["scope_manifest"])
+        manifest = self._manifest(run["run_id"])
+        pinned = manifest_source_pins(manifest)
         problems = []
         for read in reads:
             chunk, source = read.chunk, read.source
@@ -359,7 +371,7 @@ class ResearchStore:
         if problems:
             raise InvalidResearchRecord(problems)
         revisions = {read.chunk.source_id: pinned[read.chunk.source_id][0] for read in reads}
-        sources = verify_manifest_sources(self.conn, run["scope_manifest"], revisions)
+        sources = verify_manifest_sources(self.conn, manifest, revisions)
         chunks = exact_chunks(self.conn, revisions, [read.chunk.chunk_id for read in reads])
         problems = [f"chunk {read.chunk.chunk_id} is not the indexed text of its source"
                     for read in reads if chunks.get(read.chunk.chunk_id) != read.chunk]
@@ -427,8 +439,8 @@ class ResearchStore:
         payload = decision.model_dump(mode="json")
         digest = json_digest(payload)
         with self.conn.transaction():
-            run = self._lock(run_id)
-            verify_manifest(self.conn, run["scope_manifest"])
+            self._lock(run_id)
+            verify_manifest(self.conn, self._manifest(run_id))
             self.conn.execute(queries.get("insert_research_decision"), {
                 "run_id": run_id, "response_id": response_id, "render_version": render_version,
                 "decision": Jsonb(payload), "digest": digest})

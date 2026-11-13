@@ -262,8 +262,9 @@ class ConversationStore:
             from app.advising.research_store import ResearchStore, RunClosed
 
             try:
-                run = ResearchStore(self.conn, self.workspace_key)._lock(UUID(research["runId"]))
-                verify_manifest(self.conn, run["scope_manifest"])
+                runs = ResearchStore(self.conn, self.workspace_key)
+                runs._lock(UUID(research["runId"]))
+                verify_manifest(self.conn, runs._manifest(UUID(research["runId"])))
             except (ScopeChanged, RunClosed) as exc:
                 raise HTTPException(409, "research sources or run changed; completion was withheld") from exc
         sequence = row["last_sequence"] + 1

@@ -22,6 +22,35 @@ def make_store(dsn, clock=None):
     return JobStore(lambda: connect(dsn), clock=clock or (lambda: datetime.now(UTC)))
 
 
+def test_a_queued_job_wakes_an_idle_worker_instead_of_waiting_for_its_poll(migrated_dsn, db):
+    """Idle workers poll slowly; the enqueue's notification starts the job at once."""
+    import threading
+
+    from app.jobs.worker import listen_for_jobs
+
+    clock = FakeClock()  # The idle wait can only end by a wake, never by time.
+    store = make_store(migrated_dsn, clock)
+    ran, listening = threading.Event(), threading.Event()
+    runner = WorkerRunner(store, "worker-wake", lambda job, context: ran.set() or {"ok": True},
+                          lease_seconds=30, idle_seconds=60.0, max_idle_seconds=60.0,
+                          concurrency=1, clock=clock)
+    runner_thread = threading.Thread(target=runner.run, daemon=True)
+    listener = threading.Thread(target=listen_for_jobs, args=(lambda: connect(migrated_dsn), runner),
+                                kwargs={"timeout_seconds": 0.2, "on_listening": listening.set},
+                                daemon=True)
+    runner_thread.start()
+    listener.start()
+    try:
+        assert runner.wait_until_accepting() and listening.wait(timeout=5.0)
+        store.create(kind="turn", scope_key="user:wake", idempotency_key="wake-1",
+                     payload={}, max_attempts=1)
+        assert ran.wait(timeout=5.0)
+    finally:
+        runner.request_stop()
+        runner_thread.join(timeout=5.0)
+        listener.join(timeout=5.0)
+
+
 def test_idempotent_create_returns_same_record_once(migrated_dsn, db):
     store = make_store(migrated_dsn)
     first = store.create(

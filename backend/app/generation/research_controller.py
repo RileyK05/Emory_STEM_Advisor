@@ -153,23 +153,48 @@ def _source_scope_notices(evidence):
 
     These flag unresolved scope for the model to examine; they do not classify
     a passage as a requirement or determine which rules apply to the student.
+    `evidence` holds the full records; the model sees only their slim form.
     """
     sources = {}
     for record in evidence:
         notices = []
-        status = record["applicability_status"]
+        status = record.applicability_status
         if status in {"historical", "unknown"}:
             notices.append("historical_source" if status == "historical" else "applicability_unknown")
-        if not record["edition"]:
+        if not record.edition:
             notices.append("edition_not_recorded")
-        if "advising_guidance" in record["document_roles"]:
+        if "advising_guidance" in record.document_roles:
             notices.append("guidance_requires_passage_scope_check")
         if not notices:
             continue
-        key = (record["source_id"], record["source_revision"], record["metadata_revision"])
+        key = (record.source_id, record.source_revision, record.metadata_revision)
         item = sources.setdefault(key, {"evidence_ids": [], "notices": notices})
-        item["evidence_ids"].append(record["evidence_id"])
+        item["evidence_ids"].append(record.evidence_id)
     return list(sources.values())
+
+
+# Server bookkeeping a model never reads: identities, digests and steps. The
+# passage, its source, edition and applicability are what it cites and weighs.
+_SERVER_ONLY_EVIDENCE = frozenset({
+    "source_id", "source_revision", "origin_key", "metadata_revision", "chunk_id",
+    "locator_id", "text_digest", "acquired_step", "acquired_at", "child_trace_id",
+    "source_url"})
+
+
+def _model_evidence(record) -> dict:
+    """An evidence record as the model sees it: no server ids and no empty fields."""
+    return {key: value for key, value in record.model_dump(mode="json").items()
+            if key not in _SERVER_ONLY_EVIDENCE and value not in (None, "", [], {})}
+
+
+def _escaped_bytes(value) -> int:
+    """Bytes a JSON value adds inside the user message, as the prompt estimator counts it."""
+    text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    return len(json.dumps(text, ensure_ascii=False)[1:-1].encode("utf-8"))
+
+
+# Rounds that only open an issued handle need little deliberation.
+_FORCED_ROUND_EFFORT = "low"
 
 
 def _prioritize_candidate_evidence(session, ordered, question=""):
@@ -541,7 +566,12 @@ def _with_retry_allowance(request, truncations, settings):
     if not truncations:
         return request
     ceiling = settings.research_truncation_max_output_tokens
-    return replace(request, max_output_tokens=min(ceiling, request.max_output_tokens * 2 ** truncations))
+    # Hidden reasoning is what usually fills the allowance, so a retry also
+    # asks for less of it.
+    effort = (_FORCED_ROUND_EFFORT if request.reasoning_effort not in (None, "none")
+              else request.reasoning_effort)
+    return replace(request, reasoning_effort=effort,
+                   max_output_tokens=min(ceiling, request.max_output_tokens * 2 ** truncations))
 
 
 class ResearchController:
@@ -825,22 +855,21 @@ class ResearchController:
                 if call.name == "advisor_finish":
                     accepted = json.loads(output)
                     nudge = None
+                    # A missing artifact needs no extra round: the request is
+                    # attached from the student's words below. A program that
+                    # does not exist does: the reply must say so.
                     if (not artifact_reminded and accepted.get("status") == "ok"
                             and session.decision is not None
                             and session.decision.outcome != "declined"
+                            and missing_program and session.decision.artifact is not None
                             and corrections_used < 2
                             and tools_used < settings.research_max_tool_calls
                             and _round + 1 < settings.research_max_calls
                             and status.remaining_calls > 1
                             and status.remaining_seconds > _SALVAGE_RESERVE_SECONDS):
-                        if missing_program and session.decision.artifact is not None:
-                            nudge = (f"The student named {missing_program}, which is not a program in "
-                                     "the catalog. Say so, name the closest programs, and set no "
-                                     "decision.artifact.")
-                        elif (request_context.get("artifact_requested") and not missing_program
-                                and session.decision.artifact is None):
-                            nudge = ("The student asked for an artifact to keep. Set decision.artifact "
-                                     "with kind, title, and a brief.")
+                        nudge = (f"The student named {missing_program}, which is not a program in "
+                                 "the catalog. Say so, name the closest programs, and set no "
+                                 "decision.artifact.")
                     if nudge:
                         artifact_reminded = True
                         session.rejected_decision = session.decision
@@ -876,7 +905,11 @@ class ResearchController:
                     return session.decision, _aggregate_usage(usages), prepared.messages[0].content, user, result.model
             if not repairing:
                 hint = ""
-            last_round = [AssistantToolMessage(result.tool_calls), *round_results]
+            # A state update is already in the next context as
+            # state_model_assessments; resending its call would repeat it.
+            last_round = ([] if all(call.name == "advisor_update_research"
+                                    for call in result.tool_calls)
+                          else [AssistantToolMessage(result.tool_calls), *round_results])
             after = (session.new_evidence, session.read_count, session.discovery_count,
                      session.state.model_dump_json(exclude={"revision"}) if session.state else "",
                      _conversation_progress(session))
@@ -902,12 +935,14 @@ class ResearchController:
                     "program evidence, or drop that candidate. Cite only exact_evidence_untrusted IDs, "
                     "never omitted IDs, even in limitations.").strip()
         handles = [(h, value) for h, value in session.handles.items() if value[0] != "memory"][-40:]
+        # Keys run from what stays the same all run to what changes every round,
+        # so a provider's prompt cache can reuse the longest possible prefix.
         base = {"question": question, "history_untrusted": history or "",
-                "state_model_assessments": session.state.model_dump(mode="json") if session.state else None,
-                "course_facts": dict(list(getattr(session, "course_facts", {}).items())[-COURSE_FACT_COURSES:]),
                 "available_source_kinds": sorted({p.source_kind for p in session.scope.sources.values()}),
                 "program_count": len(session.scope.programs),
-                "remaining_limits": session.remaining_limits,
+                "exact_evidence_untrusted": [],
+                "state_model_assessments": session.state.model_dump(mode="json") if session.state else None,
+                "course_facts": dict(list(getattr(session, "course_facts", {}).items())[-COURSE_FACT_COURSES:]),
                 "completed_actions": session.actions[-10:],
                 "program_read_progress": [{"handle": h, "title": r.pin.title,
                     "read_items": len(session.program_positions[h]), "total_items": session.program_sizes[h],
@@ -941,10 +976,11 @@ class ResearchController:
                    if (_asks_for_artifact(question)
                        if getattr(session, "artifact_choice", None) is None
                        else session.artifact_choice) else {}),
+                "omitted_evidence_ids": [],
+                "remaining_limits": session.remaining_limits,
                 "finish_required": finishing, "instruction": hint,
                 "state_update_requested": state_required,
-                "source_read_requested": read_required,
-                "exact_evidence_untrusted": [], "omitted_evidence_ids": []}
+                "source_read_requested": read_required}
         if getattr(session, "workspace", None) is not None:
             base["prior_workspace_untrusted"] = session.prior_workspace if session.state is None else None
             base["conversation_recall_index"] = deepcopy(session.recall_page)
@@ -995,14 +1031,14 @@ class ResearchController:
             base["source_scope_empty"] = True
             tools = tuple(t for t in tools if t.name in {
                 "advisor_read_conversation", "advisor_update_research", "advisor_finish"})
-        round_note = ""
+        # The system prompt stays identical every round so it can be cached; the
+        # round's own note travels in the user context. The advertised tools
+        # already say which tools this round has.
         if empty_scope:
-            round_note = ("\nNo sources are selected or indexed in this run. Source facts cannot be verified. "
-                          "Use conversation reads only for discussion/student reports; finish with an "
-                          "uncited scope limitation when the question needs source evidence.")
-        if finishing or state_required or read_required or hint:
-            round_note += ("\nCURRENT ROUND: Only these tools are available: "
-                          + ", ".join(t.name for t in tools) + ". " + hint)
+            base["source_scope_note"] = (
+                "No sources are selected or indexed in this run. Source facts cannot be verified. "
+                "Use conversation reads only for discussion/student reports; finish with an "
+                "uncited scope limitation when the question needs source evidence.")
         finish_round = (len(last_round) == 2 and isinstance(last_round[0], AssistantToolMessage)
             and len(last_round[0].tool_calls) == 1
             and last_round[0].tool_calls[0].name == "advisor_finish"
@@ -1011,25 +1047,34 @@ class ResearchController:
             and last_round[1].tool_call_id == last_round[0].tool_calls[0].id)
         if state_required or finishing and not finish_round:
             last_round = []  # Fresh typed state/evidence avoids repeating old read-tool requests.
+        effort = settings.llm_reasoning_effort
+        if (effort not in (None, "none") and not finishing and not state_required
+                and (read_required or program_required or continuation_required or policy_required)):
+            effort = _FORCED_ROUND_EFFORT
+        system = SYSTEM + (WORKSPACE_SYSTEM if getattr(session, "workspace", None) else "")
         request = GenerationRequest(messages=(), tools=tools, tool_choice="required",
             max_output_tokens=settings.research_max_output_tokens,
             timeout_seconds=settings.llm_timeout_seconds,
             temperature=0 if settings.llm_sampling_policy == "greedy" and (
                 settings.llm_reasoning_effort in (None, "none")) else None,
-            reasoning_effort=settings.llm_reasoning_effort)
+            reasoning_effort=effort,
+            # Every research request shares this prefix; providers that route by a
+            # cache key keep it warm across rounds and runs.
+            cache_key="research-" + json_digest({"system": system,
+                                                 "tools": RESEARCH_TOOLS_VERSION})[:24])
         def build(round_messages):
             # Recompute after every whole-evidence omission so a reminder can
             # never bring an omitted passage back into the model's cited scope.
-            base["source_scope_notices"] = _source_scope_notices(base["exact_evidence_untrusted"])
+            base["source_scope_notices"] = _source_scope_notices(
+                [records[item["evidence_id"]] for item in base["exact_evidence_untrusted"]])
             user = json.dumps(base, ensure_ascii=False, separators=(",", ":"))
-            system = SYSTEM + (WORKSPACE_SYSTEM if getattr(session, "workspace", None) else "") + round_note
             return replace(request, messages=(TextMessage("system", system), TextMessage("user", user),
                                              *round_messages)), user
         # Prefer exact evidence over duplicated native read outputs. Check the
         # requested active set before deciding whether to retain the last round.
         active = (_prioritize_candidate_evidence(session, session.active, question)
                   if finishing else session.active)
-        base["exact_evidence_untrusted"] = [records[e].model_dump(mode="json")
+        base["exact_evidence_untrusted"] = [_model_evidence(records[e])
                                             for e in active if e in records]
         current, user = build(last_round)
         if estimate_prompt_bytes(current) > settings.research_max_prompt_bytes and not finish_round:
@@ -1053,7 +1098,7 @@ class ResearchController:
         if not preferred:
             preferred = [records[e] for e in active if e in records][:1]
         def fits():
-            base["exact_evidence_untrusted"] = [record.model_dump(mode="json") for record in preferred]
+            base["exact_evidence_untrusted"] = [_model_evidence(record) for record in preferred]
             preferred_ids = {record.evidence_id for record in preferred}
             base["omitted_evidence_ids"] = [e for e in active if e in records and e not in preferred_ids]
             candidate, _ = build(last_round)
@@ -1107,25 +1152,38 @@ class ResearchController:
             priority = {record.evidence_id for record in preferred}
             active = [e for e in active if e in priority] + [e for e in active if e not in priority]
         supplied = set()
+        # Track the prompt's size as passages are added instead of serializing the
+        # whole request per passage. Each step adds exactly the passage's escaped
+        # bytes plus the change in the scope notices, so the choice is the same.
+        evidence, omitted = base["exact_evidence_untrusted"], base["omitted_evidence_ids"]
+        current, user = build(last_round)
+        size = estimate_prompt_bytes(current)
+        notices_bytes = _escaped_bytes(base["source_scope_notices"])
+        chosen: list = [records[item["evidence_id"]] for item in evidence]
         for eid in active:
             record = records.get(eid)
             if record is None:
                 continue
-            base["exact_evidence_untrusted"].append(record.model_dump(mode="json"))
-            current, user = build(last_round)
-            if estimate_prompt_bytes(current) > settings.research_max_prompt_bytes:
-                base["exact_evidence_untrusted"].pop()
-                base["omitted_evidence_ids"].append(eid)
+            item = _model_evidence(record)
+            item_bytes = _escaped_bytes(item) + (1 if evidence else 0)
+            new_notices = _escaped_bytes(_source_scope_notices([*chosen, record]))
+            if size + item_bytes + new_notices - notices_bytes > settings.research_max_prompt_bytes:
+                omitted.append(eid)
+                size += _escaped_bytes(eid) + (1 if len(omitted) > 1 else 0)
             else:
+                evidence.append(item)
+                chosen.append(record)
+                size += item_bytes + new_notices - notices_bytes
+                notices_bytes = new_notices
                 supplied.add(eid)
         current, user = build(last_round)
         # Omission metadata also costs bytes. Account it after selection, rather
         # than accepting a request a few bytes above the bound.
         while estimate_prompt_bytes(current) > settings.research_max_prompt_bytes and (
                 base["exact_evidence_untrusted"]):
-            omitted = base["exact_evidence_untrusted"].pop()["evidence_id"]
-            supplied.discard(omitted)
-            base["omitted_evidence_ids"].append(omitted)
+            dropped = base["exact_evidence_untrusted"].pop()["evidence_id"]
+            supplied.discard(dropped)
+            base["omitted_evidence_ids"].append(dropped)
             current, user = build(last_round)
         if estimate_prompt_bytes(current) > settings.research_max_prompt_bytes:
             raise ToolConversationError("research context exceeds the configured prompt bound")

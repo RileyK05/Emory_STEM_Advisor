@@ -590,7 +590,9 @@ def test_context_compaction_preserves_exact_passages_and_accounts_omission_metad
     # Compaction retains the cited edition/scope, and groups reminders only for
     # actually supplied evidence. Neither a discovery lead nor an omitted chunk
     # can establish applicability by surviving in a source-level summary.
-    assert all(e["edition"] == edition and e["applicability_status"] == scope_status
+    # A record shows no empty field and no server identity (chunk, source, digest).
+    assert all(e.get("edition") == edition and e["applicability_status"] == scope_status
+               and not {"chunk_id", "source_id", "text_digest"} & set(e)
                and e["applicability"]["academic_year"] == ["2025-26"]
                for e in context["exact_evidence_untrusted"])
     assert len(context["source_scope_notices"]) == 1
@@ -637,7 +639,7 @@ def test_context_compaction_preserves_exact_passages_and_accounts_omission_metad
     assert refreshed["omitted_evidence_ids"]
     exact = next(record for record in refreshed["exact_evidence_untrusted"]
                  if record["evidence_id"] == reread.evidence_id)
-    assert exact["chunk_id"] == reread.chunk_id and exact["exact_text"] == reread.exact_text
+    assert exact["exact_text"] == reread.exact_text
     assert estimate_prompt_bytes(request) <= prompt_bytes
 
 
@@ -897,6 +899,27 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
     session.rejected_decision = _decision(blocks=(unsupported,))
     assert session.salvage().blocks[0].text == (
         "PSYC 219 is not in the Course Atlas; the course there is PSYC 219W.")
+
+
+@pytest.mark.parametrize("block, expected", [
+    # A sourced judgment with no candidate is a fact; facts face every stricter check.
+    ({"kind": "judgment", "text": "CS 170 comes first.", "evidence_ids": ("e1",)},
+     ("fact", ("e1",))),
+    # A real candidate preference stays a judgment.
+    ({"kind": "judgment", "text": "The BS fits.", "evidence_ids": ("e1",),
+      "candidate_ids": ("c1",)}, ("judgment", ("e1",))),
+    # A citation the request never supplied is one the model cannot have read.
+    ({"kind": "fact", "text": "CS 170 is required.", "evidence_ids": ("e1", "e9")},
+     ("fact", ("e1",))),
+    # Nothing to fix in code: no evidence means no safe reading, so validation decides.
+    ({"kind": "judgment", "text": "Take it early."}, ("judgment", ())),
+])
+def test_slips_with_one_safe_reading_are_fixed_without_a_model_round(block, expected):
+    from app.generation.research_final import normalize_decision
+
+    decision = _decision(blocks=(DecisionBlock(**block),))
+    fixed = normalize_decision(decision, {"e1"}).blocks[0]
+    assert (fixed.kind, tuple(fixed.evidence_ids)) == expected
 
 
 @pytest.mark.parametrize("question, renamed", [

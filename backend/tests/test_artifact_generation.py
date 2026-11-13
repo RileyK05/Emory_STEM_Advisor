@@ -489,7 +489,9 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
     assert spec["provenance"]["program_title"] == "Economics (Minor)"
     course = next(block for block in spec["blocks"] if block["type"] == "list")
     assert course["items"] == ["ECON 201 — Intermediate Macroeconomics"]
-    assert any(block.get("text") == "Macro theory." for block in spec["blocks"])
+    # The schedule is code-built: no term spends a model call on a note.
+    assert not any(block.get("text") == "Macro theory." for block in spec["blocks"])
+    assert not any(request.tools[0].name == SECTION_TOOL for request in provider.requests)
 
 
 def test_a_whatif_request_charts_the_program_lines_a_students_courses_name(
@@ -515,6 +517,24 @@ def test_a_whatif_request_charts_the_program_lines_a_students_courses_name(
     assert [row[1:] for row in table["rows"]] == [
         ["Named", "ECON 101, ECON 201"], ["Not yet", "—"]]
     assert spec["provenance"]["whatif_programs"] == '["Economics (Minor)"]'
+
+
+def test_a_plan_for_one_named_program_needs_no_model_call(db, collection, tmp_path):
+    """With no courses named, the plan is the program's required lines: nothing to outline."""
+    source = _econ(db, collection, tmp_path)
+    provider = ArtifactStageProvider()
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "document", {
+        "prompt": "Make a plan for the Economics minor.\n\n"
+                  "Published answer:\nThe minor lists ECON 101 and ECON 201.",
+        "requestText": "Make a plan for the Economics minor.",
+        "sourceIds": [str(source)]}, "plan-direct")
+    finished = run_once(store, "plan-direct", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    assert spec["title"] == "Economics (Minor): Term plan"
+    assert not provider.requests
 
 
 def test_a_plan_outline_falls_back_to_the_programs_required_lines(db, collection, tmp_path):
@@ -953,7 +973,8 @@ def test_a_plan_note_cannot_move_a_course_between_terms(db, collection, tmp_path
                 for ref in spec["evidence"][element_id]] == [record]
 
 
-def test_a_failed_plan_section_falls_back_to_the_fixed_course_list(db, collection, tmp_path):
+def test_a_plan_section_is_the_fixed_course_list_without_a_model_call(
+        db, collection, tmp_path):
     source = _econ(db, collection, tmp_path)
 
     truncated = GenerationResult(text="", finish_reason="length",
@@ -973,7 +994,9 @@ def test_a_failed_plan_section_falls_back_to_the_fixed_course_list(db, collectio
     headings = [block.get("text") for block in spec["blocks"]
                 if block.get("type") == "heading"]
     assert "Term 1" in headings and "Term 2" in headings
-    assert spec["provenance"]["degraded_sections"] == 2
+    # No term asks the model for anything, so none can fail or degrade.
+    assert "degraded_sections" not in spec["provenance"]
+    assert not any(request.tools[0].name == SECTION_TOOL for request in provider.requests)
     # Each fallback course list cites the records of its own courses.
     lists = [block for block in spec["blocks"] if block["type"] == "list"]
     assert [block["items"] for block in lists] == [

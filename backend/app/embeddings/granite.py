@@ -146,6 +146,11 @@ def _load(settings: Settings) -> SentenceTransformer:
     with _load_lock:
         cached = _models.get(key)
         if cached is None:
+            threads = getattr(settings, "embedding_threads", 0)
+            if threads > 0:
+                import torch
+
+                torch.set_num_threads(threads)
             snapshot = snapshot_download(
                 repo_id=settings.embedding_model_id, allow_patterns=_ALLOWED_FILES,
             )

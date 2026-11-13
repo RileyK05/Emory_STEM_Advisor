@@ -116,6 +116,10 @@ class Settings:
     # Optional HTTP liveness/readiness port for scripts.worker; 0 disables it.
     worker_health_port: int = 0
     embedding_device: str = "cpu"
+    # Torch threads for CPU embedding; 0 keeps torch's default (every core). A
+    # worker running several job threads sets cores // concurrency so they do
+    # not oversubscribe the CPU.
+    embedding_threads: int = 0
     # Opt-in: load the embedding model in a daemon thread after the app is
     # constructed, so the first real query does not pay the model-load cost.
     embedder_warmup_on_startup: bool = False
@@ -441,6 +445,7 @@ def load_settings() -> Settings:
         upload_index_timeout_seconds=_float("UPLOAD_INDEX_TIMEOUT_SECONDS", 60),
         workspace_storage_max_bytes=_int("WORKSPACE_STORAGE_MAX_BYTES", 100 * 1024 * 1024),
         embedding_device=os.environ.get("EMBEDDING_DEVICE", "cpu"),
+        embedding_threads=_int("EMBEDDING_THREADS", 0),
         embedder_warmup_on_startup=_bool("EMBEDDER_WARMUP_ON_STARTUP", False),
         request_max_bytes=_int("REQUEST_MAX_BYTES", 21 * 1024 * 1024),
         readiness_timeout_seconds=_int("READINESS_TIMEOUT_SECONDS", 3),

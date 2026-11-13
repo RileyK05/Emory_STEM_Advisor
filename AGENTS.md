@@ -214,7 +214,8 @@ npm run format:check    # Prettier over src/**/*.{ts,tsx}; `npm run format` fixe
 - Generation is greedy deliberately so eval runs are reproducible. Don't add
   sampling defaults. The one exception is research, which asks a supporting
   provider for `RESEARCH_REASONING_EFFORT` (medium): unbounded hidden reasoning
-  made answers take minutes.
+  made answers take minutes. Rounds that only open an issued handle, and
+  truncation retries, ask for low.
 - IDs are content-addressed `uuid5` (see architecture D3) so re-ingest keeps
   citations stable. Don't switch them to random IDs.
 - Frontend has Node test suites and Chromium behavior/integration checks plus

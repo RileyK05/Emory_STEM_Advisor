@@ -14,6 +14,7 @@ import sys
 import time
 from contextlib import nullcontext
 from dataclasses import replace
+from threading import Thread
 
 from app.auth.factory import build_auth_service
 from app.auth.housekeeping import PURGE_INTERVAL_SECONDS, purge_expired_auth
@@ -22,12 +23,18 @@ from app.config import configure_runtime_database, load_settings
 from app.conversations.recovery import reconcile_pending_requests
 from app.db.bootstrap import prepare_database
 from app.db.budget import WORKER_POOL_ROLES, check_connection_budget
-from app.db.connection import connector, open_connection, resolved_database_url
+from app.db.connection import connect, connector, open_connection, resolved_database_url
 from app.generation.artifacts import build_worker_handlers
 from app.jobs.dispatch import KindDispatchingExecutor
 from app.jobs.runtime import RunExecutor
 from app.jobs.store import JobStore
-from app.jobs.worker import WorkerHealthServer, WorkerRunner, install_stop_signals, run_once
+from app.jobs.worker import (
+    WorkerHealthServer,
+    WorkerRunner,
+    install_stop_signals,
+    listen_for_jobs,
+    run_once,
+)
 from app.ops.readiness import ReadinessProbe
 
 
@@ -96,6 +103,8 @@ def main() -> None:
     parser.add_argument("--worker-id", default=f"{socket.gethostname()}-{os.getpid()}")
     parser.add_argument("--lease-seconds", type=int, default=60)
     parser.add_argument("--idle-seconds", type=float, default=1.0)
+    parser.add_argument("--max-idle-seconds", type=float, default=15.0,
+                        help="idle polling backs off to this; a queued job wakes workers at once")
     parser.add_argument("--concurrency", type=int, default=1,
                         help="claim/execute threads in this process (1-32)")
     parser.add_argument("--health-port", type=int, default=None,
@@ -108,6 +117,10 @@ def main() -> None:
         parser.error("--concurrency must be between 1 and 32")
 
     settings = load_settings()
+    if settings.embedding_threads == 0 and args.concurrency > 1:
+        # Job threads share one embedding model; split the cores between them.
+        settings = replace(settings, embedding_threads=max(
+            1, (os.cpu_count() or 1) // args.concurrency))
     health_port = settings.worker_health_port if args.health_port is None else args.health_port
     if not 0 <= health_port <= 65535:
         parser.error("--health-port must be between 0 (disabled) and 65535")
@@ -163,6 +176,7 @@ def main() -> None:
             executor,
             lease_seconds=args.lease_seconds,
             idle_seconds=args.idle_seconds,
+            max_idle_seconds=args.max_idle_seconds,
             concurrency=args.concurrency,
             maintenance=maintenance,
             maintenance_interval_seconds=5.0,
@@ -189,6 +203,9 @@ def main() -> None:
             else nullcontext()
         )
         restore_signals = install_stop_signals(runner.request_stop)
+        # A plain connection of its own (never a pooled one): it stays in LISTEN.
+        Thread(target=listen_for_jobs, args=(lambda: connect(settings.database_url), runner),
+               daemon=True, name="advisor-job-listener").start()
         try:
             with health_context:
                 runner.run()

@@ -8,6 +8,7 @@ import signal
 import threading
 import time
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Condition, Event, Lock, Thread
 from typing import Any, Self
@@ -326,12 +327,17 @@ class WorkerRunner:
         maintenance_interval_seconds: float = 5.0,
         on_error: Callable[[str, Exception], None] | None = None,
         clock: Any | None = None,
+        max_idle_seconds: float | None = None,
     ) -> None:
         self.store = store
         self.worker_id = worker_id
         self.executor = executor
         self.lease_seconds = lease_seconds
         self.idle_seconds = idle_seconds
+        # An empty queue is polled less and less often, up to this cap; a job
+        # notification (see `listen_for_jobs`) wakes every idle thread at once.
+        self.max_idle_seconds = max(idle_seconds, max_idle_seconds or idle_seconds)
+        self._wakes = 0
         self.concurrency = concurrency
         self._maintenance = maintenance
         self._maintenance_interval_seconds = maintenance_interval_seconds
@@ -358,6 +364,12 @@ class WorkerRunner:
         deadline = time.monotonic() + max(0.0, timeout)
         for thread in self._threads:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
+
+    def wake(self) -> None:
+        """End every idle wait now: new work was queued."""
+        with self._cond:
+            self._wakes += 1
+            self._cond.notify_all()
 
     def request_stop(self) -> None:
         """Stop claiming new jobs while allowing in-flight jobs to drain."""
@@ -392,7 +404,10 @@ class WorkerRunner:
         try:
             with self._cond:
                 deadline = self._now() + seconds
+                wakes = self._wakes
                 while not self._stop.is_set():
+                    if self._wakes != wakes:
+                        return False
                     remaining = deadline - self._now()
                     if remaining <= 0:
                         return False
@@ -430,6 +445,7 @@ class WorkerRunner:
             thread_worker_id = (
                 self.worker_id if self.concurrency == 1 else f"{self.worker_id}-{index}"
             )
+            idle = self.idle_seconds
             try:
                 while not self._stop.is_set():
                     try:
@@ -446,8 +462,14 @@ class WorkerRunner:
                             self._on_error(thread_worker_id, exc)
                         self._wait_stop_or_timeout(max(0.5, self.idle_seconds))
                         continue
-                    if job is None and not self._stop.is_set():
-                        self._wait_stop_or_timeout(self.idle_seconds)
+                    if job is not None:
+                        idle = self.idle_seconds
+                    elif not self._stop.is_set():
+                        woken = self._wakes
+                        self._wait_stop_or_timeout(idle)
+                        # Back off only while nothing arrives; a wake resets it.
+                        idle = (self.idle_seconds if self._wakes != woken
+                                else min(self.max_idle_seconds, idle * 2))
             finally:
                 with self._cond:
                     self._cond.notify_all()
@@ -481,3 +503,35 @@ class WorkerRunner:
                 except Exception as exc:  # noqa: BLE001 - recovery still requeues them later
                     if self._on_error is not None:
                         self._on_error(self.worker_id, exc)
+
+
+JOB_CHANNEL = "advisor_jobs"
+
+
+def listen_for_jobs(connect: Callable[[], Any], runner: WorkerRunner, *,
+                    timeout_seconds: float = 5.0, retry_seconds: float = 5.0,
+                    on_listening: Callable[[], None] | None = None) -> None:
+    """Wake the runner whenever a job is queued; returns when the runner stops.
+
+    Polling stays the safety net (a retry that becomes due, a missed
+    notification), so a lost listener only makes pickup slower, never wrong.
+    """
+    while not runner.stopping:
+        conn = None
+        try:
+            conn = connect()
+            conn.autocommit = True
+            conn.execute(f"LISTEN {JOB_CHANNEL}")
+            if on_listening is not None:
+                on_listening()
+            while not runner.stopping:
+                for _notify in conn.notifies(timeout=timeout_seconds, stop_after=1):
+                    runner.wake()
+        except Exception:
+            # The listener is an optimisation; polling keeps the queue moving.
+            logger.warning("job listener lost its connection; retrying", exc_info=True)
+            runner._wait_stop_or_timeout(retry_seconds)
+        finally:
+            if conn is not None:
+                with suppress(Exception):
+                    conn.close()
