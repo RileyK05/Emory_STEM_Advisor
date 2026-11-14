@@ -40,18 +40,120 @@ param oidcClientId string = ''
 
 param apiMinReplicas int
 param apiMaxReplicas int
-param workerReplicas int
+param workerMinReplicas int
+param workerMaxReplicas int
 param workerConcurrency int
+param workerDrainSeconds int
 
 param dbPoolMaxSize int
 param httpThreadpoolTokens int
 param admissionMaxPendingWorkspace int
 param admissionMaxPendingGlobal int
+param workspaceStorageMaxBytes int
 
-var apiFqdn = '${apiName}.${defaultDomain}'
+var apiPort = 8000
+var webPort = 8080
+var workerHealthPort = 8081
+var dataDir = '/workspace/data'
 var webBaseUrl = publicBaseUrl != '' ? publicBaseUrl : 'https://${webName}.${defaultDomain}'
-var apiUpstream = 'https://${apiFqdn}'
-var dataVolumeName = 'advisor-data'
+
+func plainEnv(values object) array => map(items(values), item => {
+  name: item.key
+  value: item.value
+})
+
+func secretEnv(refs object) array => map(items(refs), item => {
+  name: item.key
+  secretRef: item.value
+})
+
+// Liveness restarts a stuck process; readiness holds traffic until it is up.
+func httpProbes(port int, livenessPath string, readinessPath string) array => [
+  {
+    type: 'Liveness'
+    httpGet: { path: livenessPath, port: port, scheme: 'HTTP' }
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  }
+  {
+    type: 'Readiness'
+    httpGet: { path: readinessPath, port: port, scheme: 'HTTP' }
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  }
+]
+
+// Environment variable -> Key Vault secret of the same name. deploy.sh writes
+// every one of these before this module runs, and the user-assigned identity
+// has Key Vault Secrets User on the vault.
+var appSecretEnv = {
+  DATABASE_URL: 'database-url'
+  // Port 5432, past PgBouncer: LISTEN, migrations, backups, probes and the
+  // worker scaler. Equals database-url when the pooler is off.
+  DATABASE_DIRECT_URL: 'database-direct-url'
+  LLM_API_KEY: 'llm-api-key'
+  AUTH_SERVER_KEY: 'auth-server-key'
+  PROFILE_ENCRYPTION_KEY: 'profile-encryption-key'
+  OIDC_CLIENT_SECRET: 'oidc-client-secret'
+}
+
+// Versionless references, so a rotated secret reaches the next revision.
+var appSecrets = map(items(appSecretEnv), item => {
+  name: item.value
+  keyVaultUrl: '${keyVaultUri}secrets/${item.value}'
+  identity: identityId
+})
+
+var appSettings = {
+  DATA_DIR: dataDir
+  DEFAULT_COLLECTION: 'default'
+  LLM_PROVIDER: llmProvider
+  LLM_MODEL_ID: llmModelId
+  LLM_BASE_URL: llmBaseUrl
+  EMBEDDING_PROVIDER: 'granite'
+  EMBEDDING_MODEL_ID: embeddingModelId
+  EMBEDDING_DEVICE: 'cpu'
+  TOOLS_ENABLED: 'true'
+  AUTH_MODE: authMode
+  OIDC_ISSUER: oidcIssuer
+  OIDC_CLIENT_ID: oidcClientId
+  OIDC_REDIRECT_URI: '${webBaseUrl}/api/auth/callback'
+  ADMIN_API_ENABLED: 'false'
+  ADMIN_PANEL_ENABLED: string(adminPanelEnabled)
+  DEBUG_PANEL_ENABLED: string(debugPanelEnabled)
+  DEBUG_SESSION_TTL_SECONDS: string(debugSessionTtlSeconds)
+  ADMIN_BOOTSTRAP_EMAILS: adminBootstrapEmails
+  ADMIN_BOOTSTRAP_SUBJECTS: adminBootstrapSubjects
+  DB_POOL_MAX_SIZE: string(dbPoolMaxSize)
+  // Only checked without a pooler; behind PgBouncer the pooler caps server connections.
+  DB_EXPECTED_REPLICAS: string(max(apiMaxReplicas, workerMaxReplicas))
+  HTTP_THREADPOOL_TOKENS: string(httpThreadpoolTokens)
+  ADMISSION_MAX_PENDING_WORKSPACE: string(admissionMaxPendingWorkspace)
+  ADMISSION_MAX_PENDING_GLOBAL: string(admissionMaxPendingGlobal)
+  WORKSPACE_STORAGE_MAX_BYTES: string(workspaceStorageMaxBytes)
+}
+
+var appEnv = concat(plainEnv(appSettings), secretEnv(appSecretEnv))
+var workerEnv = concat(appEnv, plainEnv({ WORKER_HEALTH_PORT: string(workerHealthPort) }))
+
+// Migrations and backups are whole sessions, so they skip the pooler entirely.
+var migrateEnv = concat(
+  plainEnv({ DEFAULT_COLLECTION: 'default', AUTH_MODE: authMode }),
+  secretEnv({ DATABASE_URL: 'database-direct-url' }))
+var backupEnv = concat(
+  plainEnv({ DATA_DIR: dataDir }),
+  secretEnv({ DATABASE_URL: 'database-direct-url' }))
+
+var registries = [
+  {
+    server: acrLoginServer
+    identity: identityId
+  }
+]
 var serviceIdentity = {
   type: 'UserAssigned'
   userAssignedIdentities: {
@@ -59,189 +161,30 @@ var serviceIdentity = {
   }
 }
 
-// Versionless Key Vault references. The user-assigned identity has Key Vault
-// Secrets User on the vault; the deploy script creates every referenced secret.
-var appSecrets = [
+// The shared Azure Files DATA_DIR, until the Blob adapter replaces it.
+var dataVolumeName = 'advisor-data'
+var dataVolumes = [
   {
-    name: 'database-url'
-    keyVaultUrl: '${keyVaultUri}secrets/database-url'
-    identity: identityId
+    name: dataVolumeName
+    storageType: 'AzureFile'
+    storageName: storageName
   }
+]
+var dataVolumeMounts = [
   {
-    name: 'llm-api-key'
-    keyVaultUrl: '${keyVaultUri}secrets/llm-api-key'
-    identity: identityId
-  }
-  {
-    name: 'auth-server-key'
-    keyVaultUrl: '${keyVaultUri}secrets/auth-server-key'
-    identity: identityId
-  }
-  {
-    name: 'profile-encryption-key'
-    keyVaultUrl: '${keyVaultUri}secrets/profile-encryption-key'
-    identity: identityId
-  }
-  {
-    name: 'oidc-client-secret'
-    keyVaultUrl: '${keyVaultUri}secrets/oidc-client-secret'
-    identity: identityId
+    volumeName: dataVolumeName
+    mountPath: dataDir
   }
 ]
 
-var commonEnv = [
+var latestRevisionOnly = [
   {
-    name: 'DATABASE_URL'
-    secretRef: 'database-url'
-  }
-  {
-    name: 'DATA_DIR'
-    value: '/workspace/data'
-  }
-  {
-    name: 'DEFAULT_COLLECTION'
-    value: 'default'
-  }
-  {
-    name: 'LLM_PROVIDER'
-    value: llmProvider
-  }
-  {
-    name: 'LLM_MODEL_ID'
-    value: llmModelId
-  }
-  {
-    name: 'LLM_BASE_URL'
-    value: llmBaseUrl
-  }
-  {
-    name: 'LLM_API_KEY'
-    secretRef: 'llm-api-key'
-  }
-  {
-    name: 'EMBEDDING_PROVIDER'
-    value: 'granite'
-  }
-  {
-    name: 'EMBEDDING_MODEL_ID'
-    value: embeddingModelId
-  }
-  {
-    name: 'EMBEDDING_DEVICE'
-    value: 'cpu'
-  }
-  {
-    name: 'AUTH_MODE'
-    value: authMode
-  }
-  {
-    name: 'AUTH_SERVER_KEY'
-    secretRef: 'auth-server-key'
-  }
-  {
-    name: 'PROFILE_ENCRYPTION_KEY'
-    secretRef: 'profile-encryption-key'
-  }
-  {
-    name: 'OIDC_ISSUER'
-    value: oidcIssuer
-  }
-  {
-    name: 'OIDC_CLIENT_ID'
-    value: oidcClientId
-  }
-  {
-    name: 'OIDC_CLIENT_SECRET'
-    secretRef: 'oidc-client-secret'
-  }
-  {
-    name: 'OIDC_REDIRECT_URI'
-    value: '${webBaseUrl}/api/auth/callback'
-  }
-  {
-    name: 'DB_POOL_MAX_SIZE'
-    value: string(dbPoolMaxSize)
-  }
-  {
-    name: 'DB_EXPECTED_REPLICAS'
-    value: string(apiMaxReplicas)
-  }
-  {
-    name: 'HTTP_THREADPOOL_TOKENS'
-    value: string(httpThreadpoolTokens)
-  }
-  {
-    name: 'ADMISSION_MAX_PENDING_WORKSPACE'
-    value: string(admissionMaxPendingWorkspace)
-  }
-  {
-    name: 'ADMISSION_MAX_PENDING_GLOBAL'
-    value: string(admissionMaxPendingGlobal)
-  }
-  {
-    name: 'ADMIN_API_ENABLED'
-    value: 'false'
-  }
-  {
-    name: 'ADMIN_PANEL_ENABLED'
-    value: string(adminPanelEnabled)
-  }
-  {
-    name: 'DEBUG_PANEL_ENABLED'
-    value: string(debugPanelEnabled)
-  }
-  {
-    name: 'DEBUG_SESSION_TTL_SECONDS'
-    value: string(debugSessionTtlSeconds)
-  }
-  {
-    name: 'ADMIN_BOOTSTRAP_EMAILS'
-    value: adminBootstrapEmails
-  }
-  {
-    name: 'ADMIN_BOOTSTRAP_SUBJECTS'
-    value: adminBootstrapSubjects
-  }
-  {
-    name: 'TOOLS_ENABLED'
-    value: 'true'
+    latestRevision: true
+    weight: 100
   }
 ]
 
-var workerEnv = concat(commonEnv, [
-  {
-    name: 'WORKER_HEALTH_PORT'
-    value: '8081'
-  }
-])
-
-var migrateEnv = [
-  {
-    name: 'DATABASE_URL'
-    secretRef: 'database-url'
-  }
-  {
-    name: 'DEFAULT_COLLECTION'
-    value: 'default'
-  }
-  {
-    name: 'AUTH_MODE'
-    value: authMode
-  }
-]
-
-var backupEnv = [
-  {
-    name: 'DATABASE_URL'
-    secretRef: 'database-url'
-  }
-  {
-    name: 'DATA_DIR'
-    value: '/workspace/data'
-  }
-]
-
-resource api 'Microsoft.App/containerApps@2023-05-01' = {
+resource api 'Microsoft.App/containerApps@2024-03-01' = {
   name: apiName
   location: location
   tags: tags
@@ -252,22 +195,12 @@ resource api 'Microsoft.App/containerApps@2023-05-01' = {
       activeRevisionsMode: 'Single'
       ingress: {
         external: false
-        targetPort: 8000
+        targetPort: apiPort
         transport: 'http'
         allowInsecure: false
-        traffic: [
-          {
-            latestRevision: true
-            weight: 100
-          }
-        ]
+        traffic: latestRevisionOnly
       }
-      registries: [
-        {
-          server: acrLoginServer
-          identity: identityId
-        }
-      ]
+      registries: registries
       secrets: appSecrets
     }
     template: {
@@ -279,48 +212,12 @@ resource api 'Microsoft.App/containerApps@2023-05-01' = {
             cpu: json('2.0')
             memory: '4Gi'
           }
-          env: commonEnv
-          probes: [
-            {
-              type: 'Liveness'
-              httpGet: {
-                path: '/health'
-                port: 8000
-                scheme: 'HTTP'
-              }
-              initialDelaySeconds: 15
-              periodSeconds: 10
-              timeoutSeconds: 3
-              failureThreshold: 3
-            }
-            {
-              type: 'Readiness'
-              httpGet: {
-                path: '/ready'
-                port: 8000
-                scheme: 'HTTP'
-              }
-              initialDelaySeconds: 5
-              periodSeconds: 10
-              timeoutSeconds: 3
-              failureThreshold: 3
-            }
-          ]
-          volumeMounts: [
-            {
-              volumeName: dataVolumeName
-              mountPath: '/workspace/data'
-            }
-          ]
+          env: appEnv
+          probes: httpProbes(apiPort, '/health', '/ready')
+          volumeMounts: dataVolumeMounts
         }
       ]
-      volumes: [
-        {
-          name: dataVolumeName
-          storageType: 'AzureFile'
-          storageName: storageName
-        }
-      ]
+      volumes: dataVolumes
       scale: {
         minReplicas: apiMinReplicas
         maxReplicas: apiMaxReplicas
@@ -339,7 +236,7 @@ resource api 'Microsoft.App/containerApps@2023-05-01' = {
   }
 }
 
-resource web 'Microsoft.App/containerApps@2023-05-01' = {
+resource web 'Microsoft.App/containerApps@2024-03-01' = {
   name: webName
   location: location
   tags: tags
@@ -350,22 +247,12 @@ resource web 'Microsoft.App/containerApps@2023-05-01' = {
       activeRevisionsMode: 'Single'
       ingress: {
         external: true
-        targetPort: 8080
+        targetPort: webPort
         transport: 'http'
         allowInsecure: false
-        traffic: [
-          {
-            latestRevision: true
-            weight: 100
-          }
-        ]
+        traffic: latestRevisionOnly
       }
-      registries: [
-        {
-          server: acrLoginServer
-          identity: identityId
-        }
-      ]
+      registries: registries
     }
     template: {
       containers: [
@@ -376,38 +263,8 @@ resource web 'Microsoft.App/containerApps@2023-05-01' = {
             cpu: json('0.25')
             memory: '0.5Gi'
           }
-          env: [
-            {
-              name: 'API_UPSTREAM'
-              value: apiUpstream
-            }
-          ]
-          probes: [
-            {
-              type: 'Liveness'
-              httpGet: {
-                path: '/'
-                port: 8080
-                scheme: 'HTTP'
-              }
-              initialDelaySeconds: 5
-              periodSeconds: 10
-              timeoutSeconds: 3
-              failureThreshold: 3
-            }
-            {
-              type: 'Readiness'
-              httpGet: {
-                path: '/'
-                port: 8080
-                scheme: 'HTTP'
-              }
-              initialDelaySeconds: 3
-              periodSeconds: 10
-              timeoutSeconds: 3
-              failureThreshold: 3
-            }
-          ]
+          env: plainEnv({ API_UPSTREAM: 'https://${apiName}.${defaultDomain}' })
+          probes: httpProbes(webPort, '/', '/')
         }
       ]
       scale: {
@@ -428,7 +285,7 @@ resource web 'Microsoft.App/containerApps@2023-05-01' = {
   }
 }
 
-resource worker 'Microsoft.App/containerApps@2023-05-01' = {
+resource worker 'Microsoft.App/containerApps@2024-03-01' = {
   name: workerName
   location: location
   tags: tags
@@ -437,12 +294,7 @@ resource worker 'Microsoft.App/containerApps@2023-05-01' = {
     managedEnvironmentId: environmentId
     configuration: {
       activeRevisionsMode: 'Single'
-      registries: [
-        {
-          server: acrLoginServer
-          identity: identityId
-        }
-      ]
+      registries: registries
       secrets: appSecrets
     }
     template: {
@@ -456,62 +308,53 @@ resource worker 'Microsoft.App/containerApps@2023-05-01' = {
             'scripts.worker'
             '--concurrency'
             string(workerConcurrency)
+            '--drain-seconds'
+            string(workerDrainSeconds)
           ]
           resources: {
             cpu: json('2.0')
             memory: '4Gi'
           }
           env: workerEnv
-          probes: [
-            {
-              type: 'Liveness'
-              httpGet: {
-                path: '/health'
-                port: 8081
-                scheme: 'HTTP'
-              }
-              initialDelaySeconds: 15
-              periodSeconds: 10
-              timeoutSeconds: 3
-              failureThreshold: 3
-            }
-            {
-              type: 'Readiness'
-              httpGet: {
-                path: '/ready'
-                port: 8081
-                scheme: 'HTTP'
-              }
-              initialDelaySeconds: 5
-              periodSeconds: 10
-              timeoutSeconds: 3
-              failureThreshold: 3
-            }
-          ]
-          volumeMounts: [
-            {
-              volumeName: dataVolumeName
-              mountPath: '/workspace/data'
-            }
-          ]
+          probes: httpProbes(workerHealthPort, '/health', '/ready')
+          volumeMounts: dataVolumeMounts
         }
       ]
-      volumes: [
-        {
-          name: dataVolumeName
-          storageType: 'AzureFile'
-          storageName: storageName
-        }
-      ]
+      volumes: dataVolumes
+      // SIGTERM starts the drain; the platform kills the container after this.
+      terminationGracePeriodSeconds: workerDrainSeconds + 30
       scale: {
-        minReplicas: workerReplicas
-        maxReplicas: workerReplicas
+        minReplicas: workerMinReplicas
+        maxReplicas: workerMaxReplicas
+        rules: [
+          {
+            // KEDA's postgresql scaler: replicas = ceil(jobs needing a slot /
+            // slots per replica). Running jobs count too, so a busy replica is
+            // not scaled in under its own answers. The query uses the jobs
+            // table's two partial indexes (queued, running).
+            name: 'job-slots'
+            custom: {
+              type: 'postgresql'
+              metadata: {
+                query: 'SELECT count(*) FROM jobs WHERE status = \'running\' OR (status = \'queued\' AND available_at <= now())'
+                targetQueryValue: string(workerConcurrency)
+                activationTargetQueryValue: '0'
+              }
+              auth: [
+                {
+                  secretRef: 'database-direct-url'
+                  triggerParameter: 'connection'
+                }
+              ]
+            }
+          }
+        ]
       }
     }
   }
 }
 
-resource backupJob 'Microsoft.App/jobs@2023-05-01' = {
+resource backupJob 'Microsoft.App/jobs@2024-03-01' = {
   name: backupJobName
   location: location
   tags: tags
@@ -527,12 +370,7 @@ resource backupJob 'Microsoft.App/jobs@2023-05-01' = {
         parallelism: 1
         replicaCompletionCount: 1
       }
-      registries: [
-        {
-          server: acrLoginServer
-          identity: identityId
-        }
-      ]
+      registries: registries
       secrets: appSecrets
     }
     template: {
@@ -543,33 +381,22 @@ resource backupJob 'Microsoft.App/jobs@2023-05-01' = {
           command: [
             '/bin/sh'
             '-c'
-            'python -m scripts.backup create --backup "/workspace/data/backups/advisor-$(date -u +%Y%m%dT%H%M%SZ).zip" --maintenance-confirmed'
+            'python -m scripts.backup create --backup "${dataDir}/backups/advisor-$(date -u +%Y%m%dT%H%M%SZ).zip" --maintenance-confirmed'
           ]
           resources: {
             cpu: json('1.0')
             memory: '2Gi'
           }
           env: backupEnv
-          volumeMounts: [
-            {
-              volumeName: dataVolumeName
-              mountPath: '/workspace/data'
-            }
-          ]
+          volumeMounts: dataVolumeMounts
         }
       ]
-      volumes: [
-        {
-          name: dataVolumeName
-          storageType: 'AzureFile'
-          storageName: storageName
-        }
-      ]
+      volumes: dataVolumes
     }
   }
 }
 
-resource migrateJob 'Microsoft.App/jobs@2023-05-01' = {
+resource migrateJob 'Microsoft.App/jobs@2024-03-01' = {
   name: migrateJobName
   location: location
   tags: tags
@@ -584,12 +411,7 @@ resource migrateJob 'Microsoft.App/jobs@2023-05-01' = {
         parallelism: 1
         replicaCompletionCount: 1
       }
-      registries: [
-        {
-          server: acrLoginServer
-          identity: identityId
-        }
-      ]
+      registries: registries
       secrets: appSecrets
     }
     template: {

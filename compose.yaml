@@ -1,3 +1,28 @@
+# Local development stack. The backend and worker share one dev image
+# (deploy/docker/Dockerfile.backend, target dev) with ./backend mounted live.
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql://advisor:advisor@postgres:5432/advisor
+  DATA_DIR: /workspace/data
+  DEFAULT_COLLECTION: ${DEFAULT_COLLECTION:-default}
+  LLM_PROVIDER: ${LLM_PROVIDER:-hf-local}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-granite}
+
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: deploy/docker/Dockerfile.backend
+    target: dev
+  env_file:
+    - path: .env
+      required: false
+  environment: *backend-env
+  volumes:
+    - ./backend:/workspace/backend
+    - ./data:/workspace/data
+  depends_on:
+    postgres:
+      condition: service_healthy
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -33,28 +58,13 @@ services:
       retries: 20
 
   backend:
-    env_file:
-      - path: .env
-        required: false
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    <<: *backend
     environment:
-      DATABASE_URL: postgresql://advisor:advisor@postgres:5432/advisor
+      <<: *backend-env
       TEST_DATABASE_URL: postgresql://advisor:advisor@postgres-test:5432/advisor_test
-      DATA_DIR: /workspace/data
-      DEFAULT_COLLECTION: ${DEFAULT_COLLECTION:-default}
-      LLM_PROVIDER: ${LLM_PROVIDER:-hf-local}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-granite}
-    volumes:
-      - ./backend:/workspace/backend
-      - ./data:/workspace/data
     ports:
       - "127.0.0.1:8000:8000"
       - "127.0.0.1:5173:5173"
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
       interval: 10s
@@ -63,25 +73,8 @@ services:
       start_period: 20s
 
   worker:
-    env_file:
-      - path: .env
-        required: false
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    environment:
-      DATABASE_URL: postgresql://advisor:advisor@postgres:5432/advisor
-      DATA_DIR: /workspace/data
-      DEFAULT_COLLECTION: ${DEFAULT_COLLECTION:-default}
-      LLM_PROVIDER: ${LLM_PROVIDER:-hf-local}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-granite}
+    <<: *backend
     command: ["python", "-m", "scripts.worker"]
-    volumes:
-      - ./backend:/workspace/backend
-      - ./data:/workspace/data
-    depends_on:
-      postgres:
-        condition: service_healthy
 
   frontend:
     image: node:20-alpine

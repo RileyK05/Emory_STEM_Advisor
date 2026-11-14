@@ -2041,7 +2041,7 @@ owning ingest/artifact workflows because they own file and revision cleanup.
 The last active admin cannot be demoted or disabled, and an admin cannot demote
 or disable themselves.
 
-The Debug surface is a second separate bundle (`/api/debug/*`, `/debug`). An
+The Debug surface is an admin API (`/api/debug/*`); it no longer has a bundle. An
 admin creates an expiring `debug_sessions` row; the bearer token is returned once
 and stored only as a digest. The token, carried in `X-Debug-Session`, scopes
 validated, allowlisted overrides to that admin's debug requests. Secrets,

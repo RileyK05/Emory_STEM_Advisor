@@ -1,0 +1,93 @@
+name: Deploy checks
+
+# The Azure deployment only runs by hand, so this catches a broken template,
+# script or image when one of the files that make them changes.
+on:
+  pull_request:
+    paths:
+      - infra/**
+      - deploy/**
+      - .dockerignore
+      - compose.yaml
+      - backend/pyproject.toml
+      - frontend/package-lock.json
+      - .github/workflows/deploy-checks.yml
+  push:
+    branches: [main]
+    paths:
+      - infra/**
+      - deploy/**
+      - .dockerignore
+      - compose.yaml
+      - backend/pyproject.toml
+      - frontend/package-lock.json
+      - .github/workflows/deploy-checks.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  templates:
+    name: templates and scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile Bicep
+        run: |
+          for file in infra/main.bicep infra/modules/*.bicep; do
+            az bicep build --file "$file" --stdout >/dev/null
+          done
+      - name: Check deploy.sh
+        run: |
+          bash -n deploy/azure/deploy.sh
+          shellcheck deploy/azure/deploy.sh
+      - name: Every parameter write-params.py sends exists in main.bicep
+        run: |
+          az bicep build --file infra/main.bicep --outfile "$RUNNER_TEMP/main.json"
+          python - "$RUNNER_TEMP/main.json" <<'EOF'
+          import importlib.util, json, sys
+          spec = importlib.util.spec_from_file_location("write_params", "deploy/azure/write-params.py")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+          template = set(json.load(open(sys.argv[1]))["parameters"])
+          sent = {parameter for parameter, _ in module.SETTINGS.values()} | {"deployApps"}
+          unknown = sorted(sent - template)
+          if unknown:
+              sys.exit(f"write-params.py sends parameters main.bicep lacks: {unknown}")
+          EOF
+
+  images:
+    name: images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          docker build -f deploy/docker/Dockerfile.backend --target prod \
+            --build-arg PRELOAD_EMBEDDING_MODEL= -t advisor-api:ci .
+          docker build -f deploy/docker/Dockerfile.backend --target dev -t advisor-dev:ci .
+          docker build -f deploy/docker/Dockerfile.web --target prod -t advisor-web:ci .
+      - name: Web caching and security headers
+        run: |
+          docker run -d --name web -p 8080:8080 -e API_UPSTREAM=http://127.0.0.1:9 advisor-web:ci
+          for _ in $(seq 1 20); do curl -fsS -o /dev/null http://127.0.0.1:8080/ && break; sleep 1; done
+          expect() {  # path header-line
+            if ! curl -fsSI "http://127.0.0.1:8080$1" | tr -d '\r' | grep -qix "$2"; then
+              echo "::error::$1 should send '$2'"
+              curl -sSI "http://127.0.0.1:8080$1"
+              exit 1
+            fi
+          }
+          asset="/assets/$(docker exec web ls /usr/share/nginx/html/assets | head -n 1)"
+          for path in / /index.html /admin /admin/ /some/app/route "$asset"; do
+            expect "$path" "x-content-type-options: nosniff"
+          done
+          for path in / /index.html /admin /admin/ /admin.html /some/app/route; do
+            expect "$path" "cache-control: no-store"
+          done
+          expect "$asset" "cache-control: public, max-age=31536000, immutable"

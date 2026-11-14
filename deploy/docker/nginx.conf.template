@@ -1,3 +1,16 @@
+# Cache-Control by path. Hashed assets are immutable; the two HTML entry points
+# (the app and Admin) must never be cached, or a deploy leaves browsers on old
+# bundles. An empty value sends no header, so API responses keep their own.
+#
+# Every add_header lives at server level: nginx drops all inherited add_header
+# directives in any location that declares one of its own.
+map $uri $cache_control {
+    ~^/assets/                     "public, max-age=31536000, immutable";
+    ~^/(index|admin)\.html$        "no-store";
+    ~^/admin/?$                    "no-store";
+    default                        "";
+}
+
 server {
     listen 8080;
     server_name _;
@@ -18,6 +31,10 @@ server {
     gzip_vary on;
     gzip_types application/json application/javascript text/css text/plain
                text/markdown image/svg+xml;
+
+    add_header Cache-Control $cache_control;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
 
     # Proxy the API so the browser sees one origin. Container Apps terminates
     # TLS at the ingress, so the public scheme is always HTTPS.
@@ -44,50 +61,17 @@ server {
         proxy_read_timeout 10s;
     }
 
+    # A missing hashed asset is a 404, never the app shell.
     location /assets/ {
-        add_header Cache-Control "public, max-age=31536000, immutable";
         try_files $uri =404;
     }
 
-    location = /index.html {
-        add_header Cache-Control "no-store";
-    }
-
-    # Separate bundles. Direct .html paths also work for local previews.
-    location = /admin {
-        add_header Cache-Control "no-store";
+    # The Admin bundle; /admin.html also works.
+    location ~ ^/admin/?$ {
         try_files /admin.html =404;
-    }
-
-    location = /admin/ {
-        add_header Cache-Control "no-store";
-        try_files /admin.html =404;
-    }
-
-    location = /admin.html {
-        add_header Cache-Control "no-store";
-        try_files $uri =404;
-    }
-
-    location = /debug {
-        add_header Cache-Control "no-store";
-        try_files /debug.html =404;
-    }
-
-    location = /debug/ {
-        add_header Cache-Control "no-store";
-        try_files /debug.html =404;
-    }
-
-    location = /debug.html {
-        add_header Cache-Control "no-store";
-        try_files $uri =404;
     }
 
     location / {
         try_files $uri $uri/ /index.html;
     }
-
-    add_header X-Content-Type-Options nosniff always;
-    add_header Referrer-Policy strict-origin-when-cross-origin always;
 }

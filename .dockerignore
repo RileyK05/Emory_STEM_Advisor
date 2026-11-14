@@ -1,5 +1,16 @@
-.git
-.venv
+# An allowlist: `az acr build` uploads the whole context on every build, so
+# send only what the Dockerfiles copy (uploads/, data/ and docs/ are large).
+*
+!backend/pyproject.toml
+!backend/app
+!backend/scripts
+!backend/configs
+!backend/tests
+!frontend
+!deploy/docker/nginx.conf.template
+!sandbox
+
+# Never wanted, even inside an allowed folder. Later rules win.
 **/__pycache__
 **/.pytest_cache
 **/.pytest-tmp*
@@ -11,5 +22,3 @@ frontend/node_modules
 frontend/dist
 frontend/.env.local
 frontend/.env.*.local
-.env
-data

@@ -1,10 +1,13 @@
 // Azure platform for the Emory STEM Advisor.
 //
-// Two-phase deployment, driven by deploy/azure/deploy.sh:
+// deploy/azure/deploy.sh deploys this file twice:
 //   1. deployApps=false creates the registry, database, storage, vault,
-//      monitoring, identity and Container Apps environment.
-//   2. The script builds/pushes images and sets Key Vault secrets.
-//   3. deployApps=true creates the API, web, worker and migrate job.
+//      monitoring, identity and Container Apps environment. The script then
+//      builds the images in the registry and writes the Key Vault secrets.
+//   2. deployApps=true adds the API, web, worker, migrate and backup apps.
+//
+// Every deployment default lives in this file's parameters; the script passes
+// only the settings an operator sets.
 //
 // PostgreSQL, Blob/File storage and Key Vault are reached through private
 // endpoints. Only the web container has public ingress; the API is internal to
@@ -85,6 +88,19 @@ param postgresBackupRetentionDays int = 14
 ])
 param postgresHighAvailability string = 'Disabled'
 
+@description('Run Flexible Server\'s built-in PgBouncer (transaction mode, port 6432). The API and workers connect through it, so replicas can autoscale without exhausting server connections; LISTEN, migrations, backups and readiness probes use port 5432. Not available on the Burstable tier, where this is ignored.')
+param postgresPooler bool = true
+
+@description('Server connections PgBouncer keeps for the advisor database. Keep it well under max_connections, which leaves room for direct sessions.')
+@minValue(10)
+@maxValue(1000)
+param pgbouncerPoolSize int = 60
+
+@description('Client connections PgBouncer accepts: the sum of every replica\'s pools.')
+@minValue(100)
+@maxValue(50000)
+param pgbouncerMaxClientConnections int = 5000
+
 @description('Model provider: openai, openai-compatible, anthropic or google.')
 param llmProvider string = 'openai-compatible'
 
@@ -137,20 +153,30 @@ param apiMinReplicas int = 1
 @maxValue(30)
 param apiMaxReplicas int = 10
 
-@description('Worker replicas. Keep at one until per-job throughput is measured.')
+@description('Minimum worker replicas. Two keep answers flowing while one restarts or drains.')
 @minValue(1)
-@maxValue(20)
-param workerReplicas int = 1
+@maxValue(50)
+param workerMinReplicas int = 2
 
-@description('Concurrent jobs executed inside one worker process.')
+@description('Maximum worker replicas. Workers scale on queued plus running jobs, one replica per workerConcurrency of them. 14 x 24 slots covers about 300 answers in progress, the 6,000-student peak estimate.')
+@minValue(1)
+@maxValue(50)
+param workerMaxReplicas int = 14
+
+@description('Concurrent jobs executed inside one worker process. Jobs mostly wait on the model provider.')
 @minValue(1)
 @maxValue(32)
-param workerConcurrency int = 4
+param workerConcurrency int = 24
 
-@description('Per-process PostgreSQL pool size used by the API and worker.')
+@description('On scale-in or redeploy, seconds a worker waits for in-flight answers before requeueing them. The container gets 30 s more before it is killed (600 s at most). Keep it above RESEARCH_ADVICE_OPERATION_TIMEOUT_SECONDS (540) so the longest answer finishes instead of restarting.')
+@minValue(30)
+@maxValue(570)
+param workerDrainSeconds int = 570
+
+@description('Per-process, per-role PostgreSQL pool size used by the API and worker. Behind PgBouncer these are cheap client connections; keep it at least workerConcurrency.')
 @minValue(1)
 @maxValue(200)
-param dbPoolMaxSize int = 20
+param dbPoolMaxSize int = 30
 
 @description('Per-process AnyIO thread tokens for sync dependencies and handlers.')
 @minValue(1)
@@ -162,10 +188,10 @@ param httpThreadpoolTokens int = 80
 @maxValue(100000)
 param admissionMaxPendingWorkspace int = 4
 
-@description('Outstanding conversation turns allowed across the instance (0 disables).')
+@description('Outstanding (queued plus running) conversation turns allowed across the instance (0 disables). Keep it above workerMaxReplicas x workerConcurrency so a burst queues instead of being refused.')
 @minValue(0)
 @maxValue(1000000)
-param admissionMaxPendingGlobal int = 200
+param admissionMaxPendingGlobal int = 600
 
 @description('Optional Azure Files share size in GiB for DATA_DIR.')
 @minValue(1)
@@ -178,7 +204,9 @@ param backupSchedule string = '0 2 * * *'
 @description('Optional email address for release alerts. Empty creates the rules without a receiver.')
 param alertEmail string = ''
 
-@description('Per-workspace storage ceiling, matching WORKSPACE_STORAGE_MAX_BYTES.')
+@description('Per-workspace storage ceiling in bytes: the apps\' WORKSPACE_STORAGE_MAX_BYTES and the storage alert\'s 90% line.')
+@minValue(1)
+@maxValue(107374182400)
 param workspaceStorageMaxBytes int = 104857600
 
 @description('VNet address space for the deployment.')
@@ -206,13 +234,27 @@ var workerName = take('${namePrefix}-worker-${suffix}', 32)
 var migrateJobName = take('${namePrefix}-migrate-${suffix}', 32)
 var backupJobName = take('${namePrefix}-backup-${suffix}', 32)
 var dataShareName = 'advisor-data'
+// Flexible Server offers the built-in PgBouncer only on General Purpose and
+// Memory Optimized compute.
+var poolerEnabled = postgresPooler && postgresTier != 'Burstable'
+// Behind a transaction pooler the app cannot send per-connection limits, so
+// they become server defaults (the app's own DB_STATEMENT_TIMEOUT_MS and
+// DB_IDLE_TRANSACTION_TIMEOUT_MS defaults). Direct sessions (migrations,
+// backups, scripts) clear them for themselves. Burstable has no PgBouncer
+// settings at all.
+var poolerSettings = [
+  { name: 'pgbouncer.pool_mode', value: 'TRANSACTION' }
+  { name: 'pgbouncer.default_pool_size', value: string(pgbouncerPoolSize) }
+  { name: 'pgbouncer.max_client_conn', value: string(pgbouncerMaxClientConnections) }
+  { name: 'statement_timeout', value: '30000' }
+  { name: 'idle_in_transaction_session_timeout', value: '60000' }
+]
+var postgresSettings = postgresTier == 'Burstable' ? [] : concat(
+  [{ name: 'pgbouncer.enabled', value: poolerEnabled ? 'true' : 'false' }],
+  poolerEnabled ? poolerSettings : [])
 var vnetName = take('${namePrefix}-vnet-${suffix}', 64)
 var appsSubnetName = 'apps'
 var privateEndpointsSubnetName = 'private-endpoints'
-var postgresDnsZoneName = 'privatelink.postgres.database.azure.com'
-var blobDnsZoneName = 'privatelink.blob.${environment().suffixes.storage}'
-var fileDnsZoneName = 'privatelink.file.${environment().suffixes.storage}'
-var vaultDnsZoneName = 'privatelink.vaultcore.azure.net'
 
 var acrPullRole = '7f951dda-4ed3-4680-a7ca-43fe172d538d'
 var keyVaultSecretsUserRole = '4633458b-17de-408a-b874-0445c86b69e6'
@@ -275,78 +317,6 @@ resource privateEndpointsSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-
   name: privateEndpointsSubnetName
   properties: {
     addressPrefix: privateEndpointsSubnetPrefix
-  }
-}
-
-resource postgresDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
-  name: postgresDnsZoneName
-  location: 'global'
-  tags: tags
-}
-
-resource blobDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
-  name: blobDnsZoneName
-  location: 'global'
-  tags: tags
-}
-
-resource fileDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
-  name: fileDnsZoneName
-  location: 'global'
-  tags: tags
-}
-
-resource vaultDnsZone 'Microsoft.Network/privateDnsZones@2020-06-01' = {
-  name: vaultDnsZoneName
-  location: 'global'
-  tags: tags
-}
-
-resource postgresDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
-  parent: postgresDnsZone
-  name: '${vnetName}-link'
-  location: 'global'
-  properties: {
-    virtualNetwork: {
-      id: virtualNetwork.id
-    }
-    registrationEnabled: false
-  }
-}
-
-resource blobDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
-  parent: blobDnsZone
-  name: '${vnetName}-link'
-  location: 'global'
-  properties: {
-    virtualNetwork: {
-      id: virtualNetwork.id
-    }
-    registrationEnabled: false
-  }
-}
-
-resource fileDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
-  parent: fileDnsZone
-  name: '${vnetName}-link'
-  location: 'global'
-  properties: {
-    virtualNetwork: {
-      id: virtualNetwork.id
-    }
-    registrationEnabled: false
-  }
-}
-
-resource vaultDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = {
-  parent: vaultDnsZone
-  name: '${vnetName}-link'
-  location: 'global'
-  properties: {
-    virtualNetwork: {
-      id: virtualNetwork.id
-    }
-    registrationEnabled: false
   }
 }
 
@@ -461,6 +431,20 @@ resource vectorExtension 'Microsoft.DBforPostgreSQL/flexibleServers/configuratio
   }
 }
 
+// One at a time: Flexible Server rejects concurrent configuration updates.
+@batchSize(1)
+resource postgresConfiguration 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2022-12-01' = [for setting in postgresSettings: {
+  parent: postgres
+  name: setting.name
+  properties: {
+    value: setting.value
+    source: 'user-override'
+  }
+  dependsOn: [
+    vectorExtension
+  ]
+}]
+
 resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: keyVaultName
   location: location
@@ -482,8 +466,67 @@ resource keyVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   }
 }
 
-resource postgresPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
-  name: take('${postgresName}-pe', 63)
+// Private access: each service gets a DNS zone linked to the VNet and an
+// endpoint in the private-endpoints subnet. `connection` and `zoneConfig` keep
+// the names the endpoints were first created with. The target ids are a
+// separate list so the DNS zones need not wait for the servers.
+var privateLinkTargets = [
+  postgres.id
+  storage.id
+  storage.id
+  keyVault.id
+]
+var privateLinks = [
+  {
+    zone: 'privatelink.postgres.database.azure.com'
+    endpoint: take('${postgresName}-pe', 63)
+    groupId: 'postgresqlServer'
+    connection: 'postgresql'
+    zoneConfig: 'postgres'
+  }
+  {
+    zone: 'privatelink.blob.${environment().suffixes.storage}'
+    endpoint: take('${storageName}-blob-pe', 63)
+    groupId: 'blob'
+    connection: 'blob'
+    zoneConfig: 'blob'
+  }
+  {
+    zone: 'privatelink.file.${environment().suffixes.storage}'
+    endpoint: take('${storageName}-file-pe', 63)
+    groupId: 'file'
+    connection: 'file'
+    zoneConfig: 'file'
+  }
+  {
+    zone: 'privatelink.vaultcore.azure.net'
+    endpoint: take('${keyVaultName}-pe', 63)
+    groupId: 'vault'
+    connection: 'vault'
+    zoneConfig: 'vault'
+  }
+]
+
+resource privateDnsZones 'Microsoft.Network/privateDnsZones@2020-06-01' = [for link in privateLinks: {
+  name: link.zone
+  location: 'global'
+  tags: tags
+}]
+
+resource privateDnsLinks 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2020-06-01' = [for (link, i) in privateLinks: {
+  parent: privateDnsZones[i]
+  name: '${vnetName}-link'
+  location: 'global'
+  properties: {
+    virtualNetwork: {
+      id: virtualNetwork.id
+    }
+    registrationEnabled: false
+  }
+}]
+
+resource privateEndpoints 'Microsoft.Network/privateEndpoints@2023-04-01' = [for (link, i) in privateLinks: {
+  name: link.endpoint
   location: location
   tags: tags
   properties: {
@@ -492,143 +535,32 @@ resource postgresPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01'
     }
     privateLinkServiceConnections: [
       {
-        name: 'postgresql'
+        name: link.connection
         properties: {
-          privateLinkServiceId: postgres.id
+          privateLinkServiceId: privateLinkTargets[i]
           groupIds: [
-            'postgresqlServer'
+            link.groupId
           ]
         }
       }
     ]
   }
-}
+}]
 
-resource postgresPrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = {
-  parent: postgresPrivateEndpoint
+resource privateDnsGroups 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = [for (link, i) in privateLinks: {
+  parent: privateEndpoints[i]
   name: 'default'
   properties: {
     privateDnsZoneConfigs: [
       {
-        name: 'postgres'
+        name: link.zoneConfig
         properties: {
-          privateDnsZoneId: postgresDnsZone.id
+          privateDnsZoneId: privateDnsZones[i].id
         }
       }
     ]
   }
-}
-
-resource blobPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
-  name: take('${storage.name}-blob-pe', 63)
-  location: location
-  tags: tags
-  properties: {
-    subnet: {
-      id: privateEndpointsSubnet.id
-    }
-    privateLinkServiceConnections: [
-      {
-        name: 'blob'
-        properties: {
-          privateLinkServiceId: storage.id
-          groupIds: [
-            'blob'
-          ]
-        }
-      }
-    ]
-  }
-}
-
-resource blobPrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = {
-  parent: blobPrivateEndpoint
-  name: 'default'
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: 'blob'
-        properties: {
-          privateDnsZoneId: blobDnsZone.id
-        }
-      }
-    ]
-  }
-}
-
-resource filePrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
-  name: take('${storage.name}-file-pe', 63)
-  location: location
-  tags: tags
-  properties: {
-    subnet: {
-      id: privateEndpointsSubnet.id
-    }
-    privateLinkServiceConnections: [
-      {
-        name: 'file'
-        properties: {
-          privateLinkServiceId: storage.id
-          groupIds: [
-            'file'
-          ]
-        }
-      }
-    ]
-  }
-}
-
-resource filePrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = {
-  parent: filePrivateEndpoint
-  name: 'default'
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: 'file'
-        properties: {
-          privateDnsZoneId: fileDnsZone.id
-        }
-      }
-    ]
-  }
-}
-
-resource vaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2023-04-01' = {
-  name: take('${keyVault.name}-pe', 63)
-  location: location
-  tags: tags
-  properties: {
-    subnet: {
-      id: privateEndpointsSubnet.id
-    }
-    privateLinkServiceConnections: [
-      {
-        name: 'vault'
-        properties: {
-          privateLinkServiceId: keyVault.id
-          groupIds: [
-            'vault'
-          ]
-        }
-      }
-    ]
-  }
-}
-
-resource vaultPrivateDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2023-04-01' = {
-  parent: vaultPrivateEndpoint
-  name: 'default'
-  properties: {
-    privateDnsZoneConfigs: [
-      {
-        name: 'vault'
-        properties: {
-          privateDnsZoneId: vaultDnsZone.id
-        }
-      }
-    ]
-  }
-}
+}]
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: identityName
@@ -636,7 +568,7 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' 
   tags: tags
 }
 
-resource containerEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' = {
+resource containerEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: environmentNameResource
   location: location
   tags: tags
@@ -657,7 +589,7 @@ resource containerEnvironment 'Microsoft.App/managedEnvironments@2023-05-01' = {
 // Azure Files is the interim shared DATA_DIR for more than one replica.
 // Replace it with the Blob adapter before horizontal API scaling is required
 // for correctness (not just convenience).
-resource environmentDataStorage 'Microsoft.App/managedEnvironments/storages@2023-05-01' = {
+resource environmentDataStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
   parent: containerEnvironment
   name: dataShareName
   properties: {
@@ -714,6 +646,12 @@ module alerts 'modules/alerts.bicep' = {
     postgresId: postgres.id
     alertEmail: alertEmail
     storageQuotaBytes: workspaceStorageMaxBytes
+    // Behind PgBouncer the expected peak is its server pool, one LISTEN session
+    // per worker replica, and short direct probes from every replica, plus room
+    // for migrations and backups. Without the pooler, keep a fixed ceiling.
+    dbConnectionsThreshold: poolerEnabled
+      ? pgbouncerPoolSize + workerMaxReplicas + apiMaxReplicas + 10
+      : 80
   }
 }
 
@@ -752,12 +690,15 @@ module apps 'modules/apps.bicep' = if (deployApps) {
     oidcClientId: oidcClientId
     apiMinReplicas: apiMinReplicas
     apiMaxReplicas: apiMaxReplicas
-    workerReplicas: workerReplicas
+    workerMinReplicas: workerMinReplicas
+    workerMaxReplicas: workerMaxReplicas
     workerConcurrency: workerConcurrency
+    workerDrainSeconds: workerDrainSeconds
     dbPoolMaxSize: dbPoolMaxSize
     httpThreadpoolTokens: httpThreadpoolTokens
     admissionMaxPendingWorkspace: admissionMaxPendingWorkspace
     admissionMaxPendingGlobal: admissionMaxPendingGlobal
+    workspaceStorageMaxBytes: workspaceStorageMaxBytes
   }
 }
 
@@ -767,6 +708,8 @@ output keyVaultName string = keyVault.name
 output keyVaultUri string = keyVault.properties.vaultUri
 output postgresFqdn string = postgres.properties.fullyQualifiedDomainName
 output postgresName string = postgres.name
+output postgresAdminLogin string = postgresAdminLogin
+output postgresPoolerEnabled bool = poolerEnabled
 output storageAccountName string = storage.name
 output dataShareName string = environmentDataStorage.name
 output containerEnvironmentName string = containerEnvironment.name

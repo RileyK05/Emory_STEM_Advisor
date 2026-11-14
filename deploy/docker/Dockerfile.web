@@ -18,7 +18,7 @@ ENV VITE_API_MODE=${VITE_API_MODE} \
 
 RUN npm run build
 
-FROM nginxinc/nginx-unprivileged:1.27-alpine
+FROM nginxinc/nginx-unprivileged:1.27-alpine AS prod
 
 COPY deploy/docker/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html

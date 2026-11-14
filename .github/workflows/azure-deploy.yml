@@ -5,12 +5,16 @@ name: Deploy Azure
 #
 # Variables: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
 #   LLM_PROVIDER, LLM_MODEL_ID, LLM_BASE_URL, AUTH_MODE, OIDC_ISSUER,
-#   OIDC_CLIENT_ID
+#   OIDC_CLIENT_ID, and optionally PUBLIC_BASE_URL, ADMIN_BOOTSTRAP_EMAILS,
+#   ADMIN_BOOTSTRAP_SUBJECTS, ALERT_EMAIL. Unset ones take infra/main.bicep's
+#   defaults.
 # Secrets:   POSTGRES_ADMIN_PASSWORD, AUTH_SERVER_KEY, PROFILE_ENCRYPTION_KEY,
 #   LLM_API_KEY, OIDC_CLIENT_SECRET
 #
 # The deploying identity needs Contributor on the resource group and Key Vault
-# Secrets Officer on the vault it creates (or a pre-created vault).
+# Secrets Officer on the vault it creates (or a pre-created vault). Key Vault
+# and PostgreSQL are private, so the job must run on a self-hosted runner inside
+# the deployment's VNet; a GitHub-hosted runner cannot write the secrets.
 
 on:
   workflow_dispatch:
@@ -26,6 +30,10 @@ on:
         description: Azure region
         required: true
         default: eastus
+      runner:
+        description: Runner label with access to the deployment's VNet
+        required: true
+        default: self-hosted
 
 permissions:
   id-token: write
@@ -37,7 +45,7 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     environment: azure
     steps:
       - uses: actions/checkout@v4
@@ -64,4 +72,8 @@ jobs:
           OIDC_ISSUER: ${{ vars.OIDC_ISSUER }}
           OIDC_CLIENT_ID: ${{ vars.OIDC_CLIENT_ID }}
           OIDC_CLIENT_SECRET: ${{ secrets.OIDC_CLIENT_SECRET }}
+          PUBLIC_BASE_URL: ${{ vars.PUBLIC_BASE_URL }}
+          ADMIN_BOOTSTRAP_EMAILS: ${{ vars.ADMIN_BOOTSTRAP_EMAILS }}
+          ADMIN_BOOTSTRAP_SUBJECTS: ${{ vars.ADMIN_BOOTSTRAP_SUBJECTS }}
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
         run: bash deploy/azure/deploy.sh

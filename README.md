@@ -2,11 +2,11 @@
 
 A grounded advising system with a Python API, Postgres/pgvector retrieval, and a React frontend. The architecture contract and current implementation status live in [docs/architecture.md](docs/architecture.md).
 
-The frontend ships three entries from one codebase: **Main** for students and
-advisors, **Admin** at `/admin` (`/admin.html` under Vite) for institutional
-management and review, and **Debug** at `/debug` (`/debug.html`) for an expiring,
-scoped prompt/retrieval session. Main, Admin, and Debug share authentication but
-load separate bundles. The two session roles are student and admin.
+The frontend ships two entries from one codebase: **Main** for students and
+advisors, and **Admin** at `/admin` (`/admin.html` under Vite) for institutional
+management and review. They share authentication but load separate bundles.
+Expiring, scoped prompt/retrieval overrides are an admin API (`/api/debug/*`)
+with no bundle of their own. The two session roles are student and admin.
 
 ## Contributing
 
@@ -243,10 +243,10 @@ Key Vault, monitoring, and a migrate job. `bash deploy/azure/deploy.sh` builds
 the images in ACR, sets the Key Vault secrets, deploys the apps and runs the
 migration.
 
-This is a base, not the school's final topology: it uses public ingress, a
-PostgreSQL Azure-services firewall rule, Azure Files for `DATA_DIR`, and the
-existing OIDC adapter. The custom internal sign-in, private networking, Blob
-adapter and retention policy remain in
+This is a base, not the school's final topology. PostgreSQL, storage and Key
+Vault are private behind a VNet, and only the web app has public ingress. It
+still uses Azure Files for `DATA_DIR` and the existing OIDC adapter. The custom
+internal sign-in, Blob adapter and retention policy remain in
 [docs/plans/azure-hosting-requirements.md](docs/plans/azure-hosting-requirements.md).
 
 ## Frontend checks

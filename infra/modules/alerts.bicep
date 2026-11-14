@@ -17,15 +17,58 @@ param logAnalyticsId string
 param postgresId string
 param alertEmail string = ''
 param storageQuotaBytes int = 104857600
+@description('Active PostgreSQL connections above which the database alert fires.')
+param dbConnectionsThreshold int = 80
 
-var alertNames = {
-  api5xx: take('${namePrefix}-alert-api-5xx-${suffix}', 64)
-  queueDepth: take('${namePrefix}-alert-queue-depth-${suffix}', 64)
-  oldestJob: take('${namePrefix}-alert-oldest-job-${suffix}', 64)
-  provider429: take('${namePrefix}-alert-provider-429-${suffix}', 64)
-  dbConnections: take('${namePrefix}-alert-db-connections-${suffix}', 64)
-  storage: take('${namePrefix}-alert-storage-${suffix}', 64)
-}
+// Log-query rules over the Log Analytics workspace, one row per alert. The
+// rule names keep their first-deploy spelling: <prefix>-alert-<key>-<suffix>.
+var logAlerts = [
+  {
+    key: 'api-5xx'
+    displayName: 'API 5xx rate > 5% over 5 minutes'
+    description: 'Share of AppRequests with a 5xx result code in the last five minutes. Threshold: 5 percent.'
+    severity: 1
+    window: 'PT5M'
+    query: 'AppRequests | where TimeGenerated > ago(5m) | summarize Total=count(), Failures=countif(toint(ResultCode) >= 500) | extend Rate=100.0*Failures/max(Total,1) | project Rate'
+    threshold: 5
+  }
+  {
+    key: 'queue-depth'
+    displayName: 'Worker queue depth > 50 over 5 minutes'
+    description: 'AppMetrics advisor_jobs with status queued, averaged. Threshold: 50 queued jobs.'
+    severity: 2
+    window: 'PT5M'
+    query: 'AppMetrics | where TimeGenerated > ago(5m) | where Name == "advisor_jobs" and tostring(Properties.status) == "queued" | summarize Value=avg(Sum) | project Value'
+    threshold: 50
+  }
+  {
+    key: 'oldest-job'
+    displayName: 'Oldest queued job > 60 seconds over 5 minutes'
+    description: 'AppMetrics advisor_job_oldest_queued_seconds, averaged. Threshold: 60 seconds.'
+    severity: 1
+    window: 'PT5M'
+    query: 'AppMetrics | where TimeGenerated > ago(5m) | where Name == "advisor_job_oldest_queued_seconds" | summarize Value=avg(Sum) | project Value'
+    threshold: 60
+  }
+  {
+    key: 'provider-429'
+    displayName: 'Provider 429 rate > 10 per 5 minutes'
+    description: 'AppMetrics advisor_provider_rate_limited_total (from model_calls), summed. Threshold: 10 rate-limited calls in five minutes.'
+    severity: 1
+    window: 'PT5M'
+    query: 'AppMetrics | where TimeGenerated > ago(5m) | where Name == "advisor_provider_rate_limited_total" | summarize Value=sum(Sum) | project Value'
+    threshold: 10
+  }
+  {
+    key: 'storage'
+    displayName: 'Workspace storage > 90% of quota'
+    description: 'AppMetrics advisor_workspace_storage_bytes, the largest workspace. Threshold: 90% of WORKSPACE_STORAGE_MAX_BYTES (${storageQuotaBytes} bytes).'
+    severity: 2
+    window: 'PT15M'
+    query: 'AppMetrics | where TimeGenerated > ago(15m) | where Name == "advisor_workspace_storage_bytes" | summarize Value=max(Sum) | project Value'
+    threshold: storageQuotaBytes * 9 / 10
+  }
+]
 
 resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
   name: take('${namePrefix}-alerts-${suffix}', 64)
@@ -44,28 +87,27 @@ resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
   }
 }
 
-// Percentage of AppRequests with a 5xx result code in the last five minutes.
-resource api5xx 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
-  name: alertNames.api5xx
+resource logAlertRules 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = [for alert in logAlerts: {
+  name: take('${namePrefix}-alert-${alert.key}-${suffix}', 64)
   location: location
   tags: tags
   properties: {
-    displayName: 'API 5xx rate > 5% over 5 minutes'
-    description: 'Query: AppRequests | summarize 100.0 * countif(toint(ResultCode) >= 500) / count(). Threshold: 5 percent.'
-    severity: 1
+    displayName: alert.displayName
+    description: alert.description
+    severity: alert.severity
     enabled: true
-    evaluationFrequency: 'PT5M'
-    windowSize: 'PT5M'
+    evaluationFrequency: alert.window
+    windowSize: alert.window
     scopes: [
       logAnalyticsId
     ]
     criteria: {
       allOf: [
         {
-          query: 'AppRequests | where TimeGenerated > ago(5m) | summarize Total=count(), Failures=countif(toint(ResultCode) >= 500) | extend Rate=100.0*Failures/max(Total,1) | project Rate'
+          query: alert.query
           timeAggregation: 'Average'
           operator: 'GreaterThan'
-          threshold: 5
+          threshold: alert.threshold
           failingPeriods: {
             numberOfEvaluationPeriods: 1
             minFailingPeriodsToAlert: 1
@@ -79,127 +121,16 @@ resource api5xx 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
       ]
     }
   }
-}
+}]
 
-// Queued jobs across the worker queue; the metric is advisor_jobs{status="queued"}.
-resource queueDepth 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
-  name: alertNames.queueDepth
-  location: location
-  tags: tags
-  properties: {
-    displayName: 'Worker queue depth > 50 over 5 minutes'
-    description: 'Query: AppMetrics | where Name == "advisor_jobs" and Properties.status == "queued" | summarize avg(Sum). Threshold: 50 queued jobs.'
-    severity: 2
-    enabled: true
-    evaluationFrequency: 'PT5M'
-    windowSize: 'PT5M'
-    scopes: [
-      logAnalyticsId
-    ]
-    criteria: {
-      allOf: [
-        {
-          query: 'AppMetrics | where TimeGenerated > ago(5m) | where Name == "advisor_jobs" and tostring(Properties.status) == "queued" | summarize Value=avg(Sum) | project Value'
-          timeAggregation: 'Average'
-          operator: 'GreaterThan'
-          threshold: 50
-          failingPeriods: {
-            numberOfEvaluationPeriods: 1
-            minFailingPeriodsToAlert: 1
-          }
-        }
-      ]
-    }
-    actions: {
-      actionGroups: [
-        actionGroup.id
-      ]
-    }
-  }
-}
-
-// Oldest queued job age; the metric is advisor_job_oldest_queued_seconds.
-resource oldestJob 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
-  name: alertNames.oldestJob
-  location: location
-  tags: tags
-  properties: {
-    displayName: 'Oldest queued job > 60 seconds over 5 minutes'
-    description: 'Query: AppMetrics | where Name == "advisor_job_oldest_queued_seconds" | summarize avg(Sum). Threshold: 60 seconds.'
-    severity: 1
-    enabled: true
-    evaluationFrequency: 'PT5M'
-    windowSize: 'PT5M'
-    scopes: [
-      logAnalyticsId
-    ]
-    criteria: {
-      allOf: [
-        {
-          query: 'AppMetrics | where TimeGenerated > ago(5m) | where Name == "advisor_job_oldest_queued_seconds" | summarize Value=avg(Sum) | project Value'
-          timeAggregation: 'Average'
-          operator: 'GreaterThan'
-          threshold: 60
-          failingPeriods: {
-            numberOfEvaluationPeriods: 1
-            minFailingPeriodsToAlert: 1
-          }
-        }
-      ]
-    }
-    actions: {
-      actionGroups: [
-        actionGroup.id
-      ]
-    }
-  }
-}
-
-// Provider 429s recorded by model_calls and exported as a counter metric.
-resource provider429 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
-  name: alertNames.provider429
-  location: location
-  tags: tags
-  properties: {
-    displayName: 'Provider 429 rate > 10 per 5 minutes'
-    description: 'Query: AppMetrics | where Name == "advisor_provider_rate_limited_total" | summarize sum(Sum). Threshold: 10 rate-limited calls in five minutes.'
-    severity: 1
-    enabled: true
-    evaluationFrequency: 'PT5M'
-    windowSize: 'PT5M'
-    scopes: [
-      logAnalyticsId
-    ]
-    criteria: {
-      allOf: [
-        {
-          query: 'AppMetrics | where TimeGenerated > ago(5m) | where Name == "advisor_provider_rate_limited_total" | summarize Value=sum(Sum) | project Value'
-          timeAggregation: 'Average'
-          operator: 'GreaterThan'
-          threshold: 10
-          failingPeriods: {
-            numberOfEvaluationPeriods: 1
-            minFailingPeriodsToAlert: 1
-          }
-        }
-      ]
-    }
-    actions: {
-      actionGroups: [
-        actionGroup.id
-      ]
-    }
-  }
-}
-
-// Flexible Server active connections against a conservative 80-connection
-// ceiling. The server's real max_connections is checked by the app preflight.
+// Flexible Server active connections above what the deployment expects at
+// peak; main.bicep derives the threshold from the pool and replica settings.
 resource dbConnections 'Microsoft.Insights/metricAlerts@2018-03-01' = {
-  name: alertNames.dbConnections
+  name: take('${namePrefix}-alert-db-connections-${suffix}', 64)
   location: 'global'
   tags: tags
   properties: {
-    description: 'PostgreSQL active connections > 80. Metric: Microsoft.DBforPostgreSQL/flexibleServers active_connections, average over 5 minutes. Threshold: 80 connections.'
+    description: 'PostgreSQL active connections > ${dbConnectionsThreshold}. Metric: Microsoft.DBforPostgreSQL/flexibleServers active_connections, average over 5 minutes.'
     severity: 2
     enabled: true
     scopes: [
@@ -216,7 +147,7 @@ resource dbConnections 'Microsoft.Insights/metricAlerts@2018-03-01' = {
           metricNamespace: 'Microsoft.DBforPostgreSQL/flexibleServers'
           metricName: 'active_connections'
           operator: 'GreaterThan'
-          threshold: 80
+          threshold: dbConnectionsThreshold
           timeAggregation: 'Average'
         }
       ]
@@ -226,42 +157,5 @@ resource dbConnections 'Microsoft.Insights/metricAlerts@2018-03-01' = {
         actionGroupId: actionGroup.id
       }
     ]
-  }
-}
-
-// A workspace at 90% of WORKSPACE_STORAGE_MAX_BYTES (default 100 MiB).
-resource storage 'Microsoft.Insights/scheduledQueryRules@2023-03-15-preview' = {
-  name: alertNames.storage
-  location: location
-  tags: tags
-  properties: {
-    displayName: 'Workspace storage > 90% of quota'
-    description: 'Query: AppMetrics | where Name == "advisor_workspace_storage_bytes" | summarize max(Sum). Threshold: 90% of the 100 MiB workspace quota.'
-    severity: 2
-    enabled: true
-    evaluationFrequency: 'PT15M'
-    windowSize: 'PT15M'
-    scopes: [
-      logAnalyticsId
-    ]
-    criteria: {
-      allOf: [
-        {
-          query: 'AppMetrics | where TimeGenerated > ago(15m) | where Name == "advisor_workspace_storage_bytes" | summarize Value=max(Sum) | project Value'
-          timeAggregation: 'Average'
-          operator: 'GreaterThan'
-          threshold: storageQuotaBytes * 9 / 10
-          failingPeriods: {
-            numberOfEvaluationPeriods: 1
-            minFailingPeriodsToAlert: 1
-          }
-        }
-      ]
-    }
-    actions: {
-      actionGroups: [
-        actionGroup.id
-      ]
-    }
   }
 }

@@ -79,8 +79,8 @@ plans and `docs/audit/` the review status.
   also work with password authentication and no `PGPASSWORD`.
 - `frontend/src/` — `api/` (`types.ts` mirrors the contract, `client.ts` is the
   single factory; `VITE_API_MODE` selects `mock` (default) or `http`), `admin/`
-  and `debug/` (separate Vite entry bundles sharing `SessionGate`, `Shell` and
-  the API client), `components/` (one chat with artifacts made from it;
+  (a separate Vite entry bundle sharing `SessionGate`, `Shell` and the API
+  client), `components/` (one chat with artifacts made from it;
   `shell/` holds the Swoop = light Emory blue/gold, Dooley = dark black/white
   theme switch), `lib/` (shared hooks such as `useAsyncAction`, `useLoad`).
   `frontend/tests/fixtures/` holds the offline real-API browser test server.
@@ -183,6 +183,16 @@ npm run format:check    # Prettier over src/**/*.{ts,tsx}; `npm run format` fixe
   separate `tool_execution` role. Run API handlers release bootstrap and pooled
   request borrows before store-owned transactions — conversation abandon returns
   its request borrow before `JobStore.cancel`; never nest same-pool borrows.
+- Deployment defaults live only in `infra/main.bicep`'s parameters.
+  `deploy/azure/write-params.py` maps environment variables to parameters and
+  sends only the ones that are set; never repeat a default in `deploy.sh`.
+- Production request traffic goes through a transaction-mode PgBouncer
+  (`DATABASE_URL`), and `DATABASE_DIRECT_URL` reaches the same database
+  directly. Anything that needs a session (LISTEN, session-level `SET`,
+  session advisory locks, `WITH HOLD` cursors, temp tables kept across
+  transactions) must use `direct_database_url(settings)`, or `open_connection`
+  for scripts. Keep `set_config(..., true)` and `pg_advisory_xact_lock`
+  transaction-scoped.
 - Authoritative sources use `origin_key` plus `is_current`; replacements stage
   before atomic publication. Keep historical sources/chunks for evidence, and
   filter current retrieval on indexed/current sources. Atlas replacement never
