@@ -1881,8 +1881,7 @@ self-assigned "complete" label is insufficient. Check status is rendered from th
 execution ledger, never from prose: `not_requested`, `not_executed`,
 `executed_supported`, or `executed_but_unavailable`. The last state must not be
 reported as "no check ran". Deterministic academic checks stay in application
-code. [plans/advising-quality-and-data-management.md](plans/advising-quality-and-data-management.md)
-is the implementation handoff for these semantics.
+code.
 
 ## HTTP API
 

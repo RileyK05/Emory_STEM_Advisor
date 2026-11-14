@@ -5,20 +5,15 @@ data scans, the items still open, and behavior a refactor must not "fix" away.
 The original reports were removed once every confirmed finding closed; they are in
 git history. [db-data-review.md](db-data-review.md) is the live data review and
 stays until its R1–R11 acceptance pass is re-run.
-[security-attack-notes.md](security-attack-notes.md) records the adversarial
-input pass and its open denial-of-service limits.
-[REPORT-llm-error-suite.md](REPORT-llm-error-suite.md) records the 58-probe
-live LLM error suite and Course Atlas concordance across all STEM majors,
-minors, divisions, electives, and policies (2026-10-28).
-[TEST-SUITE-SPECIFICATION.md](TEST-SUITE-SPECIFICATION.md) defines the full 65-probe
-test suite specification, exact query prompts, Course Atlas invariants, and pass/fail criteria.
-[REPORT-round5.md](REPORT-round5.md) records the fifth round: one shared
-course-identity reader for both answering paths, the research path's identity
-check split into identity and claim support, the policy read widened to every
-matched section, the gold set cross-checked against the Atlas capture, and one
-chunking measure on every ingest path.
-[REPORT-round6.md](REPORT-round6.md) records the sixth round: the Atlanta/Oxford
-campus equivalence, stated by the database and derived from the Atlas itself.
+[TEST-SUITE-SPECIFICATION.md](TEST-SUITE-SPECIFICATION.md) defines the 65-probe
+live suite (`scripts.manual.audit_llm_system`): exact prompts, Course Atlas
+invariants and pass/fail criteria.
+
+The round reports (rounds 4 to 6, the 2026-10-28 LLM error suite and the
+2026-10-23 security pass) and their remediation plans were removed on
+2026-11-14 once their findings closed; they are in git history. The
+dispositions below are their record. Items still open are carried in
+[production-launch.md](../plans/production-launch.md#open-items-carried-from-retired-plans).
 
 ## Round 6 (2026-10-31)
 
@@ -140,8 +135,8 @@ items in the remediation plan.
 
 ## Round 3 implementation review (2026-10-22)
 
-[REPORT-round3.md](REPORT-round3.md) is retained as the external QA observation,
-not rewritten as a claim about the repaired tree. Its raw `r3/` captures are not
+The round 3 report (external QA, now in git history) was the observation, not
+a claim about the repaired tree. Its raw `r3/` captures are not
 in this repository. The offline checks below establish code behavior; the live
 advising pass rates and reported model-specific incidents have not been rerun.
 

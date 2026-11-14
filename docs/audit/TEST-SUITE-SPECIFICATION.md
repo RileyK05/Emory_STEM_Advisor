@@ -657,4 +657,3 @@ The tests in this specification are automated via `backend/scripts/manual/audit_
 
 ### Output Files and Archival
 - Raw JSON responses: `data/manual-checks/llm_audit_responses_<model>.json`
-- Synthesized error comparison report: `docs/audit/REPORT-llm-error-suite.md`

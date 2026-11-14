@@ -3,10 +3,11 @@
 Written 2026-11-07 after commit `e250fa6` on `goal/production-readiness`.
 
 This is the single work list for getting the Emory STEM Advisor to production. Another
-model implements it, and Claude reviews and fixes afterward. It replaces Phases 2 to 6 of
-[production-readiness.md](production-readiness.md) as the source of truth. Item IDs P2.x
-to P6.x keep their old numbers so the ledger rows still apply. New items are numbered
-P5.7, P7.x (hosting) and P8.x (answer quality).
+model implements it, and Claude reviews and fixes afterward. It replaced Phases 2 to 6 of
+the earlier production-readiness plan (in git history; its Phases 0 and 1 are done). Item
+IDs P2.x to P6.x keep their old numbers so the ledger rows still apply. New items are
+numbered P5.7, P7.x (hosting) and P8.x (answer quality).
+[production-readiness-progress.md](production-readiness-progress.md) is the ledger.
 
 Each item is one of four kinds:
 
@@ -19,45 +20,72 @@ Each item is one of four kinds:
 
 ---
 
-## Where things stand
+## Where things stand (2026-11-14)
 
-**Done:**
+**Done** (ledger rows and commits in
+[production-readiness-progress.md](production-readiness-progress.md)):
 
-- Phase 0, the review findings: R1 to R6 and R10.
-- Phase 1, the cuts: everything except P1.9. P1.9 waits on the user's call about the
-  debug backend.
-- The data layer:
-  - Courses come from the Atlas, and the prerequisite graph has no cycles.
-  - There are 155 programs, 154 of them bound to their exact source.
-  - Live sweeps pass about 98% of checks on random courses and programs.
-- Every size target is met:
-  - `backend/app` is 40,860 lines (target 42,000).
-  - There are 93 backend test files (target 95).
-  - Admin is 3,132 lines and `types.ts` is 1,155 lines.
-  - There are 2 roles.
-- Gates on `e250fa6`:
-  - Backend: 1,658 passed, 2 skipped. Both skips are the expected Windows-only ones.
-  - ruff, typecheck and format:check are clean.
-  - Integration: 5 of 5 passed.
-- The team snapshot `data/team/advisor-20261107.zip` is at schema 086 and has been
-  verified by a full restore.
+- Phases 0, 1 (except P1.9), 2 (except P2.6), 5 (except P5.5), 6, 7 and 8.
+- Research is the only answering path; the legacy path is deleted.
+- Artifacts are built by reprompting: a chain of small checked calls, code-built
+  templates for common plans, checklists and sheets.
+- Advice answers group options by interest and give picks, in the Swoop or Dooley
+  voice of the theme ([advisor-voice-and-advice.md](advisor-voice-and-advice.md)).
+- Scaling is built, not yet deployed: PgBouncer-ready connections, KEDA worker
+  autoscaling, a 570 s scale-in drain and a partial vector index
+  ([cost-and-scaling.md](cost-and-scaling.md)).
+- The live model is `deepseek-v4.1-flash` (from 2026-11-13).
 
 **Not done:**
 
-- Phases 2 to 6 have not started.
-- There is no Azure deployment.
-- There are no published requirement rules.
-- No load test has been run.
-- The research path is still off by default in `config.py`
-  (`advising_research_enabled` and `tools_enabled` are both `False`).
+- There is no Azure deployment, so the deployed Tier 1 load test (P5.5,
+  [scale-6000.md](scale-6000.md)) has not run.
+- The sandbox host (P4.3 to P4.7) does not exist.
+- There are no published requirement rules (U2).
+- The live benchmarks (P2.1 sweep, P3.2 artifacts) have not been rerun on DeepSeek (U5).
+- The user items U1 to U9 in the ledger.
 
-**Lessons from the last push:**
+### Open items carried from retired plans
 
-1. **The provider rate limit is real.** About 4,700 calls in 3 hours got every call
-   refused with a hard 429 for about 90 minutes. That is why P5.3 has moved to the front.
-2. **Pytest does not catch answer bugs.** Reading live traces does. The bug where "open"
-   was read as "unlock" was found only by reading a trace. Phase 2 and Phase 8 work must
-   include live runs.
+These came from plans that are otherwise done and were removed on 2026-11-14 (they are
+in git history). Each is small enough to state here.
+
+- **Code:** split `research_tools.py` and `routes/admin.py`, which grew by accretion
+  (cleanup C6). A debug session's system-prompt override is stored but not applied
+  since the legacy path went (C7, waits on U1).
+- **Artifacts** (round 6): a deadline before any validated draft has no partial
+  answer to publish; words like "Intro Psych" are not read as completed courses,
+  only codes are; a second program's and premed courses depend on the outline
+  model choosing them. The seed-11 suite and the frozen benchmark have not been
+  rerun on that code.
+- **Artifact tooling ideas** (weak-model tooling): split a section that keeps
+  truncating into smaller calls; prefill checklist sections from program items;
+  render document and workbook previews for the vision reviewer; record per-stage
+  call outcomes in artifact provenance.
+- **Decisions for Riley** (round 5):
+  1. A deleted user can never return (EMO-052): the workspace key is the
+     identity and the deletion tombstone is permanent. Letting them return needs
+     a workspace generation number. A privacy call.
+  2. The quota seed (EMO-061): choose a per-student daily budget, and whether
+     the reset time shows in local time.
+  3. Curator holds are never surfaced (EMO-038): decide whether a hold withholds
+     the answer or adds a caveat.
+  4. K1 `queue_empty` counts the whole workspace's open jobs, so one orphaned job
+     fails every case (EMO-074); scoping it to the case is a K-check change.
+  5. The drop-petition deadline conflict for `source_conflicts.toml`.
+  6. Program data to check by hand, then fix in the parser or manually, never by a
+     model (EMO-062/EMO-013): Dance and Movement Studies minor 19 h / 12 courses;
+     French Studies minor 29-31 h for 5 courses; History minor
+     `courses_required: null`; Chinese Studies minor 18-36 h; the Classics page
+     carrying Chemistry blocks; "Mathematics 107" in the Anthropology and Human
+     Biology BS.
+  7. Overhedging (EMO-034): runs that stop before reading the program table, or
+     answer short follow-ups from too little. A research-loop design question.
+  8. The meeting-time filter in the artifact `checks.py` (from an earlier round,
+     never approved): keep or revert.
+- **Security** (2026-10-23 pass): a source can still bias prose within the allowed
+  evidence (treat retrieved text as untrusted); PDF extraction runs in-process
+  (parser isolation is EMO-044); no formal penetration test has been done.
 
 ---
 
@@ -255,8 +283,8 @@ the in-flight job completes.
 
 **Do:**
 
-- Add a per-workspace byte quota on artifact revisions and uploads. This is open risk 3
-  in `docs/audit/security-attack-notes.md`.
+- Add a per-workspace byte quota on artifact revisions and uploads. This was open risk 3
+  of the 2026-10-23 security pass.
 - Read the limit from one setting in `config.py`, with a sensible default and the
   number explained in a comment.
 - Over quota, an upload or artifact save is refused with a plain sentence.
@@ -701,8 +729,17 @@ Read `infra/README.md` and `docs/plans/azure-hosting-requirements.md` first.
   - Every DOCX and XLSX from P3.2's final run recalculates, with zero error cells.
   - Every HTML artifact screenshots and gets a verdict.
   - p95 is under 10 s per conversion and under 15 s per screenshot.
-- **P4.5 Containment.** Run the ten probes (a) to (j) from production-readiness.md
-  through P4.2's script. Every one must be contained every time.
+- **P4.5 Containment.** Run these ten probes through P4.2's script. Every one must be
+  contained every time. They ride on Office and screenshot inputs (a hostile document
+  or HTML page), since the program endpoint is gone.
+  - (a) outbound network fails; (b) the root filesystem is read-only; (c) writes
+    outside the job directory fail;
+  - (d) a fork bomb stops at the PID limit; (e) a memory bomb is killed with a clear
+    error; (f) a CPU spin is killed within the timeout plus 2 s;
+  - (g) output over the cap is rejected; (h) input over the cap gets a 413; (i) a
+    wrong token gets a 401;
+  - (j) a job cannot read a concurrent job's files (each writes a random value, the
+    other tries to read it).
 - **P4.6 Soak and recovery.**
   - Run 200 sequential jobs, then 100 jobs eight at a time.
   - Afterwards, no container or job directory is left over.

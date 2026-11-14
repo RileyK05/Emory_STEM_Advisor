@@ -18,7 +18,7 @@ Step-by-step instructions: [CONTRIBUTING.md](CONTRIBUTING.md).
 | Location | Purpose |
 | --- | --- |
 | `backend/app/` | Backend services grouped by domain; HTTP handlers in `api/routes/` |
-| `backend/configs/` | Versioned settings and the [course discovery directory](backend/configs/catalog-directory.md) |
+| `backend/configs/` | Versioned settings and hand-written data (programs, departments, nudges, source conflicts) |
 | `backend/scripts/` | Routine commands; `smoke/` for live checks, `manual/` for one-off probes |
 | `backend/tests/` | Offline tests, including real Postgres checks |
 | `frontend/src/components/` | Feature folders containing their panels, components, and helpers |
