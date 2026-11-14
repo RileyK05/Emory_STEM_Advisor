@@ -110,6 +110,43 @@
   - Rows written before 090 have no hash, so each source's next import embeds
     as before and records them. Backfilling them in SQL took 84 s under a table
     lock, too long for a startup migration.
+- **The vector index holds only searchable vectors** (migration 091). Only
+  11.8k of 52.9k vectors (22%) can be returned. The rest belong to superseded
+  versions, hidden term cards or failed sources. They used up the 200
+  nearest-neighbour slots before the filters ran, and only 57 survived on
+  average.
+  - Measured on the dev database with 268 real and labeled queries, the search
+    now finds 99.0% of the true top 40, up from 86.7%. p50 fell from 10.4 to
+    5.5 ms and p95 from 30.1 to 8.8 ms. The index is 46 MB instead of 167 MB.
+  - Triggers keep a `searchable` flag in step with the source status,
+    `is_current` and `search_hidden`, so reactivating an old version works.
+    Superseding a 6,349-vector source flips its rows in about 1 s.
+  - The migration takes about 10 s on the dev data.
+
+### Scaling (2026-11-13)
+
+- **Workers autoscale on the job queue.**
+  - KEDA's `postgresql` rule counts running jobs plus due queued jobs, one
+    replica per `WORKER_CONCURRENCY` of them. The defaults are 2-14 replicas
+    of 24 slots, about 300 answers in progress.
+  - This replaces the fixed single worker with 4 slots.
+  - Scale-in drains for `WORKER_DRAIN_SECONDS` (570) under a 600 s grace
+    period, longer than the 540 s advice limit, so no answer restarts.
+    Before this, Container Apps' 30 s default killed workers in the middle of
+    their 60 s drain.
+- **The built-in PgBouncer carries request traffic.**
+  - `DATABASE_DIRECT_URL` keeps LISTEN, migrations, backups, probes and the
+    scaler on direct sessions.
+  - Pooled connections send no prepared statements or startup options. The
+    two timeouts become server parameters, and direct sessions clear them.
+  - Behind the pooler the startup connection-budget check is skipped, so
+    autoscaled replicas no longer need a fixed `DB_EXPECTED_REPLICAS`.
+- **The global admission cap** went from 200 to 600 outstanding turns, so a
+  peak queues instead of being refused below worker capacity.
+- **Not verified on Azure yet:** whether the scaler reaches the private
+  database endpoint, the PgBouncer parameter names and values, and
+  `terminationGracePeriodSeconds` on API version 2024-03-01. The deployed Tier 1
+  load test in `scale-6000.md` is the acceptance check.
 
 ## Follow-ups, not done (each needs a decision or a live check)
 
@@ -131,24 +168,38 @@
    `scope_digest` (schema change).
 7. **Ingest uploads and reindexes in workers.** Then the API process never loads
    the embedder and can run at about 1 CPU / 1-2 GiB, with more small replicas.
-8. **Worker autoscaling.** Workers are a fixed count in `infra/modules/apps.bicep`.
-   Add a queue-depth scaler (KEDA postgres) with min=1.
-9. **Connection budget.** Pools of 20 per role times 10 API replicas is 400
-   connections. Lower `DB_POOL_MAX_SIZE` to 5-8 or put PgBouncer in front.
+8. **(Done: worker autoscaling, listed under Scaling.)**
+9. **(Done: built-in PgBouncer, listed under Scaling.)**
 10. **Finish the blob storage adapter**, so replicas need no shared Azure Files mount.
 11. **Size Postgres `shared_buffers` for the 389 MB embedding index** and
     pg_prewarm it. A cold vector search takes 367 ms against 2-4 ms warm.
 12. **Cache auth `resolve()` per session for 5-10 s.** Each poll costs an auth
     query; the tradeoff is a few seconds of revocation lag.
-13. **Keep superseded versions out of the vector index.** 27.9k of the 52.9k
-    vectors (53%) belong to non-current sources. They take up half of the
-    167 MB HNSW index, and the nearest-neighbour step spends candidates on them
-    before the current-source filter drops them. They can't simply be deleted,
-    because admin source review and `scripts.reconcile_source_origins` can make
-    an old version current again. Instead, add a `searchable` flag kept in step
-    with `is_current`, and use a partial HNSW index on it. This needs an index
-    rebuild.
+13. **(Done: migration 091, listed under Embeddings.)**
 14. **A smaller embedding model.** `granite-embedding-30m-english` (384 dims) is
     about 4× less compute per chunk and half the storage. It needs a retrieval
-    eval and a full re-embed. halfvec would also halve storage, but it needs
-    pgvector 0.7, and the bundled pgserver ships 0.6.2.
+    eval and a full re-embed.
+15. **An fp16 (halfvec) vector index.** It needs pgvector 0.7 or later.
+    - In an offline test on the dev vectors, fp16 kept 99.7% of the exact top
+      10 and 99.8% of the top 40, with cosine error at most 0.0002. int8 kept
+      99.3%, but pgvector has no int8 type. int4 and binary need an fp32
+      re-rank of about 400 candidates and still keep only 92-94% of the top 40.
+    - Measured on the throwaway copy, an fp16 HNSW index over all rows is
+      85.8 MB instead of 173.7 MB, finds the same results (87.5% vs 87.1%) and
+      is slightly faster (p50 2.5 ms vs 2.6 ms). Over searchable rows only (now
+      the index's shape) it is 24 MB instead of 48 MB, with the same 99.2%
+      found and a p50 of 1.3 ms instead of 1.8 ms.
+    - pgvector 0.8.7 builds against pgserver's MinGW Postgres 16 with MSYS2's
+      gcc and the PGXS makefile (`make PG_CONFIG=...`). `ALTER EXTENSION vector
+      UPDATE` takes an existing 0.6.2 database with an HNSW index to 0.8.7 in
+      place. The test build used `-march=native`; a build to share with the
+      team needs a generic `-march`.
+    - Blocker: `pgserver` 0.1.4 (June 2024) is the last upstream release and
+      bundles pgvector 0.6.2. `pgembed` 0.2.0 is a maintained fork, but it runs
+      Postgres 17, so the dev database would need a dump and restore and would
+      no longer match production's 16.
+    - The compose image `pgvector/pgvector:pg16` and Azure Flexible Server
+      already offer 0.7 or later; check the deployed server with
+      `SELECT version FROM pg_available_extension_versions WHERE name = 'vector'`.
+    - Until every database the app runs on has 0.7, the migration and the
+      search query need an fp32 fallback.

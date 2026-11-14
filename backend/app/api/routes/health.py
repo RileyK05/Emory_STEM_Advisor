@@ -4,6 +4,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from app.api.schemas import HealthStatus
+from app.db.connection import direct_database_url
 
 router = APIRouter()
 
@@ -21,7 +22,8 @@ def readiness(request: Request) -> JSONResponse:
         provider is not None and settings.llm_provider != "hf-local"
     )
     result = request.app.state.readiness_probe.check(
-        dsn=settings.database_url,
+        # The probe sets read-only and timeout startup options a pooler refuses.
+        dsn=direct_database_url(settings),
         auth_service=request.app.state.auth_service,
         auth_mode=settings.auth_mode,
         advising_model_configured=tools_capable,

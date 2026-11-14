@@ -29,7 +29,9 @@ WITH ann AS (
     SELECT e.chunk_id,
            ((e.embedding)::public.vector(768)) <=> ((%(q)s)::public.vector(768)) AS dist
     FROM chunk_embeddings e
-    WHERE e.dim = 768 AND e.model = %(model)s
+    -- `searchable` matches the partial HNSW index (migration 091), so the
+    -- nearest rows it returns are ones the filters below can keep.
+    WHERE e.dim = 768 AND e.model = %(model)s AND e.searchable
     ORDER BY ((e.embedding)::public.vector(768)) <=> ((%(q)s)::public.vector(768))
     LIMIT %(ann_limit)s
 )

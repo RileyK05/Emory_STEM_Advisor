@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from app.config import Settings
 from app.db import queries
+from app.db.connection import behind_pooler
 
 # Superuser, migration and maintenance connections that must remain possible
 # while every application pool is full.
@@ -30,7 +31,14 @@ def connection_budget(settings: Settings, *, roles: int) -> int:
 
 
 def check_connection_budget(conn, settings: Settings, *, roles: int) -> None:
-    """Raise before startup when this deployment cannot fit its own pools."""
+    """Raise before startup when this deployment cannot fit its own pools.
+
+    Behind a transaction pooler the application's pools are pooler clients, and
+    the pooler's own pool size caps the server connections, so there is nothing
+    to check here. That is also what lets replicas autoscale.
+    """
+    if behind_pooler(settings, settings.database_url):
+        return
     required = connection_budget(settings, roles=roles)
     if required == 0:
         return

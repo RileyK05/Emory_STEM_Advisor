@@ -5,6 +5,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from fastapi import HTTPException
+from psycopg.conninfo import make_conninfo
 from psycopg_pool import PoolTimeout
 
 from app.config import load_settings
@@ -139,16 +140,18 @@ def test_connector_pools_by_default_and_falls_back_to_plain_connections_when_dis
 
 
 @pytest.mark.parametrize(
-    "max_connections,pool_size,replicas,roles,allowed",
+    "max_connections,pool_size,replicas,roles,direct_url,allowed",
     [
-        (70, 20, 1, 3, True),
-        (60, 20, 1, 3, False),
-        (100, 0, 5, 3, True),
+        (70, 20, 1, 3, None, True),
+        (60, 20, 1, 3, None, False),
+        (100, 0, 5, 3, None, True),
+        # Behind a pooler the pools are pooler clients; the pooler caps the server.
+        (60, 20, 12, 3, "postgresql://db:5432/advisor", True),
     ],
-    ids=["exact-fit", "over-budget", "pooling-disabled"],
+    ids=["exact-fit", "over-budget", "pooling-disabled", "behind-pooler"],
 )
 def test_connection_budget_preflight_uses_the_server_max_connections(
-    max_connections, pool_size, replicas, roles, allowed,
+    max_connections, pool_size, replicas, roles, direct_url, allowed,
 ):
     class FakeConnection:
         def execute(self, _statement):
@@ -158,7 +161,8 @@ def test_connection_budget_preflight_uses_the_server_max_connections(
             return {"max_connections": max_connections}
 
     settings = replace(
-        load_settings(), db_pool_max_size=pool_size, db_expected_replicas=replicas
+        load_settings(), db_pool_max_size=pool_size, db_expected_replicas=replicas,
+        database_url="postgresql://db:6432/advisor", database_direct_url=direct_url,
     )
     if allowed:
         check_connection_budget(FakeConnection(), settings, roles=roles)
@@ -190,6 +194,27 @@ def test_pooled_connections_apply_the_configured_statement_timeout(dsn):
         assert conn.execute("SELECT 1 AS one").fetchone()["one"] == 1
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize("pooled", [False, True], ids=["direct", "behind-pooler"])
+def test_connections_behind_a_transaction_pooler_leave_no_session_state(dsn, pooled):
+    # A transaction pooler gives each transaction any server connection: a
+    # statement prepared earlier may be missing, and it refuses startup options.
+    settings = replace(
+        load_settings(), database_url=dsn, db_pool_max_size=1, db_pool_timeout_seconds=2.0,
+        db_statement_timeout_ms=1234, db_idle_transaction_timeout_ms=0,
+        database_direct_url=make_conninfo(dsn, application_name="direct") if pooled else None,
+    )
+    conn = connector(settings)()
+    try:
+        for _ in range(8):  # psycopg prepares a statement on the server after five runs
+            conn.execute("SELECT 1 AS one").fetchone()
+        prepared = conn.execute("SELECT count(*) AS n FROM pg_prepared_statements").fetchone()["n"]
+        timeout = conn.execute("SHOW statement_timeout").fetchone()["statement_timeout"]
+    finally:
+        conn.close()
+    assert (prepared > 0) is not pooled
+    assert (timeout == "1234ms") is not pooled
 
 
 def test_returning_a_connection_after_a_read_only_query_does_not_log_a_pool_warning(dsn, caplog):

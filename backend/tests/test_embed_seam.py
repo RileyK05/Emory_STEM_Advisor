@@ -156,6 +156,59 @@ def test_failed_source_excluded(db, collection, tmp_path):
     assert result.state == "dormant"
 
 
+def _axis(weight: float) -> np.ndarray:
+    vector = np.zeros(768, dtype=np.float32)
+    vector[0], vector[1] = weight, np.sqrt(1.0 - weight * weight)
+    return vector
+
+
+_SUPERSEDE = "UPDATE sources SET is_current = false WHERE source_id = %(s)s"
+
+
+@pytest.mark.parametrize("changes, crowd_visible", [
+    ([_SUPERSEDE], False),
+    (["UPDATE chunks SET search_hidden = true WHERE source_id = %(s)s"], False),
+    (["UPDATE sources SET status = 'failed' WHERE source_id = %(s)s"], False),
+    ([_SUPERSEDE, "UPDATE sources SET is_current = true WHERE source_id = %(s)s"], True),
+], ids=["superseded", "hidden", "failed", "made-current-again"])
+def test_unsearchable_vectors_never_crowd_out_searchable_ones(
+    db, collection, tmp_path, changes, crowd_visible,
+):
+    # The 768-dim search takes its nearest rows before the source filters run.
+    # Forty-one crowd chunks sit exactly on the query, more than the 40 rows a
+    # limit-1 search takes, so if they count, the wanted chunk is never seen.
+    query = _axis(1.0)
+    wanted = ingest_text(db, collection, tmp_path, "wanted.txt", "wanted passage",
+                         embedder=FakeEmbedder(dim=768))
+    crowd = ingest_text(db, collection, tmp_path, "crowd.txt", "crowd passage",
+                        embedder=FakeEmbedder(dim=768))
+    wanted_chunk = db.execute(queries.get("list_chunks_for_source"),
+                              {"source_id": wanted}).fetchone()
+    db.execute("UPDATE chunk_embeddings SET embedding = %(v)s WHERE chunk_id = %(c)s",
+               {"v": _axis(0.6), "c": wanted_chunk["chunk_id"]})
+    first = db.execute(queries.get("list_chunks_for_source"), {"source_id": crowd}).fetchone()
+    db.execute("UPDATE chunk_embeddings SET embedding = %(v)s WHERE chunk_id = %(c)s",
+               {"v": query, "c": first["chunk_id"]})
+    for index in range(1, 41):
+        chunk_id = uuid4()
+        db.execute(queries.get("insert_chunk"), {
+            "chunk_id": chunk_id, "source_id": crowd, "locator_id": first["locator_id"],
+            "chunk_index": index, "start_char": 0, "end_char": 5, "token_count": 2,
+            "text": f"crowd passage {index}",
+        })
+        db.execute(queries.get("upsert_chunk_embedding"), {
+            "chunk_id": chunk_id, "model": _MODEL, "dim": 768, "embedding": query,
+            "text_sha256": None,
+        })
+    for change in changes:
+        db.execute(change, {"s": crowd})
+    db.commit()
+
+    result = embed_seam(db, collection, "q", _MODEL, _config(limit=1), query_vec=query)
+    assert result.state == "active"
+    assert result.candidates[0].source_id == (crowd if crowd_visible else wanted)
+
+
 def test_disabled_is_disabled(db, collection, tmp_path):
     ingest_text(db, collection, tmp_path, "a.txt", "alpha beta gamma\n")
     result = embed_seam(

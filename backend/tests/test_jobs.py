@@ -389,9 +389,14 @@ def test_run_once_invokes_cancellation_hook_when_a_late_success_is_fenced(migrat
     assert calls == [finished.job_id]
 
 
-@pytest.mark.parametrize("completes_within_lease", [True, False])
+@pytest.mark.parametrize("completes_within_lease, drain_seconds", [
+    (True, None),
+    (False, None),
+    # A drain longer than the lease keeps waiting past it, then requeues.
+    (False, 120),
+], ids=["finishes", "drain-runs-out", "drain-outlasts-lease"])
 def test_worker_stop_claims_no_new_jobs_drains_in_flight_work_and_updates_readiness(
-    migrated_dsn, db, completes_within_lease,
+    migrated_dsn, db, completes_within_lease, drain_seconds,
 ):
     import http.client
     import json
@@ -403,12 +408,13 @@ def test_worker_stop_claims_no_new_jobs_drains_in_flight_work_and_updates_readin
 
     clock = FakeClock()
     store = make_store(migrated_dsn, clock)
+    row = f"{completes_within_lease}-{drain_seconds}"
     first = store.create(
-        kind="turn", scope_key="user:drain", idempotency_key=f"drain-1-{completes_within_lease}",
+        kind="turn", scope_key="user:drain", idempotency_key=f"drain-1-{row}",
         payload={"seq": 1}, max_attempts=2,
     )
     second = store.create(
-        kind="turn", scope_key="user:drain", idempotency_key=f"drain-2-{completes_within_lease}",
+        kind="turn", scope_key="user:drain", idempotency_key=f"drain-2-{row}",
         payload={"seq": 2}, max_attempts=2,
     )
     in_flight = threading.Event()
@@ -429,6 +435,7 @@ def test_worker_stop_claims_no_new_jobs_drains_in_flight_work_and_updates_readin
         idle_seconds=5.0,
         concurrency=1,
         clock=clock,
+        drain_seconds=drain_seconds,
     )
     probe = ReadinessProbe(monotonic=lambda: clock().timestamp())
 
@@ -483,6 +490,10 @@ def test_worker_stop_claims_no_new_jobs_drains_in_flight_work_and_updates_readin
                 assert store.get(first.job_id).status is JobStatus.SUCCEEDED
             else:
                 clock.advance(31)
+                if drain_seconds is not None:
+                    runner_thread.join(timeout=0.3)
+                    assert runner_thread.is_alive(), "the drain waits past the lease"
+                    clock.advance(drain_seconds - 31)
                 runner_thread.join(timeout=5.0)
                 assert not runner_thread.is_alive()
                 # The stopping worker released the lease itself: nothing is left to recover.

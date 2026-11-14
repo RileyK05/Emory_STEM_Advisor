@@ -328,11 +328,16 @@ class WorkerRunner:
         on_error: Callable[[str, Exception], None] | None = None,
         clock: Any | None = None,
         max_idle_seconds: float | None = None,
+        drain_seconds: float | None = None,
     ) -> None:
         self.store = store
         self.worker_id = worker_id
         self.executor = executor
         self.lease_seconds = lease_seconds
+        # How long a stopping worker waits for in-flight jobs before requeueing
+        # them. Heartbeats keep their leases alive meanwhile, so this may exceed
+        # the lease. The platform's termination grace period must be longer.
+        self.drain_seconds = float(drain_seconds if drain_seconds is not None else lease_seconds)
         self.idle_seconds = idle_seconds
         # An empty queue is polled less and less often, up to this cap; a job
         # notification (see `listen_for_jobs`) wakes every idle thread at once.
@@ -425,7 +430,7 @@ class WorkerRunner:
             unsubscribe = self._subscribe_clock()
             try:
                 with self._cond:
-                    deadline = self._now() + float(self.lease_seconds)
+                    deadline = self._now() + self.drain_seconds
                     while any(t.is_alive() for t in threads) and self._now() < deadline:
                         self._cond.wait()
             finally:
@@ -435,7 +440,7 @@ class WorkerRunner:
                     thread.join(timeout=1.0)
             return
 
-        deadline = time.monotonic() + float(self.lease_seconds)
+        deadline = time.monotonic() + self.drain_seconds
         for thread in threads:
             remaining = max(0.0, deadline - time.monotonic())
             thread.join(timeout=remaining)

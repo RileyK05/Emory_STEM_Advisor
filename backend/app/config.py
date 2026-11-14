@@ -236,6 +236,13 @@ class Settings:
     # 0 disables the corresponding server setting.
     db_statement_timeout_ms: int = 30_000
     db_idle_transaction_timeout_ms: int = 60_000
+    # A session-capable URL for the same database. Set it to a different URL
+    # when DATABASE_URL points at a transaction-mode pooler (PgBouncer):
+    # LISTEN, migrations, backups and readiness probes then use this URL.
+    # Connections through the pooler skip server-side prepared statements and
+    # per-connection startup options, so the two timeouts above must also be
+    # server parameters there. Unset, or equal to DATABASE_URL, means no pooler.
+    database_direct_url: str | None = None
     # Sync FastAPI dependencies and handlers share one AnyIO thread pool per
     # process. Size it for expected concurrent requests so a dependency waiting
     # for a pooled connection cannot starve the handler that releases it.
@@ -280,6 +287,8 @@ class Settings:
                 or not 0 <= self.db_idle_transaction_timeout_ms <= 3_600_000):
             raise ValueError(
                 "DB_IDLE_TRANSACTION_TIMEOUT_MS must be between 0 (disabled) and 3600000")
+        if self.database_direct_url is not None and not self.database_url:
+            raise ValueError("DATABASE_DIRECT_URL needs DATABASE_URL (the pooled URL) as well")
         if type(self.http_threadpool_tokens) is not int or not 1 <= self.http_threadpool_tokens <= 1000:
             raise ValueError("HTTP_THREADPOOL_TOKENS must be between 1 and 1000")
         for name, value in (
@@ -517,6 +526,7 @@ def load_settings() -> Settings:
         db_pool_timeout_seconds=_float("DB_POOL_TIMEOUT_SECONDS", 10),
         db_statement_timeout_ms=_int("DB_STATEMENT_TIMEOUT_MS", 30_000),
         db_idle_transaction_timeout_ms=_int("DB_IDLE_TRANSACTION_TIMEOUT_MS", 60_000),
+        database_direct_url=_optional("DATABASE_DIRECT_URL"),
         http_threadpool_tokens=_int("HTTP_THREADPOOL_TOKENS", 40),
         admission_max_pending_workspace=_int("ADMISSION_MAX_PENDING_WORKSPACE", 0),
         admission_max_pending_global=_int("ADMISSION_MAX_PENDING_GLOBAL", 0),

@@ -328,8 +328,16 @@ One row per chunk per model: `(chunk_id, model, dim, embedding vector)`, with
 `CHECK (vector_dims(embedding) = dim)`. Vectors are L2-normalized and checked
 (dimension, unit norm within 1e-3) before they are written. A chunk with no
 row for the current model is dormant, not an error. Re-embedding under a new
-model adds rows beside the old ones. 768-dimension vectors have an HNSW cosine
-index (migration 087); different models and dimensions must remain isolated.
+model adds rows beside the old ones. Different models and dimensions must remain
+isolated.
+
+`searchable` is true only for vectors that search can return: chunks of an
+indexed, current source that are not `search_hidden`. Triggers keep it in step
+whenever a source is published, superseded, reactivated or fails, or a chunk is
+hidden or shown, so no write path sets it by hand. The 768-dimension HNSW cosine
+index is partial on `searchable` (migration 091). The nearest-neighbour step
+takes its rows before the collection, workspace and scope filters, so an index
+that held superseded or hidden rows let them use up those slots.
 
 Each row also records `text_sha256`, a hash of the exact text it embedded
 (heading prefix included). Ingest copies an existing vector for the same model

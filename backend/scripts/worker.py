@@ -23,7 +23,13 @@ from app.config import configure_runtime_database, load_settings
 from app.conversations.recovery import reconcile_pending_requests
 from app.db.bootstrap import prepare_database
 from app.db.budget import WORKER_POOL_ROLES, check_connection_budget
-from app.db.connection import connect, connector, open_connection, resolved_database_url
+from app.db.connection import (
+    connect,
+    connector,
+    direct_database_url,
+    open_connection,
+    resolved_database_url,
+)
 from app.generation.artifacts import build_worker_handlers
 from app.jobs.dispatch import KindDispatchingExecutor
 from app.jobs.runtime import RunExecutor
@@ -109,10 +115,16 @@ def main() -> None:
                         help="claim/execute threads in this process (1-32)")
     parser.add_argument("--health-port", type=int, default=None,
                         help="HTTP health/readiness port (defaults to WORKER_HEALTH_PORT; 0 disables)")
+    parser.add_argument("--drain-seconds", type=float, default=None,
+                        help="on SIGTERM, wait this long for in-flight jobs before requeueing "
+                             "them (defaults to --lease-seconds); keep it under the "
+                             "platform's termination grace period")
     parser.add_argument("--once", action="store_true", help="claim at most one job, then exit")
     args = parser.parse_args()
     if not 1 <= args.lease_seconds <= 3600 or not 0.05 <= args.idle_seconds <= 60:
         parser.error("worker timing settings are outside supported bounds")
+    if args.drain_seconds is not None and not 0 <= args.drain_seconds <= 3600:
+        parser.error("--drain-seconds must be between 0 and 3600")
     if not 1 <= args.concurrency <= 32:
         parser.error("--concurrency must be between 1 and 32")
 
@@ -177,6 +189,7 @@ def main() -> None:
             lease_seconds=args.lease_seconds,
             idle_seconds=args.idle_seconds,
             max_idle_seconds=args.max_idle_seconds,
+            drain_seconds=args.drain_seconds,
             concurrency=args.concurrency,
             maintenance=maintenance,
             maintenance_interval_seconds=5.0,
@@ -194,7 +207,7 @@ def main() -> None:
                 accepting=lambda: runner.accepting,
                 stopping=lambda: runner.stopping,
                 readiness_check=lambda: probe.check(
-                    dsn=settings.database_url,
+                    dsn=direct_database_url(settings),
                     auth_service=auth_service,
                     auth_mode=settings.auth_mode,
                 ),
@@ -203,8 +216,10 @@ def main() -> None:
             else nullcontext()
         )
         restore_signals = install_stop_signals(runner.request_stop)
-        # A plain connection of its own (never a pooled one): it stays in LISTEN.
-        Thread(target=listen_for_jobs, args=(lambda: connect(settings.database_url), runner),
+        # A plain, direct connection of its own: it stays in LISTEN, which a
+        # transaction pooler cannot carry.
+        listen_dsn = direct_database_url(settings)
+        Thread(target=listen_for_jobs, args=(lambda: connect(listen_dsn), runner),
                daemon=True, name="advisor-job-listener").start()
         try:
             with health_context:

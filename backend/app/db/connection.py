@@ -15,10 +15,33 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from app.config import Settings
+from app.db import queries
 
 
-def connect(dsn: str) -> psycopg.Connection:
-    conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False)
+def direct_database_url(settings: Settings) -> str | None:
+    """The URL for work that needs a whole session: LISTEN, migrations, backups, probes."""
+    return getattr(settings, "database_direct_url", None) or settings.database_url
+
+
+def behind_pooler(settings: Settings, dsn: str | None) -> bool:
+    """Whether `dsn` reaches the database through a transaction-mode pooler.
+
+    A transaction pooler hands each transaction to any server connection, so a
+    statement prepared in one transaction is missing in the next, and it refuses
+    the `options` startup parameter.
+    """
+    direct = getattr(settings, "database_direct_url", None)
+    return bool(direct) and dsn != direct
+
+
+def _pooler_kwargs(pooler: bool) -> dict:
+    # psycopg prepares a statement on the server after five runs; never do that
+    # through a pooler.
+    return {"prepare_threshold": None} if pooler else {}
+
+
+def connect(dsn: str, *, pooler: bool = False) -> psycopg.Connection:
+    conn = psycopg.connect(dsn, row_factory=dict_row, autocommit=False, **_pooler_kwargs(pooler))
     try:
         register_vector(conn)
     except psycopg.ProgrammingError:
@@ -27,6 +50,23 @@ def connect(dsn: str) -> psycopg.Connection:
         # migration). The baseline (or legacy 001) creates it; callers that bind
         # vector values run against a migrated database.
         conn.rollback()
+    return conn
+
+
+def connect_session(dsn: str) -> psycopg.Connection:
+    """A direct connection for a whole job: a script, a migration or a backup.
+
+    It clears the statement and idle-transaction limits, which a pooled
+    deployment sets as server defaults for request traffic, so these sessions
+    keep running as long as they need to, as they always have.
+    """
+    conn = connect(dsn)
+    try:
+        conn.execute(queries.get("clear_session_time_limits"))
+        conn.commit()
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 
@@ -158,7 +198,7 @@ def register_vector_adapter(conn: "psycopg.Connection | PooledConnection") -> No
     register_vector(conn._conn if isinstance(conn, PooledConnection) else conn)
 
 
-_pools: dict[tuple[str, int, float, str, int, int], ConnectionPool] = {}
+_pools: dict[tuple[str, int, float, str, int, int, bool], ConnectionPool] = {}
 _pools_lock = threading.Lock()
 _borrow_diagnostics = {"release": 0, "reacquire": 0}
 
@@ -180,15 +220,17 @@ def _server_options(statement_timeout_ms: int, idle_timeout_ms: int) -> str | No
 
 def _pool_for(dsn: str, max_size: int, timeout: float, pool_name: str = "default", *,
               statement_timeout_ms: int = 0,
-              idle_timeout_ms: int = 0) -> ConnectionPool:
-    key = (dsn, max_size, timeout, pool_name, statement_timeout_ms, idle_timeout_ms)
+              idle_timeout_ms: int = 0, pooler: bool = False) -> ConnectionPool:
+    key = (dsn, max_size, timeout, pool_name, statement_timeout_ms, idle_timeout_ms, pooler)
     pool = _pools.get(key)
     if pool is None:
         with _pools_lock:
             pool = _pools.get(key)
             if pool is None:
-                kwargs = {"row_factory": dict_row, "autocommit": False}
-                options = _server_options(statement_timeout_ms, idle_timeout_ms)
+                kwargs = {"row_factory": dict_row, "autocommit": False, **_pooler_kwargs(pooler)}
+                # Behind a pooler the limits are server parameters instead.
+                options = None if pooler else _server_options(statement_timeout_ms,
+                                                              idle_timeout_ms)
                 if options is not None:
                     kwargs["options"] = options
                 pool = ConnectionPool(
@@ -203,10 +245,11 @@ def _pool_for(dsn: str, max_size: int, timeout: float, pool_name: str = "default
 
 def pooled_connect(dsn: str, *, max_size: int, timeout: float,
                    pool_name: str = "default", statement_timeout_ms: int = 0,
-                   idle_timeout_ms: int = 0) -> PooledConnection:
+                   idle_timeout_ms: int = 0, pooler: bool = False) -> PooledConnection:
     """Borrow a connection from the shared pool for `dsn` (raises `PoolTimeout` when exhausted)."""
     pool = _pool_for(dsn, max_size, timeout, pool_name,
-                     statement_timeout_ms=statement_timeout_ms, idle_timeout_ms=idle_timeout_ms)
+                     statement_timeout_ms=statement_timeout_ms, idle_timeout_ms=idle_timeout_ms,
+                     pooler=pooler)
     conn = pool.getconn()
     try:
         # TypesRegistry has no __contains__, so membership tests against a
@@ -234,15 +277,17 @@ def connector(settings: Settings, dsn: str | None = None, *,
     fields (minimal test doubles) get plain connections.
     """
     dsn = dsn or settings.database_url
+    pooler = behind_pooler(settings, dsn)
     max_size = getattr(settings, "db_pool_max_size", 0)
     if max_size <= 0:
-        return lambda: connect(dsn)
+        return lambda: connect(dsn, pooler=pooler)
     timeout = settings.db_pool_timeout_seconds
     statement_timeout_ms = getattr(settings, "db_statement_timeout_ms", 0)
     idle_timeout_ms = getattr(settings, "db_idle_transaction_timeout_ms", 0)
     return lambda: pooled_connect(
         dsn, max_size=max_size, timeout=timeout, pool_name=pool_name,
         statement_timeout_ms=statement_timeout_ms, idle_timeout_ms=idle_timeout_ms,
+        pooler=pooler,
     )
 
 
@@ -270,7 +315,7 @@ def pool_stats() -> list[dict[str, int | str]]:
     with _pools_lock:
         entries = [(key, pool) for key, pool in _pools.items()]
     snapshots = []
-    for (_dsn, max_size, _timeout, pool_name, _statement, _idle), pool in entries:
+    for (_dsn, max_size, _timeout, pool_name, _statement, _idle, _pooler), pool in entries:
         current = pool.get_stats()
         snapshots.append({
             "pool": pool_name,
@@ -310,14 +355,16 @@ def connection_transaction(connect_fn):
 def open_connection(settings: Settings, database_url: str | None = None):
     """Yield a migrated connection.
 
-    Uses an explicit URL, then `DATABASE_URL`, then an embedded `pgserver`
-    instance (D2). The embedded server keeps its data under `DATA_DIR/pgserver`
+    Uses an explicit URL, then the direct database URL (`DATABASE_DIRECT_URL`,
+    else `DATABASE_URL`), then an embedded `pgserver` instance (D2). Scripts and
+    migrations run whole sessions, so they never go through a transaction
+    pooler. The embedded server keeps its data under `DATA_DIR/pgserver`
     (gitignored) so callers can run in sequence without a DATABASE_URL; its
     schema is migrated on first use. Set `PGSERVER_DATA` to relocate it.
     """
-    dsn = database_url or settings.database_url
+    dsn = database_url or direct_database_url(settings)
     if dsn:
-        conn = connect(dsn)
+        conn = connect_session(dsn)
         try:
             yield conn
         finally:

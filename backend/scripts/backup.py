@@ -11,15 +11,16 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from app.config import load_settings
-from app.db.connection import connect
+from app.db.connection import connect_session, direct_database_url
 from app.ops.backup import BackupError, create_backup, restore_backup
 
 
 @contextmanager
 def _backup_connection(settings, database_url: str | None):
-    dsn = database_url or settings.database_url
+    # pg_dump and restores need whole sessions, never a transaction pooler.
+    dsn = database_url or direct_database_url(settings)
     if dsn:
-        conn = connect(dsn)
+        conn = connect_session(dsn)
         try:
             yield conn, dsn
         finally:
@@ -32,7 +33,7 @@ def _backup_connection(settings, database_url: str | None):
     server = pgserver.get_server(pgdata, cleanup_mode="stop")
     try:
         dsn = server.get_uri()
-        conn = connect(dsn)
+        conn = connect_session(dsn)
         try:
             from app.db.migrate import apply_migrations
 
@@ -79,7 +80,7 @@ def main() -> None:
                 f"PostgreSQL {manifest['postgres_server_version_num']})"
             )
         else:
-            conn = connect(args.database_url)
+            conn = connect_session(args.database_url)
             try:
                 manifest = restore_backup(
                     conn, dsn=args.database_url, archive_path=args.backup,

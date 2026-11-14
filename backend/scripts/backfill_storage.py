@@ -111,7 +111,7 @@ def main() -> None:
     if args.limit < 1:
         parser.exit(2, "--limit must be positive\n")
     settings = load_settings()
-    with _backup_connection(settings, settings.database_url) as (conn, _dsn):
+    with _backup_connection(settings, None) as (conn, _dsn):
         report = backfill(
             conn,
             data_dir=settings.data_dir.resolve(),

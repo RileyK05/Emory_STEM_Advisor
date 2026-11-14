@@ -1,6 +1,13 @@
 -- name: server_max_connections
 SELECT current_setting('max_connections')::int AS max_connections;
 
+-- A direct session for a whole job (script, migration, backup) runs without the
+-- request time limits a pooled deployment sets as server defaults. A backup
+-- holds its snapshot in an idle transaction while pg_dump runs.
+-- name: clear_session_time_limits
+SELECT set_config('statement_timeout', '0', false),
+       set_config('idle_in_transaction_session_timeout', '0', false);
+
 -- name: diagnostic_connection_states
 SELECT coalesce(state, 'unknown') AS state, count(*) AS connections
 FROM pg_stat_activity
