@@ -37,7 +37,7 @@ from app.gaps.store import GapError, GapStore
 from app.generation.controller import GenerationCancelled, ToolConversationError
 from app.generation.evidence import persist_response, record_attempt
 from app.generation.operation import GenerationOperation
-from app.generation.research_controller import ResearchController
+from app.generation.research_controller import ResearchController, asks_for_advice
 from app.generation.research_final import (
     RESEARCH_PROMPT_VERSION,
     RESEARCH_RENDER_VERSION,
@@ -68,6 +68,24 @@ def research_sampling(settings) -> dict[str, str]:
         return {}
     return {"llm_sampling_policy": "model_default",
             "llm_reasoning_effort": settings.research_reasoning_effort}
+
+
+def advice_budget(settings):
+    """A question asking for advice gets room to plan: more effort, rounds and time.
+
+    Only raised, never lowered, so an operator's larger research limits stand.
+    """
+    return replace(
+        settings,
+        research_reasoning_effort=settings.research_advice_reasoning_effort,
+        research_max_calls=max(settings.research_max_calls, settings.research_advice_max_calls),
+        research_max_tool_calls=max(settings.research_max_tool_calls,
+                                    settings.research_advice_max_tool_calls),
+        research_operation_timeout_seconds=max(
+            settings.research_operation_timeout_seconds,
+            settings.research_advice_operation_timeout_seconds),
+        research_operation_token_budget=max(settings.research_operation_token_budget,
+                                            settings.research_advice_operation_token_budget))
 
 
 def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) -> None:
@@ -210,6 +228,8 @@ def query_response(
             on_profile_selection(selection)
     if provider is None or not callable(getattr(provider, "generate", None)):
         raise HTTPException(503, "Research advising requires an available tools-capable connection.")
+    if asks_for_advice(body.query):
+        settings = advice_budget(settings)
     settings = replace(settings,
         llm_max_output_tokens=settings.research_max_output_tokens,
         **research_sampling(settings))
@@ -263,6 +283,7 @@ def query_response(
             session, provider, operation, ledger=ledger, check_cancelled=guard,
             on_progress=on_progress, question=body.query, history_context=history_context,
             artifact_choice=getattr(body, "makeArtifact", None),
+            persona=getattr(body, "persona", None),
             selection_identity={"profile": str(selection.profile_id), "revision": selection.profile_revision}
             if selection else {"provider": settings.llm_provider, "model": settings.llm_model_id},
             on_attempt=lambda prepared, result, error: audit.record(result, error, prepared),

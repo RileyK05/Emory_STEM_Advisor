@@ -3,6 +3,7 @@ import { getClient } from '../../api/client';
 import { errorMessage } from '../../lib/errors';
 import { useApp } from '../../state/AppContext';
 import type { AssistantEntry, ChatController, ChatEntry } from './model';
+import type { AdvisorPersona } from '../../api/types';
 
 let nextKey = 1;
 
@@ -15,7 +16,7 @@ export function useDemoChat(): ChatController {
   // Answers that arrive after "New chat" belong to a cleared transcript.
   const generation = useRef(0);
 
-  const send = (makeArtifact = false) => {
+  const send = (makeArtifact = false, persona?: AdvisorPersona) => {
     const query = draft.trim();
     if (!query || sending) return;
     const epoch = generation.current;
@@ -42,7 +43,7 @@ export function useDemoChat(): ChatController {
       setEntries((current) => current.map((item) => (item.key === assistantKey ? entry : item)));
     };
     getClient()
-      .query({ query, makeArtifact, ...(scope !== null ? { sourceIds: scope } : {}) })
+      .query({ query, makeArtifact, ...(persona ? { persona } : {}), ...(scope !== null ? { sourceIds: scope } : {}) })
       .then((res) =>
         settle({
           ...base,
@@ -81,12 +82,12 @@ export function useDemoChat(): ChatController {
     advisingModelConfigured: true,
     busy: sending,
     send: (_attachments, onAccepted, options) => {
-      send(options?.makeArtifact ?? false);
+      send(options?.makeArtifact ?? false, options?.persona);
       onAccepted?.();
     },
-    retry: (text) => {
+    retry: (text, persona) => {
       setDraft(text);
-      send();
+      send(false, persona);
     },
     retryPending: () => undefined,
     changeScope: setScope,

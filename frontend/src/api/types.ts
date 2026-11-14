@@ -69,6 +69,8 @@ export interface Citation {
   chunkId: string;
 }
 
+export type AdvisorPersona = 'swoop' | 'dooley';
+
 export interface QueryRequest {
   query: string;
   collectionId?: string;
@@ -77,6 +79,8 @@ export interface QueryRequest {
   studentCohort?: string | null;
   /** The composer's "Make a file" box. Omitted: the server reads the wording. */
   makeArtifact?: boolean | null;
+  /** The active theme's voice for this turn. Omitted: the plain advisor voice. */
+  persona?: AdvisorPersona | null;
 }
 
 // Native authoring artifacts are immutable revisions.
@@ -480,6 +484,7 @@ export interface ConversationTurnRequest {
   artifactReferences?: ArtifactRevisionReference[];
   studentCohort?: string | null;
   makeArtifact?: boolean | null;
+  persona?: AdvisorPersona | null;
 }
 
 export interface ConversationTerminalResponse {

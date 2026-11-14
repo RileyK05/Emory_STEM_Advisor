@@ -1,8 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { CloseIcon } from '../icons';
+import { useTheme } from '../../state/ThemeContext';
 import { Composer } from './Composer';
 import { MessageView, PendingAnswer } from './MessageView';
 import { Welcome } from './Welcome';
+import type { AdvisorPersona } from '../../api/types';
 import type { Attachment, ChatController } from './model';
 
 interface Props {
@@ -13,6 +15,10 @@ interface Props {
 
 export function ChatView({ chat, attachments, onRemoveAttachment }: Props) {
   const bottom = useRef<HTMLDivElement>(null);
+  // The voice belongs to the theme at send time, so a later theme switch
+  // leaves earlier replies as they were.
+  const { theme } = useTheme();
+  const persona: AdvisorPersona = theme === 'dark' ? 'dooley' : 'swoop';
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [chat.entries, chat.pending !== null]);
@@ -43,7 +49,9 @@ export function ChatView({ chat, attachments, onRemoveAttachment }: Props) {
           {empty ? (
             <Welcome demo={!chat.saved} onSuggest={suggest} />
           ) : (
-            chat.entries.map((entry) => <MessageView key={entry.key} entry={entry} onRetry={chat.retry} />)
+            chat.entries.map((entry) => (
+              <MessageView key={entry.key} entry={entry} onRetry={(text) => chat.retry?.(text, persona)} />
+            ))
           )}
           {chat.pending && (
             <PendingAnswer
@@ -51,7 +59,7 @@ export function ChatView({ chat, attachments, onRemoveAttachment }: Props) {
               preview={chat.pending.preview}
               abandoning={chat.pending.abandoning}
               onStop={chat.abandon}
-              onRetry={chat.retryPending}
+              onRetry={() => chat.retryPending?.(persona)}
             />
           )}
           <div ref={bottom} />
@@ -75,7 +83,7 @@ export function ChatView({ chat, attachments, onRemoveAttachment }: Props) {
               <p role="alert">The advisor isn&apos;t set up yet.</p>
             </div>
           )}
-          <Composer chat={chat} attachments={attachments} onRemoveAttachment={onRemoveAttachment} />
+          <Composer chat={chat} attachments={attachments} onRemoveAttachment={onRemoveAttachment} persona={persona} />
           <p className="composer-hint">
             Answers use only Emory sources and can be incomplete. Confirm important decisions with your advisor.
           </p>

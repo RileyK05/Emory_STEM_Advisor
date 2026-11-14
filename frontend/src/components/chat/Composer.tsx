@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { CloseIcon, KindIcon, SendIcon } from '../icons';
+import type { AdvisorPersona } from '../../api/types';
 import type { Attachment, ChatController } from './model';
 
 interface Props {
   chat: ChatController;
   attachments: Attachment[];
   onRemoveAttachment: (attachment: Attachment) => void;
+  persona: AdvisorPersona;
 }
 
-export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
+export function Composer({ chat, attachments, onRemoveAttachment, persona }: Props) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   // Applies to the next message only; it clears once that message is accepted.
   const [makeArtifact, setMakeArtifact] = useState(false);
@@ -24,7 +26,7 @@ export function Composer({ chat, attachments, onRemoveAttachment }: Props) {
   }, [chat.draft]);
 
   const submit = () => {
-    if (canSend) chat.send(attachments, () => setMakeArtifact(false), { makeArtifact });
+    if (canSend) chat.send(attachments, () => setMakeArtifact(false), { makeArtifact, persona });
   };
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {

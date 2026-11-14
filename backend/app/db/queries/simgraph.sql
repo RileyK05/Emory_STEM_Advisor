@@ -95,3 +95,32 @@ JOIN sim_clusters c ON c.cluster_id = m.cluster_id
 JOIN sim_courses sc ON sc.build_id = c.build_id AND sc.course_id = m.course_id
 WHERE m.cluster_id = %(cluster_id)s
 ORDER BY m.code;
+
+-- name: course_topics
+-- The deepest learned topic each named course sits in, from the current build.
+-- A course with no topic row (unknown, or a department with no learned split)
+-- has no group here.
+SELECT DISTINCT ON (m.code)
+       m.code, m.title, c.cluster_id, c.level, c.label
+FROM sim_cluster_members m
+JOIN sim_clusters c ON c.cluster_id = m.cluster_id
+JOIN sim_builds b ON b.build_id = c.build_id
+WHERE b.collection_id = %(collection_id)s
+  AND b.is_current
+  AND b.graph_version = 2
+  AND c.kind = 'topic'
+  AND m.code = ANY(%(codes)s)
+ORDER BY m.code, c.level DESC, c.label, c.cluster_id;
+
+-- name: subject_level_codes
+-- Current master courses of one subject whose number falls in a level range
+-- (CS 300-499), for a program line that names a level instead of courses.
+-- Retired master rows are left out; campus subjects such as CS_OX are their own.
+SELECT code
+FROM courses
+WHERE collection_id = %(collection_id)s
+  AND subject = %(subject)s
+  AND lifecycle = 'current'
+  AND substring(code FROM '^[A-Z_]+ ([0-9]+)')::int BETWEEN %(min_level)s AND %(max_level)s
+ORDER BY code
+LIMIT %(limit)s;

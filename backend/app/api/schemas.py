@@ -14,6 +14,8 @@ class QueryRequest(BaseModel):
     # The composer's "make a file" box. Unset keeps the wording-based guess, so
     # API callers that never send it behave as before.
     makeArtifact: bool | None = None
+    # The active theme's voice for this turn. Unset gives the plain advisor voice.
+    persona: Literal["swoop", "dooley"] | None = None
 
     @field_validator("query")
     @classmethod

@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { getClient } from '../../api/client';
 import { errorMessage, statusOf } from '../../lib/errors';
-import type { ConversationRecord, ConversationSummary, ConversationTurnRequest } from '../../api/types';
+import type { ConversationRecord, ConversationSummary, ConversationTurnRequest, AdvisorPersona } from '../../api/types';
 import { useApp } from '../../state/AppContext';
 import type { SourceScope } from '../../state/AppContext';
 import { useMountedRef } from '../../lib/useMountedRef';
 import { applyStreamEvent, emptyPreview, entriesFromTurns } from './model';
-import type { Attachment, ChatController, StreamPreview } from './model';
+import type { Attachment, ChatController, SendOptions, StreamPreview } from './model';
 
 const NEW_DRAFT_KEY = '__new_conversation__';
 const CONVERSATION_PAGE_SIZE = 200;
@@ -351,13 +351,13 @@ export function useSavedChat(): ChatController {
     attachments: Attachment[],
     onAccepted?: () => void,
     queryText?: string,
-    makeArtifactChoice?: boolean,
+    options?: SendOptions,
   ) => {
     const query = (queryText ?? draft).trim();
     if (!query) return;
     // A retry of the same question keeps the "Make a file" choice it was sent with.
     const makeArtifact =
-      makeArtifactChoice ?? (lastChoice.current?.query === query ? lastChoice.current.makeArtifact : false);
+      options?.makeArtifact ?? (lastChoice.current?.query === query ? lastChoice.current.makeArtifact : false);
     lastChoice.current = { query, makeArtifact };
     setError(null);
     setNotice(null);
@@ -378,6 +378,8 @@ export function useSavedChat(): ChatController {
       requestId,
       expectedSequence: record.lastSequence,
       makeArtifact,
+      // The theme at send time; earlier replies keep the voice they were made in.
+      ...(options?.persona ? { persona: options.persona } : {}),
       // A first question over all sources needs no explicit scope; a follow-up with an unchanged
       // scope omits it so the server inherits the conversation's saved scope.
       ...(scopeChanged.current && !(record.lastSequence === 0 && scope === null) ? { sourceIds: scope } : {}),
@@ -427,12 +429,12 @@ export function useSavedChat(): ChatController {
     }
   };
 
-  const retry = (text: string) => {
+  const retry = (text: string, persona?: AdvisorPersona) => {
     setDrafts((current) => ({ ...current, [draftKey]: text }));
-    void send([], undefined, text);
+    void send([], undefined, text, { persona });
   };
 
-  const retryPending = async () => {
+  const retryPending = async (persona?: AdvisorPersona) => {
     const currentRecord = conversationRef.current ?? conversation;
     if (!conversationId || !currentRecord?.pendingRequestId || abandoningRef.current.has(conversationId)) return;
     const id = conversationId;
@@ -467,7 +469,7 @@ export function useSavedChat(): ChatController {
         });
     }
     if (shouldResend) {
-      void send([], undefined, textToResend);
+      void send([], undefined, textToResend, { persona });
     }
   };
 
@@ -578,8 +580,7 @@ export function useSavedChat(): ChatController {
     setDraft: (text) => setDrafts((current) => ({ ...current, [draftKey]: text })),
     advisingModelConfigured,
     busy: currentBusy || abandoning || loadingConversation || !!conversation?.pendingRequestId,
-    send: (attachments, onAccepted, options) =>
-      void send(attachments, onAccepted, undefined, options?.makeArtifact ?? false),
+    send: (attachments, onAccepted, options) => void send(attachments, onAccepted, undefined, options),
     retry,
     retryPending,
     changeScope: (next) => {

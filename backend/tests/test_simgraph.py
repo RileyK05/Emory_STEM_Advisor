@@ -387,6 +387,31 @@ def test_single_course_department_remains_visible(db, collection, tmp_path):
     assert recs[0].path == ("Computer Science",)
 
 
+def test_course_topics_group_by_learned_topic_and_leave_other_codes_ungrouped(
+        db, collection, tmp_path):
+    from app.generation.research_tools import group_courses
+
+    _import(db, collection, tmp_path)
+    _build(db, collection)
+    grouped = group_courses(db, collection_id=collection, codes=[
+        "ECON 101", "ECON 201", "ECON 210", "HIST 999"])
+    macro = [group for group in grouped["groups"]
+             if {"ECON 101", "ECON 201"} <= {course["code"] for course in group["courses"]}]
+    assert len(macro) == 1
+    micro = next(group for group in grouped["groups"]
+                 if {"ECON 210"} <= {course["code"] for course in group["courses"]})
+    assert micro["topic"] != macro[0]["topic"]
+    assert grouped["ungrouped"] == ["HIST 999"]
+    # A program that says "two 200-level ECON courses" names no codes, so the
+    # options come from the course master by subject and level, minus retired rows.
+    from app.generation.research_tools import subject_level_codes
+
+    db.execute("UPDATE courses SET lifecycle = 'retired' WHERE collection_id = %s "
+               "AND code = 'ECON 211'", (collection,))
+    assert subject_level_codes(db, collection_id=collection, subject="ECON",
+                               min_level=200, max_level=299) == ["ECON 201", "ECON 210"]
+
+
 def test_relevant_deep_topic_is_not_hidden_by_a_mixed_parent_centroid(db, collection, tmp_path):
     from uuid import uuid4
 

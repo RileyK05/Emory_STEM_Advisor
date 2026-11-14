@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from uuid import uuid5
 
-from pydantic import AfterValidator, Field, ValidationError, field_validator
+from pydantic import AfterValidator, Field, ValidationError, field_validator, model_validator
 
 from app.advising.audit_engine import audit_reported_courses
 from app.advising.catalog import load_advising_context, load_campus_equivalents
@@ -32,6 +32,7 @@ from app.advising.research_store import (
 )
 from app.advising.research_types import (
     MAX_DECISION_TEXT_BYTES,
+    MAX_DECISION_WORDS,
     DecisionBlock,
     FinalDecision,
     ResearchState,
@@ -68,7 +69,7 @@ from app.tools.registry import (
 )
 from app.util.digest import json_digest
 
-RESEARCH_TOOLS_VERSION = "26"
+RESEARCH_TOOLS_VERSION = "30"
 
 
 def _course_code(value: str) -> str:
@@ -114,9 +115,16 @@ class ReadInput(ToolInputModel):
     cursor: str | None = Field(default=None, max_length=128)
 
 
+# A read takes a queue: the first MAX_COURSE_CODES now, the rest handed back.
+MAX_QUEUED_COURSES = 24
+# Codes one grouping call sorts when given a list, and when given a subject range.
+MAX_GROUPED_COURSES = 24
+MAX_SUBJECT_COURSES = 40
+
+
 class CoursesInput(ToolInputModel):
-    course_codes: list[CourseCode] = Field(default_factory=list, max_length=4)
-    handles: list[str] = Field(default_factory=list, max_length=4,
+    course_codes: list[CourseCode] = Field(default_factory=list, max_length=MAX_QUEUED_COURSES)
+    handles: list[str] = Field(default_factory=list, max_length=MAX_QUEUED_COURSES,
         description="Only course handles from this run. For earlier-memory handles, use advisor_recall with handles only; exact course codes can be passed in course_codes without handles.")
 
 
@@ -136,6 +144,23 @@ class AuditInput(ToolInputModel):
 
 class SuggestInput(ToolInputModel):
     goal: str = Field(min_length=1, max_length=300)
+
+
+class GroupInput(ToolInputModel):
+    course_codes: list[CourseCode] = Field(default_factory=list, max_length=MAX_GROUPED_COURSES)
+    subject: str | None = Field(default=None, pattern=r"^[A-Z][A-Z_]{1,11}$", description=(
+        "Instead of course_codes: a subject such as CS, for a program line that names "
+        "a level (\"three 300-level CS courses\") rather than courses."))
+    min_level: int = Field(default=100, ge=100, le=999)
+    max_level: int = Field(default=999, ge=100, le=999)
+
+    @model_validator(mode="after")
+    def one_source(self):
+        if bool(self.course_codes) == bool(self.subject):
+            raise ValueError("give course_codes or a subject, not both")
+        if self.min_level > self.max_level:
+            raise ValueError("min_level is above max_level")
+        return self
 
 
 class RecallInput(ToolInputModel):
@@ -315,7 +340,10 @@ class ResearchRegistry(ToolRegistry):
             self.session.validation_hint = "; ".join(problems)[:2000]
             self.session.store.record_action(self.session.run.run_id, action_kind="invalid_tool_arguments",
                                              details={"tool": tool_id, "problems": problems})
-            return ResearchResult(status="conflict", limitations=problems)
+            # Marked so the controller counts a malformed call as a format slip,
+            # not as one of the corrections an answer's content gets.
+            return ResearchResult(status="conflict", data={"schema_error": True},
+                                  limitations=problems)
 
 
 #: What the server read about a course that no evidence passage holds.
@@ -425,6 +453,40 @@ def _within_read_limit(chunks):
             kept[chunk.chunk_id] = chunk
             size += length
     return list(kept.values())
+
+
+def subject_level_codes(conn, *, collection_id, subject, min_level, max_level) -> list[str]:
+    """Current course codes of one subject within a level range, in code order."""
+    return [row["code"] for row in conn.execute(queries.get("subject_level_codes"), {
+        "collection_id": collection_id, "subject": subject, "min_level": min_level,
+        "max_level": max_level, "limit": MAX_SUBJECT_COURSES})]
+
+
+def group_courses(conn, *, collection_id, codes) -> dict:
+    """Sort exact course codes into their deepest learned topic groups.
+
+    The grouping is data from the current topic build, never a model's guess;
+    a code the build places in no topic is reported as ungrouped.
+    """
+    normalized = list(dict.fromkeys(
+        code for value in codes if (code := normalize_code(value)) is not None))
+    rows = conn.execute(queries.get("course_topics"), {
+        "collection_id": collection_id, "codes": normalized}).fetchall() if normalized else []
+    members: dict[str, list] = {}
+    topics: dict[str, tuple[int, str, str]] = {}
+    for row in rows:
+        cluster = str(row["cluster_id"])
+        members.setdefault(cluster, []).append({"code": row["code"], "title": row["title"]})
+        topics[cluster] = (row["level"], row["label"], cluster)
+    # Deepest topics first, then by label: two builds group the same courses the
+    # same way, and a shallower department name never hides a specific topic.
+    ordered = sorted(members, key=lambda cluster: (
+        -topics[cluster][0], topics[cluster][1], cluster))
+    groups = [{"topic": topics[cluster][1],
+               "courses": sorted(members[cluster], key=lambda course: course["code"])}
+              for cluster in ordered]
+    grouped = {course["code"] for group in groups for course in group["courses"]}
+    return {"groups": groups, "ungrouped": [code for code in normalized if code not in grouped]}
 
 
 class ResearchSession:
@@ -900,8 +962,12 @@ class ResearchSession:
                 return ResearchResult(status="conflict", limitations=[instruction])
             handle_codes.append(self.resolve(handle, "course"))
         codes = list(dict.fromkeys([*value.course_codes, *handle_codes]))
-        if not 1 <= len(codes) <= 4:
-            return ResearchResult(status="conflict", limitations=["Read one to four course codes."])
+        if not codes:
+            return ResearchResult(status="conflict", limitations=["Name at least one course."])
+        # The order asked is the priority. Each read holds one batch, so a long
+        # list never crowds earlier reads out of the prompt; the rest come back
+        # unread, and the model decides whether it needs them.
+        codes, queued = codes[:MAX_COURSE_CODES], codes[MAX_COURSE_CODES:]
         reads = read_courses(self.conn, self.scope, codes)
         self.conn.commit()
         required_by = {row["code"]: row["required_by"][:24] for row in self.conn.execute(
@@ -996,10 +1062,16 @@ class ResearchSession:
             self.course_facts[r.code]["evidence_ids"] = sorted(self.entity_evidence.get(r.code, ()))
             return data
 
-        return ResearchResult(data={"courses": [record(r) for r in reads],
-            "follow_on_courses": [record(r) for r in follow_ons], "terms_checked": checked,
-            "evidence_ids": ids, "missing_codes": sorted(set(codes) - {r.code for r in reads})},
-            status="ok" if reads else "not_found")
+        data = {"courses": [record(r) for r in reads],
+                "follow_on_courses": [record(r) for r in follow_ons], "terms_checked": checked,
+                "evidence_ids": ids, "missing_codes": sorted(set(codes) - {r.code for r in reads})}
+        limitations = []
+        if queued:
+            data["queued_codes"] = queued
+            limitations.append(f"Read the first {MAX_COURSE_CODES}. queued_codes are still "
+                               "unread: read them only if you still need them.")
+        return ResearchResult(data=data, status="ok" if reads else "not_found",
+                              limitations=limitations)
 
     def _offerings(self, codes):
         """Each course's Atlas terms, every term checked, and running variants by stem.
@@ -1296,6 +1368,31 @@ class ResearchSession:
             limitations=[("Suggestions come from topic similarity. They are not requirements "
                           "and do not show that a course counts toward any program.")])
 
+    def group(self, value, _scope):
+        if value.subject:
+            codes = subject_level_codes(self.conn, collection_id=self.scope.collection_id,
+                                        subject=value.subject, min_level=value.min_level,
+                                        max_level=value.max_level)
+        else:
+            codes = list(dict.fromkeys(
+                code for raw in value.course_codes if (code := normalize_code(raw)) is not None))
+        # As with suggestions, a course no checked Atlas term shows is not an
+        # option to organize; it is reported apart so it is never advised.
+        terms, checked, variants = self._offerings(codes)
+        retired = [code for code in codes if self._not_offered(code, terms, checked, variants)]
+        grouped = group_courses(self.conn, collection_id=self.scope.collection_id,
+                                codes=[code for code in codes if code not in retired])
+        self.conn.commit()
+        limitations = [("Topics are similarity groups from course descriptions, not "
+                        "requirements; read a course before describing it.")]
+        if retired:
+            limitations.append("not_offered courses appear in no checked Course Atlas term; "
+                               "do not recommend them.")
+        return ResearchResult(
+            status="ok" if grouped["groups"] else "not_found",
+            data={**grouped, "not_offered": retired, "discovery_only": True},
+            limitations=limitations)
+
     def update(self, value, _scope):
         state = value.state
         if len(state.candidates) > self.config.research.max_candidates:
@@ -1381,7 +1478,12 @@ class ResearchSession:
                            self.artifact_requested, tuple(self.grading_rules))
         except DecisionRejected as exc:
             self.rejected_decision = value.decision
-            opened = self._open_courses(value.decision.recommended_course_codes)
+            # A judgment that names a course is a recommendation of it, so its
+            # unread courses are opened too; otherwise the model, told to read
+            # them, drops the advice instead.
+            advised = [code for block in value.decision.blocks if block.kind == "judgment"
+                       for code in canonical_codes_in(block.text)]
+            opened = self._open_courses([*value.decision.recommended_course_codes, *advised])
             if not opened:
                 raise
             raise DecisionRejected(
@@ -1417,7 +1519,7 @@ class ResearchSession:
         retired = self._retired_courses(proposal)
         nearest = self.unknown_question_codes()
         unknown = frozenset(nearest)
-        kept, used = [], 0
+        kept, used, used_words = [], 0, 0
         for block in proposal.blocks:
             single = proposal.model_copy(update={
                 "outcome": "information", "completeness": "partial", "blocks": (block,),
@@ -1430,10 +1532,12 @@ class ResearchSession:
                                unknown, self.artifact_requested, tuple(self.grading_rules))
             except DecisionRejected:
                 continue
-            if used + size > MAX_DECISION_TEXT_BYTES:
+            words = len(block.text.split())
+            if used + size > MAX_DECISION_TEXT_BYTES or used_words + words > MAX_DECISION_WORDS:
                 continue
             kept.append(block)
             used += size
+            used_words += words
         # What the master already settles is not lost with the block that said it.
         named = {code for block in kept for code in canonical_codes_in(block.text)}
         absent = [DecisionBlock(kind="limitation", text=(
@@ -1568,12 +1672,13 @@ class ResearchSession:
             ("search", "Discover leads; use kind=document for admissions, guidance, checklists or handbooks. Source metadata and snippets are not evidence until read.", SearchInput, self.search, ()),
             ("list_programs", "Browse exact majors and minors in scope.", BrowseInput, self.browse, ()),
             ("read_program", "Read up to eight raw requirements and acquire exact evidence; follow cursor.", ReadInput, self.program, ("handle",)),
-            ("read_courses", "Read one to four exact course records, descriptions and restrictions. Handles must be course handles; for old-memory handles, use advisor_recall with handles only, or pass exact course codes without handles.", CoursesInput, self.courses, ("handles",)),
+            ("read_courses", "Read exact course records, descriptions and restrictions. List up to 24 codes, most wanted first: it reads eight and returns the rest as queued_codes, so stop once you have enough. Handles must be course handles; for old-memory handles, use advisor_recall with handles only, or pass exact course codes without handles.", CoursesInput, self.courses, ("handles",)),
             ("read_document", "Read source or section evidence; follow cursor for remaining chunks.", ReadInput, self.document, ("handle",)),
             ("compare_mentions", "Compare already read programs; overlap is mentions, never credit savings.", CompareInput, self.compare, ("handles",)),
             ("check_preparation", "Run deterministic dependency checks, never eligibility. completed_codes is required and must reflect the student's explicit report; use [] only when the student explicitly reports no completed courses, and ask if history is unknown. In blocker alternative_groups, each inner group requires all entries and the outer list offers alternative paths. If alternative_groups_truncated is true, more paths were omitted; do not treat the shown groups as exhaustive.", PreparationInput, self.preparation, ()),
             ("audit_program", "Check a student's reported courses against a fully read program. Ask if unknown. reviewed_rules false gives only the lines naming them, never that a requirement is met.", AuditInput, self.audit, ("handle",)),
             ("suggest_courses", "Courses related to a goal, from the topic graph: suggestions, never requirements.", SuggestInput, self.suggest, ()),
+            ("group_courses", "Sort courses into topic groups from the topic graph, to organize options by interest: pass course_codes, or a subject with min_level and max_level when a program names a level instead of courses. Call it before reading when more than four courses could fit.", GroupInput, self.group, ()),
             ("update_research", "Replace bounded comparison state, set active exact evidence and expected revision.", StateInput, self.update, ()),
             ("finish", "Propose typed final answer. Must be the sole tool call. Cite active evidence IDs, never raw markers. Optional artifact requests a follow-on document (printable plan, checklist or report), workbook (spreadsheet) or html (web page) when the student asks to make, keep or export one; revise requires the exact referenced revision.", FinishInput, self.finish, ()),
         ]

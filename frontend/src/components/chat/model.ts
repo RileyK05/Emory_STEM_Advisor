@@ -1,4 +1,5 @@
 import type {
+  AdvisorPersona,
   ArtifactRevisionReference,
   ArtifactRunInfo,
   Citation,
@@ -94,7 +95,9 @@ export const streamStageLabel = (stage: string | null) => (stage && STAGE_LABELS
 /** What the chat UI needs from either the saved (HTTP) or the demo (mock) engine. */
 export interface SendOptions {
   /** The composer's "Make a file" box: ask for an artifact with this message. */
-  makeArtifact: boolean;
+  makeArtifact?: boolean;
+  /** The active theme's voice for this turn. */
+  persona?: AdvisorPersona;
 }
 
 export interface ChatController {
@@ -118,10 +121,10 @@ export interface ChatController {
   /** Sending is not possible right now (a turn is in flight, or the chat is loading). */
   busy: boolean;
   send: (attachments: Attachment[], onAccepted?: () => void, options?: SendOptions) => void;
-  /** Retry sending a failed question. */
-  retry?: (text: string) => void;
+  /** Retry sending a failed question, in the theme's current voice. */
+  retry?: (text: string, persona?: AdvisorPersona) => void;
   /** Abandon a slow pending turn and resend the question. */
-  retryPending?: () => void;
+  retryPending?: (persona?: AdvisorPersona) => void;
   /** Change the source scope for the next question. */
   changeScope: (scope: SourceScope) => void;
   open: (id: string) => void;

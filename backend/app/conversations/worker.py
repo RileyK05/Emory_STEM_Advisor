@@ -153,6 +153,7 @@ class ConversationTurnExecutor:
                 collectionId=effective.get("collectionId"),
                 sourceIds=effective.get("sourceIds"),
                 makeArtifact=request_data.get("makeArtifact"),
+                persona=request_data.get("persona"),
             )
             selected_profiles: dict[tuple[UUID, int], None] = {}
             operation_ids: list[UUID] = []

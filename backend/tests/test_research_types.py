@@ -190,6 +190,11 @@ def test_block_candidate_references_are_checked_too():
             (DecisionBlock(kind="judgment", text="x" * 20_000),),
             "reply is",
         ),
+        # A phone-length reply: short words stay under the byte bound but not this.
+        (
+            (DecisionBlock(kind="judgment", text="take it " * 230),),
+            "words, over",
+        ),
     ],
 )
 def test_decision_limits_are_enforced(blocks, expected_problem):
@@ -217,14 +222,31 @@ def test_a_bounded_decision_reports_no_problems():
                blocks=(DecisionBlock(kind="judgment", text="Choose this."),)), "unknown candidate"),
     (_decision(outcome="recommendation", recommended_course_codes=("CS 170",),
                blocks=(DecisionBlock(kind="question", text="Which goal?"),)), "read recommended course"),
-    (_decision(outcome="information", blocks=(DecisionBlock(kind="judgment",
-               text="The captured page does not establish next-cycle applicability."),)), "use fact or limitation"),
+    # A candidate is optional: a sourced judgment is advice, not a fact to prove.
+    (_decision(outcome="information", blocks=(DecisionBlock(
+        kind="judgment", text="This course fits the goal better.", evidence_ids=("e1",)),)), None),
+    (_decision(outcome="information", blocks=(DecisionBlock(
+        kind="judgment", text="The captured page does not establish next-cycle applicability."),)),
+     "supporting evidence"),
 ])
-def test_research_finish_rejects_unrenderable_or_unexecuted_references(decision, expected):
+def test_research_finish_validates_references_and_judgment_support(decision, expected):
+    from app.advising.research_types import EvidenceRecord
     from app.generation.research_final import DecisionRejected, validate_final
 
+    record = EvidenceRecord(
+        evidence_id="e1", source_id=str(uuid4()), source_revision=1,
+        source_kind="institutional_catalog", source_name="Catalog", chunk_id=str(uuid4()),
+        locator_label="Courses", exact_text="The catalog describes the course.",
+        text_digest="a" * 64, acquired_step=1, content_completeness="complete")
+
+    def finish():
+        validate_final(decision, None, [record], {"e1"}, {})
+
+    if expected is None:
+        finish()
+        return
     with pytest.raises(DecisionRejected, match=expected):
-        validate_final(decision, None, [], set(), {})
+        finish()
 
 
 _CITED = "See the registrar page for the petition."
@@ -350,7 +372,10 @@ def test_a_grading_answer_must_cite_the_program_rule(text):
     ("AP credit applies toward the degree.", False),
     ("The cited rule does not establish a 16 hour limit for transfer credit.", False),
 ])
-def test_a_policy_number_comes_from_the_cited_passage(text, rejected):
+# Advice states numbers too ("take it once you have 12 hours"), so a judgment
+# faces the same check; only its opinion is beyond verification.
+@pytest.mark.parametrize("kind", ["fact", "judgment"])
+def test_a_policy_number_comes_from_the_cited_passage(text, rejected, kind):
     from uuid import uuid4
 
     from app.advising.research_types import EvidenceRecord
@@ -362,7 +387,7 @@ def test_a_policy_number_comes_from_the_cited_passage(text, rejected):
         locator_label="AP Credit", exact_text=_AP_RULE, text_digest="a" * 64, acquired_step=1,
         content_completeness="complete", entity_refs=())
     decision = _decision(outcome="information", blocks=(
-        DecisionBlock(kind="fact", text=text, evidence_ids=("e1",)),))
+        DecisionBlock(kind=kind, text=text, evidence_ids=("e1",)),))
 
     def finish():
         validate_final(decision, None, [record], {"e1"}, {})
@@ -451,6 +476,33 @@ def test_cited_program_requirement_is_a_mention_not_an_unread_recommendation():
     })
     with pytest.raises(DecisionRejected, match="read recommended course BIOL 120"):
         validate_final(excluded_decision, state, [excluded], {"e1"}, {})
+    # A judgment needs evidence, not a candidate. Every course it names is
+    # recommended, so an unread or retired course is still refused.
+    advice = FinalDecision(outcome="recommendation", completeness="complete", blocks=(
+        DecisionBlock(kind="judgment", text="CHEM 150 is a good place to start.",
+                      evidence_ids=("e2",)),))
+    validate_final(advice, state, [record, course], {"e1", "e2"}, {})
+    unread = advice.model_copy(update={"blocks": (
+        DecisionBlock(kind="judgment", text="BIOL 120 is a good place to start.",
+                      evidence_ids=("e2",)),)})
+    with pytest.raises(DecisionRejected, match="read recommended course BIOL 120"):
+        validate_final(unread, state, [record, course], {"e1", "e2"}, {})
+    with pytest.raises(DecisionRejected, match="no longer offered"):
+        validate_final(advice, state, [record, course], {"e1", "e2"}, {},
+                       retired_courses=frozenset({"CHEM 150"}))
+    # A prerequisite the cited course record names is grounded by that record...
+    ml = record.model_copy(update={"evidence_id": "e3", "source_name": "CS 334",
+                                   "exact_text": "CS 334: Machine Learning. Prerequisite: CS 171.",
+                                   "entity_refs": ("CS 334",)})
+    after = advice.model_copy(update={"blocks": (
+        DecisionBlock(kind="judgment", text="After CS 171, CS 334 is the best start for ML.",
+                      evidence_ids=("e3",)),)})
+    validate_final(after, state, [record, ml], {"e1", "e3"}, {})
+    # ...but a program list's mention is not a read: citing it grounds no advice.
+    listed = advice.model_copy(update={"blocks": (
+        DecisionBlock(kind="judgment", text="BIOL 141 is a good pick.", evidence_ids=("e1",)),)})
+    with pytest.raises(DecisionRejected, match="read recommended course BIOL 141"):
+        validate_final(listed, state, [record], {"e1"}, {})
 
 
 def test_fact_block_cannot_name_a_course_absent_from_its_cited_evidence():
@@ -511,7 +563,8 @@ def test_entry_point_claims_need_a_read_course_without_prerequisites():
                    None, records, {"e3"}, {})
 
 
-@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(15000, False), (16000, False), (49000, True)])
+# The system prompt counts toward the bound; these fixture budgets track its size.
+@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(16400, False), (17400, False), (50400, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
     ("unknown", None, "edition_not_recorded"),
@@ -812,7 +865,7 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
                               program_handles=("h_a",)),))
     session = SimpleNamespace(
         settings=replace(load_settings(), research_max_prompt_bytes=(
-            20000 if support == "preparation" else 13000 if support == "oversized_preparation" else 16000)),
+            21100 if support == "preparation" else 14100 if support == "oversized_preparation" else 17100)),
         store=SimpleNamespace(evidence=lambda _run: records), run=SimpleNamespace(run_id=uuid4()),
         active=[r.evidence_id for r in records], state=state, entity_evidence={"h_a": {"e20"}},
         scope=SimpleNamespace(sources={}, programs={}),
@@ -882,6 +935,12 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
     session.rejected_decision = _decision(blocks=(unsupported,))
     assert session.salvage() is None  # No supported fact means no reply to keep.
 
+    # The kept reply stays phone-length: a block that would pass 450 words is left out.
+    first = DecisionBlock(kind="limitation", text="Confirm this with your advisor. " * 60)
+    second = DecisionBlock(kind="limitation", text="Check the schedule before you plan. " * 50)
+    session.rejected_decision = _decision(blocks=(good, first, second))
+    assert session.salvage().blocks == (good, first)
+
     # The master settles a course that does not exist, so that sentence always survives.
     session.question = "what are the prereqs for PSYC 219"
     session.rejected_decision = _decision(blocks=(good, unsupported))
@@ -902,9 +961,9 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
 
 
 @pytest.mark.parametrize("block, expected", [
-    # A sourced judgment with no candidate is a fact; facts face every stricter check.
+    # A candidate is optional: a sourced judgment keeps its kind and its citations.
     ({"kind": "judgment", "text": "CS 170 comes first.", "evidence_ids": ("e1",)},
-     ("fact", ("e1",))),
+     ("judgment", ("e1",))),
     # A real candidate preference stays a judgment.
     ({"kind": "judgment", "text": "The BS fits.", "evidence_ids": ("e1",),
       "candidate_ids": ("c1",)}, ("judgment", ("e1",))),
@@ -1018,11 +1077,12 @@ def test_a_provider_dropout_keeps_what_the_run_already_proposed(monkeypatch, fai
 def test_opening_many_courses_is_one_evidence_step(monkeypatch):
     from types import SimpleNamespace
 
+    from app.advising.research_repository import MAX_COURSE_CODES
     from app.generation import research_tools
     from app.generation.research_tools import ResearchSession
 
     def fake_read(_conn, _scope, codes):
-        assert len(codes) <= 4
+        assert len(codes) <= MAX_COURSE_CODES
         return [SimpleNamespace(code=code, canonical_code=code, chunks=tuple(
             SimpleNamespace(chunk_id=f"{code}-{n}", text="x" * 6_000) for n in range(4)))
             for code in codes]
@@ -1062,6 +1122,27 @@ def test_research_asks_only_a_supporting_provider_for_reasoning(
     assert bool(fields) == (own_effort is None and expected is not None)
     if fields:  # The temperature rule: reasoning effort never travels with greedy.
         assert fields["llm_sampling_policy"] == "model_default"
+
+
+@pytest.mark.parametrize("base_calls, base_seconds, calls, seconds", [
+    (16, 360.0, 24, 600.0),   # The default budget grows for advice.
+    (30, 900.0, 30, 900.0),   # An operator's larger limits are never cut.
+])
+def test_advice_gets_more_room_to_plan_and_never_less(base_calls, base_seconds, calls, seconds):
+    from dataclasses import replace
+
+    from app.api.query_service import advice_budget
+    from app.config import load_settings
+
+    # The advice limits are pinned so the table checks the rule, not the defaults.
+    base = replace(load_settings(), research_max_calls=base_calls,
+                   research_operation_timeout_seconds=base_seconds,
+                   research_advice_max_calls=24,
+                   research_advice_operation_timeout_seconds=600.0)
+    advice = advice_budget(base)
+    assert (advice.research_max_calls, advice.research_operation_timeout_seconds) == (
+        calls, seconds)
+    assert advice.research_reasoning_effort == base.research_advice_reasoning_effort
 
 
 def test_compare_rejects_duplicate_program_handles():
@@ -1144,6 +1225,28 @@ def test_research_is_told_when_the_student_asks_for_something_to_keep(question, 
     from app.generation.research_controller import _asks_for_artifact
 
     assert _asks_for_artifact(question) is asked
+
+
+# Advice gets the longer thinking budget; a lookup keeps the quick one.
+@pytest.mark.parametrize("question, advice", [
+    ("What CS electives should I take?", True),
+    ("I like biology and coding. What should I take next year?", True),
+    ("Which math courses help most for machine learning?", True),
+    ("QTM or CS for data science?", True),
+    ("Is the BS or the BA better for grad school?", True),
+    ("What would you recommend after CS 171?", True),
+    ("Help me choose a minor.", True),
+    ("Data Science vs Computer Science?", True),
+    ("What can I take after CS 253?", False),
+    ("When is the add/drop deadline?", False),
+    ("Is CS 170 offered in fall or spring?", False),
+    ("What does CS 334 cover?", False),
+    ("How many credits do I need to graduate?", False),
+])
+def test_advice_questions_get_the_extended_budget(question, advice):
+    from app.generation.research_controller import asks_for_advice
+
+    assert asks_for_advice(question) is advice
 
 
 _PROGRAMS = ["NEUROSCIENCE AND BEHAVIORAL BIOLOGY (BS)", "APPLIED MATHEMATICS (MINOR)",

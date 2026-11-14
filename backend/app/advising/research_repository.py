@@ -33,7 +33,7 @@ from app.util.json import iso
 
 SCOPE_FORMAT_VERSION = "2"
 DOCUMENT_PAGE_BYTES = 8_000
-MAX_COURSE_CODES = 4
+MAX_COURSE_CODES = 8
 
 
 class ScopeChanged(RuntimeError):

@@ -1412,7 +1412,11 @@ Research answers every question, from `/api/query` and from saved turns
 (`api/query_service.py`). It needs a tools-capable connection; an unavailable
 one fails explicitly and `/ready` reports `no_advising_model_configured`. It
 settles token and cost quotas after publishing and records unanswered questions
-(`insufficient_evidence`) in the gap list. Migrations 037–040 hold its data; migration 039 adds
+(`insufficient_evidence`) in the gap list. A turn may carry the active theme's
+voice in an optional `persona` (`swoop` or `dooley`); it appends a short style
+note after the one shared rulebook, never changes evidence, citations or checks,
+and an unset persona gives the plain advisor voice. Migrations 037–040 hold its
+data; migration 039 adds
 private `research_steps.details` for discovery results, read/entity
 associations, executed preparation checks, provider-context evidence IDs/state
 revision/prompt digest, and rejected proposals. Root retrieval traces have
@@ -1448,7 +1452,9 @@ Out-of-scope and unknown identifiers both raise `NotInScope`.
 - `read_program` returns header fields and raw lines. A line is cited only
   while its stored span digest still matches the chunk text; otherwise it is a
   lead. A projection re-imported since pinning raises `ScopeChanged`.
-- `read_courses` returns exact atlas records (at most 4 codes per call).
+- `read_courses` returns exact atlas records, eight per call. A longer list (up to
+  24, most wanted first) is a queue: the first eight are read and the rest come
+  back unread as `queued_codes`, so the model stops once it has enough.
 - `read_document` returns a section index plus whole chunks up to a byte page.
   It never cuts a chunk, and reports an oversized chunk as incomplete.
 
@@ -1518,7 +1524,8 @@ privacy service.
 `generation/research_tools.py` implements scoped discovery, program browsing,
 paged program/document reads, exact course reads, mention comparison,
 deterministic preparation checks, program audits of reported courses, topic-graph
-course suggestions, state replacement and finish. Run-local
+course suggestions, deterministic course-topic grouping, state replacement and
+finish. Run-local
 opaque handles and cursors authorize reads within the pinned manifest.
 `CORPUS_RESEARCH` grants discovery/state/finish only; handle reads retain
 `SOURCE_READ` resource checks. Search snippets are discovery leads. Discovery
@@ -1532,7 +1539,13 @@ execution fingerprint.
 Program comparison uses only read requirement items and reports
 `mention_overlap_only`, never credit savings. `advisor_suggest_courses` returns
 the closest topic groups for a goal, minus courses no checked Atlas term shows,
-labelled as suggestions and never as requirements or evidence. Course checks expand at most 30
+labelled as suggestions and never as requirements or evidence.
+`advisor_group_courses` sorts up to 24 exact course codes, or every current
+course of one subject in a level range ("three 300-level CS courses" names no
+codes), into their deepest learned topic groups from the current topic build. It
+reports codes in no topic as ungrouped and courses no checked Atlas term shows as
+`not_offered`; its topics are similarity groups from descriptions, not
+requirements, and the result is discovery only. Course checks expand at most 30
 codes, use the citation-scoped deterministic parser trees and sequence planning,
 and disclose blockers, unexplored dependencies and unverified completed courses.
 Preparation checks may discover prerequisite alternatives for evidence, but only
@@ -1633,7 +1646,10 @@ notebook updates and finish.
 `generation/research_final.py` checks active evidence/candidate references,
 factual support, recommended entity reads, preparation claim coverage and
 executed results. It rejects empty finals and raw model-authored citation
-markers. Course-specific suggestions use `FinalDecision.recommended_course_codes`;
+markers. A judgment needs supporting evidence but no candidate; every course a
+judgment names joins `recommended_course_codes`, so it must have been read, exist
+and be currently offered. Course-specific suggestions use
+`FinalDecision.recommended_course_codes`;
 course-only candidate paths also require actual course evidence. Course codes
 within a program candidate remain research hypotheses, so listing a program's
 requirements does not demand descriptions of every required course. The
@@ -1649,8 +1665,10 @@ program must be backed by that passage. Both sides of both comparisons are
 read with the shared `canonical_codes_in` reader, and the locator label is
 part of a cited passage. A clause that reports the
 evidence does not establish the claim may name the absent code; a positive
-clause may not. `judgment` and `question` blocks are exempt: neither
-asserts an institutional fact about a course. The server
+clause may not. `judgment` and `question` blocks are exempt from the claim-support
+and identity halves: neither asserts an institutional fact about a course. A
+judgment's named courses remain recommendations, so they still face the
+read/current checks. The server
 renders numbers in first-use order, with `trace.contextBlock` and citations in
 exactly that order. JSON/citation acceptance is structural validation. Typed
 factual blocks become entailment-review units; subjective suitability judgments
@@ -2282,8 +2300,9 @@ whose bound job is terminal or missing, or whose synchronous deadline has
 passed; live queued/running work is never reconciled away.
 
 A turn request extends `QueryRequest` with UUID `requestId`, integer
-`expectedSequence`, and optional `artifactReferences`
-containing `{artifactId, revisionId}` pairs. Replay of an identical settled
+`expectedSequence`, optional `artifactReferences`
+containing `{artifactId, revisionId}` pairs, and an optional `persona`
+(`swoop|dooley`) that selects this turn's voice. Replay of an identical settled
 request returns its recorded result without another model call. A changed input,
 concurrent request, or unknown pending outcome returns 409. Abandoning cannot
 refund an already-started provider call; usage is still accounted before output

@@ -214,6 +214,14 @@ class Settings:
     # A reply cut off at the output limit is retried with a doubled allowance up
     # to this ceiling: reasoning models spend hidden tokens before any tool call.
     research_truncation_max_output_tokens: int = 16_384
+    # A question asking for advice (what to take, which path, X or Y) gets more
+    # room to plan before it answers: more effort per round, more rounds, more
+    # time. Lookups keep the quicker budget above.
+    research_advice_reasoning_effort: str | None = "high"
+    research_advice_max_calls: int = 24
+    research_advice_max_tool_calls: int = 20
+    research_advice_operation_timeout_seconds: float = 540.0
+    research_advice_operation_token_budget: int = 360_000
     audit_max_search_states: int = 50_000
     office_enabled: bool = False
     sandbox_remote_url: str | None = None
@@ -316,6 +324,15 @@ class Settings:
         if self.research_reasoning_effort not in {None, "none", "minimal", "low", "medium", "high",
                                                    "xhigh", "max"}:
             raise ValueError("RESEARCH_REASONING_EFFORT is unsupported")
+        if self.research_advice_reasoning_effort not in {None, "none", "minimal", "low", "medium",
+                                                          "high", "xhigh", "max"}:
+            raise ValueError("RESEARCH_ADVICE_REASONING_EFFORT is unsupported")
+        if (not 1 <= self.research_advice_max_calls <= 100
+                or not 1 <= self.research_advice_max_tool_calls <= 100
+                or not math.isfinite(self.research_advice_operation_timeout_seconds)
+                or self.research_advice_operation_timeout_seconds <= 0
+                or not 1_000 <= self.research_advice_operation_token_budget <= 20_000_000):
+            raise ValueError("research advice limits are invalid")
         if self.llm_compatible_thinking not in {None, "enabled", "disabled"}:
             raise ValueError("LLM_COMPATIBLE_THINKING must be enabled or disabled")
         if self.llm_sampling_policy == "greedy" and self.llm_reasoning_effort not in {None, "none"}:
@@ -511,6 +528,14 @@ def load_settings() -> Settings:
         research_max_prompt_bytes=_int("RESEARCH_MAX_PROMPT_BYTES", 52_000),
         research_max_output_tokens=_int("RESEARCH_MAX_OUTPUT_TOKENS", 10_240),
         research_truncation_max_output_tokens=_int("RESEARCH_TRUNCATION_MAX_OUTPUT_TOKENS", 16_384),
+        research_advice_reasoning_effort=(
+            os.environ.get("RESEARCH_ADVICE_REASONING_EFFORT", "high") or None),
+        research_advice_max_calls=_int("RESEARCH_ADVICE_MAX_CALLS", 24),
+        research_advice_max_tool_calls=_int("RESEARCH_ADVICE_MAX_TOOL_CALLS", 20),
+        research_advice_operation_timeout_seconds=_float(
+            "RESEARCH_ADVICE_OPERATION_TIMEOUT_SECONDS", 540),
+        research_advice_operation_token_budget=_int(
+            "RESEARCH_ADVICE_OPERATION_TOKEN_BUDGET", 360_000),
         audit_max_search_states=_int("AUDIT_MAX_SEARCH_STATES", 50_000),
         office_enabled=_bool("OFFICE_ENABLED", False),
         sandbox_remote_url=_optional("SANDBOX_REMOTE_URL"),

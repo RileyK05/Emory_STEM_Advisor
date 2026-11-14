@@ -141,10 +141,12 @@ Each item is one of four kinds:
   - `PYTHONPATH=.`
   - `HF_HUB_OFFLINE=1`
   - `PYTHONIOENCODING=utf-8`
-  - `DATABASE_URL=postgresql://postgres@127.0.0.1:63312/postgres`, the embedded dev
-    pgserver
+  - `DATABASE_URL=postgresql://postgres@127.0.0.1:<port>/postgres`, the embedded dev
+    pgserver. Its port changes when it restarts (57482 on 2026-11-13); read it from
+    `data/pgserver/postmaster.pid`.
 - **Live model.** Live runs use the model the user's `.env` already configures. The
-  provider is `minimax-m3.1-flash` through Ollama Cloud.
+  provider is `deepseek-v4.1-flash` through Ollama Cloud (from 2026-11-13; earlier
+  results in these plans are `minimax-m3.1-flash`).
 - **On a provider 429 or "allowance spent":**
   - Stop the run and wait. The last limit lasted about 90 minutes.
   - Never count it as a failure, and never switch providers.

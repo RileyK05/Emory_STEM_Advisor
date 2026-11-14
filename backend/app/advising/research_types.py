@@ -41,7 +41,9 @@ MAX_CRITERIA = 8
 MAX_OPEN_QUESTIONS = 8
 MAX_STATE_BYTES = 8_000
 MAX_DECISION_BLOCKS = 20
-MAX_DECISION_TEXT_BYTES = 3_200
+MAX_DECISION_TEXT_BYTES = 4_000
+# Replies are read on a phone: about 400 words, with a little room.
+MAX_DECISION_WORDS = 450
 MAX_QUESTIONS_PER_TURN = 2
 MAX_UNRESOLVED_QUESTIONS = 8
 
@@ -331,6 +333,10 @@ def decision_text_bytes(decision: FinalDecision) -> int:
     return sum(len(block.text.encode("utf-8")) for block in decision.blocks)
 
 
+def decision_words(decision: FinalDecision) -> int:
+    return sum(len(block.text.split()) for block in decision.blocks)
+
+
 def question_blocks(decision: FinalDecision) -> int:
     return sum(1 for block in decision.blocks if block.kind == "question")
 
@@ -347,7 +353,13 @@ def validate_decision_limits(decision: FinalDecision) -> list[str]:
     total = decision_text_bytes(decision)
     if total > MAX_DECISION_TEXT_BYTES:
         problems.append(f"reply is {total} bytes, over {MAX_DECISION_TEXT_BYTES}: cut it to the "
-                        "direct answer and the next step, under 250 words")
+                        "direct answer and the next step, under 250 words for a lookup, 400 "
+                        "for grouped advice")
+    words = decision_words(decision)
+    if words > MAX_DECISION_WORDS:
+        problems.append(f"reply is {words} words, over {MAX_DECISION_WORDS}: keep it to about "
+                        "400, with one or two picks per interest, and drop program rules the "
+                        "student did not ask about")
     if question_blocks(decision) > MAX_QUESTIONS_PER_TURN:
         problems.append(f"more than {MAX_QUESTIONS_PER_TURN} questions in one turn")
     if len(decision.unresolved_questions) > MAX_UNRESOLVED_QUESTIONS:

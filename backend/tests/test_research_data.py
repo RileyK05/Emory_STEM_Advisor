@@ -393,7 +393,8 @@ def test_course_and_document_reads_stay_in_scope_and_page_whole_chunks(db, colle
     assert read_courses(db, _scope(db, collection, source_ids=[corpus["policy"]]),
                         ["ECON 201"]) == []
     with pytest.raises(ValueError):
-        read_courses(db, scope, ["ECON 101", "ECON 201", "MATH 111", "MATH 112", "ECON 301"])
+        read_courses(db, scope, ["ECON 101", "ECON 201", "MATH 111", "MATH 112", "ECON 301",
+                                 "ECON 302", "ECON 303", "ECON 304", "ECON 305"])
     whole = read_document(db, scope, corpus["policy"], page_bytes=10**6)
     assert len(whole.chunks) > 1 and whole.next_chunk is None and whole.sections
     # A page holds whole chunks only; the next page starts at the next chunk.
@@ -469,6 +470,24 @@ def test_course_read_states_what_the_atlas_terms_show(
         assert bool(courses[code]["offered_terms"]) == (code == "ECON 101")
         assert (note in courses[code]["offering_note"]) if note else (
             "offering_note" not in courses[code])
+    # A long list is a queue, read in the order asked: the first batch now, the
+    # rest handed back unread, so the model stops once it has what it needs.
+    wanted = [*expected, *(f"ECON {n}" for n in range(901, 908))]
+    batch = session.registry().invoke(
+        "advisor_read_courses", {"course_codes": wanted}, session.tool_scope(lambda: None))
+    assert {course["code"] for course in batch.data["courses"]} == set(expected)
+    assert batch.data["queued_codes"] == wanted[8:]
+    # Advice naming an unread course is sent back with that record already
+    # opened, so the next round can keep the advice instead of dropping it.
+    rejected = session.registry().invoke("advisor_finish", {"decision": {
+        "outcome": "recommendation", "completeness": "complete", "blocks": [{
+            "kind": "judgment", "text": "MATH 112 is a good next step.",
+            "evidence_ids": batch.data["evidence_ids"][:1]}]}}, session.tool_scope(lambda: None))
+    assert "the course records for MATH 112 are now in" in rejected.limitations[0]
+    # Grouping options by interest leaves a retired course out of every group.
+    grouped = session.registry().invoke(
+        "advisor_group_courses", {"course_codes": list(expected)}, session.tool_scope(lambda: None))
+    assert grouped.data["not_offered"] == (["MATH 111"] if expected["MATH 111"] else [])
     answer = SimpleNamespace(recommended_course_codes=(), candidate_ids=(), blocks=[
         SimpleNamespace(text="ECON 101, ECON 201 and MATH 111")])
     assert session._retired_courses(answer) == (
@@ -1033,7 +1052,7 @@ def _research_provider(monkeypatch, script):
     return provider
 
 
-@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry", "program_paging", "program_paging_budget", "factual_evidence_retention", "program_audit", "course_suggestions", "which_majors"])
+@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_format_slips_spare_corrections", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry", "program_paging", "program_paging_budget", "factual_evidence_retention", "program_audit", "course_suggestions", "which_majors"])
 def test_research_answers_progressively_and_persists_its_decision(
         db, collection, tmp_path, monkeypatch, scenario):
     from app.api.query_service import query_response
@@ -1100,7 +1119,8 @@ def test_research_answers_progressively_and_persists_its_decision(
         # This chain sits at the default budget; the point is its length, not the limit.
         settings = replace(settings, research_max_prompt_bytes=56_000)
     if scenario == "program_paging_budget":
-        settings = replace(settings, research_max_calls=5)
+        # "Help choose a path" is advice, so its budget is the advice budget.
+        settings = replace(settings, research_max_calls=5, research_advice_max_calls=5)
     observed = {}
     def script(context, index, request=None):
         def call(name, args):
@@ -1320,13 +1340,13 @@ def test_research_answers_progressively_and_persists_its_decision(
                     "active_evidence_ids": ids, "candidates": [{"id": "document_lookup",
                         "program_handles": [handle], "description": "Read a policy", "status": "investigating"}]
                         if index == 2 else []}})
-            if index == 5:
-                assert "use fact or limitation" in context["instruction"]
+            # A sourced judgment with no candidate is advice; it now finishes the run.
             return call("finish", {"decision": {"outcome": "information", "completeness": "complete",
-                "blocks": [{"kind": "judgment" if index == 4 else "fact",
+                "blocks": [{"kind": "judgment",
                     "text": "The policy describes letter grades.", "evidence_ids": ids}]}})
         if scenario in {"free_json_finish", "finish_repair_extra_field",
-                        "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references"}:
+                        "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references",
+                        "finish_format_slips_spare_corrections"}:
             if index == 0:
                 return call("read_courses", {"course_codes": ["ECON 201"]})
             ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
@@ -1342,6 +1362,19 @@ def test_research_answers_progressively_and_persists_its_decision(
             if index == 1 and scenario == "finish_repair_malformed_then_validation":
                 return GenerationResult(text='{"decision": {"outcome":', finish_reason="stop",
                                         usage=provider.result.usage)
+            # Two format slips, then one real content rejection: the slips have
+            # their own allowance, so the content correction still gets its round.
+            if scenario == "finish_format_slips_spare_corrections" and index in {1, 2, 3}:
+                if index == 1:
+                    return GenerationResult(text='{"decision": {"outcome":', finish_reason="stop",
+                                            usage=provider.result.usage)
+                if index == 2:
+                    return [ToolCall("no-kinds", "advisor_finish", {"decision": {
+                        "outcome": "information", "completeness": "complete",
+                        "blocks": [{"evidence_ids": ids}]}})]
+                return [ToolCall("bad-reference", "advisor_finish", {"decision": {
+                    "outcome": "information", "completeness": "complete", "blocks": [{
+                        "kind": "fact", "text": "Unsupported claim.", "evidence_ids": ["e999"]}]}})]
             if index == 1 and scenario == "finish_rejects_unsupported_references":
                 bad = {"outcome": "information", "completeness": "complete", "blocks": [{
                     "kind": "fact", "text": "Unsupported claim.", "evidence_ids": ["e999"]}]}
@@ -1423,7 +1456,7 @@ def test_research_answers_progressively_and_persists_its_decision(
                 assert result.tool_call_id == assistant.tool_calls[0].id
                 rejection = json.loads(result.content)
                 assert rejection["status"] == "conflict"
-                assert any("judgment requires a candidate" in message
+                assert any("judgment requires supporting evidence" in message
                            for message in rejection["limitations"])
                 assert any("fact with no supporting evidence" in message
                            for message in rejection["limitations"])
@@ -1655,6 +1688,7 @@ def test_research_answers_progressively_and_persists_its_decision(
     if scenario == "document_state_repair":
         assert run.state.revision == 1 and not run.state.candidates
         assert run.state.active_evidence_ids
+        assert [block.kind for block in response.research.blocks] == ["judgment"]
     if scenario == "discovery_read_cadence":
         steps = ResearchStore(db, "development").steps(run.run_id)
         assert any(step["action_kind"] == "read_document" for step in steps)

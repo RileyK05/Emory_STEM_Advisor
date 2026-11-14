@@ -22,7 +22,7 @@ from app.generation.answer import NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-50"
+RESEARCH_PROMPT_VERSION = "research-56"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
 # A fact block that asserts a course is required, listed or part of a program
@@ -155,14 +155,15 @@ def grading_rule_problems(decision: FinalDecision,
 
 
 def policy_number_problems(decision: FinalDecision, records: dict) -> list[str]:
-    """A fact stating a cap, minimum or GPA threshold cites a passage with that number.
+    """A fact or judgment stating a cap, minimum or GPA threshold cites a passage with it.
 
     A model that read the College default and the program rule can give the
-    wrong one's number, or none of them ("24 hours" when the rule says 12).
+    wrong one's number, or none of them ("24 hours" when the rule says 12). Advice
+    carries numbers as often as facts do; only its opinion is beyond checking.
     """
     problems = []
     for block in decision.blocks:
-        if block.kind != "fact":
+        if block.kind not in {"fact", "judgment"}:
             continue
         support = _numbers_in("\n".join(
             records[e].exact_text for e in block.evidence_ids if e in records))
@@ -181,7 +182,7 @@ def policy_number_problems(decision: FinalDecision, records: dict) -> list[str]:
                         unsupported.add(f"{number:g}")
         if unsupported:
             problems.append(
-                "fact block states " + ", ".join(sorted(unsupported)) + " but its cited passages "
+                f"{block.kind} block states " + ", ".join(sorted(unsupported)) + " but its cited passages "
                 "do not contain that number; cite the passage that states it, or drop it")
     return problems
 
@@ -335,20 +336,16 @@ def _instruction_shingles(instructions: str) -> set[tuple[str, ...]]:
 def normalize_decision(decision: FinalDecision, supplied) -> FinalDecision:
     """Fix in code the slips that need no model round, before validation.
 
-    Two shapes cost a whole correction round each and have one safe reading:
-    a judgment block with evidence but no candidate is a sourced statement, so
-    it becomes a fact (a stricter kind: every check on facts still applies);
-    and a citation of evidence this request never supplied is one the model
-    cannot have read, so it is dropped (a fact left without support is still
-    rejected).
+    A citation of evidence this request never supplied is one the model cannot
+    have read, so it is dropped (a fact left without support is still rejected).
+    A judgment keeps its kind: a candidate is optional, and its own evidence and
+    named-course checks decide whether it stands.
     """
     blocks, changed = [], False
     for block in decision.blocks:
         evidence = tuple(e for e in block.evidence_ids if e in supplied)
-        kind = ("fact" if block.kind == "judgment" and not block.candidate_ids and evidence
-                else block.kind)
-        if evidence != tuple(block.evidence_ids) or kind != block.kind:
-            block = block.model_copy(update={"evidence_ids": evidence, "kind": kind})
+        if evidence != tuple(block.evidence_ids):
+            block = block.model_copy(update={"evidence_ids": evidence})
             changed = True
         blocks.append(block)
     return decision.model_copy(update={"blocks": tuple(blocks)}) if changed else decision
@@ -379,10 +376,9 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
     if any(_MARKER.search(b.text) for b in decision.blocks):
         problems.append("block text contains a raw citation marker; use evidence_ids")
     for block in decision.blocks:
-        if block.kind == "judgment" and (not block.candidate_ids or not block.evidence_ids):
-            problems.append("judgment requires a candidate and supporting evidence; "
-                            "use fact or limitation for source-scope conclusions, "
-                            "and judgment only for candidate preferences")
+        if block.kind == "judgment" and not block.evidence_ids:
+            problems.append("judgment requires supporting evidence; cite the course records or "
+                            "passages behind your advice")
     cited = {e for b in decision.blocks for e in b.evidence_ids}
     refs = {ref for e in cited if e in records for ref in records[e].entity_refs}
     if entity_evidence is not None:
@@ -441,7 +437,9 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
                 f"{block.kind} block names course code(s) absent from the evidence "
                 "this run acquired: " + ", ".join(sorted(missing)))
     for block in decision.blocks:
-        if block.kind != "fact" or not _INCLUSION.search(block.text):
+        # Advice that says a course counts toward a program makes the same
+        # claim a fact does, so it names only courses its citations show.
+        if block.kind not in {"fact", "judgment"} or not _INCLUSION.search(block.text):
             continue
         # The locator is part of the cited passage: a course record's locator
         # names the course the passage is about.
@@ -458,7 +456,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
             missing.update(named)
         if missing:
             problems.append(
-                "fact block names course code(s) absent from its cited evidence: "
+                f"{block.kind} block names course code(s) absent from its cited evidence: "
                 + ", ".join(sorted(missing)))
     problems.extend(policy_number_problems(decision, records))
     for block in decision.blocks:
@@ -483,9 +481,25 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
                     f"entry/starting-point claim for {course} cites a record listing a prerequisite; "
                     "state the prerequisite first")
     course_recommendations = set(decision.recommended_course_codes)
+    # A judgment that names a course is advising the student to consider it, so
+    # the same read/current/exists checks apply however the model typed it. A
+    # course that a cited course record names besides its own (a prerequisite,
+    # say) is mentioned, not advised, and that read grounds it. The record's own
+    # course stays a recommendation, so the retired check still sees it. A
+    # program list's mention grounds nothing: citing the list would otherwise
+    # ground advice about every course on it.
+    for block in decision.blocks:
+        if block.kind != "judgment":
+            continue
+        named_by_reads = {code for e in block.evidence_ids if e in records
+                          and not any(ref.startswith("h_") for ref in records[e].entity_refs)
+                          for code in canonical_codes_in(records[e].exact_text)
+                          if code not in records[e].entity_refs}
+        course_recommendations.update(
+            code for code in canonical_codes_in(block.text) if code not in named_by_reads)
     if decision.outcome == "recommendation":
-        if not decision.candidate_ids or not any(b.kind == "judgment" for b in decision.blocks):
-            problems.append("recommendation requires a candidate and a judgment block")
+        if not any(block.kind == "judgment" for block in decision.blocks):
+            problems.append("recommendation requires a judgment block")
         for cid in decision.candidate_ids:
             candidate = candidates.get(cid)
             if candidate is None:
