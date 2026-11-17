@@ -10,6 +10,36 @@ It is a first run. The map needs a lot of checking on the ground, and several
 inputs need Riley (see "Open decisions"). Each phase ends in something a person
 can look at and correct.
 
+## Status (2026-11-17)
+
+Riley's decisions: OpenStreetMap is OK as the survey; start with the **Atlanta
+main campus**; and **make our own map rather than use a map tool**. Built in the
+first run, by Claude:
+
+- `backend/scripts/fetch_campus_map.py`: one Overpass query for the campus box,
+  saved raw to `data/maps/raw/` with a SHA sidecar; backs off when the server
+  is at capacity.
+- `backend/scripts/build_campus_map.py`: draws **our own map file**,
+  `frontend/public/maps/atlanta.json`, from the survey: metres from a campus
+  origin, our own layers (lawn, woods, sport, water, parking, plaza, roads,
+  paths, buildings), simplified, with ids only for named buildings inside
+  Emory's boundary. Everything else is faded context. No model touches it.
+- `frontend/src/components/map/`: `mapData.ts` (format, loader, helpers),
+  `CampusMap.tsx` (the SVG drawing: drag, arrow keys, buttons and Ctrl + wheel
+  to move; labels thin out without overlapping; pins on highlighted buildings;
+  Swoop and Dooley colours), and `CampusMapCard.tsx` (the card under an answer,
+  with a text list, Directions and Emory's-map links, and the credit line).
+- The contract: `ResearchDecisionInfo.places` (an optional list of building ids)
+  in `schemas.py` and `types.ts`. It is per answer, not per block, because the
+  chat renders an answer as one text. This replaces `place_ids` on blocks below.
+- Mock mode: a question starting with "where" shows the card.
+
+Not built yet: the gazetteer (1a), the audit (1c), `app/places/` and the
+backend attaching places to answers (Phase 2), and browser checks. Until the
+gazetteer exists, place ids are the builder's building ids (a slug of the OSM
+name, such as `candler-library`), so they can change when OSM renames a
+building; the gazetteer's own `id` is what later code should use.
+
 ## What the data can and cannot do (surveyed 2026-11-17)
 
 - **Atlas rooms.** The public Atlas detail pages have a "Schedule and Location"
@@ -210,15 +240,8 @@ fix the file, re-run.
 
 ## Open decisions for Riley
 
-1. **OpenStreetMap for shapes.** It is the only open source of building
-   outlines; Emory's map is all rights reserved. OK to use it, with the credit
-   line? If yes, which download: a Geofabrik Georgia extract (one file of a
-   few hundred MB, cut down to the two campuses locally) or a single Overpass query
-   for the two boxes (small, but a public API)? Recommended: Geofabrik, since
-   the file and its date can be pinned.
-2. **Which places first.** The about-60 list in 1a, or a smaller start (Oxford
-   only, where the Atlas rooms make it immediately useful)? Recommended:
-   Oxford first, then the offices students are sent to most.
+1. **OpenStreetMap for shapes.** Settled 2026-11-17: yes, as the survey only; the map itself is our own drawing.
+2. **Which places first.** Settled 2026-11-17: the Atlanta main campus first.
 3. **Ground checks.** Pins and entrances need someone on campus. Can Riley
    check the Oxford buildings, or should the first release say "approximate"
    on every pin until checked?

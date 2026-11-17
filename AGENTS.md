@@ -78,7 +78,8 @@ plans and `docs/audit/` the review status.
   `connection_dsn(conn)` instead of `conn.info.dsn` when reconnecting, so tests
   also work with password authentication and no `PGPASSWORD`.
 - `frontend/src/` — `api/` (`types.ts` mirrors the contract, `client.ts` is the
-  single factory; `VITE_API_MODE` selects `mock` (default) or `http`), `admin/`
+  single factory; `VITE_API_MODE` selects `mock` (default) or `http`), `components/map/` (our own SVG campus map; its data is `public/maps/`, built from an
+  OpenStreetMap survey, never from Emory's all-rights-reserved map), `admin/`
   (a separate Vite entry bundle sharing `SessionGate`, `Shell` and the API
   client), `components/` (one chat with artifacts made from it;
   `shell/` holds the Swoop = light Emory blue/gold, Dooley = dark black/white
@@ -145,6 +146,8 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.prepare_advising_documents           # reviewed uploads -> data/staging/
 ../.venv/Scripts/python -m scripts.fetch_bls_wages               # federal pay data -> data/staging/career-references-*/ (index with scripts.ingest --origin-manifest)
 ../.venv/Scripts/python -m scripts.fetch_scorecard_fields        # federal earnings by field -> data/staging/career-references-scorecard-*/ (same ingest)
+../.venv/Scripts/python -m scripts.fetch_campus_map             # OpenStreetMap survey -> data/maps/raw/ (backs off while Overpass is busy)
+../.venv/Scripts/python -m scripts.build_campus_map             # our own map -> frontend/public/maps/<campus>.json (ODbL; credit OSM)
 ../.venv/Scripts/python -m scripts.eval_retrieval [--cases FILE]
 ../.venv/Scripts/python -m scripts.serve                 # HTTP API on :8000
 ../.venv/Scripts/python -m scripts.worker                # background jobs and saved conversation turns

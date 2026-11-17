@@ -130,6 +130,8 @@ class ResearchDecisionInfo(BaseModel):
     blocks: list[ResearchBlock]
     artifact: ArtifactRequestInfo | None = None
     unresolvedQuestions: list[str]
+    # Campus place ids the answer names; the chat shows them on a map.
+    places: list[str] = []
 
 
 class SourceApplicabilityItem(BaseModel):

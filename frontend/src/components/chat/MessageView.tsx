@@ -1,6 +1,7 @@
 import { memo, useEffect, useState } from 'react';
 import { getClient } from '../../api/client';
 import { CheckIcon, CopyIcon, KindIcon, StopIcon, ThumbDownIcon, ThumbUpIcon } from '../icons';
+import { CampusMapCard } from '../map/CampusMapCard';
 import { AnswerText } from './AnswerText';
 import { ApplicabilityBanner } from './ApplicabilityBanner';
 import { SourceList } from './SourceList';
@@ -139,6 +140,7 @@ function AssistantMessage({ entry, onRetry }: AssistantProps) {
             context={entry.context}
             onCite={(n) => setOpenPassage((current) => (current === n ? null : n))}
           />
+          {entry.research?.places?.length ? <CampusMapCard placeIds={entry.research.places} /> : null}
           {entry.artifactNotice && (
             <p className="callout callout-info" role="status">
               {entry.artifactNotice}

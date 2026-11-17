@@ -212,6 +212,8 @@ export class MockClient implements AdvisorClient {
       response = unansweredResponse(req.query, wait);
     } else if (q.includes('gradient') || q.includes('semantic') || q.includes('embed')) {
       response = embeddingResponse(req.query, wait);
+    } else if (q.startsWith('where')) {
+      response = whereResponse(req.query, wait);
     } else if (q.includes('prereq') || q.includes('depend')) {
       response = prereqResponse(req.query, wait);
     } else if (q.includes('vector') || q.includes('basis') || q.includes('eigen')) {
@@ -471,6 +473,35 @@ function prereqResponse(query: string, wait: number): QueryResponse {
     ],
   });
 }
+
+/** A "where is…" answer: the chat shows the places it names on the campus map. */
+function whereResponse(query: string, wait: number): QueryResponse {
+  const answer =
+    'Here is where those buildings are on the Atlanta campus. The map card below the answer ' +
+    'pins each one and links to walking directions.';
+  const response = answerResponse(query, wait, {
+    answer,
+    seams: [seam('keyword', 'active', 0), PREREQ_DORMANT, seam('embed', 'active', 0)],
+    contributions: [],
+    contextChunkIds: [],
+    citationChunkIds: [],
+  });
+  return {
+    ...response,
+    research: {
+      runId: 'demo-where',
+      outcome: 'information',
+      completeness: 'complete',
+      blocks: [{ kind: 'fact', text: answer, evidenceIds: [], citationNumbers: [], candidateIds: [] }],
+      artifact: null,
+      unresolvedQuestions: [],
+      places: DEMO_PLACES,
+    },
+  };
+}
+
+// Building ids from public/maps/atlanta.json, written by scripts.build_campus_map.
+const DEMO_PLACES = ['mathematics-and-science-center', 'atwood-chemistry-center', 'robert-w-woodruff-library'];
 
 function defaultResponse(query: string, wait: number): QueryResponse {
   return answerResponse(query, wait, {

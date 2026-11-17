@@ -328,6 +328,8 @@ export interface ResearchDecisionInfo {
   blocks: ResearchBlock[];
   artifact?: ArtifactRequestInfo | null;
   unresolvedQuestions: string[];
+  /** Campus place ids the answer names (building ids in `public/maps/<campus>.json`); shown on a map. */
+  places?: string[];
 }
 
 export interface SourceApplicabilityItem {
