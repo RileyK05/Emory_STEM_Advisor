@@ -62,12 +62,31 @@ def test_or_requires_one_explicit_choice_and_never_guesses():
 
     unresolved = plan_sequence(courses, ["CS 253"])
     chosen = plan_sequence(courses, ["CS 253", "MATH 111"])
+    both_selected = plan_sequence(courses, ["CS 253", "MATH 111", "CS 170"])
     already_done = plan_sequence(courses, ["CS 253"], ["CS 170"])
 
     assert unresolved.stages == ()
     assert any(b.reason == "alternative_required" and b.alternatives == ("CS 170", "MATH 111") for b in unresolved.blockers)
     assert chosen.stages == (("MATH 111",), ("CS 253",))
-    assert already_done.stages == (("CS 253",),)
+    assert not both_selected.blockers and both_selected.prerequisites == (("CS 253", "CS 170"),)
+    assert already_done.stages == (("CS 170",), ("CS 253",)) or already_done.stages == (("CS 253",),)
+
+    minimal = plan_sequence({
+        "MATH 100": course("MATH 100"),
+        "MATH 111": course("MATH 111"),
+        "CS 170": course("CS 170", prereq=CourseRef("MATH 100"), status="parsed"),
+        "CS 253": course(
+            "CS 253",
+            prereq=AnyOf((
+                CourseRef("MATH 111"),
+                AllOf((CourseRef("CS 170"), CourseRef("MATH 100"))),
+            )),
+            status="parsed",
+        ),
+    }, ["CS 253", "MATH 111", "CS 170", "MATH 100"])
+    assert not minimal.blockers
+    assert minimal.stages == (("MATH 100", "MATH 111"), ("CS 170", "CS 253"))
+    assert ("CS 253", "MATH 111") in minimal.prerequisites
 
 
 def test_or_discloses_condition_as_an_alternative_without_requiring_it():

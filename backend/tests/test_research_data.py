@@ -448,13 +448,32 @@ def _atlas_terms(db, source_id, shown):
      {"ECON 101": None, "ECON 201": None, "MATH 111": None}),
 ])
 def test_course_read_states_what_the_atlas_terms_show(
-        db, collection, tmp_path, terms, lifecycle, expected):
+        db, collection, tmp_path, monkeypatch, terms, lifecycle, expected):
+    import hashlib
+
+    from app.advising.requirement_holds import apply_requirement_hold
     from app.config import load_settings
     from app.generation.research_tools import ResearchSession
     from tests.fakes import FakeEmbedder
     from tests.helpers import lenient_config
 
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     corpus, scope, store, run = _run(db, collection, tmp_path)
+    master_hash = db.execute(
+        "SELECT file_hash FROM sources WHERE source_id = %(source_id)s",
+        {"source_id": corpus["atlas"]},
+    ).fetchone()["file_hash"]
+    capture = tmp_path / "hold-capture.json"
+    capture.write_bytes(b"{}")
+    hold_reason = "ECON 101 requirement differs in captured live Atlas."
+    apply_requirement_hold(
+        db, source_id=corpus["atlas"], course_code="ECON 101",
+        master_file_hash=master_hash,
+        conflict_reason=hold_reason,
+        evidence_capture_sha256=hashlib.sha256(b"{}").hexdigest(),
+        evidence_capture_path=str(capture),
+        curator="test",
+    )
     db.execute("UPDATE courses SET lifecycle = %s WHERE collection_id = %s AND code = 'MATH 111'",
                (lifecycle, collection))
     _atlas_terms(db, corpus["policy"], {term: {"ECON 101": "eligible"} for term in terms[:-1]} | {
@@ -466,6 +485,9 @@ def test_course_read_states_what_the_atlas_terms_show(
         "advisor_read_courses", {"course_codes": list(expected)}, session.tool_scope(lambda: None))
     courses = {course["code"]: course for course in read.data["courses"]}
     assert set(courses) == set(expected)
+    assert courses["ECON 101"]["requirement_hold"] == hold_reason
+    assert session.course_facts["ECON 101"]["requirement_hold"] == hold_reason
+    assert "requirement_hold" not in courses["ECON 201"]
     for code, note in expected.items():
         assert bool(courses[code]["offered_terms"]) == (code == "ECON 101")
         assert (note in courses[code]["offering_note"]) if note else (
@@ -2020,10 +2042,12 @@ def test_the_prerequisite_graph_can_hold_the_whole_answer(db, collection, tmp_pa
     session.question = "is PHYS 413 a good class"
     with pytest.raises(DecisionRejected, match="PHYS 413"):
         session.finish(FinishInput.model_construct(decision=decision), None)
+    # The other degree is a database fact, so the server says it rather than refuse.
     session.question = "what classes do i need for the economics major"
     session.must_name_degrees = {"BA"}
-    with pytest.raises(DecisionRejected, match="also exists as a BA"):
-        session.finish(FinishInput.model_construct(decision=decision), None)
+    session.finish(FinishInput.model_construct(decision=decision), None)
+    assert session.decision.blocks[0].text == (
+        "ECON 301 follows it. Emory also offers this program as a BA.")
 
 
 @pytest.mark.parametrize("question,hits", [

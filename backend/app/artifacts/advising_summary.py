@@ -22,7 +22,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 
-from app.artifacts.checks import invalid_course_codes
+from app.artifacts.checks import invalid_course_codes, label_absent_codes
 from app.artifacts.models import (
     ArtifactReference,
     DocumentBlock,
@@ -41,10 +41,15 @@ ABSENT_COURSE = "a course not in the current Course Atlas"
 # A course code as a turn may write it: "PHYS 444", "phys444", "ECON_OX 201W".
 _WRITTEN_CODE = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z]{2,8}(?:_OX)?\s?\d{3}[A-Za-z]?(?![A-Za-z0-9])",
                            re.IGNORECASE)
+_SLASH_WRITTEN_CODE = re.compile(
+    r"(?<![A-Za-z0-9_])([A-Za-z]{2,8}(?:_OX)?(?:\s*/\s*[A-Za-z]{2,8}(?:_OX)?)+)"
+    r"\s?(\d{3}[A-Za-z]?)(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 
 
 def without_absent_codes(blocks, known_courses, campus_equivalents):
-    """Write each code the Course Atlas lacks as a description, in every block's text."""
+    """Rewrite aliases/absent codes across blocks without altering valid casing."""
     absent = invalid_course_codes(
         {code for block in blocks for text in _block_texts(block)
          for code in canonical_codes_in(text)}, known_courses, campus_equivalents)
@@ -52,37 +57,92 @@ def without_absent_codes(blocks, known_courses, campus_equivalents):
                 for alias in [_suffix_alias(code, known_courses)]
                 if alias is not None}
     absent -= set(resolved)
-    if not absent and not resolved:
-        return blocks
 
-    def written(match) -> str:
-        # "phys444" only normalizes; "Physics 444" only reads as a course in prose.
-        codes = {normalize_code(match.group(0)), *canonical_codes_in(match.group(0))}
+    def resolve_single(raw: str) -> str | None:
+        canon = next(iter(canonical_codes_in(raw)), None) or normalize_code(raw)
+        codes = {normalize_code(raw), *canonical_codes_in(raw)} - {None}
         for code in codes:
             if code in resolved:
                 return resolved[code]
-        return ABSENT_COURSE if codes & absent else match.group(0)
+        if codes & absent:
+            return ABSENT_COURSE
+        if canon and " ".join(raw.split()).casefold() != canon.casefold():
+            return canon
+        return None
+
+    def slash_sub(match: re.Match) -> str:
+        subjects = [s.strip() for s in match.group(1).split("/")]
+        num = match.group(2)
+        kept: list[str] = []
+        changed = False
+        for subj in subjects:
+            raw_part = f"{subj} {num}"
+            codes = {normalize_code(raw_part), *canonical_codes_in(raw_part)} - {None}
+            if any(c in resolved for c in codes):
+                changed = True
+                for c in codes:
+                    if c in resolved and resolved[c] not in kept:
+                        kept.append(resolved[c])
+            elif codes and codes <= absent:
+                changed = True
+            else:
+                canon = next(iter(canonical_codes_in(raw_part)), None) or normalize_code(raw_part)
+                if canon and canon.casefold() != raw_part.casefold():
+                    changed = True
+                chosen = canon or raw_part
+                if chosen not in kept:
+                    kept.append(chosen)
+        if not kept:
+            return ABSENT_COURSE
+        if changed:
+            return " / ".join(kept)
+        return match.group(0)
+
+    def written(match: re.Match) -> str:
+        replacement = resolve_single(match.group(0))
+        return replacement if replacement is not None else match.group(0)
 
     def clean(text: str) -> str:
-        cleaned = _WRITTEN_CODE.sub(written, text)
+        cleaned = _SLASH_WRITTEN_CODE.sub(slash_sub, text)
+        cleaned = _WRITTEN_CODE.sub(written, cleaned)
         # A list of missing codes becomes one readable phrase.
         missing = re.escape(ABSENT_COURSE)
-        return re.sub(
+        cleaned = re.sub(
             rf"{missing}(?:\s*(?:,\s*(?:and\s+)?|\band\s+){missing})+",
             "and other courses not in the current Course Atlas", cleaned)
+        return re.sub(
+            rf"({missing})\s+(?!(?:Fall|Spring|Summer|Winter|Emory|Oxford)\b)([A-Z][A-Za-z0-9]*)",
+            r"\1 — \2",
+            cleaned,
+        )
 
-    cleaned = []
+    return _map_texts(blocks, clean)
+
+
+def label_absent_codes_in(blocks, known_courses, campus_equivalents, catalog_aliases=None):
+    """Keep quoted program lines as written; label each code the Atlas lacks.
+
+    Code-built artifacts quote the catalog's requirement lines. Rewriting a
+    missing code would change the requirement the student reads, so the line
+    stays and says which codes cannot be found (user decision, 2026-11-16).
+    """
+    return _map_texts(blocks, lambda text: label_absent_codes(
+        text, known_courses, campus_equivalents, catalog_aliases))
+
+
+def _map_texts(blocks, change):
+    changed = []
     for block in blocks:
         if isinstance(block, (HeadingBlock, ParagraphBlock)):
-            block = block.model_copy(update={"text": clean(block.text)})
+            block = block.model_copy(update={"text": change(block.text)})
         elif isinstance(block, ListBlock):
-            block = block.model_copy(update={"items": [clean(item) for item in block.items]})
+            block = block.model_copy(update={"items": [change(item) for item in block.items]})
         elif isinstance(block, TableBlock):
             block = block.model_copy(update={
-                "headers": [clean(cell) for cell in block.headers],
-                "rows": [[clean(cell) for cell in row] for row in block.rows]})
-        cleaned.append(block)
-    return cleaned
+                "headers": [change(cell) for cell in block.headers],
+                "rows": [[change(cell) for cell in row] for row in block.rows]})
+        changed.append(block)
+    return changed
 
 
 def _suffix_alias(code: str, known_courses) -> str | None:

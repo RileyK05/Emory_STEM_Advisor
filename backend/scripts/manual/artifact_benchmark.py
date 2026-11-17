@@ -29,15 +29,19 @@ import docx
 import openpyxl
 from fastapi.testclient import TestClient
 
-from app.advising.catalog import load_campus_equivalents
+from app.advising.catalog import (
+    load_campus_equivalents,
+    load_catalog_code_aliases,
+    load_program_quoted_codes,
+)
 from app.api import create_app
 from app.artifacts.checks import (
     extract_artifact_text,
     extract_planned_terms,
-    invalid_course_codes,
     leak_matches,
     plan_order_violations,
     program_requirement_check,
+    undisclosed_course_codes,
 )
 from app.artifacts.docx import export_docx
 from app.artifacts.inert_html import render_inert_markup
@@ -116,6 +120,8 @@ def evaluate_checks(
     campus_equivalents: dict[str, frozenset[str]],
     collection_id: UUID,
     parent_sha256_before: str | None = None,
+    catalog_aliases: dict[str, frozenset[str]] | None = None,
+    quoted_codes: frozenset[str] = frozenset(),
 ) -> list[CheckResult]:
     """Run mechanical checks K1 through K11 on a completed case."""
     results: list[CheckResult] = []
@@ -163,11 +169,15 @@ def evaluate_checks(
         k3_detail = "N/A (no artifact expected)"
     results.append(CheckResult("K3", k3_ok, k3_detail))
 
-    # K4: Real courses: courses in artifact exist in collection or stated campus equivalents
+    # K4: Real courses: courses in artifact exist in collection or stated campus
+    # equivalents, or are a catalog spelling the program import linked to a course
+    # ("DATASCI 495B" for DATASCI 495BW), or a code a program line prints that is
+    # labeled as missing from the Atlas (both approved 2026-11-16).
     if spec is not None:
         art_text = extract_artifact_text(spec)
         codes = set(canonical_codes_in(art_text))
-        invalid_codes = invalid_course_codes(codes, known_courses, campus_equivalents)
+        invalid_codes = undisclosed_course_codes(art_text, known_courses, campus_equivalents,
+                                                 catalog_aliases, quoted_codes)
         if expected.get("no_hallucinated_course"):
             bad = expected["no_hallucinated_course"]
             if bad in codes or bad in canonical_codes_in(turn.get("text") or ""):
@@ -595,6 +605,8 @@ def main() -> None:
         ).fetchall()
         known_courses = {r["code"] for r in c_rows}
         campus_equivalents = load_campus_equivalents(startup_conn, collection_id=collection_id)
+        catalog_aliases = load_catalog_code_aliases(startup_conn, collection_id=collection_id)
+        quoted_codes = load_program_quoted_codes(startup_conn, collection_id=collection_id)
 
     handlers = build_worker_handlers(settings)
     artifact_executor = RunExecutor(
@@ -698,9 +710,12 @@ def main() -> None:
                 if matching_turns:
                     last_turn_record = matching_turns[0]
 
-                # If artifact run was admitted, execute artifact worker job
+                # If artifact run was admitted, execute artifact worker job. An
+                # earlier turn's run is drained too: left queued, it holds the
+                # workspace's admission slot and the next turn is refused (the
+                # revise family never ran, round 8). Only the last turn is graded.
                 art_run = last_turn_record.get("artifactRun")
-                if art_run and seq_idx == len(conv_messages) - 1:
+                if art_run:
                     run_id = art_run["runId"]
                     t_run0 = time.monotonic()
                     while time.monotonic() - t_run0 <= 600:
@@ -711,6 +726,7 @@ def main() -> None:
                             if st in ("succeeded", "failed", "cancelled"):
                                 break
                         time.sleep(0.1)
+                if art_run and seq_idx == len(conv_messages) - 1:
                     run_sec = time.monotonic() - t_run0
 
                     # Load published artifact
@@ -746,6 +762,8 @@ def main() -> None:
                     campus_equivalents=campus_equivalents,
                     collection_id=collection_id,
                     parent_sha256_before=parent_sha256_before,
+                    catalog_aliases=catalog_aliases,
+                    quoted_codes=quoted_codes,
                 )
 
             res = BenchmarkResult(

@@ -76,6 +76,7 @@ export interface QueryRequest {
   collectionId?: string;
   /** Omitted/null searches the collection; [] means explicitly search no sources. */
   sourceIds?: string[] | null;
+  artifactReferences?: ArtifactRevisionReference[];
   studentCohort?: string | null;
   /** The composer's "Make a file" box. Omitted: the server reads the wording. */
   makeArtifact?: boolean | null;

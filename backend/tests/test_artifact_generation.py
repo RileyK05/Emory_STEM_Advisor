@@ -407,6 +407,11 @@ def test_workbook_rows_become_code_built_cells_and_formulas(db, collection, tmp_
     ("Plan my Economics major", "Economics (Minor)", True),
     ("Compare the Economics major and minor", "Economics (Minor)", False),
     ("Plan my Economics courses", "Economics (BA)", False),
+    # A degree ("BA", "BS") names a major, so a request can name both kinds this way.
+    ("Compare the Physics minor and the Physics and Astronomy BA", "Physics and Astronomy (BA)",
+     False),
+    ("Compare the Physics minor and the Physics and Astronomy BA", "Physics (Minor)", False),
+    ("Plan my Economics BA", "Economics (Minor)", True),
 ])
 def test_an_outline_keeps_the_program_kind_the_student_named(brief, title, refused):
     from app.generation.artifact_pipeline import _check_program_kind
@@ -487,6 +492,8 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
     assert spec["title"] == "Economics (Minor): Term plan"
     assert spec["provenance"]["plan"] is True
     assert spec["provenance"]["program_title"] == "Economics (Minor)"
+    assumptions = next(block for block in spec["blocks"] if block["id"] == "assumptions:p")
+    assert assumptions["type"] == "paragraph" and "up to 16 credits per term" in assumptions["text"]
     course = next(block for block in spec["blocks"] if block["type"] == "list")
     assert course["items"] == ["ECON 201 — Intermediate Macroeconomics"]
     # The schedule is code-built: no term spends a model call on a note.
@@ -640,8 +647,17 @@ def test_common_artifacts_are_built_from_program_records_not_written(
 
 def test_a_checklist_is_built_from_the_programs_lines_without_the_model(
         db, collection, tmp_path):
-    """A model that cannot outline at all still gets the whole checklist."""
-    source = _econ(db, collection, tmp_path)
+    """A model that cannot outline at all still gets the whole checklist.
+
+    Its lines stay as the program wrote them: a code the Atlas lacks is labeled,
+    not dropped, and passes the artifact's own course check (round 8: 34 of 155
+    built checklists failed it), and a course whose title marks a special kind
+    gets its caveat.
+    """
+    source = _econ(db, collection, tmp_path,
+                   extra='\n{"code": "ECON 499R", "title": "Directed Research", '
+                         '"description": "Varies.", "requisites": null}',
+                   program=ECON_MINOR + "• Econ 499\n• Econ 498 or Econ 497\n")
 
     class NoOutline(ArtifactStageProvider):
         def generate(self, request):
@@ -669,7 +685,14 @@ def test_a_checklist_is_built_from_the_programs_lines_without_the_model(
     spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
     headings = [block.get("text") for block in spec["blocks"]
                 if block.get("type") == "heading"]
-    assert headings == ["At a glance", "Requirements", "Next steps"]
+    assert headings == ["At a glance", "Requirements", "Courses with their own rules",
+                        "Next steps"]
+    items = [item for block in spec["blocks"] if block.get("type") == "list"
+             for item in block["items"]]
+    assert "☐ Econ 498 or Econ 497 (ECON 498 and ECON 497 are not in the current Course " \
+           "Atlas)" in items
+    assert ("ECON 499 is an independent research or study course: you arrange it with a "
+            "faculty mentor, usually with department permission.") in items
     assert spec["title"] == "Economics (Minor): Requirements checklist"
     assert (spec["provenance"]["built_template"], spec["provenance"]["artifact_label"]) == (
         "checklist", "Requirements checklist")
@@ -880,6 +903,57 @@ def test_a_plan_order_violation_names_its_section(db, collection, tmp_path):
     assert "ECON 201" in k6[0].message
 
 
+@pytest.mark.parametrize(("code", "invalid"), [
+    # The catalog's spelling of ECON 499R, linked by the program import (round 8:
+    # a code-built checklist quoting "DATASCI 495B" failed its own course check).
+    ("ECON 499", set()),
+    ("ECON 498", {"ECON 498"}),  # no course: still an invented code
+])
+def test_the_course_check_reads_a_catalog_spelling_the_import_linked(
+        db, collection, tmp_path, code, invalid):
+    from app.advising.catalog import load_catalog_code_aliases
+    from app.artifacts.checks import invalid_course_codes
+    from app.db import queries
+
+    _econ(db, collection, tmp_path,
+          extra='\n{"code": "ECON 499R", "title": "Independent Study", '
+                '"description": "Varies.", "requisites": null}',
+          program="Economics (Minor)\nDEGREE AWARDED N/A\nRequirements\n• Econ 499\n• Econ 498\n")
+    known = {row["code"] for row in db.execute(queries.get("list_collection_course_codes"),
+                                                {"collection_id": collection})}
+    aliases = load_catalog_code_aliases(db, collection_id=collection)
+    assert invalid_course_codes({code}, known, {}, aliases) == invalid
+    assert invalid_course_codes({code}, known, {}) == {code}
+
+
+@pytest.mark.parametrize(("line", "labeled", "quoted", "invalid"), [
+    # The note is read with K4's own parser: spelled subjects, bare numbers and ranges.
+    ("Linguistics 401 (only in senior year)",
+     "Linguistics 401 (only in senior year) (LING 401 is not in the current Course Atlas)",
+     {"LING 401"}, set()),
+    ("AAS 267, 300, 410 and other approved courses",
+     ("AAS 267, 300, 410 and other approved courses (AAS 300 and AAS 410 are not in the "
+      "current Course Atlas)"), {"AAS 300", "AAS 410"}, set()),
+    ("No more than 2 from the SOC 497R-499R series",
+     ("No more than 2 from the SOC 497R-499R series (SOC 499R is not in the current Course "
+      "Atlas)"), {"SOC 499R"}, set()),
+    # A note does not make up a course: only a code a program line prints passes.
+    ("Take CS 999 next", "Take CS 999 next (CS 999 is not in the current Course Atlas)",
+     set(), {"CS 999"}),
+])
+def test_a_quoted_line_keeps_a_code_the_atlas_lacks_and_says_so(line, labeled, quoted, invalid):
+    from app.artifacts.checks import PIECE_SEPARATOR, label_absent_codes, undisclosed_course_codes
+
+    known = {"AAS 267", "SOC 497R", "SOC 498R"}
+    assert label_absent_codes(line, known, {}) == labeled
+    assert undisclosed_course_codes(labeled, known, {}, quoted_codes=quoted) == invalid
+    # Unlabeled, or labeled only in another piece of the artifact, the code fails.
+    missing = quoted | invalid
+    assert undisclosed_course_codes(line, known, {}, quoted_codes=quoted) == missing
+    assert undisclosed_course_codes(labeled + PIECE_SEPARATOR + line, known, {},
+                                    quoted_codes=quoted) == missing
+
+
 def test_a_plan_request_is_not_turned_into_a_checklist_by_the_model_brief(db, collection, tmp_path):
     source = _econ(db, collection, tmp_path)
     provider = ArtifactStageProvider(
@@ -906,6 +980,9 @@ def test_a_plan_request_is_not_turned_into_a_checklist_by_the_model_brief(db, co
      12.0, 3, 4),
     ("A four-year plan with at most 15 credit hours.", 15.0, 5, 8),
     ("Make a 3-year spreadsheet plan.", 16.0, 5, 6),
+    ("I have 2 semesters left in my 4-year BS plan.", 16.0, 5, 2),
+    ("Minimum 12 credits, max 15 credits a term in 3 terms remaining.", 15.0, 5, 3),
+    ("Last semester I took 19 credits; keep me under 15 credits next.", 15.0, 5, None),
 ])
 def test_the_student_term_limits_are_read(text, credits, courses, terms):
     from app.generation.artifact_pipeline import (
@@ -917,6 +994,55 @@ def test_the_student_term_limits_are_read(text, credits, courses, terms):
     assert _requested_credit_cap(text) == credits
     assert _requested_course_cap(text) == courses
     assert _requested_terms(text) == terms
+
+
+@pytest.mark.parametrize(("text", "completed"), [
+    ("I finished ECON 101, have not taken ECON 201, and did not finish MATH 111.", ["ECON 101"]),
+    ("I took ECON 101 and will take ECON 201 next fall.", ["ECON 101"]),
+    ("I've taken MATH 111 and want ECON 201 next semester.", ["MATH 111"]),
+    ("I already took ECON 101 and I'm currently in MATH 111.", ["ECON 101"]),
+])
+def test_only_courses_the_student_finished_count_as_completed(text, completed):
+    from app.generation.artifact_pipeline import _completed_from_text
+
+    assert _completed_from_text(text, {"ECON 101", "ECON 201", "MATH 111"}, {}) == completed
+
+
+@pytest.mark.parametrize(("prompt", "selected", "completed", "expected_header", "formula_prefix"), [
+    ("Make a spreadsheet term plan for the Economics minor covering MATH 111, ECON 101, and ECON 201.",
+     ["MATH 111", "ECON 101", "ECON 201"], [], "Total Credits", "=SUM(B2:B"),
+    ("Make a spreadsheet term plan for the Economics minor covering ECON 101 and ECON 201.",
+     ["ECON 101", "ECON 201"], [],
+     "ECON 201 — Intermediate Macroeconomics (blocked prerequisite)", ""),
+    ("Track my Economics minor courses; I already completed ECON 101.",
+     ["ECON 101", "ECON 201"], ["ECON 101"], "Credits Completed", "=SUMIF("),
+])
+def test_credit_workbooks_include_totals_and_completed_status(
+        db, collection, tmp_path, prompt, selected, completed, expected_header, formula_prefix):
+    credit_atlas = "\n".join(
+        json.dumps({**json.loads(line), "credits": "4"})
+        for line in ATLAS_SAMPLE.splitlines()
+    )
+    source = import_atlas_sample(db, collection, tmp_path, text=credit_atlas)
+    import_programs(db, collection_id=collection,
+                    path=_write_programs(tmp_path, ("Economics (Minor)", ECON_MINOR)))
+    db.commit()
+    provider = ArtifactStageProvider(
+        outline=_plan_outline(selected, completed=completed),
+    )
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "workbook", {"prompt": prompt, "sourceIds": [str(source)]},
+                       "workbook-credits")
+    finished = run_once(store, "workbook-credits", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    cells = [cell for sheet in spec["sheets"] for cell in sheet["cells"]]
+    assert any(cell.get("value") == expected_header for cell in cells)
+    if formula_prefix:
+        assert any(str(cell.get("formula", "")).startswith(formula_prefix) for cell in cells)
+    if completed:
+        assert any(cell.get("value") == "Completed" for cell in cells)
 
 
 @pytest.mark.parametrize(("written", "printed"), [

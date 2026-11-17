@@ -71,6 +71,7 @@ export function useSavedChat(): ChatController {
   const eventCursor = useRef<Record<string, number>>({});
   const pollingRequests = useRef(new Map<string, { epoch: number; promise: Promise<void> }>());
   const settledUnknownRequests = useRef(new Set<string>());
+  const pendingDrafts = useRef(new Map<string, { keyForDraft: string; sentText: string }>());
   const loadConversationRef = useRef<((id: string, epoch: number) => Promise<void>) | null>(null);
   // Whether the user changed the scope since it was last saved with a turn. When unchanged,
   // a follow-up omits sourceIds so the server inherits the conversation's saved scope.
@@ -223,6 +224,14 @@ export function useSavedChat(): ChatController {
         }
       }
       if (isCurrent(id, epoch)) {
+        for (const [reqId, pending] of Array.from(pendingDrafts.current.entries())) {
+          if (pending.keyForDraft !== id) continue;
+          const terminal = record.turns.find((turn) => turn.requestId === reqId && turn.role === 'assistant');
+          const hasUserTurn = record.turns.some((turn) => turn.requestId === reqId && turn.role === 'user');
+          if (!terminal && !(hasUserTurn && record.pendingRequestId !== reqId)) continue;
+          pendingDrafts.current.delete(reqId);
+          applyTerminalTurnState(pending.keyForDraft, pending.sentText, terminal);
+        }
         setConversation(record);
         setTurnsAfter(after);
         if (!scopeChanged.current) {
@@ -347,6 +356,24 @@ export function useSavedChat(): ChatController {
   const restoreDraft = (key: string, text: string) =>
     setDrafts((current) => (current[key]?.trim() ? current : { ...current, [key]: text }));
 
+  const applyTerminalTurnState = (
+    keyForDraft: string,
+    sentText: string,
+    terminal: ConversationRecord['turns'][number] | undefined,
+  ) => {
+    // No answer, including a job that failed before its turn was published.
+    if (terminal?.status !== 'answer' && terminal?.status !== 'refusal') {
+      restoreDraft(keyForDraft, sentText);
+    }
+    if (terminal?.status === 'failed' || terminal?.status === 'abandoned') {
+      setNotice(
+        terminal.status === 'abandoned'
+          ? 'Your turn was stopped; your draft is kept.'
+          : 'The answer could not be produced; your draft is kept.',
+      );
+    }
+  };
+
   const send = async (
     attachments: Attachment[],
     onAccepted?: () => void,
@@ -392,6 +419,7 @@ export function useSavedChat(): ChatController {
     try {
       await getClient().startConversationTurnStream(id, request);
       onAccepted?.();
+      pendingDrafts.current.set(requestId, { keyForDraft, sentText });
       // The message now shows in the transcript, so the box empties. Text typed
       // while the request was in flight is a newer draft and stays.
       setDrafts((current) => (current[keyForDraft] === sentText ? { ...current, [keyForDraft]: '' } : current));
@@ -399,21 +427,14 @@ export function useSavedChat(): ChatController {
       if (!isCurrent(id, epoch)) return;
       await loadConversation(id, epoch);
       await pollStream(id, requestId, epoch);
-      if (isCurrent(id, epoch)) {
+      if (isCurrent(id, epoch) && pendingDrafts.current.delete(requestId)) {
         const latest = await getClient().getConversation(id, request.expectedSequence, CONVERSATION_PAGE_SIZE);
         if (!isCurrent(id, epoch)) return;
         const terminal = latest.turns.find((turn) => turn.requestId === requestId && turn.role === 'assistant');
-        // No answer, including a job that failed before its turn was published.
-        if (terminal?.status !== 'answer' && terminal?.status !== 'refusal') restoreDraft(keyForDraft, sentText);
-        if (terminal?.status === 'failed' || terminal?.status === 'abandoned') {
-          setNotice(
-            terminal.status === 'abandoned'
-              ? 'Your turn was stopped; your draft is kept.'
-              : 'The answer could not be produced; your draft is kept.',
-          );
-        }
+        applyTerminalTurnState(keyForDraft, sentText, terminal);
       }
     } catch (cause) {
+      pendingDrafts.current.delete(requestId);
       if (!isCurrent(id, epoch)) return;
       restoreDraft(keyForDraft, sentText);
       setError(errorMessage(cause));
@@ -425,6 +446,7 @@ export function useSavedChat(): ChatController {
       await loadConversation(id, epoch);
       await refreshList(false);
     } finally {
+      pendingDrafts.current.delete(requestId);
       releaseBusy(id, busyOwner);
     }
   };
@@ -451,6 +473,7 @@ export function useSavedChat(): ChatController {
       await getClient().abandonConversationTurn(id, requestId);
       if (!isCurrent(id, epoch)) return;
       pollingRequests.current.delete(`${id}:${requestId}`);
+      pendingDrafts.current.delete(requestId);
       releaseBusy(id, pendingOwner);
       setStreamPreview(null);
       await loadConversation(id, epoch);
@@ -488,6 +511,7 @@ export function useSavedChat(): ChatController {
       if (!isCurrent(id, epoch)) return;
       // Stop the old poll from publishing a late event after the terminal read.
       pollingRequests.current.delete(`${id}:${requestId}`);
+      pendingDrafts.current.delete(requestId);
       const terminalEpoch = ++viewEpoch.current;
       releaseBusy(id, pendingOwner);
       setStreamPreview(null);

@@ -608,6 +608,14 @@ def _scan(segment: str) -> list[tuple[str, str]]:
     return tokens
 
 
+_IDENTITY_LEVEL_TAIL = re.compile(r"^\s*-?\s*level\b", re.IGNORECASE)
+_MULTI_LEVEL_TAIL = re.compile(
+    r"^\s*(?:,|/|&|\band\b|\bor\b|–|-|\bto\b)\s*"
+    r"(?:any\s+|up\s+to\s+|at\s+the\s+)?\d{3}\s*-?\s*level\b",
+    re.IGNORECASE,
+)
+
+
 def canonical_codes_in(text: str) -> tuple[str, ...]:
     """Every course identity a passage names, in canonical form.
 
@@ -625,10 +633,10 @@ def canonical_codes_in(text: str) -> tuple[str, ...]:
 
     Two rules differ from the requirement parser, both because the question
     differs. A passage that lists codes carries the subject across the
-    separator ("CHEM 202Z + 202ZL", "MATH 411-412"), and a number the
-    passage prints as part of a level phrase still names that course
-    ("GER 300 level courses" names GER 300). The requirement parser treats
-    both as structure, because there it must decide what is required.
+    separator ("CHEM 202Z + 202ZL", "MATH 411-412"), and a single level phrase
+    still names that course ("GER 300 level courses" names GER 300), whereas
+    multi-level ranges ("PSYC 300 and 400 level") and 1-2 digit numbers
+    ("ECS 49") do not.
     """
     prepared = _SPACED_OX_RE.sub(r"\1_OX", text)
     prepared = _OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", prepared)
@@ -639,20 +647,32 @@ def canonical_codes_in(text: str) -> tuple[str, ...]:
     previous_end = 0
     for match in _CODE_RE.finditer(prepared):
         subject_part, digits = match.group(1), match.group(2)
+        after = prepared[match.end():]
         if subject_part is None:
             # A bare number continues the previous subject when the passage
-            # separated them only by a list separator.
+            # separated them only by a list separator, unless it is a level phrase.
             digits = match.group(3)
             if last_subject is None:
                 continue
             between = prepared[previous_end:match.start()]
             if _IDENTITY_CARRY_SEP.fullmatch(between) is None:
                 continue
+            if _IDENTITY_LEVEL_TAIL.match(after) or _MULTI_LEVEL_TAIL.match(after):
+                last_subject = None
+                continue
             subject = last_subject
         else:
             subject = _resolve_subject(subject_part)
             if subject is None:
+                last_subject = None
                 continue
+            if _MULTI_LEVEL_TAIL.match(after):
+                last_subject = None
+                continue
+        stem = re.match(r"\d+", digits or "")
+        if stem is None or len(stem.group(0)) < 3:
+            last_subject = None
+            continue
         code = normalize_code(f"{subject} {digits}")
         if code is None:
             continue

@@ -6,7 +6,15 @@ from collections.abc import Iterable
 from typing import Any
 from uuid import UUID
 
-from app.atlas.requisites import AllOf, AnyOf, Condition, CourseRef, Req, parse_requisites
+from app.atlas.requisites import (
+    AllOf,
+    AnyOf,
+    Condition,
+    CourseRef,
+    Req,
+    canonical_codes_in,
+    parse_requisites,
+)
 from app.db import queries
 from app.retrieval.types import CitedChunk
 
@@ -214,6 +222,27 @@ def load_campus_equivalents(conn, *, collection_id: UUID) -> dict[str, frozenset
         mapping[row["oxford_code"]].add(row["atlanta_code"])
         mapping[row["atlanta_code"]].add(row["oxford_code"])
     return {code: frozenset(others) for code, others in mapping.items()}
+
+
+def load_catalog_code_aliases(conn, *, collection_id: UUID) -> dict[str, frozenset[str]]:
+    """Catalog spellings the program import linked to a current Atlas course.
+
+    The catalog writes "DATASCI 495B" where the Atlas course is DATASCI 495BW;
+    the import links them only when exactly one current course matches. An
+    artifact that quotes the catalog line names that course, not an invented one.
+    """
+    mapping: dict[str, set[str]] = defaultdict(set)
+    for row in conn.execute(queries.get("list_program_code_aliases"),
+                            {"collection_id": collection_id}).fetchall():
+        mapping[row["catalog_code"]].add(row["atlas_code"])
+    return {code: frozenset(courses) for code, courses in mapping.items()}
+
+
+def load_program_quoted_codes(conn, *, collection_id: UUID) -> frozenset[str]:
+    """Every course code an active program's own lines print, read as K4 reads them."""
+    return frozenset(code for row in conn.execute(
+        queries.get("list_active_program_line_texts"), {"collection_id": collection_id})
+        for code in canonical_codes_in(row["text"]))
 
 
 def load_advising_context(

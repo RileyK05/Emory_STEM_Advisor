@@ -32,7 +32,11 @@ from app.advising.research_types import (
     EvidenceRecord,
     FinalDecision,
 )
-from app.generation.research_final import DecisionRejected, validate_final
+from app.generation.research_final import (
+    DecisionRejected,
+    disclose_retired_courses,
+    validate_final,
+)
 
 _SUBJECTS = {"CS", "CS_OX", "MATH", "PHYS", "BIOL", "CHEM", "ENVS", "DATASCI"}
 
@@ -152,3 +156,63 @@ def test_a_course_the_atlas_no_longer_shows_is_never_presented_as_current(
             check()
     else:
         check()
+    # The server writes the disclosure itself; only recommending the course is still refused.
+    decision = disclose_retired_courses(decision, frozenset({"CS 171"}))
+    if recommended:
+        with pytest.raises(DecisionRejected, match="no longer offered"):
+            check()
+    else:
+        check()
+    if rejected and not recommended:
+        assert "(CS 171 is not offered in any Course Atlas term on file)." in decision.blocks[0].text
+
+
+@pytest.mark.parametrize(("title", "kind"), [
+    ("Special Topics:African Studies", "topics"),
+    ("Spec Topics:Dance & Mvmnt Studies", "topics"),
+    ("Adv.Topics Luso-Afro-Braz.St.", "topics"),
+    ("Topics in Chinese Studies", "topics"),
+    ("Directed Study: Current Legal Topics", "independent"),
+    ("Supervised Reading", "independent"),
+    ("Individual Research in ENVS", "independent"),
+    ("Research", "independent"),
+    ("Honors", "honors"),
+    ("Honors Seminar in French", "honors"),
+    ("Internshp in Political Science", "internship"),
+    ("Computer Science Practicum", "practicum"),
+    ("Honor Council Practicum", "practicum"),
+    ("Senior Seminar", "capstone"),
+    ("Environmental Management Capstone", "capstone"),
+    # Ordinary classes whose titles share a word with a special kind.
+    ("Research in Health Economics", None),
+    ("Research Methods in Sociology", None),
+    ("Accounting Research I", None),
+    ("International Trade", None),
+])
+def test_an_atlas_title_names_a_course_with_its_own_rules(title, kind):
+    from app.atlas.designations import course_designation
+
+    designation = course_designation(title)
+    assert (designation.kind if designation else None) == kind
+
+
+@pytest.mark.parametrize(("blocks", "caveated"), [
+    ([("judgment", "Take SOC 497R in your junior year.")], [0]),
+    # Already said in the answer's own words, or only asked about: no second caveat.
+    ([("judgment", "Take SOC 497R once a faculty mentor agrees to supervise it.")], []),
+    ([("question", "Do you want SOC 497R?")], []),
+    # Once per course, after the first block that names it.
+    ([("fact", "SOC 497R counts as an elective."), ("judgment", "Take SOC 497R.")], [0]),
+])
+def test_an_answer_naming_a_special_course_carries_its_caveat(blocks, caveated):
+    from app.atlas.designations import course_designation
+    from app.generation.research_final import disclose_special_courses
+
+    decision = _decision([DecisionBlock(kind=kind, text=text, evidence_ids=("e1",))
+                          for kind, text in blocks])
+    disclosed = disclose_special_courses(
+        decision, {"SOC 497R": course_designation("Undergraduate Research")})
+    caveat = ("SOC 497R is an independent research or study course: you arrange it with a "
+              "faculty mentor, usually with department permission.")
+    assert [index for index, block in enumerate(disclosed.blocks)
+            if block.text.endswith(caveat)] == caveated

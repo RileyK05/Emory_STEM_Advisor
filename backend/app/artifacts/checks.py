@@ -74,8 +74,13 @@ def extract_planned_terms(spec: dict) -> dict[str, int]:
     kind = spec.get("kind")
     current_term = 1
     if kind == "document":
+        in_term = True
         for block in spec.get("blocks", []):
+            block_id = str(block.get("id") or "")
+            if block_id.startswith(("assumptions:", "advisor:")):
+                continue
             text = block.get("text", "")
+            matched_term = False
             for pattern in TERM_PATTERNS:
                 m = pattern.search(text)
                 if m:
@@ -83,7 +88,14 @@ def extract_planned_terms(spec: dict) -> dict[str, int]:
                         current_term = int(m.group(1))
                     except ValueError:
                         current_term += 1
+                    matched_term = True
+                    in_term = True
                     break
+            if block.get("type") == "heading" and not matched_term and block.get("level", 2) <= 2:
+                in_term = False
+                continue
+            if not in_term:
+                continue
             codes = _course_codes_in(text)
             for code in codes:
                 mapping.setdefault(code, current_term)
@@ -110,7 +122,13 @@ def extract_planned_terms(spec: dict) -> dict[str, int]:
                             mapping.setdefault(code, term_idx)
     elif kind == "workbook":
         for s_idx, sheet in enumerate(spec.get("sheets", []), start=1):
+            s_id = str(sheet.get("id") or "")
             s_name = sheet.get("name", "")
+            if (s_id.lower() in {"advisor", "assumptions"}
+                    or s_id.lower().startswith(("advisor:", "assumptions:"))
+                    or "advisor" in s_name.lower()
+                    or "assumptions" in s_name.lower()):
+                continue
             s_term = s_idx
             for pattern in TERM_PATTERNS:
                 m = pattern.search(s_name)
@@ -157,8 +175,13 @@ def _course_codes_in(text: str) -> list[str]:
 
 
 def invalid_course_codes(codes, known_courses: set[str],
-                         campus_equivalents: dict[str, frozenset[str]]) -> set[str]:
-    """Codes that are neither a real course nor the other campus's same course."""
+                         campus_equivalents: dict[str, frozenset[str]],
+                         catalog_aliases: dict[str, frozenset[str]] | None = None) -> set[str]:
+    """Codes that are neither a real course nor the other campus's same course.
+
+    ``catalog_aliases`` are catalog spellings the program import linked to a
+    current course (``load_catalog_code_aliases``); they name that course.
+    """
     invalid = set()
     for code in codes:
         # A schedule can print a meeting pattern such as "MW 11" that looks
@@ -169,7 +192,58 @@ def invalid_course_codes(codes, known_courses: set[str],
             continue
         if campus_equivalents.get(code, frozenset()) & known_courses:
             continue
+        if catalog_aliases and catalog_aliases.get(code, frozenset()) & known_courses:
+            continue
         invalid.add(code)
+    return invalid
+
+
+# "(LING 401 is not in the current Course Atlas)": the note a catalog line keeps
+# beside a code it quotes that the Atlas does not have (user decision, 2026-11-16).
+_ABSENT_NOTE_RE = re.compile(r"\(([^()]*?)\s+(?:is|are)\s+not in the current Course Atlas\)")
+
+
+def absent_note(codes) -> str:
+    codes = list(codes)
+    if len(codes) == 1:
+        return f" ({codes[0]} is not in the current Course Atlas)"
+    return f" ({', '.join(codes[:-1])} and {codes[-1]} are not in the current Course Atlas)"
+
+
+def label_absent_codes(text: str, known_courses, campus_equivalents,
+                       catalog_aliases=None) -> str:
+    """Keep a quoted line as written and say which of its codes the Atlas lacks.
+
+    The line is read with the same parser K4 uses, so a range ("SOC 497R-499R"),
+    a spelled subject ("Linguistics 401") or a bare number in a list is labeled
+    exactly when K4 would reject it.
+    """
+    codes = dict.fromkeys(canonical_codes_in(text))
+    missing = invalid_course_codes(codes, known_courses, campus_equivalents, catalog_aliases)
+    missing -= _disclosed(text)
+    return text.rstrip() + absent_note(code for code in codes if code in missing) if missing \
+        else text
+
+
+def _disclosed(text: str) -> set[str]:
+    return {code for match in _ABSENT_NOTE_RE.finditer(text)
+            for code in canonical_codes_in(match.group(1))}
+
+
+def undisclosed_course_codes(text: str, known_courses, campus_equivalents,
+                             catalog_aliases=None, quoted_codes=frozenset()) -> set[str]:
+    """K4: codes that are not a current course, unless labeled as a program's quote.
+
+    A program line can print a code the Atlas lacks (retired, or never imported).
+    Kept with its note it is the catalog's own requirement, not an invented
+    course; ``quoted_codes`` are the codes active program lines name, so a
+    note on any other code does not pass.
+    """
+    invalid = set()
+    for piece in text.split(PIECE_SEPARATOR):
+        bad = invalid_course_codes(set(canonical_codes_in(piece)), known_courses,
+                                   campus_equivalents, catalog_aliases)
+        invalid |= bad - (_disclosed(piece) & set(quoted_codes))
     return invalid
 
 
@@ -317,6 +391,8 @@ def check_generated_artifact(
     plan_term_sections: dict[int, str] | None = None,
     section_texts: dict[str, str] | None = None,
     skip_elements: set[str] | None = None,
+    catalog_aliases: dict[str, frozenset[str]] | None = None,
+    quoted_codes: frozenset[str] = frozenset(),
 ) -> list[ArtifactCheckFinding]:
     """K4, K5, K6, K7 and K10 on one assembled artifact, attributed to sections."""
     payload = spec.model_dump(mode="json")
@@ -324,8 +400,8 @@ def check_generated_artifact(
     section_texts = section_texts or {}
     findings: list[ArtifactCheckFinding] = []
 
-    invalid = invalid_course_codes(set(canonical_codes_in(text)), known_courses,
-                                   campus_equivalents)
+    invalid = undisclosed_course_codes(text, known_courses, campus_equivalents,
+                                       catalog_aliases, quoted_codes)
     for code in sorted(invalid):
         findings.append(ArtifactCheckFinding(
             "K4", f"{code} is not in the current Course Atlas; remove the code and name the "

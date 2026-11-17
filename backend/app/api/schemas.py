@@ -3,17 +3,27 @@
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+
+
+class _WireModel(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+
+class ArtifactRevisionReference(_WireModel):
+    artifactId: str
+    revisionId: str
 
 
 class QueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=8000)
     collectionId: str | None = Field(default=None, max_length=200)
     sourceIds: list[UUID] | None = Field(default=None, max_length=500)
+    artifactReferences: list[ArtifactRevisionReference] | None = Field(default=None, max_length=20)
     studentCohort: str | None = Field(default=None, max_length=200)
     # The composer's "make a file" box. Unset keeps the wording-based guess, so
     # API callers that never send it behave as before.
-    makeArtifact: bool | None = None
+    makeArtifact: StrictBool | None = None
     # The active theme's voice for this turn. Unset gives the plain advisor voice.
     persona: Literal["swoop", "dooley"] | None = None
 
@@ -172,17 +182,8 @@ class CollectionDoc(BaseModel):
     name: str
 
 
-class _WireModel(BaseModel):
-    model_config = ConfigDict(extra="allow")
-
-
 class HealthStatus(_WireModel):
     status: Literal["ok"]
-
-
-class ArtifactRevisionReference(_WireModel):
-    artifactId: str
-    revisionId: str
 
 
 _RunState = Literal["queued", "running", "succeeded", "failed", "cancelled"]

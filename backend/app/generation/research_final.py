@@ -16,6 +16,7 @@ from app.advising.research_types import (
     validate_evidence_references,
     validate_fact_support,
 )
+from app.atlas.designations import caveat_sentence
 from app.atlas.records import normalize_code
 from app.atlas.requisites import canonical_codes_in
 from app.generation.answer import NONSUPPORT_RE, Citation, GeneratedAnswer
@@ -60,6 +61,75 @@ def _program_requirement_mentions(records, cited: set[str]) -> set[str]:
 _RETIRED_SAID = re.compile(r"no longer (?:offered|runs?|available)|not (?:been )?offered|retired|"
                            r"discontinued",
                            re.IGNORECASE)
+
+
+_CLAUSE_SPLIT = re.compile(r"([;\n]|(?<=[.!?])\s+)")
+_CLAUSE_END = re.compile(r"[.!?]*[\"'”’)]*$")
+
+
+def disclose_retired_courses(decision: FinalDecision, retired: frozenset[str]) -> FinalDecision:
+    """Say in each sentence that names a retired course that it is not offered.
+
+    Which courses no checked Atlas term shows is a database fact, so the server
+    writes the disclosure instead of rejecting the answer for wording it
+    (round 8: every model, the strongest included, lost rounds to it). The note
+    goes at the end of the sentence, so it reads the same however the code was
+    spelled. Recommending a retired course is still refused: that is advice,
+    and a note cannot fix it.
+    """
+    if not retired:
+        return decision
+    blocks, changed = [], False
+    for block in decision.blocks:
+        parts = _CLAUSE_SPLIT.split(block.text)
+        for index in range(0, len(parts), 2):
+            clause = parts[index]
+            if _RETIRED_SAID.search(clause):
+                continue
+            named = [code for code in dict.fromkeys(canonical_codes_in(clause)) if code in retired]
+            if not named:
+                continue
+            note = (f" ({named[0]} is not offered in any Course Atlas term on file)" if len(named) == 1
+                    else f" ({', '.join(named[:-1])} and {named[-1]} are not offered in any "
+                         "Course Atlas term on file)")
+            end = _CLAUSE_END.search(clause).start()
+            parts[index] = clause[:end].rstrip() + note + clause[end:]
+        text = "".join(parts)
+        if text != block.text:
+            block, changed = block.model_copy(update={"text": text}), True
+        blocks.append(block)
+    return decision.model_copy(update={"blocks": tuple(blocks)}) if changed else decision
+
+
+#: Special courses one answer caveats; past this the caveats would bury the answer.
+MAX_SPECIAL_CAVEATS = 4
+
+
+def disclose_special_courses(decision: FinalDecision, special: dict) -> FinalDecision:
+    """Give each special topics, research, honors, internship, practicum or capstone
+    course the answer names its caveat, once, unless the answer already says it.
+
+    The kind is read from the Atlas title (``app.atlas.designations``), so the
+    server writes the caveat rather than trusting each model to remember it. It
+    goes after the first block that names the course; a block that names the
+    course in the caveat's own words ("arranged with a faculty mentor") counts.
+    """
+    if not special:
+        return decision
+    blocks = list(decision.blocks)
+    added = 0
+    for code, designation in special.items():
+        naming = [index for index, block in enumerate(blocks)
+                  if block.kind != "question" and code in canonical_codes_in(block.text)]
+        if not naming or any(designation.said.search(blocks[index].text) for index in naming):
+            continue
+        first = naming[0]
+        blocks[first] = blocks[first].model_copy(update={
+            "text": f"{blocks[first].text.rstrip()} {caveat_sentence(code, designation)}"})
+        added += 1
+        if added == MAX_SPECIAL_CAVEATS:
+            break
+    return decision.model_copy(update={"blocks": tuple(blocks)}) if added else decision
 
 
 def retired_course_problems(decision: FinalDecision, recommended: set[str],
@@ -133,25 +203,62 @@ def _numbers_in(text: str) -> set[float]:
 
 
 _GRADING_TEXT = re.compile(
-    r"(?<![A-Za-z])s[/-]u(?![A-Za-z])|pass[/-]fail|letter[- ]grade|"
-    r"satisfactory|grading basis|\bgrading\b", re.IGNORECASE)
+    r"(?<![A-Za-z])s[/-]u(?![A-Za-z])|pass[/-]fail|credit[/-]no[- ]credit|"
+    r"letter[- ]grade|satisfactory|grading basis|\bgrading\b|\bgrade mode\b",
+    re.IGNORECASE)
+_LETTER_ONLY_RULE = re.compile(
+    r"\bno\s+s[/-]u\b|\bnot\s+(?:be\s+)?taken\s+(?:on\s+|for\s+)?s[/-]u\b|"
+    r"\bletter[- ]grad(?:e|ed|ing)\b|"
+    r"\bonly\b[^.;]{0,60}\belectives?\b[^.;]{0,40}(?<![A-Za-z])s[/-]u(?![A-Za-z])",
+    re.IGNORECASE)
+# A rule that lets electives be taken S/U ("only courses in the elective component
+# may be taken S/U") makes an answer about an elective an exception, not a conflict.
+_RULE_ALLOWS_ELECTIVE_SU = re.compile(
+    r"\belectives?\b[^.;]{0,80}(?<![A-Za-z])s[/-]u(?![A-Za-z])|"
+    r"(?<![A-Za-z])s[/-]u(?![A-Za-z])[^.;]{0,80}\belectives?\b",
+    re.IGNORECASE)
+_ELECTIVE_WORD = re.compile(r"\belectives?\b", re.IGNORECASE)
+_SU_ALLOW = re.compile(
+    r"(?<![A-Za-z])s[/-]u(?![A-Za-z])|pass[/-]fail|credit[/-]no[- ]credit|"
+    r"satisfactory/?unsatisfactory", re.IGNORECASE)
+_SU_PERM = re.compile(r"\b(?:can|may|allowed|eligible|permitted|option|possible)\b",
+                      re.IGNORECASE)
+_SU_NEG = re.compile(
+    r"\b(?:no|not|n['’]t|never|cannot|can['’]t|prohibit(?:ed)?|ineligible|"
+    r"disallowed|forbidden|must\s+be\s+(?:taken\s+(?:for\s+)?)?a?\s*letter)\b",
+    re.IGNORECASE)
+_ELECTIVE_EXCEPTION = re.compile(
+    r"\b(?:general\s+electives?|free\s+electives?|non-major|outside\s+the\s+(?:major|minor))\b",
+    re.IGNORECASE)
 
 
 def grading_rule_problems(decision: FinalDecision,
                           rules: Sequence[tuple[str, str, str]]) -> list[str]:
-    """A grading answer must cite the program's own rule when one was read."""
+    """A grading answer must cite and follow the program's own rule when one was read."""
     if not rules:
         return []
     written = "\n".join(block.text for block in decision.blocks)
     if not _GRADING_TEXT.search(written):
         return []
     cited = {eid for block in decision.blocks for eid in block.evidence_ids}
-    for title, text, evidence_id in rules:
-        if evidence_id in cited:
-            return []
-    title, text, _evidence_id = rules[0]
-    return [(f"the answer discusses grading but does not cite {title}'s own rule "
-             f"({text[:300]}); use that rule instead of the College default")]
+    cited_rules = [(title, text, evidence_id) for title, text, evidence_id in rules
+                   if evidence_id in cited]
+    if not cited_rules:
+        title, text, _evidence_id = rules[0]
+        return [(f"the answer discusses grading but does not cite {title}'s own rule "
+                 f"({text[:300]}); use that rule instead of the College default")]
+    for title, text, _eid in cited_rules:
+        if not _LETTER_ONLY_RULE.search(text):
+            continue
+        electives_allowed = bool(_RULE_ALLOWS_ELECTIVE_SU.search(text))
+        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", written):
+            if (_SU_ALLOW.search(clause) and _SU_PERM.search(clause)
+                    and not _SU_NEG.search(clause)
+                    and not _ELECTIVE_EXCEPTION.search(clause)
+                    and not (electives_allowed and _ELECTIVE_WORD.search(clause))):
+                return [(f"the answer states courses may be taken S/U in conflict with "
+                         f"{title}'s grading rule ({text[:300]})")]
+    return []
 
 
 def policy_number_problems(decision: FinalDecision, records: dict) -> list[str]:
@@ -215,42 +322,94 @@ _ABSENT_SAID = re.compile(
 _STUB = re.compile(r"(?:placeholder|lorem ipsum|todo|tbd|n/?a|answer|text|none|null)?",
                    re.IGNORECASE)
 _STUB_START = re.compile(r"^(?:placeholder|lorem ipsum|todo|tbd)\b", re.IGNORECASE)
+_STUB_INLINE = re.compile(
+    r"\[\s*(?:todo|tbd|placeholder|insert\b[^\]]{0,40})\s*\]|\b(?:lorem ipsum|todo\s*:|tbd\s*:)",
+    re.IGNORECASE)
 _MIN_ANSWER_LETTERS = 12
 _ECHO_SHINGLE = 5
 _ECHO_MIN_SHARED = 5
 _ECHO_RATIO = 0.25
-_ZERO_WIDTH = str.maketrans("", "", "\u200b\u200c\u200d\u200e\u200f\u2060\ufeff")
+_ZERO_WIDTH = str.maketrans("", "", "\u00ad\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060\ufeff")
 _CONFUSABLES = str.maketrans({
-    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O",
-    "Р": "P", "С": "C", "Т": "T", "Х": "X", "У": "Y",
-    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
-    "і": "i", "ј": "j", "ѕ": "s",
+    "А": "A", "В": "B", "Е": "E", "І": "I", "Ј": "J", "К": "K", "М": "M",
+    "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "У": "Y", "Х": "X", "Ѕ": "S",
+    "а": "a", "е": "e", "і": "i", "ј": "j", "к": "k", "м": "m", "о": "o",
+    "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "ѕ": "s",
+    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K",
+    "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
+    "α": "a", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p",
+    "τ": "t", "υ": "u", "χ": "x",
 })
 _SECRET = re.compile(
     r"\bsk-[A-Za-z0-9_-]{16,}|\b[A-Z][A-Z0-9_]{2,}_(?:API_)?KEY\s*=|"
-    r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
+    r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@|-----BEGIN [A-Z0-9 ]*KEY-----|"
     r"\bAKIA[0-9A-Z]{16}\b|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|"
     r"\bgh[pousr]_[A-Za-z0-9]{36}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}|"
     r"\bAIza[0-9A-Za-z_-]{35}\b|"
+    r"(?i:\bBearer\s+[A-Za-z0-9._-]{16,}|\bAccountKey\s*=\s*[^\s;]{8,}|"
+    r"\b(?:api[_-]?key|access[_-]?token|secret|password|passwd|pwd)\s*[:=]\s*"
+    r"(?=['\"]?(?:[^\s'\";]*[\d_/+=-]|[A-Za-z]{16,}))['\"]?[A-Za-z0-9_/+=-]{8,})|"
     r"Traceback \(most recent call last\):|File \"[^\"]+\", line \d+")
 _MARKUP = re.compile(
-    r"<\s*script\b|javascript:|\bon(?:click|error|load|mouseover|mouseout|focus|blur|"
-    r"submit|change|input|keydown|keyup)\s*=", re.IGNORECASE)
-_URL = re.compile(r"\bhttps?://[^\s)\]>\"']+|\bwww\.[^\s)\]>\"']+", re.IGNORECASE)
+    r"<\s*(?:script|style|iframe|object|embed|svg)\b|javascript:|data\s*:\s*text/html|"
+    r"\bon(?:click|error|load|mouseover|mouseout|focus|blur|submit|change|input|keydown|keyup)\s*=",
+    re.IGNORECASE)
+_URL = re.compile(
+    r"\bhttps?://[^\s)\]>\"']+|\bwww\.[^\s)\]>\"']+|"
+    r"(?<=\]\()(?:[a-z0-9-]{2,}\.)+[a-z]{2,10}(?:/[^\s)]*)?(?=\))|"
+    r"(?<![A-Za-z0-9.@])(?:[a-z0-9-]{2,}\.)+"
+    r"(?:com|org|net|example|xyz|info|biz|[a-z]{2,10}(?=/[^\s)\]>\"']+))(?:/[^\s)\]>\"']*)?",
+    re.IGNORECASE)
 _CREDENTIAL_ASK = re.compile(
-    r"\b(?:verify|enter|provide|send|confirm|share|submit|type)\b[^.!?\n]{0,60}"
-    r"\b(?:password|passcode|credentials)\b", re.IGNORECASE)
+    r"\b(?:verify|enter|provide|send|confirm|share|submit|type|give|reply\s+with|tell\s+me)\b"
+    r"[^.!?\n]{0,60}\b(?:password|passcode|credentials|ssn|social\s+security(?:\s+number)?|"
+    r"api[\s_-]?key|secret[\s_-]?token|access[\s_-]?token)\b"
+    r"|\b(?:send|share|give|reply\s+with|tell\s+me)\b[^.!?\n]{0,40}\b(?:your\s+)?(?:netid|login|pin)\b",
+    re.IGNORECASE)
+_SPACED_OBF = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9](?:\s+[A-Za-z0-9]){2,}(?![A-Za-z0-9])")
+_DOTTED_OBF = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9](?:\.[A-Za-z0-9]){3,}(?![A-Za-z0-9])")
+_DOT_SPACED = re.compile(
+    r"(?<=[A-Za-z0-9])\s*\.\s*(?=(?:com|org|net|edu|gov|io|co|example|xyz|info|biz)\b)|"
+    r"(?<=[A-Za-z0-9])\s+\.\s+(?=[A-Za-z0-9])|(?<=\bwww)\s*\.\s*(?=[A-Za-z0-9])",
+    re.IGNORECASE,
+)
+_SCHEME_SPACED = re.compile(r"\b(https?)\s*:\s*/\s*/", re.IGNORECASE)
+
+
+def _clean_safety_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text or "")
+    without_marks = "".join(
+        ch for ch in unicodedata.normalize("NFKD", normalized)
+        if unicodedata.category(ch) != "Mn"
+    )
+    return without_marks.translate(_ZERO_WIDTH).translate(_CONFUSABLES)
+
+
+def _safety_variants(text: str) -> tuple[str, ...]:
+    clean = _clean_safety_text(text)
+    spaced = _SPACED_OBF.sub(lambda m: re.sub(r"\s+", "", m.group(0)), clean)
+    spaced = _SCHEME_SPACED.sub(r"\1://", _DOT_SPACED.sub(".", spaced))
+    dotted = _DOTTED_OBF.sub(lambda m: m.group(0).replace(".", ""), clean)
+    return tuple(dict.fromkeys((text or "", clean, spaced, dotted)))
 
 
 def _normalize_match_text(text: str) -> str:
-    text = unicodedata.normalize("NFKC", text or "")
-    text = text.translate(_ZERO_WIDTH).translate(_CONFUSABLES)
-    return text.casefold()
+    return _clean_safety_text(text).casefold()
 
 
 def _shingles(text: str) -> set[tuple[str, ...]]:
     words = re.findall(r"[a-z0-9]+", _normalize_match_text(text))
     return {tuple(words[i:i + _ECHO_SHINGLE]) for i in range(len(words) - _ECHO_SHINGLE + 1)}
+
+
+def _is_stub_block(text: str) -> bool:
+    for variant in _safety_variants(text):
+        if (not re.search(r"[A-Za-z]", variant)
+                or _STUB.fullmatch(variant.strip(" .,:;!?-*#\"'[]"))
+                or _STUB_START.match(variant.strip())
+                or _STUB_INLINE.search(variant)):
+            return True
+    return False
 
 
 def answer_content_problems(decision: FinalDecision, *, instructions: str | None,
@@ -259,37 +418,37 @@ def answer_content_problems(decision: FinalDecision, *, instructions: str | None
     """Reject a reply that is empty, echoes the instructions, or carries a secret or link."""
     texts = [block.text for block in decision.blocks]
     problems = []
-    if any(not re.search(r"[A-Za-z]", text) or _STUB.fullmatch(text.strip(" .,:;!?-*#\"'"))
-           or _STUB_START.match(text.strip()) for text in texts) or sum(
-               len(re.findall(r"[A-Za-z]", t)) for t in texts) < (_MIN_ANSWER_LETTERS):
+    if any(_is_stub_block(text) for text in texts) or sum(
+            len(re.findall(r"[A-Za-z]", _clean_safety_text(t))) for t in texts) < (
+                _MIN_ANSWER_LETTERS):
         problems.append("a block has no answer in it; write the answer itself in plain sentences")
     written = "\n".join(texts)
+    variants = _safety_variants(written)
     reply_shingles = _shingles(written)
     prompt_shingles = _instruction_shingles(instructions) if instructions else set()
     shared = len(reply_shingles & prompt_shingles)
     if (shared >= _ECHO_MIN_SHARED
             and shared / max(1, len(reply_shingles)) >= _ECHO_RATIO):
         problems.append("the reply repeats the advisor's instructions; answer the student instead")
-    if _SECRET.search(written):
+    if any(_SECRET.search(variant) for variant in variants):
         problems.append("the reply contains credential, key or error text; remove it")
-    if _MARKUP.search(written):
+    if any(_MARKUP.search(variant) for variant in variants):
         problems.append("the reply contains HTML markup; answer in plain text")
     known = "\n".join(
         f"{record.source_name}\n{record.source_url or ''}\n{record.exact_text}"
         for record in evidence).lower()
-    for url in _URL.findall(written):
-        bare = re.sub(r"^https?://", "", url.rstrip(".,;:!?").lower()).rstrip("/")
-        if bare not in known:
-            problems.append("the reply links to a page no evidence names; remove the link")
-            break
-    if _asks_for_credentials(written):
+    if any(re.sub(r"^https?://", "", url.rstrip(".,;:!?").lower()).rstrip("/") not in known
+           for variant in variants for url in _URL.findall(variant)):
+        problems.append("the reply links to a page no evidence names; remove the link")
+    if any(_asks_for_credentials(variant) for variant in variants):
         problems.append("the reply asks the student for a password or credentials; remove it")
     # The answer is published before the artifact run starts, and that run can fail.
-    if (decision.artifact is not None or artifact_expected) and _ARTIFACT_READY.search(written):
+    if ((decision.artifact is not None or artifact_expected)
+            and any(_ARTIFACT_READY.search(variant) for variant in variants)):
         problems.append("the reply says the artifact is ready; it is still being made, so say "
                         "it is being made")
     if (decision.artifact is None and not artifact_expected
-            and _ARTIFACT_PROGRESS.search(written)):
+            and any(_ARTIFACT_PROGRESS.search(variant) for variant in variants)):
         problems.append("the reply says an artifact is being made, but no artifact was "
                         "requested; make the request or answer without promising one")
     return problems
@@ -318,7 +477,10 @@ _ARTIFACT_PROGRESS = re.compile(
     r"\b(?:the|your) (?:[a-z]+\s+){0,3}"
     r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\s+"
     r"(?:is|are)\s+being\s+(?:made|written|prepared|created|built)\b"
-    r"|\bI(?:['’]m| am)\s+(?:making|writing|preparing|creating|building)\b",
+    r"|\bI(?:['’]m| am)\s+(?:making|writing|preparing|creating|building)\b"
+    r"|\b(?:are\s+now|is\s+now|have\s+been|has\s+been)\s+"
+    r"(?:ticked\s+off|checked\s+off|crossed\s+off|marked\s+(?:as\s+)?(?:done|complete|completed)"
+    r"|updated\s+in\s+(?:your|the)\s+(?:checklist|tracker|plan|sheet|table|workbook))\b",
     re.IGNORECASE)
 
 

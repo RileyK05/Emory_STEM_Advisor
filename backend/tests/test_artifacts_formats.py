@@ -41,6 +41,7 @@ def test_markdown_keeps_structure_and_html_escapes_markup():
         CodeBlock(id="c", language="py", text="x = 1"),
     ])
     rendered = render_markdown(spec)
+    assert rendered.startswith("# Course notes\n\n")
     for expected in ("## Heading 2", "A line with $5.00 and a\nreal newline.", "- one",
                      r"a\|b", chr(96) * 3 + "py\nx = 1"):
         assert expected in rendered

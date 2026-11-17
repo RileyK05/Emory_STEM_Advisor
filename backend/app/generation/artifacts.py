@@ -212,6 +212,13 @@ class ArtifactHandler:
             raise SafeJobError("deadline_exceeded", _TOO_SLOW) from exc
         except ProviderError as exc:
             raise SafeJobError("provider_failed", provider_failure_detail(exc, "The model")) from exc
+        except (ValidationError, ValueError) as exc:
+            logger.warning("artifact job %s failed validation: %s", job.job_id, exc)
+            raise SafeJobError(
+                "invalid_output",
+                "The model did not return a valid artifact structure. Try a narrower request.",
+                retryable=False,
+            ) from exc
         finally:
             conn.close()
 

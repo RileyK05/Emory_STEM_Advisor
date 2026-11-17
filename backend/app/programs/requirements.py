@@ -139,12 +139,39 @@ def _subject(word: str) -> str | None:
 
 
 def _is_level_descriptor(text: str, number_end: int) -> bool:
-    """True when a number names a course level ("100-level", "200-300 level")."""
+    """True when a number names a course level ("100-level", "200-300 level", "300s")."""
     rest = text[number_end:]
-    return bool(
+    if (
         re.match(r"\s*-?\s*level\b", rest, re.IGNORECASE)
         or re.match(rf"\s*[-–]\s*{_NUMBER}\s*-?\s*level\b", rest, re.IGNORECASE)
-    )
+        or re.match(r"s\b", rest)
+        or re.match(
+            rf"\s*(?:[-–/]|and|or|to)\s*(?:{_NUMBER}\s*)?-?\s*level\b",
+            rest,
+            re.IGNORECASE,
+        )
+    ):
+        return True
+    head_match = re.search(r"(\d+[A-Za-z0-9]*)\s*$", text[:number_end])
+    if head_match is None:
+        return False
+    stem_match = re.match(r"\d+", head_match.group(1))
+    digits = stem_match.group(0) if stem_match else ""
+    before = text[:head_match.start()]
+    is_round_level = len(digits) == 3 and digits.endswith("00")
+    if re.match(r"\s*(?:(?:or|and)\s+)?(?:above|higher)\b", rest, re.IGNORECASE) and (
+        is_round_level or re.search(
+            r"\b(?:numbered|at\s+the|level)\s*(?:[A-Z]{2,7}(?:_OX)?\s*)?$",
+            before,
+            re.IGNORECASE,
+        )
+    ):
+        return True
+    return bool(is_round_level and re.search(
+        r"\b(?:courses?\s+at\s+the|at\s+the|numbered)\s*$",
+        before,
+        re.IGNORECASE,
+    ))
 
 
 def course_mentions(text: str) -> tuple[str, ...]:

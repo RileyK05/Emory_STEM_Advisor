@@ -152,6 +152,7 @@ class ConversationTurnExecutor:
                 query=request_data.get("query", snapshot.get("query", "")),
                 collectionId=effective.get("collectionId"),
                 sourceIds=effective.get("sourceIds"),
+                artifactReferences=effective.get("artifactReferences"),
                 makeArtifact=request_data.get("makeArtifact"),
                 persona=request_data.get("persona"),
             )

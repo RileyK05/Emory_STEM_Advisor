@@ -22,6 +22,8 @@ from .visuals import chart_html, chart_rows, diagram_html, diagram_mermaid
 
 def render_markdown(spec: DocumentSpec) -> str:
     chunks: list[str] = []
+    if spec.title and spec.title.strip():
+        chunks.append(f"# {spec.title.strip()}")
     for block in spec.blocks:
         if isinstance(block, HeadingBlock):
             chunks.append("#" * block.level + " " + block.text)

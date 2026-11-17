@@ -74,6 +74,9 @@ def test_the_reader_resolves_the_spellings_the_corpus_uses(text, expected):
     "Ordinarily, no more than 6 credit hours may be double counted.",
     "The four-plus-one program is pursued in stages.",
     "This section is reserved for students in the BBA program.",
+    "ECS 49 is a two-digit seminar not handled here.",
+    "Complete PSYC 300 and 400 level courses.",
+    "Take courses numbered 300 or higher.",
 ])
 def test_the_reader_invents_no_course(text):
     """Prose that merely contains a number names no course."""

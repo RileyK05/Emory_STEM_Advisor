@@ -115,6 +115,7 @@ PROGRAMS AND COURSES
 - course_facts keeps what you read about each course across rounds, with its evidence_ids. Never reread a course it lists.
 - Do not expand an acronym unless the source spells it out.
 - other_degrees lists the same major under another degree. When the student named no degree, read it too, say in the first block that both exist with their hours, then give what they share and what differs.
+- special_course is a caveat the course needs: give it when you recommend or plan it.
 - offered_terms lists the Course Atlas terms that show a course, and terms_checked lists every term on file. A course missing from a checked term is not offered that term: say no in the first block, then name the terms it does run. offering_note, when present, is the checked Atlas result and outranks any catalog record, description or term pattern. A course it calls no longer offered is not a current option: never recommend it or plan around it, say so plainly even when the student names it, and give the newer course the program list or requisites show in its place. A requisite can still accept an old course as an alternative; that does not make it current. Organic chemistry at Emory is CHEM 202 and 203 with labs.
 - ARCHE is cross-registration at other Atlanta schools, not a subject: read the Cross Registration policy. ARCH course listings are only how those seats appear.
 - Credit for a course means the student starts past it, never in it. For AP Calculus BC read the Math Placement guide.
@@ -319,14 +320,15 @@ def _requests_preparation(question):
 
 _ARTIFACT_ASK = re.compile(
     r"\b(?:make|create|build|draft|generate|put together|write up|give me|lay out|"
-    r"map out)\b[^.?!]{0,60}?"
+    r"map out|sketch)\b[^.?!]{0,60}?"
     r"\b(?:plan|checklist|schedule|spreadsheet|workbook|sheet|document|doc|handout|report|"
     r"page|comparison|table|roadmap)s?\b"
     r"|\b(?:printable|print it|i can (?:print|keep)|export|download)\b"
     r"|\b(?:can|could|would)\s+you\s+(?:plan|schedule|lay out|map out)\b"
     r"|\b(?:need|want)\b[^.?!]{0,30}\b(?:plan|schedule|spreadsheet|checklist|"
     r"document|roadmap)\b"
-    r"|^\s*(?:can you\s+)?plan\b[^.?!]{0,20}\b(?:years?|semesters?|terms?)\b"
+    r"|(?:^|[.?!]\s+)(?:can you\s+)?plan\b[^.?!]{0,50}"
+    r"\b(?:BS|BA|BBA|B\.S\.|B\.A\.|major|minor|co-major|years?|semesters?|terms?)\b"
     r"|\bsemesters?\b[^.?!]{0,20}\blook like\b"
     r"|\b(?:lay|map)\s+out\b[^.?!]{0,40}\b(?:BS|BA|BBA|B\.S\.|B\.A\.|major|minor|"
     r"co-major)(?![A-Za-z])"
@@ -343,6 +345,19 @@ _ARTIFACT_ASK = re.compile(
     r"(?:semester-by-semester|term-by-term|year-by-year|four-year|4-year|graduation)\s+"
     r"(?:plan|schedule)\b",
     re.IGNORECASE)
+_NOT_ARTIFACT_ASK = re.compile(
+    r"\b(?:no\s+(?:file|artifact|document|doc|pdf|spreadsheet|workbook|sheet|page|"
+    r"download|export)s?|"
+    r"don'?t\s+(?:make|create|generate|build|output)\s+(?:a|an|any)?\s*"
+    r"(?:file|artifact|document|spreadsheet|workbook|page)|"
+    r"without\s+(?:making|creating|generating)\s+(?:a|an)\s+"
+    r"(?:file|artifact|document|spreadsheet|workbook|page)|"
+    r"(?:only\s+)?in\s+(?:the\s+)?chat(?:\s+only)?|"
+    r"in\s+words(?:\s+only)?|just\s+(?:answer\s+)?in\s+(?:text|chat|words)|"
+    r"where\s+can\s+i\s+download|how\s+(?:do\s+i|can\s+i|to)\s+(?:download|export)|"
+    r"export\s+my\s+(?:data|account|history|chats?)|"
+    r"plan\s+ahead:|need\s+(?:a|my)\s+plan\s+approved|schedule\s+change\s+form)\b",
+    re.IGNORECASE)
 _SUMMARY_ASK = re.compile(
     r"\bsummar(?:y|ize|ise)\b[^.?!]{0,40}\b(?:chat|conversation|discussion|thread)\b"
     r"|\b(?:turn|put|make)\b[^.?!]{0,20}\b(?:chat|conversation)\b[^.?!]{0,20}"
@@ -352,6 +367,11 @@ _SUMMARY_ASK = re.compile(
 _EXPORT_ASK = re.compile(
     r"\b(?:export|download|convert)\b"
     r"|\b(?:as|to|into)\s+(?:an?\s+)?(?:word|docx|pdf|excel|xlsx|markdown)\b",
+    re.IGNORECASE)
+_REVISE_ASK = re.compile(
+    r"\b(?:mark|tick|check\s+off|cross\s+off|update|revise|edit|modify|change|"
+    r"add\b[^.?!]{0,40}\bto\s+(?:it|that|this|the\s+(?:plan|sheet|tracker|checklist|table|schedule|document|workbook))|"
+    r"remove|drop|delete|swap|replace|move|shift|rebalance|recalculate|fill\s+in)\b",
     re.IGNORECASE)
 # "sheet" alone is a cheat sheet as often as a spreadsheet; only a spreadsheet
 # word makes a workbook.
@@ -366,10 +386,26 @@ _REQUEST_LEAD = frozenset({
     "my", "our", "build", "create", "draft", "generate", "give", "want", "need",
     "can", "could", "would", "should", "may", "you", "please", "help", "with",
     "of", "to", "in", "on", "and", "or", "i", "i'm", "im", "we", "already",
-    "took", "finished", "compare", "comparison", "what", "which", "how", "does",
-    "do", "is", "are", "tell", "about", "explain", "describe", "show", "list",
-    "difference", "between", "any", "all", "requirements", "requirement",
-    "interested", "curious", "considering", "wondering",
+    "took", "taken", "completed", "finished", "passed", "done", "have", "has",
+    "had", "compare", "comparison", "what", "which", "how", "does", "do", "is",
+    "are", "tell", "about", "explain", "describe", "show", "list", "difference",
+    "between", "any", "all", "requirements", "requirement", "interested",
+    "curious", "considering", "wondering", "map", "out", "lay", "sketch",
+    "put", "together", "write", "up", "declare", "declaring", "pick", "picking",
+    "choose", "choosing", "find", "finding", "study", "studying", "switch",
+    "switching", "pursue", "pursuing", "doing", "completing", "taking", "take",
+    "finish", "finishing", "start", "starting", "earn", "earning", "get",
+    "getting", "spreadsheet", "workbook", "checklist", "roadmap", "handout",
+    "worksheet", "page", "webpage", "website", "document", "doc", "guide",
+    "overview", "report", "table", "chart", "tracker", "semester", "semesters",
+    "term", "terms", "year", "years", "four-year", "4-year", "three-year",
+    "3-year", "two-year", "2-year", "semester-by-semester", "term-by-term",
+    "year-by-year", "remaining", "rest", "next", "graduation", "premed",
+    "pre-med", "complete", "full", "detailed", "sample", "possible",
+    "recommended", "double", "dual", "joint", "combined", "plus", "vs",
+    "versus", "if", "when", "while", "since", "after", "before", "undergrad",
+    "undergraduate", "emory", "oxford", "college", "bs", "ba", "bba", "minor",
+    "major", "co-major",
 })
 _PROGRAM_MODIFIERS = frozenset({"honors", "honours", "with", "program", "degree"})
 _DEGREE_FOLLOWERS = frozenset({
@@ -403,17 +439,35 @@ def _asks_for_artifact(question) -> bool:
     A hint only: the model still decides the kind and writes the brief, and an
     ordinary question that mentions a plan does not match.
     """
-    return bool(_ARTIFACT_ASK.search(question or "") or _SUMMARY_ASK.search(question or ""))
+    text = question or ""
+    if _NOT_ARTIFACT_ASK.search(text):
+        return False
+    return bool(_ARTIFACT_ASK.search(text) or _SUMMARY_ASK.search(text))
+
+
+_PROGRAM_ACRO_ALIASES: dict[str, tuple[str, ...]] = {
+    "cs": ("computer", "science"),
+    "nbb": ("neuroscience", "behavioral", "biology"),
+    "qss": ("quantitative", "sciences"),
+    "qtm": ("quantitative", "theory", "methods"),
+    "ams": ("applied", "mathematics", "statistics"),
+    "ppa": ("public", "policy", "analysis"),
+    "bba": ("business", "administration"),
+    "envs": ("environmental", "sciences"),
+}
+_GENERIC_PROGRAM_WORDS = frozenset({
+    "studies", "study", "science", "sciences", "health", "arts", "art",
+    "engineering", "management", "policy", "affairs", "history", "culture",
+    "cultures", "language", "languages", "literature", "system", "systems",
+    "analysis", "theory", "methods",
+})
 
 
 def _missing_program(question, titles) -> str | None:
     """A degree program the student named that no program in scope matches.
 
-    Conservative on purpose: a name of one word, or with an acronym ("CS and Math"),
-    is not judged, and a word matches a title word exactly or through a known
-    short form ("Math" and "Mathematics", "Behaviour" and "Behavioral"), so a
-    real program is never called missing. The degree word may be written in any
-    case ("bs", "B.S.", "Minor").
+    Known acronyms (CS, NBB, QSS, QTM, AMS, PPA, BBA, ENVS) and one-word names
+    ("Astrology BS") are judged against the programs in scope.
     """
     titles = list(titles)
     text = question or ""
@@ -425,22 +479,33 @@ def _missing_program(question, titles) -> str | None:
             following = re.match(r"[A-Za-z]+", text[match.end():].lstrip())
             if following and following.group(0).casefold() in _DEGREE_FOLLOWERS:
                 continue  # "the major requirements", not a program named "major"
-        window = re.findall(r"[A-Za-z][\w'’&-]*", text[:match.start()])[-10:]
+        clause = re.split(r"[.?!\n:;]+", text[:match.start()])[-1]
+        window = re.findall(r"[A-Za-z][\w'’&-]*", clause)[-10:]
         while window and window[0].casefold() in _REQUEST_LEAD:
             window.pop(0)
         raw = [word for word in window]
         content = [word for word in raw if word.casefold() not in _NAME_STOPWORDS]
-        if len(content) < 2:
+        if not content:
             continue
-        # An acronym ("CS", "BBA") can be part of a real title, so drop it only
-        # when another word remains to judge. "CS and Math" then leaves one word
-        # and is not judged, while "BBA + Quantitative Science" still matches.
-        content = [word for word in content
-                   if not (word.isupper() and len(word) <= 4)]
-        if len(content) < 2:
+        has_non_acro = any(
+            not (word.isupper() and len(word) <= 4)
+            or word.casefold() in _PROGRAM_ACRO_ALIASES
+            for word in content
+        )
+        words: list[str] = []
+        for word in content:
+            alias = _PROGRAM_ACRO_ALIASES.get(word.casefold())
+            if alias is not None:
+                words.extend(alias)
+            elif word.isupper() and len(word) <= 4 and has_non_acro:
+                continue
+            else:
+                words.append(word.casefold())
+        if not words:
             continue
-        words = [word.casefold() for word in content]
         meaningful = [word for word in words if word not in _PROGRAM_MODIFIERS] or words
+        if len(meaningful) == 1 and meaningful[0] in _GENERIC_PROGRAM_WORDS:
+            continue
         if _matches_program(meaningful, titles):
             return None
         return " ".join(window).strip(" ,.;:")
@@ -457,18 +522,48 @@ _PROGRAM_WORD_ALIASES = {
     "sci": "science",
 }
 
+
 def _program_word(word: str) -> str:
     return _PROGRAM_WORD_ALIASES.get(word.casefold(), word.casefold())
 
 
 def _matches_program(words: list[str], titles: list[str]) -> bool:
-    words = [_program_word(word) for word in words]
+    norm_words = [_program_word(word) for word in words]
+    raw_words = [word.casefold() for word in words]
     for title in titles:
         have = [_program_word(word) for word in re.findall(r"[a-z]+", title.casefold())]
-        for start in range(len(words)):
-            if all(word in have for word in words[start:]):
+        for start in range(len(norm_words)):
+            tail = norm_words[start:]
+            raw_tail = raw_words[start:]
+            if len(tail) == 1 and raw_tail[0] in _GENERIC_PROGRAM_WORDS:
+                continue
+            if all(word in have for word in tail):
                 return True
     return False
+
+
+_TITLE_LEAD_RE = re.compile(
+    r"^(?:(?:please|can\s+you|could\s+you|would\s+you|help\s+me|i\s+(?:need|want)|"
+    r"make\s+(?:me\s+)?|create\s+(?:me\s+)?|build\s+(?:me\s+)?|draft\s+(?:me\s+)?|"
+    r"generate\s+(?:me\s+)?|give\s+me\s+|put\s+together\s+|write\s+(?:up\s+)?|"
+    r"lay\s+out\s+|map\s+out\s+|sketch\s+)+)",
+    re.IGNORECASE,
+)
+
+
+def _clean_artifact_title(question: str, kind: str) -> str:
+    first = re.split(r"[.!?\n]+", " ".join((question or "").split()), maxsplit=1)[0].strip()
+    cleaned = _TITLE_LEAD_RE.sub("", first).strip(" ,.;:-")
+    cleaned = re.sub(
+        r"^(?:a|an)\s+(?=(?:\d+[- ]?(?:semester|term|year)\s+|four[- ]year\s+|"
+        r"spreadsheet|workbook|checklist|roadmap|handout|worksheet|plan|guide|page))",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    if cleaned:
+        return (cleaned[0].upper() + cleaned[1:])[:120]
+    return {"workbook": "Advising workbook", "html": "Advising page"}.get(kind, "Advising plan")
 
 
 def _artifact_for(question: str, *, grounding: str = "corpus"):
@@ -480,12 +575,44 @@ def _artifact_for(question: str, *, grounding: str = "corpus"):
         return ArtifactRequest(kind="document", title="Conversation summary",
                                brief=text[:4_000], purpose="summary")
     kind = "workbook" if _SHEET_ASK.search(text) else "html" if _PAGE_ASK.search(text) else "document"
-    return ArtifactRequest(kind=kind, title=text[:200], brief=text[:4_000],
-                           grounding=grounding)
+    return ArtifactRequest(kind=kind, title=_clean_artifact_title(text, kind),
+                           brief=text[:4_000], grounding=grounding)
+
+
+def _revise_artifact_for(question: str, references, reference_details=None):
+    from uuid import UUID
+
+    from app.advising.research_types import ArtifactRequest, ArtifactRevisionReference
+
+    aid, rid = next(iter(references))
+    kind, title = (reference_details or {}).get((aid, rid), (None, None))
+    if kind not in {"document", "workbook", "html"}:
+        kind = "workbook" if _SHEET_ASK.search(question) else "html" if _PAGE_ASK.search(question) else "document"
+    text = " ".join((question or "").split())
+    clean_title = (title or "Revised artifact")[:200]
+    try:
+        revises = ArtifactRevisionReference(artifact_id=UUID(str(aid)), revision_id=UUID(str(rid)))
+    except ValueError:
+        return None
+    return ArtifactRequest(
+        kind=kind, title=clean_title, brief=(text or "Revise the attached artifact.")[:4_000],
+        purpose="revise", revises=revises,
+    )
+
+
+_NO_PROGRAM_REFUSAL = re.compile(
+    r"\b(?:emory\s+(?:does\s+not|doesn't|did\s+not)\s+(?:offer|have)|"
+    r"no\s+(?:such|matching)\s+(?:major|minor|co-major|program|degree)|"
+    r"there\s+is\s+no\s+[^.?!]{0,40}\b(?:major|minor|program|degree)\s+"
+    r"(?:at\s+emory|in\s+(?:the\s+)?(?:catalog|atlas))|"
+    r"not\s+offered\s+(?:at\s+emory|in\s+emory|in\s+the\s+(?:catalog|collection)))\b",
+    re.IGNORECASE,
+)
 
 
 def _with_requested_artifact(decision, question, titles, *, referenced: bool,
-                             unknown_codes=(), requested: bool | None = None):
+                             unknown_codes=(), requested: bool | None = None,
+                             references=(), reference_details=None):
     """Hand the student's request to the artifact pipeline when research left it out.
 
     `requested` is the composer's "make a file" box. Checked, a file is made
@@ -498,7 +625,10 @@ def _with_requested_artifact(decision, question, titles, *, referenced: bool,
     attached one, or when it asks for an attached one in another format.
     """
     missing = _missing_program(question, titles)
+    decision_text = " ".join(block.text for block in decision.blocks)
+    refuses_program = bool(_NO_PROGRAM_REFUSAL.search(decision_text))
     if (missing is not None
+            or refuses_program
             or unknown_codes and not _DEGREE_TOKEN.search(question or "")
             or referenced and _EXPORT_ASK.search(question or "")
             or requested is False and decision.artifact is not None
@@ -510,6 +640,13 @@ def _with_requested_artifact(decision, question, titles, *, referenced: bool,
             and artifact.kind == "document" and artifact.purpose == "create"):
         return decision.model_copy(update={"artifact": artifact.model_copy(
             update={"purpose": "summary", "revises": None})})
+    if (artifact is None and referenced and references and requested is not False
+            and not _EXPORT_ASK.search(question or "")
+            and (_REVISE_ASK.search(question or "") or requested)
+            and decision.outcome in {"recommendation", "information"}):
+        revise = _revise_artifact_for(question, references, reference_details)
+        if revise is not None:
+            return decision.model_copy(update={"artifact": revise})
     if (artifact is None and asked
             and (not referenced or requested or _SUMMARY_ASK.search(question or ""))
             and decision.outcome in {"recommendation", "information"}):
@@ -643,12 +780,15 @@ class ResearchController:
                     raise ToolConversationError("The advisor couldn't answer that. Try again.") from exc
                 raise
             # A salvaged reply still carries the student's request for something to keep.
+            refs = getattr(session, "artifact_reference_list", None) or getattr(session, "artifact_references", ())
             decision = _with_requested_artifact(
                 decision, session.question,
                 [pin.title for pin in session.scope.programs.values()],
-                referenced=bool(session.artifact_references),
+                referenced=bool(refs),
                 unknown_codes=session.unknown_question_codes(),
-                requested=getattr(session, "artifact_choice", None))
+                requested=getattr(session, "artifact_choice", None),
+                references=refs,
+                reference_details=getattr(session, "artifact_reference_details", None))
             session.decision = decision
             system, user, model = session.last_call
             return decision, _aggregate_usage(usages), system, user, model
@@ -660,8 +800,14 @@ class ResearchController:
         session.question = question
         # The student's checkbox decides; without one, the wording does.
         session.artifact_choice = artifact_choice
-        session.artifact_requested = (_asks_for_artifact(question) if artifact_choice is None
-                                      else artifact_choice)
+        refs = getattr(session, "artifact_reference_list", None) or getattr(session, "artifact_references", ())
+        if refs and _EXPORT_ASK.search(question or ""):
+            session.artifact_requested = False
+        elif refs and artifact_choice is None and _REVISE_ASK.search(question or ""):
+            session.artifact_requested = True
+        else:
+            session.artifact_requested = (_asks_for_artifact(question) if artifact_choice is None
+                                          else artifact_choice)
         session.history_context = history_context
         session.persona = persona
         session.instructions = _system_prompt(session)
@@ -846,6 +992,13 @@ class ResearchController:
                     result = replace(result, tool_calls=(parsed_finish,))
             terminal = any(c.name == "advisor_finish" for c in result.tool_calls)
             advertised = {t.name for t in prepared.tools}
+            if (terminal and len(result.tool_calls) > 1
+                    and all(c.name in advertised for c in result.tool_calls)):
+                non_terminal = tuple(
+                    c for c in result.tool_calls if c.name != "advisor_finish")
+                if non_terminal:
+                    result = replace(result, tool_calls=non_terminal)
+                    terminal = False
             if (not result.tool_calls or terminal and len(result.tool_calls) != 1
                     or any(c.name not in advertised for c in result.tool_calls)):
                 if not spend_correction(format_slip=True):
@@ -859,7 +1012,11 @@ class ResearchController:
                                            session.state)
                         if repairing else reason)
                 session.store.record_action(session.run.run_id, action_kind="rejected_finish", details={
-                    "reason": hint, "text": result.text[:16_000], "finish_reason": result.finish_reason})
+                    "reason": hint, "text": result.text[:16_000],
+                    "finish_reason": result.finish_reason,
+                    "tool_calls": [c.name for c in result.tool_calls],
+                    "advertised": sorted(advertised),
+                })
                 last_round = []
                 continue
             before = (session.new_evidence, session.read_count, session.discovery_count,
@@ -963,11 +1120,14 @@ class ResearchController:
                                       f"I did not check every requirement for: {coverage}."]
                         session.decision = session.decision.model_copy(update={
                             "completeness": "partial", "unresolved_questions": tuple(unresolved[:8])})
+                    refs = getattr(session, "artifact_reference_list", None) or getattr(session, "artifact_references", ())
                     session.decision = _with_requested_artifact(
                         session.decision, question, program_titles,
-                        referenced=bool(session.artifact_references),
+                        referenced=bool(refs),
                         unknown_codes=session.unknown_question_codes(),
-                        requested=getattr(session, "artifact_choice", None))
+                        requested=getattr(session, "artifact_choice", None),
+                        references=refs,
+                        reference_details=getattr(session, "artifact_reference_details", None))
                     return session.decision, _aggregate_usage(usages), prepared.messages[0].content, user, result.model
             if not repairing:
                 hint = ""
@@ -1042,9 +1202,20 @@ class ResearchController:
                        if hasattr(session, "renamed_question_codes") else None) else {}),
                 **({"artifact_requested": "The student asked for a plan, checklist, "
                     "sheet or page to keep: set finish.decision.artifact."}
-                   if (_asks_for_artifact(question)
-                       if getattr(session, "artifact_choice", None) is None
-                       else session.artifact_choice) else {}),
+                   if getattr(session, "artifact_requested", False) else {}),
+                **({"referenced_artifacts": [
+                    {"artifact_id": aid, "revision_id": rid,
+                     **({"kind": detail[0], "title": detail[1]}
+                        if (detail := (getattr(session, "artifact_reference_details", None) or {}).get((aid, rid)))
+                        else {})}
+                    for aid, rid in (getattr(session, "artifact_reference_list", None)
+                                     or sorted(getattr(session, "artifact_references", ())))],
+                    **({"artifact_export_note": (
+                        "The student asked to export or convert an attached artifact. Do not set "
+                        "decision.artifact; tell them to use the Download/Export button in the "
+                        "artifact panel (Markdown, Word, Excel, HTML) or Print / Save as PDF in their browser."
+                    )} if _EXPORT_ASK.search(question or "") else {})}
+                   if getattr(session, "artifact_references", None) else {}),
                 "omitted_evidence_ids": [],
                 "remaining_limits": session.remaining_limits,
                 "finish_required": finishing, "instruction": hint,

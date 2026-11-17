@@ -172,6 +172,7 @@ class CourseRead:
     parse_status: str
     chunks: tuple[ChunkRead, ...]
     lifecycle: str = "current"
+    requirement_hold: str | None = None
 
 
 @dataclass(frozen=True)
@@ -466,7 +467,7 @@ def read_courses(conn, scope: ResearchScope, codes) -> list[CourseRead]:
     return [CourseRead(row["code"], row["title"], row["canonical_code"],
                        row["requisites_raw"], row["parse_status"],
                        (*by_locator.get(row["locator_id"], ()), *cards.get(row["code"], ())),
-                       row["lifecycle"])
+                       row["lifecycle"], row.get("requirement_hold"))
             for row in rows]
 
 

@@ -14,6 +14,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from app.advising.research_repository import ProgramItem
+from app.atlas.designations import caveat_sentence, designated_courses
 
 CHECKBOX = "☐ "
 MAX_LINES = 120
@@ -100,6 +101,17 @@ def requirement_blocks(program: ProgramData, prefix: str, *, checklist: bool,
                    "items": [(CHECKBOX if checklist else "") + _line_text(item, titles)
                              for item in items]},
                   [chunk for item in items for chunk in _support(item)])
+    # Special topics, research, honors, internship, practicum and capstone
+    # courses work differently from a regular class; their Atlas titles say so.
+    special = designated_courses(
+        (code for item in program.items[:MAX_LINES] for code in item.mentioned_course_codes),
+        titles or {})
+    if special:
+        built.add({"id": f"{prefix}:special:h", "type": "heading", "level": 3,
+                   "text": "Courses with their own rules"})
+        built.add({"id": f"{prefix}:special", "type": "list",
+                   "items": [caveat_sentence(codes, designation)
+                             for designation, codes in special]})
     return built
 
 

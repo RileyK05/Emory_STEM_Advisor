@@ -1,0 +1,140 @@
+# The questions the decision model (DECISION_MODEL_ID, `clef`) answers about each
+# student message before research starts. See docs/plans/question-router.md.
+#
+# Hand-written. Riley reviews every change, and a change is measured with
+# `python -m scripts.manual.router_eval` against data/eval/router-cases.jsonl
+# before it ships. Unknown keys are errors.
+#
+# How the decision model reads this:
+# - `state` holds three fields: latest_message, previous_student_message,
+#   previous_advisor_reply (each cut to state_max_chars). Every question says to
+#   judge the latest message and use the earlier two only to resolve what it
+#   refers to ("what about the minor?").
+# - A `noul` question returns the probability that `true` describes the message.
+#   The criteria spell out both sides, with the hard cases named, because the
+#   model sees nothing but these words.
+# - A kind turns on when its probability reaches its threshold. A threshold is
+#   lower where a miss costs more: a missed `institutional` lets general advice
+#   stand in for an Emory fact.
+# - Distress is not a kind. It is one `choice` over ordered levels ([distress]
+#   below), because panicking about a class and being at risk are different
+#   situations that need different replies, not stronger and weaker versions of
+#   one yes/no answer.
+# - Questions are sent in this file's order, and the answers come back in it.
+
+schema_version = 1
+state_max_chars = 600
+
+[[kind]]
+name = "institutional"
+threshold = 0.3
+instructions = """Judge latest_message; use the earlier messages only to understand it. \
+Would a correct answer depend on facts that are specific to Emory University?"""
+true = """It names or implies an Emory course (like CS 170), major, minor, track, requirement, \
+policy, deadline, office, campus (Atlanta or Oxford), or registration step. Also true when it \
+asks whether something counts, is allowed, is offered, is required, or transfers (AP, IB, \
+transfer or cross-registration credit), what a course covers or how hard it is, how to prepare \
+for medical, law or graduate school at Emory, or what Emory resources exist. Also true for a \
+follow-up whose earlier messages were about any of these."""
+false = """It is only about jobs, pay or the job market in general, only about feelings, \
+stress or study habits with no Emory rule or resource asked about, only a greeting or thanks, \
+or a request that is not advising at all."""
+
+[[kind]]
+name = "choice"
+threshold = 0.5
+instructions = """Judge latest_message; use the earlier messages only to understand it. \
+Is the student asking for advice on a decision about their own studies or path?"""
+true = """Asks what to take, which option is better, whether to take, drop, add, switch or \
+double up on something, for a recommendation, or for help planning a semester, major, minor, \
+track or path. Includes "should I...", "is it worth...", "what would you pick" and \
+"help me decide"."""
+false = """Asks only for a fact (does X require Y, when is the deadline, how many credits \
+are needed), only shares a worry or feeling without asking what to do, or is not about the \
+student's studies."""
+
+[[kind]]
+name = "career_outlook"
+threshold = 0.5
+instructions = """Judge latest_message; use the earlier messages only to understand it. \
+Is the student asking about, or worried about, the world of work: jobs, pay or career \
+prospects?"""
+true = """Mentions job prospects, salaries or pay, hiring, layoffs, job security, competition \
+for jobs, demand for a field, AI replacing jobs, which careers a major leads to, or graduate \
+or professional school as a step toward a career."""
+false = """Asks only about Emory requirements, Emory career-center services or \
+internship-for-credit rules, with nothing about jobs or pay themselves."""
+
+[[kind]]
+name = "study_and_wellbeing"
+threshold = 0.5
+instructions = """Judge latest_message; use the earlier messages only to understand it. \
+Is the student talking about how school is going for them: stress, workload, motivation, \
+confidence, or how to study?"""
+true = """Feels overwhelmed, behind, burned out, anxious about grades, unmotivated, out of \
+place or like an impostor, homesick or lonely, or asks how to study, manage time or recover \
+from a bad grade."""
+false = """Asks only a factual or planning question and shares no feeling or study-habit \
+concern."""
+
+[[kind]]
+name = "smalltalk"
+threshold = 0.5
+instructions = """Judge latest_message alone. Is it only a greeting, thanks, goodbye or a \
+short reaction, with no question or request in it?"""
+true = """"hi", "thanks!", "ok cool", "that helps", "got it", "bye"."""
+false = """It contains any question or request, even after a greeting, such as "hi, what does \
+CS 170 cover?" or "thanks, and what about the minor?"."""
+
+[[kind]]
+name = "out_of_scope"
+threshold = 0.5
+instructions = """Judge latest_message; use the earlier messages only to understand it. \
+Is the whole request something other than advising a student about courses, programs, \
+policies, study or careers?"""
+true = """Doing the student's coursework (writing an essay, code, problem-set or exam answers), \
+other writing, general trivia or chat, roleplay, medical, legal or money advice, another \
+person's records, or rules of a university with no tie to Emory."""
+false = """Any part of it is advising, even with an odd extra request attached, or it is a \
+greeting, a worry about school or careers, or a question about what a course covers or how \
+hard it is."""
+
+# Which occupations a career question is about. Asked as one `choice`; its options
+# are built at load time from configs/career_occupations.toml (one per `soc`,
+# described by its title and paths), with `none` first so a tie means no pick.
+# Read only when `career_outlook` turns on. Every occupation at or above
+# `min_probability` is kept, up to `max_picks`, and research is told to read
+# their pay records first.
+[career_field]
+instructions = """Judge latest_message; use the earlier messages only to understand it. \
+Which occupation's pay and job data would answer the student's career question? A major \
+counts as the jobs it usually leads to: computer science means software developers. Choose \
+none when no field, major or job is named or implied."""
+none = "No field, major or occupation is named or implied."
+min_probability = 0.2
+max_picks = 3
+
+# How distressed the student sounds, as one `choice` over ordered levels. The
+# router adds up the probabilities from the top level down and picks the
+# highest response tier whose share reaches its threshold:
+#   crisis    P(clear_risk)                                  >= crisis_at
+#   check_in  P(possible_risk) + P(clear_risk)               >= check_in_at
+#   steady    P(acute_distress) + P(possible_risk) + ...     >= steady_at
+#   calm      otherwise
+# Uncertainty between two levels therefore lands on the gentler of the two
+# careful replies (check_in: answer the question, with care and a way to reach
+# someone) instead of on the crisis takeover. Only clear risk replaces the answer.
+# Option order is from least to most severe; the router reads the
+# probabilities, not the single `choice`, so tie order does not matter.
+[distress]
+instructions = """Judge latest_message, but a sign of risk in previous_student_message still counts: a calm message right after one does not cancel it. How distressed does the student sound, and is there any sign of risk to their life or safety? Panic, crying or dread about a class, exam, grade or deadline is distress about a situation, not a risk. Look for risk beyond the situation: hopelessness about life itself, wanting to disappear or not exist, feeling like a burden, goodbyes that sound final, self-harm, danger from someone, or having no food or place to sleep."""
+crisis_at = 0.4
+check_in_at = 0.2
+steady_at = 0.5
+
+[distress.levels]
+none = """No sign of distress: a plain question, a request, a greeting, or calm talk about plans."""
+everyday_stress = """Ordinary school stress, worry or frustration, said calmly or as a figure of speech: "this exam is killing me", "I'm dead tired", "my parents will kill me if I fail", "I'm so behind", "I have zero motivation"."""
+acute_distress = """Strong, present-tense distress about a specific school situation, with no sign of risk beyond it: panicking, crying, can't breathe or sleep over an exam, a grade, registration, a deadline or a scholarship; "I'm freaking out", "having a panic attack about my final", "I've cried every night over physics"."""
+possible_risk = """Signs that may point past the situation, without a clear statement: hopelessness about everything rather than one class ("what's the point of anything", "I can't do this anymore" with nothing else said), feeling numb or like a burden, wanting to disappear, a goodbye that might be final, feeling unsafe with someone, or having no food or place to sleep."""
+clear_risk = """A clear statement of risk: thinking about suicide or killing themselves, wanting to die or for it all to end, self-harm ("I've been cutting again"), being hurt or threatened by someone, or a medical emergency."""

@@ -285,14 +285,8 @@ def _evaluate(
                     frozenset(code for result in merged for code in result.dependencies),
                     tuple(blocker for result in merged for blocker in result.blockers),
                 )
-            groups, truncated = _choice_groups(req)
-            flat = tuple(sorted({choice for group in groups for choice in group})) \
-                if not truncated and all(len(group) == 1 for group in groups) else ()
-            return _Evaluation(
-                False,
-                blockers=(SequenceBlocker(owner, "multiple_alternatives_selected", flat,
-                                          groups, truncated),),
-            )
+            chosen = min(viable, key=lambda r: (len(r.dependencies), tuple(sorted(r.dependencies))))
+            return _Evaluation(True, chosen.dependencies, chosen.blockers)
         # Keep every viable route visible. Flattening these values would make
         # (A AND B) OR C look like three interchangeable options.
         groups, truncated = _choice_groups(req)

@@ -111,7 +111,7 @@ def test_advising_summary_pins_published_sequence_and_excludes_pending(db):
 
 
 @pytest.mark.parametrize("asked", ["Is PHYS 444 a real class?", "is phys444 real?",
-                                   "Can Physics 444 count?"])
+                                   "Can Physics 444 count?", "Can CS/PHYS 444 count?"])
 def test_an_advising_summary_never_names_a_course_the_atlas_lacks(db, asked):
     from app.artifacts.advising_summary import ABSENT_COURSE
     from app.artifacts.checks import extract_artifact_text
@@ -134,12 +134,12 @@ def test_an_advising_summary_resolves_a_course_suffix_the_atlas_spells_out(db):
     store = ConversationStore(db, "workspace-test")
     conv_id = UUID(store.create("Physics research")["conversationId"])
     _append_turn_pair(store, conv_id, 0, question="Which research courses count?",
-                      answer="PHYS 495 and CHEM 499 count; PHYS 444 does not [1].")
+                      answer="PHYS 495, CHEM 499, and Econ/Math 200 count; PHYS 444 does not [1].")
     spec = build_advising_summary_spec(
         db, conv_id, "workspace-test",
-        course_identity=({"PHYS 495R", "CHEM 499R", "CS 170"}, {}))
+        course_identity=({"PHYS 495R", "CHEM 499R", "CS 170", "ECON 200", "MATH 200"}, {}))
     text = extract_artifact_text(spec.model_dump(mode="json"))
-    assert "PHYS 495R" in text and "CHEM 499R" in text
+    assert "PHYS 495R" in text and "CHEM 499R" in text and "Econ/Math 200" in text
     assert "PHYS 444" not in text
     assert ABSENT_COURSE in text
 

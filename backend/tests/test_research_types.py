@@ -263,11 +263,21 @@ _CITED = "See the registrar page for the petition."
     ("eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature", "credential"),
     ("ghp_abcdefghijklmnopqrstuvwxyz0123456789", "credential"),
     ("TODO: fill in the answer about alpha [1].", "no answer"),
+    ("First take MATH 111. [TODO] add upper-levels.", "no answer"),
+    ("ТBD", "no answer"),
     ("Lorem ipsum dolor sit amet, alpha [1].", "no answer"),
     ("<script>alert(1)</script>", "HTML markup"),
+    ("<style>body{display:none}</style>", "HTML markup"),
+    ("Click data:text/html,hello for advising info.", "HTML markup"),
+    ("Authorization: Bearer secret-token-0123456789abcdef", "credential"),
     ("The database is postgresql://admin:pw@db.internal:5432/app today.", "credential"),
     ("Verify your Emory password at http://emory-login.example to continue.", "links to a page"),
+    ("Verify at [portal](evil.io/login) before registering.", "links to a page"),
+    ("Visit w w w . e v i l . c o m for advising overrides.", "links to a page"),
     ("Please confirm your password and student ID so I can check your record.", "password"),
+    ("P.l.e.a.s.e s.e.n.d your p.a.s.s.w.o.r.d right away.", "password"),
+    ("Please reply with your NetID so I can look it up.", "password"),
+    ("Log into OPUS using your Emory NetID to check enrollment.", None),
     ("ECHO", "instructions"),
     ("A petition to drop after the deadline goes to the registrar.", None),
     ("File the petition through the registrar: registrar.emory.edu/forms has it.", None),
@@ -357,6 +367,32 @@ def test_a_grading_answer_must_cite_the_program_rule(text):
         evidence_ids=("e1",)),)})
     validate_final(correct, None, [rule, college], {"e1", "e2"}, {},
                    grading_rules=(("BIOLOGY (BS)", rule.exact_text, "e1"),))
+    contradiction = decision.model_copy(update={"blocks": (DecisionBlock(
+        kind="fact", text="You may take major courses S/U if needed.",
+        evidence_ids=("e1",)),)})
+    with pytest.raises(DecisionRejected, match="grading"):
+        validate_final(contradiction, None, [rule, college], {"e1", "e2"}, {},
+                       grading_rules=(("BIOLOGY (BS)", rule.exact_text, "e1"),))
+    exception = decision.model_copy(update={"blocks": (DecisionBlock(
+        kind="fact",
+        text="Outside the major, free electives may be taken S/U; major courses require a letter grade.",
+        evidence_ids=("e1",)),)})
+    validate_final(exception, None, [rule, college], {"e1", "e2"}, {},
+                   grading_rules=(("BIOLOGY (BS)", rule.exact_text, "e1"),))
+    # A rule that allows S/U in electives, or only sets a grade floor, is followed
+    # by an answer that says so.
+    for minor_rule in (
+            ("Only courses in the elective component may be taken S/U, up to 4 credit hours; "
+             "all courses must be completed with a grade of C- or better."),
+            "Required courses must be taken for a letter grade; one elective may be taken S/U."):
+        elective = decision.model_copy(update={"blocks": (DecisionBlock(
+            kind="fact", text="You may take one elective S/U.",
+            evidence_ids=("e1",)),)})
+        validate_final(elective, None, [rule, college], {"e1", "e2"}, {},
+                       grading_rules=(("ECONOMICS (MINOR)", minor_rule, "e1"),))
+        with pytest.raises(DecisionRejected, match="grading"):
+            validate_final(contradiction, None, [rule, college], {"e1", "e2"}, {},
+                           grading_rules=(("ECONOMICS (MINOR)", minor_rule, "e1"),))
 
 
 @pytest.mark.parametrize("text, rejected", [
@@ -759,6 +795,54 @@ def test_finish_input_undoes_provider_encodings_of_the_same_decision(sent):
     assert expected.blocks[0].evidence_ids == ("e1",)
 
 
+_FACT = {"kind": "fact", "text": "CS 171 needs CS 170.", "evidence_ids": ["e1"]}
+_ONE_FACT = {"outcome": "information", "completeness": "complete", "blocks": [_FACT]}
+
+
+@pytest.mark.parametrize(("sent", "expected"), [
+    # Round 8: the right content under near-miss keys (gemma4, gpt-oss, glm, mistral, nemotron).
+    ({"decision": {"facts": [{"text": _FACT["text"], "evidence_ids": ["e1"]}],
+                   "outcome": "information", "completeness": "complete"}}, _ONE_FACT),
+    ({"decision": {"fact": [{"statement": _FACT["text"], "evidence_ids": ["e1"]}],
+                   "outcome": "information"}}, _ONE_FACT),
+    ({"decision": {"answer": _FACT["text"], "evidence_ids": ["e1"]}}, _ONE_FACT),
+    ({"decision": {"answer": {"blocks": [{"type": "fact", "text": _FACT["text"],
+                                          "evidence_ids": ["e1"]}], "completeness": "complete"}}},
+     _ONE_FACT),
+    ({"blocks": json.dumps([_FACT]), "outcome": "information", "completeness": "complete"},
+     _ONE_FACT),
+    ({"decision": {"blocks": [_FACT], "outcome": "information"}, "completeness": "complete"},
+     _ONE_FACT),
+    ({"decision": json.dumps(_ONE_FACT)[:-1]}, _ONE_FACT),
+    ({"decision": {"fact": [{"text": _FACT["text"], "evidence_ids": "e1"}],
+                   "limitation": [{"text": "No term lists it yet."}]}},
+     {"outcome": "information", "completeness": "partial", "blocks": [
+         _FACT, {"kind": "limitation", "text": "No term lists it yet."}]}),
+    # Not one decision: these are still refused, so the model is asked again.
+    ({"decision": "You need CS 170 before CS 171."}, None),
+    # One citation list beside two blocks could belong to either.
+    ({"decision": {"facts": [_FACT["text"]], "limitations": ["No term lists it yet."],
+                   "evidence_ids": ["e1"]}}, None),
+    ({"decision": {"outcome": "information"}}, None),
+    ({"decision": {"facts": [{"evidence_ids": ["e1"]}], "answer": _FACT["text"]}}, None),
+    ({"decision": {"facts": [{"text": _FACT["text"]}], "response": "Take it in the fall."}}, None),
+])
+def test_finish_input_reads_a_near_miss_shape_as_the_decision_it_names(sent, expected):
+    from pydantic import ValidationError
+
+    from app.generation.research_tools import FinishInput
+    from app.tools.registry import repair_arguments
+
+    def read(arguments):
+        return FinishInput.model_validate(repair_arguments(arguments, FinishInput)).decision
+
+    if expected is None:
+        with pytest.raises((ValidationError, ValueError)):
+            read(sent)
+    else:
+        assert read(sent) == read({"decision": expected})
+
+
 @pytest.mark.parametrize("transport", ["direct", "wrapped", "encoded", "fenced", "bare_fenced"])
 def test_terminal_json_uses_the_finish_validation_path(transport):
     from app.generation.research_controller import _finish_text_call
@@ -865,7 +949,7 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
                               program_handles=("h_a",)),))
     session = SimpleNamespace(
         settings=replace(load_settings(), research_max_prompt_bytes=(
-            21100 if support == "preparation" else 14100 if support == "oversized_preparation" else 17100)),
+            21100 if support == "preparation" else 14200 if support == "oversized_preparation" else 17100)),
         store=SimpleNamespace(evidence=lambda _run: records), run=SimpleNamespace(run_id=uuid4()),
         active=[r.evidence_id for r in records], state=state, entity_evidence={"h_a": {"e20"}},
         scope=SimpleNamespace(sources={}, programs={}),
@@ -1272,7 +1356,10 @@ _PROGRAMS = ["NEUROSCIENCE AND BEHAVIORAL BIOLOGY (BS)", "APPLIED MATHEMATICS (M
     ("Plan my Neuroscience and Behaviour Biology BS from here.", None),
     ("A roadmap of the Applied Math minor.", None),        # a word and its prefix
     ("Plan my CS and Math BS.", None),                       # an acronym is not judged
-    ("Plan my Astrology BS.", None),                         # one word is not judged
+    ("Plan my NBB BS.", None),                               # known acronym matches scope
+    ("Plan my Studies BS.", None),                           # generic word is not a program name
+    ("Plan my Astrology BS.", "Astrology"),                  # single-word missing program is caught
+    ("Tell me about CS. Plan my Psychology BS.", None),      # clause split at sentence boundary
     ("Make a plan for the Mathematics and Computer Science BS.", None),
     # Words of the sentence before a real name are not part of it.
     ("Make a four-year plan for my Emory Psychology BS.", None),

@@ -147,3 +147,22 @@ WHERE p.collection_id = %(collection_id)s
   AND p.is_active
   AND m.target_code = %(code)s
 ORDER BY p.title;
+
+-- name: list_program_code_aliases
+-- A catalog spelling the program import linked to a different current course
+-- ("DATASCI 495B" -> DATASCI 495BW, by suffix variant). The artifact course
+-- check (K4) accepts the spelling as that course instead of calling it invented.
+SELECT DISTINCT m.target_code AS catalog_code, c.code AS atlas_code
+FROM program_course_mentions m
+JOIN programs p ON p.program_id = m.program_id
+JOIN courses c ON c.course_id = m.target_course_id
+WHERE p.collection_id = %(collection_id)s
+  AND p.is_active
+  AND c.lifecycle = 'current'
+  AND m.target_code <> c.code;
+
+-- name: list_active_program_line_texts
+SELECT i.text
+FROM program_items i
+JOIN programs p ON p.program_id = i.program_id
+WHERE p.collection_id = %(collection_id)s AND p.is_active;

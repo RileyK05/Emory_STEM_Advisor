@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
+import { existsSync } from 'node:fs';
 import { access, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -17,8 +18,31 @@ const python = process.env.PYTHON ?? path.join(
   root, '.venv',
   process.platform === 'win32' ? path.join('Scripts', 'python.exe') : path.join('bin', 'python'),
 );
-const chromePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-  path.join(process.env.ProgramFiles ?? 'C:/Program Files', 'Google/Chrome/Application/chrome.exe');
+
+function resolveChromePath() {
+  const envPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  if (envPath) {
+    if (!existsSync(envPath)) {
+      throw new Error(`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH not found at ${envPath}.`);
+    }
+    return envPath;
+  }
+  const candidates = [
+    path.join(process.env.ProgramFiles ?? 'C:/Program Files', 'Google/Chrome/Application/chrome.exe'),
+    path.join(process.env['ProgramFiles(x86)'] ?? 'C:/Program Files (x86)', 'Google/Chrome/Application/chrome.exe'),
+    path.join(process.env.LOCALAPPDATA ?? '', 'Google/Chrome/Application/chrome.exe'),
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ];
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+  const playwrightExecutable = chromium.executablePath();
+  if (playwrightExecutable && existsSync(playwrightExecutable)) return playwrightExecutable;
+  return undefined;
+}
 let child;
 let browser;
 let baseUrl;
@@ -118,7 +142,7 @@ const revisionTitle = (page) => page.locator('.canvas-footer [title*=" · revisi
 
 test.before(async () => {
   await access(python);
-  await access(chromePath);
+  const executablePath = resolveChromePath();
   await mkdir(testRunsRoot, { recursive: true });
   assert.equal(await realpath(testRunsRoot), testRunsRoot, 'test-runs directory must resolve inside the workspace');
   await mkdir(dataRoot, { recursive: false });
@@ -132,7 +156,11 @@ test.before(async () => {
   const ready = await waitForServer();
   baseUrl = ready.url;
   child.stdout.on('data', (chunk) => { stdoutText = appendTail(stdoutText, chunk); });
-  browser = await chromium.launch({ executablePath: chromePath, headless: true, args: ['--no-sandbox'] });
+  browser = await chromium.launch({
+    ...(executablePath ? { executablePath } : {}),
+    headless: true,
+    args: ['--no-sandbox'],
+  });
 });
 
 test.after(async () => {

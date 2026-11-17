@@ -7,7 +7,7 @@ from dataclasses import asdict, replace
 from functools import lru_cache
 from itertools import zip_longest
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 from uuid import uuid5
 
 from pydantic import AfterValidator, Field, ValidationError, field_validator, model_validator
@@ -33,6 +33,7 @@ from app.advising.research_store import (
 from app.advising.research_types import (
     MAX_DECISION_TEXT_BYTES,
     MAX_DECISION_WORDS,
+    BlockKind,
     DecisionBlock,
     FinalDecision,
     ResearchState,
@@ -40,6 +41,7 @@ from app.advising.research_types import (
 from app.advising.research_workspace import ConversationWorkspace
 from app.advising.sequence import CourseRequirement, plan_sequence
 from app.atlas.authority import MIN_OFFERING_TERMS, term_order
+from app.atlas.designations import caveat_sentence, course_designation
 from app.atlas.equivalence import is_oxford
 from app.atlas.records import SUBJECT_RENAMES, normalize_code
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
@@ -47,6 +49,8 @@ from app.db import queries
 from app.generation.research_final import (
     DecisionRejected,
     declined_decision,
+    disclose_retired_courses,
+    disclose_special_courses,
     normalize_decision,
     validate_final,
 )
@@ -179,6 +183,129 @@ class ConversationInput(ToolInputModel):
         description="Continue the original query's next page, including within a long turn. Omit cursor to start a different search.")
 
 
+def _loads_closing(text: str):
+    """Parse JSON, closing brackets left open at the very end ('{"blocks": [...]').
+
+    Models writing a decision as a JSON string sometimes drop the last brace.
+    Only missing closers are appended, outside any string; text that fails to
+    parse after that is returned unparsed for validation to reject.
+    """
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    stack, in_string, escaped = [], False, False
+    for char in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]" and (not stack or stack.pop() != char):
+            return text
+    if in_string or not stack:
+        return text
+    try:
+        return json.loads(text + "".join(reversed(stack)))
+    except ValueError:
+        return text
+
+
+# The near-miss decision shapes smaller models send (round 8: gemma4, gpt-oss,
+# glm, mistral). Each maps onto the one decision it can mean.
+_BLOCK_LIST_KINDS = {f"{kind}{plural}": kind for kind in get_args(BlockKind)
+                     for plural in ("", "s")}
+_BLOCK_TEXT_ALIASES = ("statement", "value", "content", "fact")
+_ANSWER_KEYS = ("answer", "response")
+
+
+def _repair_block(block, kind=None):
+    """One block from a near-miss item, or None when it is not clearly one block."""
+    if isinstance(block, str):
+        return {"kind": kind, "text": block} if kind and block.strip() else None
+    if not isinstance(block, dict):
+        return None
+    block = dict(block)
+    if "kind" not in block:
+        if block.get("type") in get_args(BlockKind):
+            block["kind"] = block.pop("type")
+        elif kind:
+            block["kind"] = kind
+    if "text" not in block:
+        aliases = [key for key in _BLOCK_TEXT_ALIASES if isinstance(block.get(key), str)]
+        if len(aliases) == 1:
+            block["text"] = block.pop(aliases[0])
+    if isinstance(block.get("evidence_ids"), str) and block["evidence_ids"].strip():
+        block["evidence_ids"] = [block["evidence_ids"]]
+    return block if "text" in block and set(block) <= set(DecisionBlock.model_fields) else None
+
+
+def repair_decision_shape(value):
+    """Read a decision sent in a near-miss shape as the decision it names.
+
+    Smaller models put the right content under the wrong keys: ``facts: [...]``
+    for blocks of kind fact, ``statement`` for ``text``, a bare ``answer``
+    string, ``blocks`` as a JSON string, or no ``outcome`` or ``completeness``.
+    Text and citations are never invented. Unlabeled text becomes a fact, the
+    kind validation checks hardest; a missing completeness is partial exactly
+    when the answer has a limitation, a question or an unresolved question,
+    and a missing outcome is information (clarification for questions alone).
+    A shape that is not clearly one decision is returned unchanged, so
+    validation names the problem to the model as before.
+    """
+    if not isinstance(value, dict):
+        return value
+    original, value = value, dict(value)
+    for key in _ANSWER_KEYS:  # An answer object nested once: {"answer": {"blocks": [...]}}.
+        inner = value.get(key)
+        if (isinstance(inner, dict) and "blocks" in inner
+                and set(inner) <= set(FinalDecision.model_fields)):
+            del value[key]
+            for field, item in inner.items():
+                value.setdefault(field, item)
+    if isinstance(value.get("blocks"), str):
+        value["blocks"] = _loads_closing(value["blocks"])
+    if "blocks" not in value:
+        blocks = []
+        for key in [key for key in value if key in _BLOCK_LIST_KINDS]:
+            items = value.pop(key)
+            items = _loads_closing(items) if isinstance(items, str) and items[:1] == "[" else items
+            for item in items if isinstance(items, (list, tuple)) else [items]:
+                block = _repair_block(item, _BLOCK_LIST_KINDS[key])
+                if block is None:
+                    return original
+                blocks.append(block)
+        answers = [key for key in _ANSWER_KEYS if isinstance(value.get(key), str)]
+        if not blocks and len(answers) == 1:
+            blocks = [{"kind": "fact", "text": value.pop(answers[0])}]
+        if not blocks:
+            return original
+        # One block and one citation list beside it: the citation is that block's.
+        if len(blocks) == 1 and "evidence_ids" not in blocks[0] and "evidence_ids" in value:
+            blocks[0]["evidence_ids"] = value.pop("evidence_ids")
+        value["blocks"] = blocks
+    elif isinstance(value["blocks"], (list, tuple)):
+        blocks = [_repair_block(block) if isinstance(block, dict) else block
+                  for block in value["blocks"]]
+        if any(block is None for block in blocks):
+            return original
+        value["blocks"] = blocks
+    blocks = value.get("blocks")
+    if not isinstance(blocks, (list, tuple)) or not blocks:
+        return original
+    kinds = {block.get("kind") for block in blocks if isinstance(block, dict)}
+    value.setdefault("outcome", "clarification" if kinds == {"question"} else "information")
+    value.setdefault("completeness", "partial" if (
+        kinds & {"limitation", "question"} or value.get("unresolved_questions")) else "complete")
+    return value
+
+
 def _coerce_embedded_json(value, model, *, unwrap_key: str):
     """Validate a tool argument that may arrive as a JSON-encoded string (EMO-006).
 
@@ -187,12 +314,14 @@ def _coerce_embedded_json(value, model, *, unwrap_key: str):
     three shapes so a valid decision is not rejected for serialization style.
     """
     if isinstance(value, str):
-        value = json.loads(value)
+        value = _loads_closing(value) if model is FinalDecision else json.loads(value)
     if isinstance(value, dict) and set(value) == {unwrap_key}:
         value = value[unwrap_key]
         if isinstance(value, str):
-            value = json.loads(value)
+            value = _loads_closing(value) if model is FinalDecision else json.loads(value)
     value = repair_arguments(value, model)
+    if model is FinalDecision:
+        value = repair_arguments(repair_decision_shape(value), model)
     # Route through JSON parsing: the strict models require tuple fields, and
     # strict JSON input accepts an array for a tuple where `model_validate`
     # would not.
@@ -214,6 +343,25 @@ class StateInput(ToolInputModel):
 
 class FinishInput(ToolInputModel):
     decision: FinalDecision
+
+    @model_validator(mode="before")
+    @classmethod
+    def gather_decision(cls, data):
+        """Decision fields sent beside ``decision``, or instead of it, belong inside it."""
+        if not isinstance(data, dict):
+            return data
+        names = set(FinalDecision.model_fields) | set(_BLOCK_LIST_KINDS) | set(_ANSWER_KEYS)
+        loose = {key: item for key, item in data.items() if key != "decision" and key in names}
+        if not loose:
+            return data
+        rest = {key: item for key, item in data.items() if key not in loose}
+        inner = rest.get("decision", {})
+        if isinstance(inner, str):
+            inner = _loads_closing(inner)
+        if not isinstance(inner, dict) or any(
+                key in inner and inner[key] != item for key, item in loose.items()):
+            return data
+        return {**rest, "decision": {**inner, **loose}}
 
     @field_validator("decision", mode="before")
     @classmethod
@@ -347,7 +495,8 @@ class ResearchRegistry(ToolRegistry):
 
 
 #: What the server read about a course that no evidence passage holds.
-COURSE_FACT_FIELDS = ("title", "required_by", "named_by_programs", "offering_note")
+COURSE_FACT_FIELDS = ("title", "required_by", "named_by_programs", "offering_note", "requirement_hold",
+                      "special_course")
 COURSE_FACT_TERMS = 4
 COURSE_FACT_COURSES = 20
 #: The most one evidence step may read.
@@ -431,6 +580,18 @@ def other_degrees(pin, programs) -> list:
             and _program_subject(other.title) == subject]
 
 
+_SMALL_TITLE_WORDS = {"and", "of", "the", "in", "for", "on", "with", "to"}
+
+
+def _display_title(title: str) -> str:
+    """'COMPUTER SCIENCE (BS)' as a sentence names it: 'Computer Science (BS)'."""
+    name, paren, rest = title.partition(" (")
+    words = [word if not word.isupper() else
+             word.lower() if index and word.lower() in _SMALL_TITLE_WORDS else word.capitalize()
+             for index, word in enumerate(name.split())]
+    return " ".join(words) + (paren + rest if paren else "")
+
+
 def _program_subject(title: str) -> str:
     return re.sub(r"\s*\(.*$", "", title).casefold()
 
@@ -495,11 +656,25 @@ class ResearchSession:
         self.conn, self.scope, self.store, self.run = conn, scope, store, run
         self.settings, self.config, self.embedder = settings, config, embedder
         # Tuples, not model objects: the pure validator only needs exact identities.
-        self.artifact_references = {
-            (str(item[0]), str(item[1])) if isinstance(item, (tuple, list))
-            else (str(item.artifactId), str(item.revisionId))
-            for item in artifact_references
-        }
+        refs: list[tuple[str, str]] = []
+        details: dict[tuple[str, str], tuple[str, str]] = {}
+        for item in artifact_references or ():
+            if isinstance(item, (tuple, list)):
+                key = (str(item[0]), str(item[1]))
+            elif isinstance(item, dict):
+                key = (str(item["artifactId"]), str(item["revisionId"]))
+                spec = item.get("spec")
+                if isinstance(spec, dict) and spec.get("kind") in {"document", "workbook", "html"}:
+                    details[key] = (spec["kind"], str(spec.get("title") or "Artifact")[:200])
+            else:
+                key = (str(item.artifactId), str(item.revisionId))
+                spec = getattr(item, "spec", None)
+                if isinstance(spec, dict) and spec.get("kind") in {"document", "workbook", "html"}:
+                    details[key] = (spec["kind"], str(spec.get("title") or "Artifact")[:200])
+            refs.append(key)
+        self.artifact_references = set(refs)
+        self.artifact_reference_list = tuple(dict.fromkeys(refs))
+        self.artifact_reference_details = details
         self.handles: dict[str, tuple[str, Any]] = {}
         self.cursors: dict[str, tuple[str, Any]] = {}
         self.program_reads = {}
@@ -534,6 +709,7 @@ class ResearchSession:
         self.answer_in_hand = ""
         self.must_name: set[str] = set()
         self.must_name_degrees: set[str] = set()
+        self.other_degree_titles: dict[str, str] = {}
         self.line_facts: dict[str, list] = {}
         self.audit_matched_lines_only = False
         self.read_keys: set[tuple] = set()
@@ -933,6 +1109,8 @@ class ResearchSession:
                    for other in others]
         if not _DEGREE_NAMED.search(self.question or ""):
             self.must_name_degrees |= {other.degree for other in others if other.degree}
+            self.other_degree_titles.update(
+                {other.degree: _display_title(other.title) for other in others if other.degree})
         return ResearchResult(data={"title": read.pin.title, "handle": value.handle,
             "binding_status": read.pin.binding_status,
             **({"renamed_subjects": renamed} if renamed else {}),
@@ -1055,6 +1233,10 @@ class ResearchSession:
             if r.code not in terms and len(checked) >= MIN_OFFERING_TERMS and (
                     running or r.lifecycle != "current"):
                 data["offering_note"] = offering_note(r.code, checked, running)
+            if r.requirement_hold:
+                data["requirement_hold"] = r.requirement_hold
+            if designation := course_designation(r.title):
+                data["special_course"] = caveat_sentence(r.code, designation)
             self.course_facts.pop(r.code, None)  # The newest reads stay in a full prompt.
             self.course_facts[r.code] = {key: data[key] for key in COURSE_FACT_FIELDS if data.get(key)}
             self.course_facts[r.code]["offered_terms"] = sorted(
@@ -1121,6 +1303,22 @@ class ResearchSession:
         terms, checked, variants = self._offerings(sorted(named))
         return frozenset(code for code in named
                          if self._not_offered(code, terms, checked, variants))
+
+    def _special_courses(self, decision, retired) -> dict:
+        """Current courses the answer names whose Atlas title marks a special kind."""
+        if decision.outcome == "declined":
+            return {}
+        named = list(dict.fromkeys(
+            code for block in decision.blocks if block.kind != "question"
+            for code in canonical_codes_in(block.text) if code not in retired))
+        if not named:
+            return {}
+        rows = self.conn.execute(queries.get("list_course_titles"), {
+            "collection_id": self.scope.collection_id, "codes": named}).fetchall()
+        self.conn.commit()
+        titles = {row["code"]: row["title"] for row in rows}
+        return {code: designation for code in named
+                if (designation := course_designation(titles.get(code)))}
 
     def _not_offered(self, code, terms, checked, variants) -> bool:
         """No checked term shows the course or a variant, and its master row is not current.
@@ -1434,7 +1632,8 @@ class ResearchSession:
         finishable_checks = {check_id: check for check_id, check in self.checks.items()
                              if check_id not in self.unavailable_preparation_check_ids}
         value = value.model_copy(update={
-            "decision": normalize_decision(value.decision, self.supplied)})
+            "decision": self._disclose(normalize_decision(value.decision, self.supplied))})
+        self.rejected_decision = value.decision
         try:
             if self.audit_matched_lines_only:
                 self._refuse_met_claims(value.decision)
@@ -1448,12 +1647,6 @@ class ResearchSession:
                 raise DecisionRejected(
                     "the prerequisite graph lists these too; name each one and what else it "
                     f"needs: {', '.join(sorted(self.must_name - named))}")
-            unsaid = {degree for degree in self.must_name_degrees
-                      if not re.search(rf"\b{re.escape(degree)}\b", written)}
-            if unsaid:
-                raise DecisionRejected(
-                    "the student named no degree and this major also exists as a "
-                    f"{', '.join(sorted(unsaid))}; say in the first block that both exist")
             unknown = self.unknown_question_codes()
             unnamed = {code for code, near in unknown.items() if not near} - named
             if unnamed:
@@ -1492,6 +1685,31 @@ class ResearchSession:
                 "say they could not be read") from None
         self.decision = value.decision
         return ResearchResult(data={"accepted": True})
+
+    def _disclose(self, decision):
+        """Write the disclosures the database decides, rather than reject their wording.
+
+        A course no checked Atlas term shows, and the same major under a degree
+        the student did not name, are facts the server holds. Rejecting an answer
+        until the model words them cost every model correction rounds (round 8).
+        """
+        retired = self._retired_courses(decision)
+        decision = disclose_retired_courses(decision, retired)
+        decision = disclose_special_courses(decision, self._special_courses(decision, retired))
+        written = " ".join(block.text for block in decision.blocks)
+        unsaid = sorted(degree for degree in self.must_name_degrees
+                        if not re.search(rf"\b{re.escape(degree)}\b", written))
+        first = next((index for index, block in enumerate(decision.blocks)
+                      if block.kind != "question"), None)
+        if not unsaid or first is None or decision.outcome == "declined":
+            return decision
+        named = [self.other_degree_titles.get(degree) for degree in unsaid]
+        sentence = (f"Emory also offers {' and '.join(named)}." if all(named) else
+                    f"Emory also offers this program as a {' and '.join(unsaid)}.")
+        blocks = list(decision.blocks)
+        blocks[first] = blocks[first].model_copy(
+            update={"text": f"{blocks[first].text.rstrip()} {sentence}"})
+        return decision.model_copy(update={"blocks": tuple(blocks)})
 
     @staticmethod
     def _refuse_met_claims(decision):

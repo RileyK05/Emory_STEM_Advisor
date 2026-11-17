@@ -19,7 +19,12 @@ from uuid import UUID
 
 from pydantic import TypeAdapter, ValidationError
 
-from app.advising.catalog import load_advising_context, load_campus_equivalents
+from app.advising.catalog import (
+    load_advising_context,
+    load_campus_equivalents,
+    load_catalog_code_aliases,
+    load_program_quoted_codes,
+)
 from app.advising.comparison import match_reported_courses
 from app.advising.research_repository import (
     NotInScope,
@@ -33,7 +38,7 @@ from app.advising.research_repository import (
 )
 from app.advising.research_store import ResearchStore
 from app.advising.sequence import CourseRequirement, SequencePlan, pack_terms, plan_sequence
-from app.artifacts.advising_summary import without_absent_codes
+from app.artifacts.advising_summary import label_absent_codes_in
 from app.artifacts.checks import (
     ArtifactCheckFinding,
     check_generated_artifact,
@@ -51,6 +56,7 @@ from app.artifacts.models import (
 )
 from app.artifacts.storage import validate_spec
 from app.atlas.display import canonicalize_codes
+from app.atlas.records import normalize_code
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
 from app.generation.artifact_builders import (
@@ -335,6 +341,7 @@ class ArtifactPipeline:
         self.plan_seasons: dict[str, frozenset[str]] = {}
         self.plan_requirements: dict[str, CourseRequirement] = {}
         self.plan_layout: tuple[list[list[str]], list[str]] | None = None
+        self.plan_notes: list[str] = []
         self.whatif_programs: list[str] = []
         self.program_title: str | None = None
         self.program_allowed: set[str] | None = None
@@ -345,6 +352,8 @@ class ArtifactPipeline:
         self._prior_completed: list[str] = []
         self.known_courses: set[str] = set()
         self.campus_equivalents: dict[str, frozenset[str]] = {}
+        self.catalog_aliases: dict[str, frozenset[str]] = {}
+        self.quoted_codes: frozenset[str] = frozenset()
         self.section_payloads: dict[str, StageSection] = {}
         self.kept: dict[str, AssembledSection] = {}
         self.section_texts: dict[str, str] = {}
@@ -404,6 +413,10 @@ class ArtifactPipeline:
         ).fetchall()
         self.known_courses = {row["code"] for row in rows}
         self.campus_equivalents = load_campus_equivalents(
+            self.conn, collection_id=self.collection_id)
+        self.catalog_aliases = load_catalog_code_aliases(
+            self.conn, collection_id=self.collection_id)
+        self.quoted_codes = load_program_quoted_codes(
             self.conn, collection_id=self.collection_id)
         self.conn.commit()
 
@@ -542,14 +555,34 @@ class ArtifactPipeline:
             queries.get("list_program_items"), {"program_id": program_id}
         ).fetchall()
         self.conn.commit()
-        required = _required_program_codes(items, self._course_exists)
-        if not required:
-            return False
-        value = StageOutline(
-            title=f"{title}: Term plan", program=title,
-            selected_courses=required, sections=[], sheets=[], charts=[],
+        completed = _completed_from_text(
+            self.request_text + "\n" + self.brief,
+            self.known_courses,
+            self.campus_equivalents,
         )
+        completed = [code for code in completed if self._course_exists(code)]
+        completed_all = set(completed)
+        for code in completed:
+            completed_all.update(self.campus_equivalents.get(code, frozenset()))
+        req_terms = _requested_terms(self.request_text)
+        target = max(16, req_terms * 4 if req_terms else 16)
+        required = _program_plan_codes(items, self._course_exists, target=target)
+        if _PREMED_RE.search(self.request_text):
+            for code in _premed_courses(self._course_exists, self.campus_equivalents):
+                if code not in required:
+                    required.append(code)
+        if _NO_CHEM_RE.search(self.request_text):
+            required = [code for code in required if not code.startswith(("CHEM ", "CHEM_"))]
+        selected = [code for code in required if code not in completed_all][:_MAX_GROUNDED_COURSES]
+        if not selected:
+            return False
         try:
+            value = StageOutline(
+                title=f"{title}: Term plan"[:200], program=title,
+                selected_courses=selected,
+                completed_courses=completed[:_MAX_GROUNDED_COURSES],
+                sections=[], sheets=[], charts=[],
+            )
             self._validate_outline(value)
         except (ValueError, ValidationError):
             return False
@@ -559,6 +592,10 @@ class ArtifactPipeline:
 
     def _plan_needs_no_outline(self) -> bool:
         text = self.request_text + "\n" + self.brief
+        if _PREMED_RE.search(text):
+            return False
+        if _completed_from_text(text, self.known_courses, self.campus_equivalents):
+            return False
         return (not canonical_codes_in(text)
                 and len(_programs_named_in(self.request_text, self.program_titles)) == 1)
 
@@ -567,10 +604,14 @@ class ArtifactPipeline:
         program = _program_named_in(self.request_text, self.program_titles)
         if program is None:
             return False
-        value = StageOutline(
-            title="What if", program=program, sections=[], sheets=[], charts=[],
-            completed_courses=list(canonical_codes_in(self.request_text + "\n" + self.brief)))
+        completed = [
+            code for code in canonical_codes_in(self.request_text + "\n" + self.brief)
+            if self._course_exists(code)
+        ][:_MAX_GROUNDED_COURSES]
         try:
+            value = StageOutline(
+                title="What if", program=program, sections=[], sheets=[], charts=[],
+                completed_courses=completed)
             self._validate_outline(value)
         except (ValueError, ValidationError):
             return False
@@ -734,22 +775,24 @@ class ArtifactPipeline:
         return title, program_id, allowed
 
     def _apply_plan(self, value: StageOutline):
-        selected = [str(code).strip() for code in value.selected_courses if str(code).strip()]
-        completed = [str(code).strip() for code in value.completed_courses if str(code).strip()]
-        selected = [_canonical_code(code) for code in selected]
-        completed = [_canonical_code(code) for code in completed]
-        # A fake code in an otherwise valid request is dropped, not allowed to
-        # throw the whole artifact away. The chat already refused it.
-        selected = [code for code in selected if self._course_exists(code)]
-        completed = [code for code in completed if self._course_exists(code)]
-        if not selected:
-            raise ValueError("a term plan needs selected_courses that exist in this collection")
-        if len(selected) != len(set(selected)):
-            raise ValueError("selected_courses must be unique")
-        if len(completed) != len(set(completed)):
-            raise ValueError("completed_courses must be unique")
-        if set(selected) & set(completed):
-            raise ValueError("a completed course cannot also be selected")
+        raw_selected = [str(code).strip() for code in value.selected_courses if str(code).strip()]
+        raw_completed = [str(code).strip() for code in value.completed_courses if str(code).strip()]
+        text_completed = _completed_from_text(
+            self.request_text + "\n" + self.brief,
+            self.known_courses,
+            self.campus_equivalents,
+        )
+        completed = list(dict.fromkeys(
+            code for code in [*(_canonical_code(c) for c in raw_completed), *text_completed]
+            if self._course_exists(code)
+        ))
+        completed_all = set(completed)
+        for code in completed:
+            completed_all.update(self.campus_equivalents.get(code, frozenset()))
+        model_selected = list(dict.fromkeys(
+            code for code in (_canonical_code(c) for c in raw_selected)
+            if self._course_exists(code) and code not in completed_all
+        ))
         if not value.program:
             raise ValueError("a term plan needs the program name")
         titles = []
@@ -770,27 +813,53 @@ class ArtifactPipeline:
             if not first_allowed:
                 first_allowed = program_allowed
         title = " and ".join(dict.fromkeys(titles))[:200]
-        if not completed and not canonical_codes_in(self.request_text):
-            # A full plan from scratch: include the program's required course
-            # lines, not only the subset the research brief happened to mention.
-            required = set()
+        allowed_all = set(allowed)
+        for code in allowed:
+            allowed_all.update(self.campus_equivalents.get(code, frozenset()))
+        explicit_selected = [
+            code for code in canonical_codes_in(self.request_text)
+            if self._course_exists(code) and code not in completed_all
+        ]
+        selected = model_selected
+        if not explicit_selected and (
+            not completed
+            or _programs_named_in(self.request_text, self.program_titles)
+            or _requested_terms(self.request_text) is not None
+        ):
+            # A full plan from scratch (or with completed courses/named programs):
+            # derive the core sequence deterministically from the program records.
+            req_terms = _requested_terms(self.request_text)
+            target = max(16, req_terms * 4 if req_terms else 16)
+            planned_from_program: list[str] = []
             for program_id in program_ids:
                 if program_id is None:
                     continue
                 items = self.conn.execute(
                     queries.get("list_program_items"), {"program_id": program_id}
                 ).fetchall()
-                required.update(_required_program_codes(items, self._course_exists))
+                for code in _program_plan_codes(items, self._course_exists, target=target):
+                    if code not in planned_from_program:
+                        planned_from_program.append(code)
             self.conn.commit()
-            if required:
-                # For a full plan from scratch, code owns the course list. The
-                # outline model's free selection can add unrelated electives.
-                selected = sorted(required - set(completed))
-        if (not completed and not canonical_codes_in(self.request_text)
-                and len(allowed) >= 8 and len(selected) < min(6, len(allowed))):
-            raise ValueError(
-                "a full term plan needs the program's required courses; select at least "
-                f"{min(6, len(allowed))} of them or name the specific courses to plan")
+            if planned_from_program:
+                extra_valid = [
+                    code for code in model_selected
+                    if code in allowed_all and code not in planned_from_program
+                ]
+                selected = [*planned_from_program, *extra_valid]
+        if _PREMED_RE.search(self.request_text + "\n" + self.brief):
+            selected = list(dict.fromkeys([
+                *selected,
+                *_premed_courses(self._course_exists, self.campus_equivalents),
+            ]))
+        if _NO_CHEM_RE.search(self.request_text):
+            selected = [code for code in selected if not code.startswith(("CHEM ", "CHEM_"))]
+        selected = [
+            code for code in selected
+            if code not in completed_all
+        ][:_MAX_GROUNDED_COURSES]
+        if not selected:
+            raise ValueError("a term plan needs selected_courses that exist in this collection")
         self.extra_courses = set()
         for code in selected:
             if not self._course_exists(code):
@@ -800,11 +869,6 @@ class ArtifactPipeline:
                 # A premed course, a minor or a second major is not on the first
                 # program's lines. It is still a real course the student named.
                 self.extra_courses.add(code)
-        for code in completed:
-            if not self._course_exists(code):
-                raise ValueError(f"completed course {code} is not in this collection")
-            if code in selected:
-                raise ValueError(f"{code} is completed and cannot also be selected")
         plan = self._plan_sequence(selected, completed)
         # A selected course's prerequisites are part of the plan even when the
         # outline did not name them; they were read into `courses` above.
@@ -873,12 +937,12 @@ class ArtifactPipeline:
             titles.append(title)
         heading = {"id": f"{WHATIF_SECTION}:h", "type": "heading", "level": 2,
                    "text": "If you switched programs"}
-        # A catalog line can still print a code the Atlas dropped; describe it
-        # instead, as the conversation summary does.
-        models = without_absent_codes(
+        # A catalog line can still print a code the Atlas lacks; the line stays
+        # as the program wrote it and says which code cannot be found.
+        models = label_absent_codes_in(
             [_BLOCK_ADAPTER.validate_python(block)
              for block in [heading, *whatif_blocks(results, completed=completed)]],
-            self.known_courses, self.campus_equivalents)
+            self.known_courses, self.campus_equivalents, self.catalog_aliases)
         blocks = [model.model_dump(mode="json") for model in models]
         evidence = {f"{WHATIF_SECTION}:t{index}": _slot_refs(slots, self.grounding.slots)
                     for index, slots in enumerate(program_slots, 1) if slots}
@@ -979,16 +1043,23 @@ class ArtifactPipeline:
 
     def _course_titles(self, program: ProgramData) -> dict[str, str]:
         codes = sorted({code for item in program.items for code in item.mentioned_course_codes})
-        rows = self.conn.execute(queries.get("list_course_titles"),
-                                 {"collection_id": self.collection_id, "codes": codes}).fetchall()
+        # A catalog spelling the import linked ("Econ 499" -> ECON 499R) takes its
+        # course's title, so its line and its special-course note read the same.
+        linked = {code: next(iter(self.catalog_aliases[code]))
+                  for code in codes if len(self.catalog_aliases.get(code, ())) == 1}
+        rows = self.conn.execute(queries.get("list_course_titles"), {
+            "collection_id": self.collection_id,
+            "codes": sorted({*codes, *linked.values()})}).fetchall()
         self.conn.commit()
-        return {row["code"]: row["title"] for row in rows}
+        titles = {row["code"]: row["title"] for row in rows}
+        return {**{code: titles[target] for code, target in linked.items() if target in titles},
+                **titles}
 
     def _keep_built(self, section_id: str, heading: str, built: Built, scope) -> OutlineSection:
-        # A catalog line can still print a code the Atlas dropped; describe it instead.
-        models = without_absent_codes(
+        # A catalog line can still print a code the Atlas lacks; keep it, labeled.
+        models = label_absent_codes_in(
             [_BLOCK_ADAPTER.validate_python(block) for block in built.blocks],
-            self.known_courses, self.campus_equivalents)
+            self.known_courses, self.campus_equivalents, self.catalog_aliases)
         blocks = [model.model_dump(mode="json") for model in models]
         evidence = {block_id: _slot_refs([self._slot_for_chunk(chunk, scope)
                                           for chunk in chunks], self.grounding.slots)
@@ -1062,15 +1133,35 @@ class ArtifactPipeline:
         return built
 
     def _build_tracker(self, value: StageOutline, title: str, program_id, scope):
-        """A credit tracker: one required course per row, its record's credits, a total."""
+        """A credit tracker: one required course per row, credits, status, and totals."""
         rows = self.conn.execute(queries.get("list_program_items"),
                                  {"program_id": program_id}).fetchall()
         self.conn.commit()
         codes = _required_program_codes(rows, self._course_exists)[:60]
+        if len(codes) < 3 or len(rows) > 4:
+            for code in _program_plan_codes(rows, self._course_exists, target=12):
+                if code not in codes and len(codes) < 60:
+                    codes.append(code)
         if not codes:
             raise ValueError("the program lists no required courses to track")
         records = self._course_facts(codes, scope)
-        sheet_id, headers = "tracker", ["Course", "Title", "Credits", "Term", "Status"]
+        completed_list = _completed_from_text(
+            self.request_text + "\n" + self.brief,
+            self.known_courses,
+            self.campus_equivalents,
+        )
+        completed_set = set(completed_list)
+        for code in completed_list:
+            completed_set.update(self.campus_equivalents.get(code, frozenset()))
+        has_credits = any(records.get(code, ("", None, None))[1] for code in codes) or bool(
+            re.search(r"\b(?:totals?|sum|remaining|done|completed|gpa|grades?)\b",
+                      self.request_text, re.IGNORECASE))
+        wants_gpa = bool(re.search(r"\b(?:gpa|grades?|points?)\b",
+                                   self.request_text, re.IGNORECASE))
+        sheet_id = "tracker"
+        headers = ["Course", "Title", "Credits", "Term", "Status"]
+        if wants_gpa:
+            headers.extend(["Grade", "Grade Points"])
         header_style = {"bold": True, "fill_color": "012169", "font_color": "FFFFFF"}
         cells, evidence, skip = [], {}, set()
         for column, header in enumerate(headers, 1):
@@ -1079,29 +1170,56 @@ class ArtifactPipeline:
             skip.add(f"{sheet_id}/h{column}")
         row = 2
         for code in codes:
-            course_title, credits, slot = records.get(code, ("", None, None))
-            for column, cell_value in enumerate((code, course_title, credits), 1):
+            course_title, stated_credits, slot = records.get(code, ("", None, None))
+            cell_credits = stated_credits if stated_credits is not None else (4 if has_credits else None)
+            for column, cell_value in enumerate((code, course_title, cell_credits), 1):
                 if cell_value in (None, ""):
                     continue
                 cell_id = f"r{row}c{column}"
                 cells.append({"id": cell_id, "row": row, "column": column, "value": cell_value})
-                if slot:
+                if slot and not (column == 3 and stated_credits is None):
                     evidence[f"{sheet_id}/{cell_id}"] = _slot_refs([slot], self.grounding.slots)
                 else:
                     skip.add(f"{sheet_id}/{cell_id}")
-            cells.append({"id": f"r{row}c5", "row": row, "column": 5, "value": "Not started"})
+            status = "Completed" if code in completed_set else "Not started"
+            cells.append({"id": f"r{row}c5", "row": row, "column": 5, "value": status})
             skip.add(f"{sheet_id}/r{row}c5")
             row += 1
-        if any(records.get(code, ("", None, None))[1] for code in codes):
-            # A total only when some record states its credits; never a total of nothing.
+        last_row = row - 1
+        if has_credits and last_row >= 2:
+            # Totals and completion formulas when course credits exist or tracking formulas are requested.
             cells.append({"id": "total-label", "row": row, "column": 2, "value": "Total",
                           "style": {"bold": True}})
             cells.append({"id": "total", "row": row, "column": 3,
-                          "formula": f"=SUM(C2:C{row - 1})", "style": {"bold": True}})
-            skip.update({f"{sheet_id}/total-label", f"{sheet_id}/total"})
+                          "formula": f"=SUM(C2:C{last_row})", "style": {"bold": True}})
+            cells.append({"id": "completed-label", "row": row + 1, "column": 2,
+                          "value": "Credits Completed", "style": {"bold": True}})
+            cells.append({"id": "completed-total", "row": row + 1, "column": 3,
+                          "formula": f'=SUMIF(E2:E{last_row},"Completed",C2:C{last_row})',
+                          "style": {"bold": True}})
+            cells.append({"id": "remaining-label", "row": row + 2, "column": 2,
+                          "value": "Credits Remaining", "style": {"bold": True}})
+            cells.append({"id": "remaining-total", "row": row + 2, "column": 3,
+                          "formula": f'=SUMIF(E2:E{last_row},"Not started",C2:C{last_row})',
+                          "style": {"bold": True}})
+            skip.update({
+                f"{sheet_id}/total-label", f"{sheet_id}/total",
+                f"{sheet_id}/completed-label", f"{sheet_id}/completed-total",
+                f"{sheet_id}/remaining-label", f"{sheet_id}/remaining-total",
+            })
+            if wants_gpa:
+                cells.append({"id": "gpa-label", "row": row + 3, "column": 2, "value": "GPA",
+                              "style": {"bold": True}})
+                cells.append({"id": "gpa-total", "row": row + 3, "column": 3,
+                              "formula": f"=IF(SUM(C2:C{last_row})>0,"
+                                         f"SUMPRODUCT(C2:C{last_row},G2:G{last_row})/SUM(C2:C{last_row}),0)",
+                              "style": {"bold": True}})
+                skip.update({f"{sheet_id}/gpa-label", f"{sheet_id}/gpa-total"})
+        widths = {"A": 14, "B": 46, "C": 10, "D": 14, "E": 16}
+        if wants_gpa:
+            widths.update({"F": 10, "G": 14})
         sheet = {"id": sheet_id, "name": "Tracker", "cells": cells,
-                 "column_widths": {"A": 14, "B": 46, "C": 10, "D": 14, "E": 16},
-                 "freeze_panes": "A2"}
+                 "column_widths": widths, "freeze_panes": "A2"}
         section = OutlineSheet(
             id=sheet_id, name="Tracker", row_purpose="One required course per row.",
             columns=[OutlineColumn(key=header.casefold(), header=header,
@@ -1238,6 +1356,8 @@ class ArtifactPipeline:
         self.plan_credits.clear()
         self.plan_stated_credits.clear()
         self.plan_seasons.clear()
+        self.plan_notes.clear()
+        self.plan_skip_cells: set[tuple[str, int, int]] = set()
         while pending and len(visited) < _MAX_GROUNDED_COURSES:
             batch, pending = pending[:4], pending[4:]
             visited.update(batch)
@@ -1268,9 +1388,23 @@ class ArtifactPipeline:
                 self.conn, collection_id=self.collection_id, chunks=cited)
             self.conn.commit()
             for course in context["courses"]:
+                reason = course.get("blocker_reason")
+                stored_status = course.get("stored_parse_status")
+                if (reason == "description_requirement_unparsed"
+                        and stored_status in {"none", "parsed"}):
+                    status = stored_status
+                    note = (f"{course['code']}'s catalog description has a requirement note; "
+                            "check it with your advisor.")
+                    if note not in self.plan_notes:
+                        self.plan_notes.append(note)
+                elif course["requirements_evidence_complete"]:
+                    status = course["parse_status"]
+                else:
+                    status = "unparsed"
+                # A grade threshold stays a blocker in the planner, so the plan
+                # lists the course for advisor review rather than assuming it met.
                 courses[course["code"]] = CourseRequirement(
-                    course["code"], course["title"],
-                    course["parse_status"] if course["requirements_evidence_complete"] else "unparsed",
+                    course["code"], course["title"], status,
                     course["prerequisites"], course["corequisites"], course["requisites_raw"],
                 )
                 for dependency in _tree_codes(course["prerequisites"]):
@@ -1295,6 +1429,10 @@ class ArtifactPipeline:
         plan_selected = selected
         self.plan_requirements = courses
         return plan_sequence(courses, plan_selected, completed, self.campus_equivalents)
+
+    def _workbook_plan_credits(self) -> bool:
+        return bool(self.plan_stated_credits) or bool(
+            re.search(r"\b(?:credits?|hours?|totals?)\b", self.request_text, re.IGNORECASE))
 
     def _replace_plan_shape(self, value: StageOutline, plan: SequencePlan,
                             selected: list[str], completed: list[str]):
@@ -1349,9 +1487,11 @@ class ArtifactPipeline:
                       "source_slots": [self.plan_records[code] for code in codes]}
             purpose = "Courses requiring advisor review" if blockers else "Scheduled courses"
             if self.kind == "workbook":
+                columns = [OutlineColumn(key="course", header="Course")]
+                if self._workbook_plan_credits() and not blockers:
+                    columns.append(OutlineColumn(key="credits", header="Credits", type="number"))
                 value.sheets.append(OutlineSheet(
-                    name=heading, row_purpose=purpose,
-                    columns=[OutlineColumn(key="course", header="Course")], **fields))
+                    name=heading, row_purpose=purpose, columns=columns, **fields))
             else:
                 value.sections.append(OutlineSection(
                     heading=heading, purpose=purpose, block_types=["list", "paragraph"], **fields))
@@ -1668,16 +1808,28 @@ class ArtifactPipeline:
                        if entry.startswith(prefix)]
             if reasons:
                 line += " (" + ", ".join(dict.fromkeys(reasons)) + ")"
-            lines.append((line, slot))
+            lines.append((code, line, slot))
 
         if self.kind == "workbook":
-            draft = StageSection(rows=[{"values": [line], "source_slots": [slot]}
-                                       for line, slot in lines])
+            include_credits = self._workbook_plan_credits() and not section.blocked_reasons
+            skip_cells = getattr(self, "plan_skip_cells", set())
+            rows = []
+            for row_index, (code, line, slot) in enumerate(lines, 2):
+                if include_credits:
+                    raw_cr = self.plan_stated_credits.get(code, 4)
+                    cr = int(raw_cr) if raw_cr == int(raw_cr) else raw_cr
+                    if code not in self.plan_stated_credits:
+                        skip_cells.add((section.id, row_index, 2))
+                    rows.append({"values": [line, cr], "source_slots": [slot]})
+                else:
+                    rows.append({"values": [line], "source_slots": [slot]})
+            self.plan_skip_cells = skip_cells
+            draft = StageSection(rows=rows)
         else:
             blocks = [{"id": f"course{index}", "type": "list", "items": [line]}
-                      for index, (line, _) in enumerate(lines, 1)]
+                      for index, (_code, line, _slot) in enumerate(lines, 1)]
             bindings = [{"element_id": block["id"], "source_slots": [slot]}
-                        for block, (_, slot) in zip(blocks, lines, strict=True)]
+                        for block, (_code, _line, slot) in zip(blocks, lines, strict=True)]
             draft = StageSection(blocks=blocks, bindings=bindings)
         self.section_payloads[section.id] = draft
 
@@ -1728,7 +1880,7 @@ class ArtifactPipeline:
         # model is told up front instead of after a failed check and a repair round.
         absent = invalid_course_codes(
             {code for slot in slots for code in canonical_codes_in(slot["text"])},
-            self.known_courses, self.campus_equivalents)
+            self.known_courses, self.campus_equivalents, self.catalog_aliases)
         if absent:
             payload["not_in_course_atlas"] = sorted(absent)
         if self.kind == "workbook":
@@ -1970,6 +2122,8 @@ class ArtifactPipeline:
             section_texts=self.section_texts,
             skip_elements=(set(content_elements(spec)) if self.inputs.mode == "authoring"
                            else self._skip_elements()),
+            catalog_aliases=self.catalog_aliases,
+            quoted_codes=self.quoted_codes,
         )
 
     def _skip_elements(self) -> set[str]:
@@ -2050,6 +2204,42 @@ class ArtifactPipeline:
             return list(self.outline.completed_courses)
         return list(self._prior_completed)
 
+    def _plan_assumptions_block(self) -> dict | None:
+        if self.plan is None:
+            return None
+        total_credits = sum(
+            self.plan_credits.get(code, 3.0)
+            for stage in self.plan.stages
+            for code in stage
+        )
+        total_label = (
+            str(int(total_credits))
+            if total_credits == int(total_credits)
+            else f"{total_credits:.1f}"
+        )
+        cap = _requested_credit_cap(self.request_text)
+        cap_label = str(int(cap)) if cap == int(cap) else f"{cap:.1f}"
+        parts = [
+            (
+                f"Scheduled credits shown: {total_label} across {len(self.plan.stages)} term(s) "
+                f"(up to {cap_label} credits per term)."
+            )
+        ]
+        completed = self._completed_courses()
+        if completed:
+            parts.append(
+                "Completed courses excluded from remaining terms: "
+                + ", ".join(completed)
+                + "."
+            )
+        if getattr(self, "plan_notes", None):
+            parts.extend(self.plan_notes)
+        return {
+            "id": "assumptions:p",
+            "type": "paragraph",
+            "text": "Plan assumptions: " + " ".join(parts),
+        }
+
     def _assemble_document(self):
         blocks: list[dict] = []
         evidence: dict[str, list[dict]] = {}
@@ -2086,6 +2276,10 @@ class ArtifactPipeline:
             blocks.extend(section_blocks)
             self.section_texts[section.id] = "\n".join(
                 _block_text(block) for block in section_blocks)
+        assumptions = self._plan_assumptions_block()
+        if assumptions is not None:
+            blocks.append(assumptions)
+            skipped.add(assumptions["id"])
         visuals = self._plan_visuals()
         if visuals:
             heading = {"id": f"{PLAN_MAP_SECTION}:h", "type": "heading", "level": 2,
@@ -2175,12 +2369,32 @@ class ArtifactPipeline:
                 cell_id = f"{section.id}:r{row_index}c{position}"
                 cells.append({"id": cell_id, "row": row_index, "column": position,
                               "value": value})
-                if refs:
+                skip_cell = (section.id, row_index, position) in getattr(
+                    self, "plan_skip_cells", set())
+                if refs and not skip_cell:
                     evidence[f"{section.id}/{cell_id}"] = refs
+                elif skip_cell:
+                    skipped.add(f"{section.id}/{cell_id}")
+        has_plan_credits_col = (
+            self.plan is not None
+            and len(columns) >= 2
+            and columns[0].key == "course"
+            and columns[1].key == "credits"
+            and last_row >= 2
+        )
+        if has_plan_credits_col:
+            sum_row = last_row + 1
+            label_id = f"{section.id}:total-label"
+            total_id = f"{section.id}:total"
+            cells.append({"id": label_id, "row": sum_row, "column": 1,
+                          "value": "Total Credits", "style": {"bold": True}})
+            cells.append({"id": total_id, "row": sum_row, "column": 2,
+                          "formula": f"=SUM(B2:B{last_row})", "style": {"bold": True}})
+            skipped.update({f"{section.id}/{label_id}", f"{section.id}/{total_id}"})
         total_columns = [position for position, column in enumerate(columns, 1)
                          if column.type == "total"
                          or column.header.strip().casefold() == "total"]
-        if self.total_requested and not total_columns:
+        if self.total_requested and not total_columns and not has_plan_credits_col:
             position = len(columns) + 1
             sources = [source_position for source_position, column in enumerate(columns, 1)
                        if column.type == "number"]
@@ -2241,6 +2455,9 @@ class ArtifactPipeline:
             self.section_texts[section.id] = payload.html
             for binding in payload.bindings or []:
                 refs.extend(_slot_refs(binding.source_slots, self.grounding.slots))
+        assumptions = self._plan_assumptions_block()
+        if assumptions is not None:
+            fragments.append(render_blocks_html([_BLOCK_ADAPTER.validate_python(assumptions)]))
         visuals = self._plan_visuals()
         if visuals:
             fragments.append(render_blocks_html(
@@ -2467,9 +2684,42 @@ def _check_binding_slots(slots, allowed):
         raise ValueError("every binding must use this section's own source slots")
 
 
-_PROGRAM_KIND_ASKED = re.compile(r"\b(minor|major)s?\b", re.IGNORECASE)
+# A degree ("BA", "B.S.", "bachelor") names a major, so "the Physics minor and the
+# Physics and Astronomy BA" asks for both kinds (round 8).
+_PROGRAM_KIND_ASKED = re.compile(r"\b(minor|major|b\.?a\.?|b\.?s\.?|bba|bachelor)s?\b",
+                                 re.IGNORECASE)
 _CREDITS_IN_RECORD = re.compile(
     r"Credits:\s*(\d+(?:\.\d+)?)(?:\s*-\s*(\d+(?:\.\d+)?))?", re.IGNORECASE)
+_ANECDOTE_CLAUSE = re.compile(
+    r"\b(?:my\s+)?(?:friend|friends|roommate|roommates|brother|sister|cousin|classmate|peer)s?\s+"
+    r"(?:took|take|taken|had|did|does|usually|recommend(?:s|ed)?)\b[^.!?\n;]{0,80}",
+    re.IGNORECASE,
+)
+_FLOOR_PREFIX = re.compile(
+    r"\b(?:at\s+least|minimum(?:\s+of)?|min(?:\s+of)?|more\s+than|no\s+fewer\s+than|"
+    r"no\s+less\s+than|at\s+a\s+minimum|greater\s+than|over|above)\s*$",
+    re.IGNORECASE,
+)
+_DEGREE_LABEL_YEARS = re.compile(
+    r"\b(?:one|two|three|four|five|six|\d{1,2})[- ]years?\s+"
+    r"(?:bs|ba|b\.s\.|b\.a\.|degree|degrees|program|programs|university|universities|"
+    r"college|colleges|transfer|transfers|student|students|school|schools)\b",
+    re.IGNORECASE,
+)
+_REMAINING_TERMS = re.compile(
+    r"\b(?:(?:remaining|last|next|final)\s+"
+    r"(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})"
+    r"[- ]?(?:semesters?|terms?)|"
+    r"(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})"
+    r"[- ]?(?:semesters?|terms?)\s+(?:left|remaining))\b",
+    re.IGNORECASE,
+)
+_REMAINING_YEARS = re.compile(
+    r"\b(?:(?:remaining|last|next|final)\s+"
+    r"(one|two|three|four|five|six|\d{1,2})[- ]?years?|"
+    r"(one|two|three|four|five|six|\d{1,2})[- ]?years?\s+(?:left|remaining))\b",
+    re.IGNORECASE,
+)
 _CREDIT_CAP_PATTERNS = (
     re.compile(r"\b(?:no more than|at most|maximum(?: of)?|max(?:imum)?|under|"
                r"fewer than|up to)\s+(\d{1,2})\s*(?:credits?|hours?)\b", re.IGNORECASE),
@@ -2513,9 +2763,12 @@ def _credits_from_record(text: str) -> float:
 
 
 def _requested_credit_cap(text: str) -> float:
+    cleaned = _ANECDOTE_CLAUSE.sub(" ", text or "")
     for pattern in _CREDIT_CAP_PATTERNS:
-        match = pattern.search(text or "")
-        if match:
+        for match in pattern.finditer(cleaned):
+            prefix = cleaned[max(0, match.start() - 32):match.start()]
+            if _FLOOR_PREFIX.search(prefix):
+                continue
             value = int(match.group(1))
             if 3 <= value <= 30:
                 return float(value)
@@ -2523,28 +2776,47 @@ def _requested_credit_cap(text: str) -> float:
 
 
 def _requested_course_cap(text: str) -> int:
+    cleaned = _ANECDOTE_CLAUSE.sub(" ", text or "")
     for pattern in _COURSE_CAP_PATTERNS:
-        match = pattern.search(text or "")
-        if match:
+        for match in pattern.finditer(cleaned):
+            prefix = cleaned[max(0, match.start() - 32):match.start()]
+            if _FLOOR_PREFIX.search(prefix):
+                continue
             value = int(match.group(1))
             if 1 <= value <= 8:
                 return value
     return 5
 
 
+def _parse_count(raw: str | None) -> int:
+    if not raw:
+        return 0
+    word = raw.casefold()
+    return _TERM_WORDS.get(word, 0) or (int(word) if word.isdigit() else 0)
+
+
 def _requested_terms(text: str) -> int | None:
-    years = _YEAR_TERMS.search(text or "")
-    if years:
-        raw = years.group(1).casefold()
-        count = _TERM_WORDS.get(raw, 0) or (int(raw) if raw.isdigit() else 0)
-        if 1 <= count <= 6:
-            return count * 2
-    terms = _TERM_COUNT.search(text or "")
-    if terms:
-        raw = terms.group(1).casefold()
-        count = _TERM_WORDS.get(raw, 0) or (int(raw) if raw.isdigit() else 0)
+    cleaned = _DEGREE_LABEL_YEARS.sub(" ", text or "")
+    rem_terms = _REMAINING_TERMS.search(cleaned)
+    if rem_terms:
+        count = _parse_count(rem_terms.group(1) or rem_terms.group(2))
         if 1 <= count <= 12:
             return count
+    rem_years = _REMAINING_YEARS.search(cleaned)
+    if rem_years:
+        count = _parse_count(rem_years.group(1) or rem_years.group(2))
+        if 1 <= count <= 6:
+            return count * 2
+    terms = _TERM_COUNT.search(cleaned)
+    if terms:
+        count = _parse_count(terms.group(1))
+        if 1 <= count <= 12:
+            return count
+    years = _YEAR_TERMS.search(cleaned)
+    if years:
+        count = _parse_count(years.group(1))
+        if 1 <= count <= 6:
+            return count * 2
     return None
 
 
@@ -2555,18 +2827,176 @@ def _strict_term_limit(text: str) -> bool:
         r"[^.?!]{0,25}\b(?:semesters?|terms?|years?)\b", text or "", re.IGNORECASE))
 
 
+_NON_REQUIRED_SECTION = re.compile(
+    r"\b(?:electives?|choices?|options?|tracks?|concentrations?|emphases|emphasis|"
+    r"breadth|distribution|general education|ger|survey|honors?|colloqui(?:um|a)|"
+    r"seminars?|independent study|research|internship|capstone|recommended|"
+    r"suggested|related|cognate|notes?|footnotes?|prerequisites?)\b",
+    re.IGNORECASE,
+)
+_NON_REQUIRED_TEXT = re.compile(
+    r"\b(?:prerequisites?|cross[- ]listed|may be counted|ap score|transfer|"
+    r"notes?|electives?|concentration|breadth|survey|honors?|colloqui(?:um|a)|"
+    r"seminars?|recommended)\b",
+    re.IGNORECASE,
+)
+_PREMED_RE = re.compile(
+    r"\b(?:pre[- ]?med(?:ical)?|mcat|medical\s+school)\b",
+    re.IGNORECASE,
+)
+_NO_CHEM_RE = re.compile(
+    r"\b(?:no|without|exclude|excluding|skip|drop|avoid)\s+(?:any\s+)?chem(?:istry)?\b",
+    re.IGNORECASE,
+)
+_PREMED_SPINE = (
+    "BIOL 141", "BIOL 141L", "BIOL 142", "BIOL 142L",
+    "CHEM 150", "CHEM 150L", "CHEM 202", "CHEM 202L",
+    "CHEM 203", "CHEM 203L", "CHEM 204", "CHEM 204L",
+    "PHYS 141", "PHYS 142",
+)
+_COMPLETED_CUE_RE = re.compile(
+    r"(?:(?:already|i(?:'ve| have)?|we(?:'ve| have)?|student(?:\s+has)?)\s+)?"
+    r"(?:completed|took|taken|finished|passed|did|earned\s+(?:ap|ib|transfer)?\s*credit\s+(?:for|in)|"
+    r"have\s+(?:ap\s+|ib\s+|transfer\s+)?credit\s+(?:for|in)|"
+    r"have\s+(?:already\s+)?(?:completed|taken|finished|passed|done)|"
+    r"(?:already|i(?:'ve| have)|we(?:'ve| have))\s+done(?:\s+with)?|"
+    r"done\s+with|ap\s+(?:credit\s+)?(?:for|in)|exempt(?:ed)?\s+from|placed\s+out\s+of|"
+    r"completed\s+equivalent\s+of)\b(?P<span>[^.!?\n]+)",
+    re.IGNORECASE,
+)
+_WITH_DONE_RE = re.compile(
+    r"\bwith\s+(?P<span>[^.!?\n]{1,100}?)\s+(?:done|completed|finished|taken|out\s+of\s+the\s+way)\b",
+    re.IGNORECASE,
+)
+_HAVE_AP_RE = re.compile(
+    r"\b(?:have|with|got)\s+(?:ap|ib)\s+(?P<span>[^.!?\n]{1,60})",
+    re.IGNORECASE,
+)
+_PLAN_STOP_RE = re.compile(
+    r"\b(?:plan|build|make|create|design|schedule|what\s+should|which|how|"
+    r"need\s+to\s+take|remaining)\b",
+    re.IGNORECASE,
+)
+_NEG_BEFORE_CUE_RE = re.compile(
+    r"(?:\b(?:not|never|no|without|neither|nor|haven['’]?t|hasn['’]?t|didn['’]?t|"
+    r"hadn['’]?t|don['’]?t|won['’]?t)\s+(?:already\s+|yet\s+)?)$",
+    re.IGNORECASE,
+)
+_NEG_STOP_RE = re.compile(
+    r"\b(?:not|never|haven['’]?t|hasn['’]?t|didn['’]?t|need(?:s)?|still|"
+    r"plan(?:s|ning)?\s+(?:to|on)|without|will|won['’]?t|['’]ll|want(?:s|ed)?|"
+    r"would\s+like|hope|going\s+to|gonna|intend(?:s|ing)?|next|later|then|"
+    r"upcoming|future|currently|enrolled|registered|signed\s+up)\b",
+    re.IGNORECASE,
+)
+_TITLE_COURSE_ALIASES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (re.compile(r"\bintro(?:ductory)?\s+psych(?:ology)?\b", re.IGNORECASE),
+     ("PSYC 110", "PSYC 111")),
+    (re.compile(r"\bgen(?:eral)?\s+chem(?:istry)?\s*(?:ii|2)\b", re.IGNORECASE),
+     ("CHEM 202", "CHEM 142")),
+    (re.compile(r"\bgen(?:eral)?\s+chem(?:istry)?(?:\s*(?:i|1))?\b", re.IGNORECASE),
+     ("CHEM 150", "CHEM 141")),
+    (re.compile(r"\borg(?:anic|o)\s*(?:chem(?:istry)?\s*)?(?:ii|2)\b", re.IGNORECASE),
+     ("CHEM 204", "CHEM 222")),
+    (re.compile(r"\borg(?:anic|o)\s*(?:chem(?:istry)?\s*)?(?:i|1)\b", re.IGNORECASE),
+     ("CHEM 203", "CHEM 221")),
+    (re.compile(r"\bcalc(?:ulus)?\s*(?:iii|3)|multivariable(?:\s+calc(?:ulus)?)?\b",
+                re.IGNORECASE),
+     ("MATH 211",)),
+    (re.compile(r"\b(?:calc(?:ulus)?\s*(?:ii|2|bc)|ap\s+calc(?:ulus)?\s+bc)\b", re.IGNORECASE),
+     ("MATH 112",)),
+    (re.compile(r"\b(?:calc(?:ulus)?\s*(?:i|1|ab)|ap\s+calc(?:ulus)?\s+ab)\b", re.IGNORECASE),
+     ("MATH 111",)),
+    (re.compile(r"\blinear\s+algebra\b", re.IGNORECASE),
+     ("MATH 221",)),
+    (re.compile(r"\bintro(?:ductory)?\s+bio(?:logy)?\b|\bgen(?:eral)?\s+bio(?:logy)?\s*(?:i|1)?\b|\bap\s+bio(?:logy)?\b",
+                re.IGNORECASE),
+     ("BIOL 141",)),
+    (re.compile(r"\bintro(?:ductory)?\s+cs\b|\bap\s+cs(?:\s*a)?\b", re.IGNORECASE),
+     ("CS 170",)),
+)
+
+
+def _premed_courses(course_exists, campus_equivalents) -> list[str]:
+    out: list[str] = []
+    for code in _PREMED_SPINE:
+        resolved = code if course_exists(code) else next(
+            (alt for alt in sorted(campus_equivalents.get(code, ())) if course_exists(alt)),
+            None,
+        )
+        if resolved and resolved not in out:
+            out.append(resolved)
+    return out
+
+
+def _completed_from_text(
+    text: str,
+    known_courses: set[str],
+    campus_equivalents: dict[str, frozenset[str]],
+) -> list[str]:
+    spans: list[str] = []
+    source_text = text or ""
+    for regex in (_COMPLETED_CUE_RE, _WITH_DONE_RE, _HAVE_AP_RE):
+        for match in regex.finditer(source_text):
+            prefix = re.split(r"[.!?\n;]", source_text[max(0, match.start() - 28):match.start()])[-1]
+            if _NEG_BEFORE_CUE_RE.search(prefix):
+                continue
+            span = match.group("span")
+            if regex is _COMPLETED_CUE_RE:
+                if match.group(0).split()[0].lower() == "did" and re.match(
+                        r"^\s*(?:not|n['’]t)\b", span, re.IGNORECASE):
+                    continue
+                stops = [s.start() for pattern in (_PLAN_STOP_RE, _NEG_STOP_RE)
+                         if (s := pattern.search(span)) is not None]
+                if stops:
+                    span = span[:min(stops)]
+            elif regex is _WITH_DONE_RE and re.search(
+                    r"\b(?:not|never|no|without|yet)\s*$", span, re.IGNORECASE):
+                continue
+            spans.append(span)
+    found: list[str] = []
+    for span in spans:
+        for code in canonical_codes_in(span):
+            canonical = normalize_code(code) or code
+            if canonical in known_courses and canonical not in found:
+                found.append(canonical)
+                continue
+            for alt in sorted(campus_equivalents.get(canonical, ())):
+                if alt in known_courses and alt not in found:
+                    found.append(alt)
+                    break
+        for pattern, candidates in _TITLE_COURSE_ALIASES:
+            if not pattern.search(span):
+                continue
+            resolved = next((c for c in candidates if c in known_courses), None)
+            if resolved is None:
+                for c in candidates:
+                    resolved = next(
+                        (alt for alt in sorted(campus_equivalents.get(c, ()))
+                         if alt in known_courses),
+                        None,
+                    )
+                    if resolved:
+                        break
+            if resolved and resolved not in found:
+                found.append(resolved)
+    return found
+
+
 def _required_program_codes(items, course_exists) -> list[str]:
     """Course codes on a program's required lines, not its elective/notes lines."""
     codes: list[str] = []
     for item in items:
         if item["choose"] is not None:
             continue
+        section = str(item["section"] or "")
         text = str(item["text"] or "")
-        if re.search(r"(?i)\b(?:prerequisites?|cross[- ]listed|may be counted|"
-                     r"ap score|transfer|notes?)\b", text):
+        if _NON_REQUIRED_SECTION.search(section) or _NON_REQUIRED_TEXT.search(text):
             continue
         choices = [str(code) for code in (item["courses"] or []) if code]
         if not choices:
+            continue
+        if len(choices) > 3 and " and " not in text.casefold():
             continue
         # "BIOL 495 (Honors) or BIOL 499R" is one requirement, not both.
         if re.search(r"\bor\b", text, re.IGNORECASE) and len(choices) > 1:
@@ -2574,6 +3004,41 @@ def _required_program_codes(items, course_exists) -> list[str]:
         for code in choices:
             if course_exists(code) and code not in codes:
                 codes.append(code)
+    return codes
+
+
+def _program_plan_codes(items, course_exists, *, target: int = 16) -> list[str]:
+    """Core required courses plus representative elective choices up to target."""
+    codes = _required_program_codes(items, course_exists)
+    if len(codes) >= target:
+        return codes
+    for item in items:
+        if len(codes) >= target:
+            break
+        text = str(item["text"] or "")
+        if re.search(r"(?i)\b(?:prerequisites?|cross[- ]listed|may be counted|"
+                     r"ap score|transfer|notes?)\b", text):
+            continue
+        choices = [str(code) for code in (item["courses"] or [])
+                   if code and course_exists(str(code))]
+        if not choices:
+            continue
+        if re.search(r"\bor\b", text, re.IGNORECASE) and item["choose"] is None:
+            # Already represented by a choice on this "or" line; do not take both.
+            if any(c in codes for c in choices):
+                continue
+            limit = 1
+        elif item["choose"] is not None:
+            limit = max(1, int(item["choose"]))
+        else:
+            limit = target - len(codes)
+        added = sum(1 for c in choices if c in codes)
+        for code in choices:
+            if added >= limit or len(codes) >= target:
+                break
+            if code not in codes:
+                codes.append(code)
+                added += 1
     return codes
 
 
@@ -2643,7 +3108,8 @@ def _program_named_in(text: str, titles: list[str]) -> str | None:
 
 def _check_program_kind(brief: str, title: str) -> None:
     """A request naming only a minor, or only a major, gets that kind of program."""
-    asked = {word.casefold() for word in _PROGRAM_KIND_ASKED.findall(brief)}
+    asked = {"minor" if word.casefold() == "minor" else "major"
+             for word in _PROGRAM_KIND_ASKED.findall(brief)}
     if len(asked) != 1:
         return  # both, or neither: the request does not decide it
     wanted = asked.pop()

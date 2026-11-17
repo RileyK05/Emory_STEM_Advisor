@@ -302,8 +302,15 @@ WHERE c.chunk_id = ANY(%(chunk_ids)s::uuid[])
 
 -- name: research_courses_by_codes
 SELECT co.course_id, co.code, co.title, co.requisites_raw, co.parse_status,
-       co.canonical_code, co.source_id, co.locator_id, co.lifecycle
+       co.canonical_code, co.source_id, co.locator_id, co.lifecycle,
+       hold.conflict_reason AS requirement_hold
 FROM courses co
+JOIN sources sc ON sc.source_id = co.source_id
+LEFT JOIN atlas_requirement_holds hold
+       ON hold.source_id = co.source_id
+      AND hold.course_code = co.code
+      AND hold.master_file_hash = sc.file_hash
+      AND hold.status = 'active'
 WHERE co.collection_id = %(collection_id)s
   AND co.code = ANY(%(codes)s::text[])
   AND co.source_id = ANY(%(source_ids)s::uuid[])

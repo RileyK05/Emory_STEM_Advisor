@@ -262,9 +262,28 @@ def query_response(
         request_id=conversation_request_id, retry=retry)
     if not created:
         raise HTTPException(409, "This conversation request already owns a research run; reconnect to it.")
+    raw_refs = list(getattr(body, "artifactReferences", ()) or ())
+    enriched_refs = []
+    if raw_refs:
+        from app.artifacts.storage import ArtifactStore
+
+        artifact_store = ArtifactStore(conn, workspace_key=workspace_key, data_dir=settings.data_dir)
+        for item in raw_refs:
+            spec = getattr(item, "spec", None) if not isinstance(item, dict) else item.get("spec")
+            aid = item["artifactId"] if isinstance(item, dict) else item.artifactId
+            rid = item["revisionId"] if isinstance(item, dict) else item.revisionId
+            if not isinstance(spec, dict):
+                try:
+                    record = artifact_store.get(UUID(str(aid)), revision_id=UUID(str(rid)))
+                    spec = record.get("spec")
+                except (HTTPException, ValueError):
+                    spec = None
+            enriched_refs.append({"artifactId": str(aid), "revisionId": str(rid),
+                                  **({"spec": spec} if isinstance(spec, dict) else {})})
+        conn.commit()
     session = ResearchSession(
         conn, scope, store, run, settings=settings, config=config, embedder=embedder,
-        artifact_references=getattr(body, "artifactReferences", ()),
+        artifact_references=enriched_refs,
     )
     outcome = Retrieved([], RetrievalTrace(trace_id, collection_id, body.query,
                         normalize_query(body.query), config.version, settings.embedding_model_id,

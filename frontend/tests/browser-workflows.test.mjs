@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { access, readFile, unlink, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,9 +10,31 @@ import { chromium } from 'playwright-core';
 
 const frontend = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 let url;
-const chromePath =
-  process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ??
-  path.join(process.env.ProgramFiles ?? 'C:/Program Files', 'Google/Chrome/Application/chrome.exe');
+
+function resolveChromePath() {
+  const envPath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  if (envPath) {
+    if (!existsSync(envPath)) {
+      throw new Error(`PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH not found at ${envPath}.`);
+    }
+    return envPath;
+  }
+  const candidates = [
+    path.join(process.env.ProgramFiles ?? 'C:/Program Files', 'Google/Chrome/Application/chrome.exe'),
+    path.join(process.env['ProgramFiles(x86)'] ?? 'C:/Program Files (x86)', 'Google/Chrome/Application/chrome.exe'),
+    path.join(process.env.LOCALAPPDATA ?? '', 'Google/Chrome/Application/chrome.exe'),
+    '/usr/bin/google-chrome',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  ];
+  for (const candidate of candidates) {
+    if (candidate && existsSync(candidate)) return candidate;
+  }
+  const playwrightExecutable = chromium.executablePath();
+  if (playwrightExecutable && existsSync(playwrightExecutable)) return playwrightExecutable;
+  return undefined;
+}
 let server;
 let browser;
 const tempFiles = [];
@@ -197,13 +220,7 @@ const defaultAdminCollections = [
 ];
 
 test.before(async () => {
-  try {
-    await access(chromePath);
-  } catch {
-    throw new Error(
-      `Chrome not found at ${chromePath}; set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH to use another local browser.`,
-    );
-  }
+  const executablePath = resolveChromePath();
   const dist = path.join(frontend, 'dist');
   server = createServer(async (request, response) => {
     const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
@@ -233,7 +250,11 @@ test.before(async () => {
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   url = `http://127.0.0.1:${server.address().port}`;
-  browser = await chromium.launch({ executablePath: chromePath, headless: true, args: ['--no-sandbox'] });
+  browser = await chromium.launch({
+    ...(executablePath ? { executablePath } : {}),
+    headless: true,
+    args: ['--no-sandbox'],
+  });
 });
 
 test.after(async () => {
