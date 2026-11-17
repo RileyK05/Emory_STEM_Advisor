@@ -47,6 +47,7 @@ from app.generation.research_tools import ResearchSession
 from app.jobs.store import JobCancelled, LeaseLost
 from app.llm.base import Provider, ProviderError, provider_failure_detail
 from app.operations.budget import OperationBudgetError, OperationLimits
+from app.places import places_in
 from app.retrieval.config import RetrievalConfig
 from app.retrieval.trace import normalize_query, write_trace
 from app.retrieval.types import RetrievalTrace, Retrieved
@@ -351,7 +352,8 @@ def query_response(
             )
         response.research = ResearchDecisionInfo(runId=str(run.run_id), outcome=decision.outcome,
             completeness=decision.completeness, blocks=rendered.blocks, artifact=artifact,
-            unresolvedQuestions=list(decision.unresolved_questions))
+            unresolvedQuestions=list(decision.unresolved_questions),
+            places=places_in(body.query, *(block["text"] for block in rendered.blocks)))
         cited_source_ids = sorted({
             UUID(str(item.source_id)) for item in rendered.answer.citations if item.source_id
         })

@@ -121,7 +121,8 @@ def main():
         try:
             with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 51000),
                             raise_server_exceptions=False) as client:
-                response = client.post("/api/query", json={"query": case["prompt"]})
+                response = client.post("/api/query", json={
+                    "query": case["prompt"], **({"persona": case["persona"]} if case.get("persona") else {})})
             row["http_status"] = response.status_code
             try:
                 row["response"] = response.json()
@@ -139,6 +140,7 @@ def main():
         print(json.dumps({"id": case["id"], "http": row.get("http_status"), "seconds": row["seconds"],
                           "type": row.get("response", {}).get("type"),
                           "outcome": (row.get("response", {}).get("research") or {}).get("outcome"),
+                          "places": (row.get("response", {}).get("research") or {}).get("places"),
                           "calls": len(row["provider_calls"])}), flush=True)
         return row
 

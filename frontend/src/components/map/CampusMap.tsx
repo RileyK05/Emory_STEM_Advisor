@@ -153,9 +153,17 @@ export function CampusMap({
     const size = LABEL_PX * metresPerPx;
     const left = view.cx - view.w / 2;
     const top = view.cy - h / 2;
-    const placed: Box[] = [];
     const out: { key: string; x: number; y: number; text: string; strong: boolean }[] = [];
     const highlighted = new Set(highlight);
+    // Every pin is reserved first, so no label (a highlighted one included) covers one.
+    const placed: Box[] = highlight.map(({ label: [x, y] }) => ({
+      minX: x - 10 * metresPerPx,
+      maxX: x + 10 * metresPerPx,
+      minY: y - 28 * metresPerPx,
+      maxY: y,
+    }));
+    const clashes = (box: Box) =>
+      placed.some((p) => box.minX < p.maxX && box.maxX > p.minX && box.minY < p.maxY && box.maxY > p.minY);
     const named = map.buildings
       .filter((b) => b.name && !b.context)
       .sort((a, b) => Number(highlighted.has(b)) - Number(highlighted.has(a)) || b.area - a.area);
@@ -164,17 +172,18 @@ export function CampusMap({
       const [x, y] = building.label;
       if (!strong && (x < left || x > left + view.w || y < top || y > top + h)) continue;
       if (!strong && Math.sqrt(building.area) / metresPerPx < 28) continue;
-      // A highlighted name sits above its pin, so its box (and the pin's) go there.
-      const ly = strong ? y - 32 * metresPerPx : y;
       const half = ((building.name as string).length * size * 0.56) / 2;
-      const box = { minX: x - half, maxX: x + half, minY: ly - size * 0.8, maxY: ly + size * 0.3 };
-      if (strong)
-        placed.push({ minX: x - 10 * metresPerPx, maxX: x + 10 * metresPerPx, minY: y - 28 * metresPerPx, maxY: y });
-      const clash = placed.some(
-        (p) => box.minX < p.maxX && box.maxX > p.minX && box.minY < p.maxY && box.maxY > p.minY,
-      );
+      const boxAt = (ly: number) => ({ minX: x - half, maxX: x + half, minY: ly - size * 0.8, maxY: ly + size * 0.3 });
+      // A highlighted name sits above its pin, or below the pin's tip when that
+      // spot covers another pin or name; it is drawn either way.
+      let ly = strong ? y - 32 * metresPerPx : y;
+      let box = boxAt(ly);
+      if (strong && clashes(box) && !clashes(boxAt(y + size * 1.2))) {
+        ly = y + size * 1.2;
+        box = boxAt(ly);
+      }
       const cut = box.minX < left || box.maxX > left + view.w || box.minY < top || box.maxY > top + h;
-      if ((clash || cut) && !strong) continue;
+      if ((clashes(box) || cut) && !strong) continue;
       placed.push(box);
       out.push({ key: building.id ?? building.osm ?? `${x},${y}`, x, y: ly, text: building.name as string, strong });
     }

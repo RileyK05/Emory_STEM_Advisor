@@ -34,11 +34,32 @@ first run, by Claude:
   chat renders an answer as one text. This replaces `place_ids` on blocks below.
 - Mock mode: a question starting with "where" shows the card.
 
-Not built yet: the gazetteer (1a), the audit (1c), `app/places/` and the
-backend attaching places to answers (Phase 2), and browser checks. Until the
-gazetteer exists, place ids are the builder's building ids (a slug of the OSM
-name, such as `candler-library`), so they can change when OSM renames a
-building; the gazetteer's own `id` is what later code should use.
+Second run (Riley: "save maps to the backend via the script"):
+
+- `build_campus_map` also writes `backend/app/places/atlanta.json`, the
+  backend's place index: each building id with the names that find it in text.
+  Names come only from OSM (`name`, `official_name`, `alt_name`, `short_name`,
+  `loc_name`; never `old_name`, which collides with today's buildings) through
+  one deterministic rule, `app.places.match_names`: a name counts when it reads as
+  a building (two or more words with a building word such as Hall or Library, or
+  four or more words) and has a distinctive word of three letters or more, so
+  "Anthropology", "Administration" and "Building C" never match. A name with a
+  middle initial also matches the words after it ("Goodrich C. White Hall" ->
+  "White Hall"). Names two places share match neither.
+- `app/places/`: `places_in(*texts)` returns at most three place ids in order of
+  first mention; the longest overlapping name wins ("Emory University Hospital
+  Tower" is the tower). `query_service` sets `ResearchDecisionInfo.places` from
+  the student's question and the answer's blocks. Tests: `tests/test_places.py`.
+- Greek-letter houses get `osm-<type>-<id>` ids (their names slug to nothing).
+- `scripts/manual/map_audit.py` (1c, first version): drawn ids vs index ids,
+  places no text can find, shared names, OSM-id ids, and `--texts` to try
+  wording.
+
+Still not built: the gazetteer (1a). It is what adds the names students use
+("MSC", "Atwood", "PAIS", "the library"), offices inside buildings and
+entrances, and the `reviewed` gate. Until it exists, place ids are the builder's
+slugs of OSM names and can change when OSM renames a building; the map shows any
+OSM-named building an answer names, without review.
 
 ## What the data can and cannot do (surveyed 2026-11-17)
 

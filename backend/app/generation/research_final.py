@@ -23,7 +23,7 @@ from app.generation.answer import NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-56"
+RESEARCH_PROMPT_VERSION = "research-57"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
 # A fact block that asserts a course is required, listed or part of a program
@@ -59,7 +59,7 @@ def _program_requirement_mentions(records, cited: set[str]) -> set[str]:
 
 
 _RETIRED_SAID = re.compile(r"no longer (?:offered|runs?|available)|not (?:been )?offered|retired|"
-                           r"discontinued",
+                           r"discontinued|(?:isn't|aren't|not) on (?:any )?recent",
                            re.IGNORECASE)
 
 
@@ -68,7 +68,8 @@ _CLAUSE_END = re.compile(r"[.!?]*[\"'”’)]*$")
 
 
 def disclose_retired_courses(decision: FinalDecision, retired: frozenset[str]) -> FinalDecision:
-    """Say in each sentence that names a retired course that it is not offered.
+    """Say in each sentence that names a retired course that it is not offered:
+    the full label at its first mention in the answer, a short one after that.
 
     Which courses no checked Atlas term shows is a database fact, so the server
     writes the disclosure instead of rejecting the answer for wording it
@@ -79,7 +80,7 @@ def disclose_retired_courses(decision: FinalDecision, retired: frozenset[str]) -
     """
     if not retired:
         return decision
-    blocks, changed = [], False
+    blocks, changed, labeled = [], False, set()
     for block in decision.blocks:
         parts = _CLAUSE_SPLIT.split(block.text)
         for index in range(0, len(parts), 2):
@@ -89,9 +90,13 @@ def disclose_retired_courses(decision: FinalDecision, retired: frozenset[str]) -
             named = [code for code in dict.fromkeys(canonical_codes_in(clause)) if code in retired]
             if not named:
                 continue
-            note = (f" ({named[0]} is not offered in any Course Atlas term on file)" if len(named) == 1
-                    else f" ({', '.join(named[:-1])} and {named[-1]} are not offered in any "
-                         "Course Atlas term on file)")
+            # The full label once per answer; a later sentence gets the short form.
+            fresh = [code for code in named if code not in labeled]
+            labeled.update(named)
+            note = (" (not on recent schedules)" if not fresh
+                    else f" ({fresh[0]} isn't on any recent Course Atlas schedule)" if len(fresh) == 1
+                    else f" ({', '.join(fresh[:-1])} and {fresh[-1]} aren't on any recent "
+                         "Course Atlas schedule)")
             end = _CLAUSE_END.search(clause).start()
             parts[index] = clause[:end].rstrip() + note + clause[end:]
         text = "".join(parts)

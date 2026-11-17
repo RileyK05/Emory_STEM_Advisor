@@ -164,7 +164,22 @@ def test_a_course_the_atlas_no_longer_shows_is_never_presented_as_current(
     else:
         check()
     if rejected and not recommended:
-        assert "(CS 171 is not offered in any Course Atlas term on file)." in decision.blocks[0].text
+        assert "(CS 171 isn't on any recent Course Atlas schedule)." in decision.blocks[0].text
+
+
+def test_a_retired_course_gets_its_full_label_once_per_answer():
+    decision = disclose_retired_courses(_decision([
+        DecisionBlock(kind="fact", text="CS 253 needs CS 171 or CS 170.", evidence_ids=("e1",)),
+        DecisionBlock(kind="judgment", text="Finish CS 171 first. Then take CS 253.",
+                      evidence_ids=("e1",)),
+    ]), frozenset({"CS 171"}))
+    assert [block.text for block in decision.blocks] == [
+        "CS 253 needs CS 171 or CS 170 (CS 171 isn't on any recent Course Atlas schedule).",
+        "Finish CS 171 first (not on recent schedules). Then take CS 253.",
+    ]
+    validate_final(decision, None, _evidence(), {"e1"}, {},
+                   known_course_codes=frozenset({"CS 170", "CS 171", "CS 253"}),
+                   retired_courses=frozenset({"CS 171"}))
 
 
 @pytest.mark.parametrize(("title", "kind"), [

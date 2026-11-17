@@ -600,7 +600,7 @@ def test_entry_point_claims_need_a_read_course_without_prerequisites():
 
 
 # The system prompt counts toward the bound; these fixture budgets track its size.
-@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(16400, False), (17400, False), (50400, True)])
+@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(17100, False), (18100, False), (51100, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
     ("unknown", None, "edition_not_recorded"),
@@ -949,7 +949,7 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
                               program_handles=("h_a",)),))
     session = SimpleNamespace(
         settings=replace(load_settings(), research_max_prompt_bytes=(
-            21100 if support == "preparation" else 14200 if support == "oversized_preparation" else 17100)),
+            21800 if support == "preparation" else 14900 if support == "oversized_preparation" else 17800)),
         store=SimpleNamespace(evidence=lambda _run: records), run=SimpleNamespace(run_id=uuid4()),
         active=[r.evidence_id for r in records], state=state, entity_evidence={"h_a": {"e20"}},
         scope=SimpleNamespace(sources={}, programs={}),

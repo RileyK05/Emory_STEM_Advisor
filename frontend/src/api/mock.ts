@@ -495,7 +495,9 @@ function whereResponse(query: string, wait: number): QueryResponse {
       blocks: [{ kind: 'fact', text: answer, evidenceIds: [], citationNumbers: [], candidateIds: [] }],
       artifact: null,
       unresolvedQuestions: [],
-      places: DEMO_PLACES,
+      // Building ids written in the question ("where is cox-hall") pick the pins, to try
+      // any building by hand; otherwise the demo set.
+      places: query.match(/[a-z0-9]+(?:-[a-z0-9]+)+/g) ?? DEMO_PLACES,
     },
   };
 }

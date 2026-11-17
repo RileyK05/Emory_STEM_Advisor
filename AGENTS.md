@@ -32,7 +32,8 @@ plans and `docs/audit/` the review status.
     releases), `advising/` (citation-scoped snapshots, the sequence planner,
     program audit engine, comparisons, research advisor data layer),
     `simgraph/` (fixed departments → learned topics → courses; no lateral
-    course links). None of these call a model.
+    course links), `places/` (campus buildings named in a text, from the
+    OSM-derived index `build_campus_map` writes). None of these call a model.
   - Generation: `retrieval/` (seams, fusion, traces, eval runner),
     `generation/` (the research loop, the only answering path, its final
     rendering and citation mapping, and the tool controller artifacts share;
@@ -147,7 +148,8 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.fetch_bls_wages               # federal pay data -> data/staging/career-references-*/ (index with scripts.ingest --origin-manifest)
 ../.venv/Scripts/python -m scripts.fetch_scorecard_fields        # federal earnings by field -> data/staging/career-references-scorecard-*/ (same ingest)
 ../.venv/Scripts/python -m scripts.fetch_campus_map             # OpenStreetMap survey -> data/maps/raw/ (backs off while Overpass is busy)
-../.venv/Scripts/python -m scripts.build_campus_map             # our own map -> frontend/public/maps/<campus>.json (ODbL; credit OSM)
+../.venv/Scripts/python -m scripts.build_campus_map             # our own map -> frontend/public/maps/<campus>.json and the place index app/places/<campus>.json (ODbL; credit OSM)
+../.venv/Scripts/python -m scripts.manual.map_audit --texts "Where is White Hall?"   # map vs place index, unfindable places, try wording
 ../.venv/Scripts/python -m scripts.eval_retrieval [--cases FILE]
 ../.venv/Scripts/python -m scripts.serve                 # HTTP API on :8000
 ../.venv/Scripts/python -m scripts.worker                # background jobs and saved conversation turns
@@ -155,6 +157,7 @@ From `backend/`:
 ../.venv/Scripts/python -m scripts.schema_baseline       # baseline == legacy final schema, disposable DBs
 ../.venv/Scripts/python -m scripts.restore_consolidated BACKUP --data-dir NEW_DIRECTORY
 ../.venv/Scripts/python -m scripts.team_snapshot --backup FILE --maintenance-confirmed  # public data only, for teammates; never share a plain backup
+../.venv/Scripts/python -m scripts.manual.router_eval --grid      # live: decision model vs data/eval/router-cases.jsonl (kinds, careers, distress tiers)
 ../.venv/Scripts/python -m scripts.manual.advising_sweep --per-family 12 --out FILE  # live answers about random courses and programs, graded from the database
 ../.venv/Scripts/python -m scripts.manual.artifact_suite generate --seed N --out CASES  # then `run --cases CASES --repeat 3 --out-dir DIR` and `report --dir DIR`; see docs/plans/artifact-test-suite.md
 ../.venv/Scripts/python -m scripts.smoke.local_model    # slow, downloads weights

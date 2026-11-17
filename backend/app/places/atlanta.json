@@ -1,0 +1,1320 @@
+{
+ "campus": "atlanta",
+ "survey": {
+  "fetchedAt": "20261117T175601Z",
+  "sha256": "1a38bfbda0d339eb0cd53e7f1647611ca23576937c3df1ce57138fe4b703effc"
+ },
+ "attribution": "© OpenStreetMap contributors",
+ "license": "Derived from OpenStreetMap; available under the Open Database License.",
+ "places": [
+  {
+   "id": "emory-university-school-of-medicine",
+   "name": "Emory University School of Medicine",
+   "osm": "way/40859912",
+   "at": [
+    33.793845,
+    -84.321835
+   ],
+   "match": [
+    "emory university school of medicine"
+   ]
+  },
+  {
+   "id": "woodruff-health-sciences-administration-building",
+   "name": "Woodruff Health Sciences Administration Building",
+   "osm": "way/40859913",
+   "at": [
+    33.794405,
+    -84.321665
+   ],
+   "match": [
+    "woodruff health sciences administration building",
+    "woodruff health sciences center administration building"
+   ]
+  },
+  {
+   "id": "peavine-parking-deck",
+   "name": "Peavine Parking Deck",
+   "osm": "way/40859914",
+   "at": [
+    33.793357,
+    -84.328291
+   ],
+   "match": [
+    "peavine parking deck"
+   ]
+  },
+  {
+   "id": "administration",
+   "name": "Administration",
+   "osm": "way/41109061",
+   "at": [
+    33.790126,
+    -84.325513
+   ],
+   "match": []
+  },
+  {
+   "id": "tarbutton-hall",
+   "name": "Tarbutton Hall",
+   "osm": "way/41109062",
+   "at": [
+    33.792014,
+    -84.324967
+   ],
+   "match": [
+    "tarbutton hall"
+   ]
+  },
+  {
+   "id": "anthropology",
+   "name": "Anthropology",
+   "osm": "way/41109063",
+   "at": [
+    33.792289,
+    -84.32445
+   ],
+   "match": []
+  },
+  {
+   "id": "modern-languages",
+   "name": "Modern Languages",
+   "osm": "way/41109064",
+   "at": [
+    33.791718,
+    -84.324747
+   ],
+   "match": []
+  },
+  {
+   "id": "alabama-hall",
+   "name": "Alabama Hall",
+   "osm": "way/41109065",
+   "at": [
+    33.792815,
+    -84.323231
+   ],
+   "match": [
+    "alabama hall"
+   ]
+  },
+  {
+   "id": "mathematics-and-science-center",
+   "name": "Mathematics and Science Center",
+   "osm": "way/41109068",
+   "at": [
+    33.790218,
+    -84.326787
+   ],
+   "match": [
+    "mathematics and science center"
+   ]
+  },
+  {
+   "id": "goodrich-c-white-hall",
+   "name": "Goodrich C. White Hall",
+   "osm": "way/41109069",
+   "at": [
+    33.79078,
+    -84.325918
+   ],
+   "match": [
+    "goodrich c white hall",
+    "white hall"
+   ]
+  },
+  {
+   "id": "convocation-hall",
+   "name": "Convocation Hall",
+   "osm": "way/41109070",
+   "at": [
+    33.790864,
+    -84.325176
+   ],
+   "match": [
+    "convocation hall"
+   ]
+  },
+  {
+   "id": "lowergate-east-parking-deck",
+   "name": "Lowergate East Parking Deck",
+   "osm": "way/41169856",
+   "at": [
+    33.791429,
+    -84.319083
+   ],
+   "match": [
+    "lowergate east parking deck"
+   ]
+  },
+  {
+   "id": "clinic-b",
+   "name": "Clinic B",
+   "osm": "way/41169860",
+   "at": [
+    33.791499,
+    -84.319832
+   ],
+   "match": []
+  },
+  {
+   "id": "robert-w-woodruff-library",
+   "name": "Robert W. Woodruff Library",
+   "osm": "way/41169862",
+   "at": [
+    33.790516,
+    -84.322914
+   ],
+   "match": [
+    "robert w woodruff library",
+    "woodruff library"
+   ]
+  },
+  {
+   "id": "harris-hall",
+   "name": "Harris Hall",
+   "osm": "way/41169863",
+   "at": [
+    33.791254,
+    -84.321491
+   ],
+   "match": [
+    "harris hall"
+   ]
+  },
+  {
+   "id": "gambrell-parking-deck",
+   "name": "Gambrell Parking Deck",
+   "osm": "way/41169864",
+   "at": [
+    33.790428,
+    -84.318954
+   ],
+   "match": [
+    "gambrell parking deck"
+   ]
+  },
+  {
+   "id": "north-decatur-building",
+   "name": "North Decatur Building",
+   "osm": "way/41169865",
+   "at": [
+    33.790655,
+    -84.318107
+   ],
+   "match": [
+    "north decatur building"
+   ]
+  },
+  {
+   "id": "boisfeuillet-jones-center",
+   "name": "Boisfeuillet Jones Center",
+   "osm": "way/41169867",
+   "at": [
+    33.789793,
+    -84.326111
+   ],
+   "match": [
+    "boisfeuillet jones center"
+   ]
+  },
+  {
+   "id": "bowden-hall",
+   "name": "Bowden Hall",
+   "osm": "way/41380318",
+   "at": [
+    33.790748,
+    -84.323782
+   ],
+   "match": [
+    "bowden hall"
+   ]
+  },
+  {
+   "id": "fishburne-parking-deck",
+   "name": "Fishburne Parking Deck",
+   "osm": "way/41556695",
+   "at": [
+    33.789064,
+    -84.322567
+   ],
+   "match": [
+    "fishburne parking deck"
+   ]
+  },
+  {
+   "id": "woodruff-physical-education-center",
+   "name": "Woodruff Physical Education Center",
+   "osm": "way/42614607",
+   "at": [
+    33.793285,
+    -84.325985
+   ],
+   "match": [
+    "woodruff physical education center",
+    "woodpec"
+   ]
+  },
+  {
+   "id": "candler-library",
+   "name": "Candler Library",
+   "osm": "way/43317371",
+   "at": [
+    33.791295,
+    -84.323534
+   ],
+   "match": [
+    "candler library"
+   ]
+  },
+  {
+   "id": "miller-ward-alumni-house",
+   "name": "Miller-Ward Alumni House",
+   "osm": "way/43621277",
+   "at": [
+    33.801935,
+    -84.32229
+   ],
+   "match": [
+    "miller ward alumni house"
+   ]
+  },
+  {
+   "id": "the-luce-center-at-emory-university",
+   "name": "The Luce Center at Emory University",
+   "osm": "way/43621278",
+   "at": [
+    33.801777,
+    -84.320021
+   ],
+   "match": [
+    "the luce center at emory university"
+   ]
+  },
+  {
+   "id": "campus-services-building-c",
+   "name": "Campus Services Building C",
+   "osm": "way/51278657",
+   "at": [
+    33.795764,
+    -84.32673
+   ],
+   "match": [
+    "campus services building c"
+   ]
+  },
+  {
+   "id": "peavine-facility",
+   "name": "Peavine Facility",
+   "osm": "way/51282136",
+   "at": [
+    33.796494,
+    -84.328023
+   ],
+   "match": [
+    "peavine facility"
+   ]
+  },
+  {
+   "id": "emory-university-center-for-rehabilitation-medicine",
+   "name": "Emory University Center for Rehabilitation Medicine",
+   "osm": "way/51282222",
+   "at": [
+    33.794926,
+    -84.320394
+   ],
+   "match": [
+    "emory university center for rehabilitation medicine"
+   ]
+  },
+  {
+   "id": "osm-way-51283225",
+   "name": "ΒΘΠ",
+   "osm": "way/51283225",
+   "at": [
+    33.795165,
+    -84.327986
+   ],
+   "match": []
+  },
+  {
+   "id": "campus-services-building-h-steam-plant",
+   "name": "Campus Services Building H - Steam Plant",
+   "osm": "way/51283232",
+   "at": [
+    33.795321,
+    -84.324664
+   ],
+   "match": [
+    "campus services building h steam plant"
+   ]
+  },
+  {
+   "id": "campus-services-building-i-boiler-9",
+   "name": "Campus Services Building I - Boiler 9",
+   "osm": "way/51283241",
+   "at": [
+    33.795579,
+    -84.325329
+   ],
+   "match": [
+    "campus services building i boiler 9"
+   ]
+  },
+  {
+   "id": "michael-c-carlos-museum",
+   "name": "Michael C. Carlos Museum",
+   "osm": "way/51284602",
+   "at": [
+    33.790448,
+    -84.324174
+   ],
+   "match": [
+    "michael c carlos museum",
+    "carlos museum"
+   ]
+  },
+  {
+   "id": "william-r-cannon-chapel",
+   "name": "William R. Cannon Chapel",
+   "osm": "way/51286211",
+   "at": [
+    33.791311,
+    -84.325133
+   ],
+   "match": [
+    "william r cannon chapel",
+    "cannon chapel"
+   ]
+  },
+  {
+   "id": "black-student-alliance-house",
+   "name": "Black Student Alliance House",
+   "osm": "way/51286262",
+   "at": [
+    33.793773,
+    -84.327096
+   ],
+   "match": [
+    "black student alliance house"
+   ]
+  },
+  {
+   "id": "campus-life-pavilion",
+   "name": "Campus Life Pavilion",
+   "osm": "way/51287217",
+   "at": [
+    33.796769,
+    -84.32933
+   ],
+   "match": [
+    "campus life pavilion"
+   ]
+  },
+  {
+   "id": "spanish-house",
+   "name": "Spanish House",
+   "osm": "way/51287234",
+   "at": [
+    33.797154,
+    -84.329998
+   ],
+   "match": [
+    "spanish house"
+   ]
+  },
+  {
+   "id": "osm-way-51287278",
+   "name": "ΣΧ",
+   "osm": "way/51287278",
+   "at": [
+    33.794631,
+    -84.325769
+   ],
+   "match": []
+  },
+  {
+   "id": "callaway-memorial-center",
+   "name": "Callaway Memorial Center",
+   "osm": "way/51287336",
+   "at": [
+    33.791439,
+    -84.324189
+   ],
+   "match": [
+    "callaway memorial center"
+   ]
+  },
+  {
+   "id": "campus-services-building-f-north-shop",
+   "name": "Campus Services Building F - North Shop",
+   "osm": "way/51288404",
+   "at": [
+    33.795747,
+    -84.325795
+   ],
+   "match": [
+    "campus services building f north shop"
+   ]
+  },
+  {
+   "id": "tufts-house",
+   "name": "Tufts House",
+   "osm": "way/51290085",
+   "at": [
+    33.792733,
+    -84.318715
+   ],
+   "match": [
+    "tufts house"
+   ]
+  },
+  {
+   "id": "thomas-hall",
+   "name": "Thomas Hall",
+   "osm": "way/51290398",
+   "at": [
+    33.790735,
+    -84.321241
+   ],
+   "match": [
+    "thomas hall"
+   ]
+  },
+  {
+   "id": "woodruff-residential-center",
+   "name": "Woodruff Residential Center",
+   "osm": "way/51291647",
+   "at": [
+    33.796841,
+    -84.321504
+   ],
+   "match": [
+    "woodruff residential center"
+   ]
+  },
+  {
+   "id": "glenn-memorial-united-methodist-church",
+   "name": "Glenn Memorial United Methodist Church",
+   "osm": "way/51294626",
+   "at": [
+    33.788672,
+    -84.324175
+   ],
+   "match": [
+    "glenn memorial united methodist church"
+   ]
+  },
+  {
+   "id": "emerson-hall",
+   "name": "Emerson Hall",
+   "osm": "way/51295534",
+   "at": [
+    33.791388,
+    -84.326281
+   ],
+   "match": [
+    "emerson hall"
+   ]
+  },
+  {
+   "id": "visual-arts-building",
+   "name": "Visual Arts Building",
+   "osm": "way/51297673",
+   "at": [
+    33.796713,
+    -84.328638
+   ],
+   "match": [
+    "visual arts building"
+   ]
+  },
+  {
+   "id": "osm-way-51297730",
+   "name": "ΚA",
+   "osm": "way/51297730",
+   "at": [
+    33.794572,
+    -84.327445
+   ],
+   "match": []
+  },
+  {
+   "id": "macmillan-gambrell-hall",
+   "name": "Macmillan - Gambrell Hall",
+   "osm": "way/51300212",
+   "at": [
+    33.789909,
+    -84.320153
+   ],
+   "match": [
+    "macmillan gambrell hall"
+   ]
+  },
+  {
+   "id": "osm-way-51301571",
+   "name": "ΚΣ",
+   "osm": "way/51301571",
+   "at": [
+    33.793939,
+    -84.327796
+   ],
+   "match": []
+  },
+  {
+   "id": "hamilton-holmes-hall",
+   "name": "Hamilton Holmes Hall",
+   "osm": "way/51301581",
+   "at": [
+    33.794329,
+    -84.32343
+   ],
+   "match": [
+    "hamilton holmes hall"
+   ]
+  },
+  {
+   "id": "mcdonough-field-stage",
+   "name": "McDonough Field Stage",
+   "osm": "way/51301588",
+   "at": [
+    33.793836,
+    -84.324561
+   ],
+   "match": [
+    "mcdonough field stage"
+   ]
+  },
+  {
+   "id": "emory-clinic-building-a",
+   "name": "Emory Clinic Building A",
+   "osm": "way/51302619",
+   "at": [
+    33.792455,
+    -84.320378
+   ],
+   "match": [
+    "emory clinic building a"
+   ]
+  },
+  {
+   "id": "the-depot",
+   "name": "The Depot",
+   "osm": "way/51303656",
+   "at": [
+    33.795279,
+    -84.322974
+   ],
+   "match": []
+  },
+  {
+   "id": "goizueta-business-school-building",
+   "name": "Goizueta Business School Building",
+   "osm": "way/51304281",
+   "at": [
+    33.790001,
+    -84.321377
+   ],
+   "match": [
+    "goizueta business school building"
+   ]
+  },
+  {
+   "id": "cox-hall",
+   "name": "Cox Hall",
+   "osm": "way/51305052",
+   "at": [
+    33.792403,
+    -84.323184
+   ],
+   "match": [
+    "cox hall"
+   ]
+  },
+  {
+   "id": "ehso-warehouse",
+   "name": "EHSO Warehouse",
+   "osm": "way/51306550",
+   "at": [
+    33.796322,
+    -84.32731
+   ],
+   "match": []
+  },
+  {
+   "id": "osm-way-51306610",
+   "name": "ΔΤΔ",
+   "osm": "way/51306610",
+   "at": [
+    33.79462,
+    -84.326513
+   ],
+   "match": []
+  },
+  {
+   "id": "osm-way-51306614",
+   "name": "ΣAM",
+   "osm": "way/51306614",
+   "at": [
+    33.794613,
+    -84.326142
+   ],
+   "match": []
+  },
+  {
+   "id": "campus-services-building-e",
+   "name": "Campus Services Building E",
+   "osm": "way/51307755",
+   "at": [
+    33.796005,
+    -84.32658
+   ],
+   "match": [
+    "campus services building e"
+   ]
+  },
+  {
+   "id": "osm-way-51310163",
+   "name": "ΣΑΕ",
+   "osm": "way/51310163",
+   "at": [
+    33.794434,
+    -84.32802
+   ],
+   "match": []
+  },
+  {
+   "id": "osm-way-51310965",
+   "name": "ΑΤΩ",
+   "osm": "way/51310965",
+   "at": [
+    33.794541,
+    -84.326999
+   ],
+   "match": []
+  },
+  {
+   "id": "eagle-hall",
+   "name": "Eagle Hall",
+   "osm": "way/51310984",
+   "at": [
+    33.794674,
+    -84.322787
+   ],
+   "match": [
+    "eagle hall"
+   ]
+  },
+  {
+   "id": "osm-way-51310997",
+   "name": "ΧΦ",
+   "osm": "way/51310997",
+   "at": [
+    33.795054,
+    -84.327249
+   ],
+   "match": []
+  },
+  {
+   "id": "sorority-complex",
+   "name": "Sorority Complex",
+   "osm": "way/51312708",
+   "at": [
+    33.795319,
+    -84.326691
+   ],
+   "match": [
+    "sorority complex"
+   ]
+  },
+  {
+   "id": "emory-children-s-center",
+   "name": "Emory Children's Center",
+   "osm": "way/51313252",
+   "at": [
+    33.793555,
+    -84.318559
+   ],
+   "match": [
+    "emory children s center"
+   ]
+  },
+  {
+   "id": "donna-and-marvin-schwartz-center-for-performing-arts",
+   "name": "Donna and Marvin Schwartz Center for Performing Arts",
+   "osm": "way/51313299",
+   "at": [
+    33.789243,
+    -84.321849
+   ],
+   "match": [
+    "donna and marvin schwartz center for performing arts",
+    "schwarz center"
+   ]
+  },
+  {
+   "id": "glenn-church-school-building",
+   "name": "Glenn Church School Building",
+   "osm": "way/51313455",
+   "at": [
+    33.788807,
+    -84.323391
+   ],
+   "match": [
+    "glenn church school building"
+   ]
+  },
+  {
+   "id": "campus-services-building-d",
+   "name": "Campus Services Building D",
+   "osm": "way/51315226",
+   "at": [
+    33.796108,
+    -84.32697
+   ],
+   "match": [
+    "campus services building d"
+   ]
+  },
+  {
+   "id": "osm-way-51315359",
+   "name": "ΑΕΠ",
+   "osm": "way/51315359",
+   "at": [
+    33.795095,
+    -84.328461
+   ],
+   "match": [
+    "aepi"
+   ]
+  },
+  {
+   "id": "emory-university-hospital",
+   "name": "Emory University Hospital",
+   "osm": "way/61494982",
+   "at": [
+    33.792121,
+    -84.322179
+   ],
+   "match": [
+    "emory university hospital"
+   ]
+  },
+  {
+   "id": "recycling-operations",
+   "name": "Recycling Operations",
+   "osm": "way/65841964",
+   "at": [
+    33.79903,
+    -84.332304
+   ],
+   "match": []
+  },
+  {
+   "id": "goizueta-foundation-building",
+   "name": "Goizueta Foundation Building",
+   "osm": "way/65956875",
+   "at": [
+    33.790058,
+    -84.32227
+   ],
+   "match": [
+    "goizueta foundation building"
+   ]
+  },
+  {
+   "id": "campus-services-building-b",
+   "name": "Campus Services Building B",
+   "osm": "way/95475030",
+   "at": [
+    33.795499,
+    -84.325836
+   ],
+   "match": [
+    "campus services building b"
+   ]
+  },
+  {
+   "id": "campus-services-building-a-campus-services-administration",
+   "name": "Campus Services Building A - Campus Services Administration",
+   "osm": "way/95475041",
+   "at": [
+    33.795347,
+    -84.325921
+   ],
+   "match": [
+    "campus services building a campus services administration"
+   ]
+  },
+  {
+   "id": "building-c",
+   "name": "Building C",
+   "osm": "way/96774356",
+   "at": [
+    33.796369,
+    -84.310751
+   ],
+   "match": []
+  },
+  {
+   "id": "emory-conference-center-hotel",
+   "name": "Emory Conference Center Hotel",
+   "osm": "way/98282477",
+   "at": [
+    33.801451,
+    -84.324402
+   ],
+   "match": [
+    "emory conference center hotel"
+   ]
+  },
+  {
+   "id": "telecommunications",
+   "name": "Telecommunications",
+   "osm": "way/112912641",
+   "at": [
+    33.792587,
+    -84.322658
+   ],
+   "match": []
+  },
+  {
+   "id": "winship-cancer-institute-clinic-c",
+   "name": "Winship Cancer Institute Clinic C",
+   "osm": "way/112921497",
+   "at": [
+    33.792808,
+    -84.319447
+   ],
+   "match": [
+    "winship cancer institute clinic c"
+   ]
+  },
+  {
+   "id": "physician-s-parking-deck",
+   "name": "Physician's Parking Deck",
+   "osm": "way/112921498",
+   "at": [
+    33.792391,
+    -84.319093
+   ],
+   "match": [
+    "physician s parking deck"
+   ]
+  },
+  {
+   "id": "health-sciences-research-building-i",
+   "name": "Health Sciences Research Building I",
+   "osm": "way/167773028",
+   "at": [
+    33.794305,
+    -84.317602
+   ],
+   "match": [
+    "health sciences research building i"
+   ]
+  },
+  {
+   "id": "longstreet-means-parking-deck",
+   "name": "Longstreet-Means Parking Deck",
+   "osm": "way/167777685",
+   "at": [
+    33.794649,
+    -84.323098
+   ],
+   "match": [
+    "longstreet means parking deck"
+   ]
+  },
+  {
+   "id": "ignatius-few-hall",
+   "name": "Ignatius Few Hall",
+   "osm": "way/167837141",
+   "at": [
+    33.794573,
+    -84.324716
+   ],
+   "match": [
+    "ignatius few hall",
+    "few hall"
+   ]
+  },
+  {
+   "id": "oxford-road-building",
+   "name": "Oxford Road Building",
+   "osm": "way/167837142",
+   "at": [
+    33.789462,
+    -84.326834
+   ],
+   "match": [
+    "oxford road building"
+   ]
+  },
+  {
+   "id": "atwood-chemistry-center",
+   "name": "Atwood Chemistry Center",
+   "osm": "way/167837145",
+   "at": [
+    33.791112,
+    -84.326865
+   ],
+   "match": [
+    "atwood chemistry center"
+   ]
+  },
+  {
+   "id": "candler-school-of-theology",
+   "name": "Candler School of Theology",
+   "osm": "way/167837151",
+   "at": [
+    33.791666,
+    -84.325855
+   ],
+   "match": [
+    "candler school of theology"
+   ]
+  },
+  {
+   "id": "lettie-pate-whitehead-evans-hall",
+   "name": "Lettie Pate Whitehead Evans Hall",
+   "osm": "way/167837152",
+   "at": [
+    33.79465,
+    -84.325367
+   ],
+   "match": [
+    "lettie pate whitehead evans hall",
+    "evans hall"
+   ]
+  },
+  {
+   "id": "psychology-and-interdisciplinary-sciences",
+   "name": "Psychology and Interdisciplinary Sciences",
+   "osm": "way/167837153",
+   "at": [
+    33.7911,
+    -84.327511
+   ],
+   "match": [
+    "psychology and interdisciplinary sciences"
+   ]
+  },
+  {
+   "id": "quadrangle-energy-plant",
+   "name": "Quadrangle Energy Plant",
+   "osm": "way/171973383",
+   "at": [
+    33.791998,
+    -84.32464
+   ],
+   "match": [
+    "quadrangle energy plant"
+   ]
+  },
+  {
+   "id": "lullwater-house",
+   "name": "Lullwater House",
+   "osm": "way/210682767",
+   "at": [
+    33.800657,
+    -84.315695
+   ],
+   "match": [
+    "lullwater house"
+   ]
+  },
+  {
+   "id": "eps-neuroscience-building",
+   "name": "EPS Neuroscience Building",
+   "osm": "way/210770476",
+   "at": [
+    33.802966,
+    -84.318039
+   ],
+   "match": [
+    "eps neuroscience building"
+   ]
+  },
+  {
+   "id": "cid",
+   "name": "Cid",
+   "osm": "way/210770588",
+   "at": [
+    33.802457,
+    -84.318978
+   ],
+   "match": []
+  },
+  {
+   "id": "turman-hall",
+   "name": "Turman Hall",
+   "osm": "way/216261215",
+   "at": [
+    33.794035,
+    -84.3229
+   ],
+   "match": [
+    "turman hall"
+   ]
+  },
+  {
+   "id": "raoul-hall",
+   "name": "Raoul Hall",
+   "osm": "way/286360476",
+   "at": [
+    33.794871,
+    -84.32374
+   ],
+   "match": [
+    "raoul hall"
+   ]
+  },
+  {
+   "id": "smith-hall",
+   "name": "Smith Hall",
+   "osm": "way/287210916",
+   "at": [
+    33.79078,
+    -84.321942
+   ],
+   "match": [
+    "smith hall"
+   ]
+  },
+  {
+   "id": "hopkins-hall",
+   "name": "Hopkins Hall",
+   "osm": "way/287210917",
+   "at": [
+    33.790618,
+    -84.321617
+   ],
+   "match": [
+    "hopkins hall"
+   ]
+  },
+  {
+   "id": "michael-c-carlos-hall",
+   "name": "Michael C. Carlos Hall",
+   "osm": "way/288252107",
+   "at": [
+    33.790207,
+    -84.324589
+   ],
+   "match": [
+    "michael c carlos hall",
+    "carlos hall"
+   ]
+  },
+  {
+   "id": "dowman-drive-visitor-information-booth",
+   "name": "Dowman Drive Visitor Information Booth",
+   "osm": "way/293646727",
+   "at": [
+    33.789378,
+    -84.325632
+   ],
+   "match": [
+    "dowman drive visitor information booth"
+   ]
+  },
+  {
+   "id": "emory-university-hospital-tower",
+   "name": "Emory University Hospital Tower",
+   "osm": "way/293658372",
+   "at": [
+    33.791127,
+    -84.320244
+   ],
+   "match": [
+    "emory university hospital tower"
+   ]
+  },
+  {
+   "id": "pitts-theology-library",
+   "name": "Pitts Theology Library",
+   "osm": "way/294784067",
+   "at": [
+    33.791455,
+    -84.325597
+   ],
+   "match": [
+    "pitts theology library"
+   ]
+  },
+  {
+   "id": "asbury-house",
+   "name": "Asbury House",
+   "osm": "way/669782051",
+   "at": [
+    33.797593,
+    -84.330754
+   ],
+   "match": [
+    "asbury house"
+   ]
+  },
+  {
+   "id": "kaminsky-park-field-house",
+   "name": "Kaminsky Park Field House",
+   "osm": "way/669782331",
+   "at": [
+    33.79986,
+    -84.332673
+   ],
+   "match": [
+    "kaminsky park field house"
+   ]
+  },
+  {
+   "id": "houston-mill-house",
+   "name": "Houston Mill House",
+   "osm": "way/669784571",
+   "at": [
+    33.80266,
+    -84.322084
+   ],
+   "match": [
+    "houston mill house"
+   ]
+  },
+  {
+   "id": "emory-student-center",
+   "name": "Emory Student Center",
+   "osm": "way/761840928",
+   "at": [
+    33.793647,
+    -84.323971
+   ],
+   "match": [
+    "emory student center"
+   ]
+  },
+  {
+   "id": "budd-terrace",
+   "name": "Budd Terrace",
+   "osm": "way/775061352",
+   "at": [
+    33.802879,
+    -84.331032
+   ],
+   "match": []
+  },
+  {
+   "id": "the-1599-building",
+   "name": "The 1599 Building",
+   "osm": "way/887239234",
+   "at": [
+    33.799815,
+    -84.324368
+   ],
+   "match": [
+    "the 1599 building"
+   ]
+  },
+  {
+   "id": "health-sciences-research-building-ii",
+   "name": "Health Sciences Research Building II",
+   "osm": "way/1268449466",
+   "at": [
+    33.79477,
+    -84.318412
+   ],
+   "match": [
+    "health sciences research building ii"
+   ]
+  },
+  {
+   "id": "emory-graduate-housing",
+   "name": "Emory Graduate Housing",
+   "osm": "way/1268449467",
+   "at": [
+    33.791874,
+    -84.316084
+   ],
+   "match": []
+  },
+  {
+   "id": "emory-graduate-housing-2",
+   "name": "Emory Graduate Housing",
+   "osm": "way/1268449468",
+   "at": [
+    33.792268,
+    -84.316753
+   ],
+   "match": []
+  },
+  {
+   "id": "hospital-annex",
+   "name": "Hospital Annex",
+   "osm": "relation/1583249",
+   "at": [
+    33.791246,
+    -84.322224
+   ],
+   "match": []
+  },
+  {
+   "id": "woodruff-memorial-building",
+   "name": "Woodruff Memorial Building",
+   "osm": "relation/1629346",
+   "at": [
+    33.793,
+    -84.322494
+   ],
+   "match": [
+    "woodruff memorial building"
+   ]
+  },
+  {
+   "id": "dobbs-hall",
+   "name": "Dobbs Hall",
+   "osm": "relation/1629347",
+   "at": [
+    33.792876,
+    -84.324626
+   ],
+   "match": [
+    "dobbs hall"
+   ]
+  },
+  {
+   "id": "rich-building",
+   "name": "Rich Building",
+   "osm": "relation/1629348",
+   "at": [
+    33.789646,
+    -84.323109
+   ],
+   "match": [
+    "rich building"
+   ]
+  },
+  {
+   "id": "the-clifton-school",
+   "name": "The Clifton School",
+   "osm": "relation/1673566",
+   "at": [
+    33.795734,
+    -84.311218
+   ],
+   "match": [
+    "the clifton school"
+   ]
+  },
+  {
+   "id": "alumni-memorial-university-center",
+   "name": "Alumni Memorial University Center",
+   "osm": "relation/7249634",
+   "at": [
+    33.793575,
+    -84.323033
+   ],
+   "match": [
+    "alumni memorial university center",
+    "the duc"
+   ]
+  }
+ ]
+}

@@ -8,6 +8,9 @@ from a campus origin (x east, y south, so it maps straight onto SVG), with our
 own layer names. Only named buildings inside the campus boundary get an id;
 everything else in the survey box is kept as faded context.
 
+It also writes backend/app/places/<campus>.json, the backend's place index: each
+building id with the names that find it in an answer (`app.places.match_names`).
+
 The file is derived from OpenStreetMap, so it is offered under the Open
 Database License and every view of it shows "© OpenStreetMap contributors".
 No model touches this data.
@@ -23,6 +26,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from app.config import load_settings
+from app.places import INDEX_DIR, match_names
 
 REPO = Path(__file__).resolve().parents[2]
 NAMES = {"atlanta": "Emory University, Atlanta campus"}
@@ -179,7 +183,7 @@ def newest_raw(campus: str) -> Path:
     return found[-1]
 
 
-def build(raw: Path, campus: str) -> dict:
+def build(raw: Path, campus: str) -> tuple[dict, list[dict]]:
     elements = json.loads(raw.read_text(encoding="utf-8"))["elements"]
     meta_path = raw.with_suffix(".meta.json")
     meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
@@ -208,7 +212,7 @@ def build(raw: Path, campus: str) -> dict:
         file doesn't carry the whole neighbourhood."""
         return any(near[0] <= x <= near[2] and near[1] <= y <= near[3] for x, y in points)
 
-    areas, lines, buildings = [], [], []
+    areas, lines, buildings, places = [], [], [], []
     used: dict[str, int] = {}
     for el in elements:
         tags = el.get("tags", {})
@@ -224,11 +228,19 @@ def build(raw: Path, campus: str) -> dict:
                 item = {"rings": [flat(simplify_ring(ring, 0.4))],
                         "label": flat([label]), "area": round(ring_area(ring))}
                 if name and campus_building:
+                    # A name with no Latin letters (the Greek-letter houses) gets its OSM id.
                     base = slug(name)
+                    if len(base) < 3:
+                        base = f"osm-{el['type']}-{el['id']}"
                     used[base] = used.get(base, 0) + 1
                     item = {"id": base if used[base] == 1 else f"{base}-{used[base]}",
                             "name": name, "osm": f"{el['type']}/{el['id']}",
                             "at": [round(v, 6) for v in proj.latlon(*label)], **item}
+                    alternates = tuple(part.strip() for key in ("official_name", "alt_name", "short_name")
+                                       for part in tags.get(key, "").split(";") if part.strip())
+                    local = tuple(part.strip() for part in tags.get("loc_name", "").split(";") if part.strip())
+                    places.append({"id": item["id"], "name": name, "osm": item["osm"], "at": item["at"],
+                                   "match": match_names(name, alternates=alternates, local=local)})
                 elif not campus_building:
                     item["context"] = True
                 buildings.append(item)
@@ -285,7 +297,7 @@ def build(raw: Path, campus: str) -> dict:
         "areas": areas,
         "lines": lines,
         "buildings": buildings,
-    }
+    }, places
 
 
 def main() -> None:
@@ -294,10 +306,15 @@ def main() -> None:
     parser.add_argument("--raw", type=Path, help="a saved survey instead of the newest one")
     args = parser.parse_args()
     raw = args.raw or newest_raw(args.campus)
-    data = build(raw, args.campus)
+    data, places = build(raw, args.campus)
     out = REPO / "frontend" / "public" / "maps" / f"{args.campus}.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(data, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+    index = {"campus": args.campus, "survey": data["survey"], "attribution": data["attribution"],
+             "license": data["license"], "places": places}
+    index_path = INDEX_DIR / f"{args.campus}.json"
+    index_path.write_text(json.dumps(index, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"{len(places)} places ({sum(bool(p['match']) for p in places)} findable in text) -> {index_path}")
     named = [b for b in data["buildings"] if "id" in b]
     print(f"{len(data['buildings'])} buildings ({len(named)} named on campus), "
           f"{len(data['areas'])} areas, {len(data['lines'])} lines, "
