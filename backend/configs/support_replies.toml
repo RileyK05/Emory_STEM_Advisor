@@ -1,0 +1,22 @@
+# Fixed replies the question router publishes, written by code, never by a model.
+# See docs/plans/question-router.md.
+#
+# Riley, 2026-11-17: sending a student to mental health support the moment they
+# vent makes them shut down, like a friend who answers venting with a referral.
+# So nothing before `support` mentions counseling: panic about a class gets a
+# normal answer, and a first sign of possible risk gets a human check-in written
+# by the model with no contacts. Only these two texts carry contacts:
+#   support  possible risk again on the turn after a check-in (escalation)
+#   crisis   an explicit statement of suicide, wanting to die, self-harm, or
+#            danger; giving 988 at once is standard safe-messaging practice
+#
+# Hand-written; reviewed = false until Riley checks every number and office name
+# against Emory's own pages. Unknown keys are errors.
+schema_version = 1
+reviewed = false
+
+# Explicit risk: replaces the answer. No research runs.
+crisis = """I'm really glad you told me. What you're feeling matters more than any class right now, and you deserve to talk it through with someone who can really help. You can call or text 988 any time, day or night, or reach Emory Counseling and Psychological Services (CAPS) 24/7 at 404-727-7450 (press 1). If you're in danger right now, please call 911 or Emory Police at 404-727-6111. I'm still here for the school side whenever you want it, and none of that has to be decided today."""
+
+# The same worry again after a check-in: shown first; the answer follows.
+support = """I want to come back to something you've said more than once. It sounds like this is weighing on you beyond school, and you don't have to carry it by yourself. If you'd like someone to talk to, Emory Counseling and Psychological Services (CAPS) is there 24/7 at 404-727-7450 (press 1), and you can call or text 988 any time."""

@@ -1,0 +1,62 @@
+# The names Emory students actually use for campus places, mapped to buildings in
+# the OpenStreetMap-derived place index (backend/app/places/<campus>.json, built by
+# scripts.build_campus_map). app.places matches these beside the OSM names.
+#
+# Hand-written. Source: Riley, 2026-11-17. No model writes, guesses or fills in a
+# name or a building here; a place whose building nobody has confirmed stays out.
+# Every `places` id must exist in the index (load fails otherwise).
+#
+#   says            what students write; case and punctuation don't matter
+#   places          building ids; more than one means one of each, a place per building
+#   not_followed_by words that make it something else ("Woodruff Scholars")
+#   inside          where in the building, told to research (the map pins buildings)
+#   note            why, in Riley's words where possible
+schema_version = 1
+campus = "atlanta"
+
+[[name]]
+says = ["MSC"]
+places = ["mathematics-and-science-center"]
+note = "Riley: MSC is never the Mathematics and Computer Science degree."
+
+[[name]]
+says = ["Woodruff", "Libs", "the library"]
+places = ["robert-w-woodruff-library"]
+not_followed_by = ["scholar", "scholars", "fellow", "fellows", "foundation", "school", "health"]
+note = "Riley: Woodruff is the library; Libs is also the library."
+
+[[name]]
+says = ["Woodies"]
+places = ["woodruff-residential-center"]
+note = "Riley: Woodies is Woodruff Residential."
+
+[[name]]
+says = ["WoodPEC", "the gym", "PE center", "P.E. center"]
+places = ["woodruff-physical-education-center"]
+note = "Riley: WoodPEC is the gym, the PE center."
+
+[[name]]
+says = ["ESC"]
+places = ["emory-student-center"]
+note = "Riley: ESC is the student center."
+
+[[name]]
+says = ["BSchool", "B-School", "B School"]
+places = ["goizueta-business-school-building"]
+note = "Riley: BSchool is Goizueta."
+
+[[name]]
+says = ["Kaldi's", "Kaldis", "Kaldi's Coffee"]
+places = ["the-depot", "emory-student-center"]
+note = "Riley: Kaldi's is two coffee shops on campus, one in the Depot and one in the ESC."
+
+[[name]]
+says = ["Cox", "Cox Computing Center", "Cox Computing"]
+places = ["cox-hall"]
+note = "Riley: Cox, and the Cox Computing Center in Cox Hall."
+
+[[name]]
+says = ["DCT", "Dobbs Common Table"]
+places = ["emory-student-center"]
+inside = "base floor"
+note = "Riley: DCT is Dobbs Common Table, on the base floor of the ESC."

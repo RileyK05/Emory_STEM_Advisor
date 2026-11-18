@@ -305,7 +305,7 @@ export interface NativeArtifactSummary {
 }
 
 export interface ResearchBlock {
-  kind: 'fact' | 'judgment' | 'assumption' | 'limitation' | 'question';
+  kind: 'fact' | 'judgment' | 'assumption' | 'limitation' | 'question' | 'perspective';
   text: string;
   evidenceIds: string[];
   citationNumbers: number[];

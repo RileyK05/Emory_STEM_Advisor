@@ -125,6 +125,13 @@ class Settings:
     embedder_warmup_on_startup: bool = False
     profile_encryption_key: str | None = field(default=None, repr=False)
     llm_timeout_seconds: float = 60.0
+    # The question router's decision model (docs/plans/question-router.md). Unset
+    # means no model call: the router uses its fixed rules only. The endpoint and
+    # key default to LLM_BASE_URL and LLM_API_KEY.
+    decision_model_id: str | None = None
+    decision_base_url: str | None = None
+    decision_api_key: str | None = field(default=None, repr=False)
+    decision_timeout_seconds: float = 10.0
     # Per-process, per-provider cap on model calls in flight. Callers wait up to
     # the operation's remaining time rather than failing immediately at the cap.
     llm_max_concurrency: int = 8
@@ -478,6 +485,10 @@ def load_settings() -> Settings:
         worker_health_port=_int("WORKER_HEALTH_PORT", 0),
         profile_encryption_key=_optional("PROFILE_ENCRYPTION_KEY"),
         llm_timeout_seconds=_float("LLM_TIMEOUT_SECONDS", 60),
+        decision_model_id=_optional("DECISION_MODEL_ID"),
+        decision_base_url=_optional("DECISION_BASE_URL"),
+        decision_api_key=_optional("DECISION_API_KEY"),
+        decision_timeout_seconds=_float("DECISION_TIMEOUT_SECONDS", 10),
         llm_max_concurrency=_int("LLM_MAX_CONCURRENCY", 8),
         llm_max_output_tokens=_int("LLM_MAX_OUTPUT_TOKENS", 1024),
         artifact_max_output_tokens=_int("ARTIFACT_MAX_OUTPUT_TOKENS", 8_192),

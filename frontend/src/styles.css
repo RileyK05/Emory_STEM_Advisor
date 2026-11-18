@@ -2547,8 +2547,9 @@ button.artifact-card:not(:disabled):hover {
   --map-highlight-edge: #ffffff;
   --map-label: #e8e8e8;
   --map-label-halo: rgba(0, 0, 0, 0.85);
-  --map-pin: #ffffff;
-  --map-pin-edge: #0a0a0a;
+  /* Black with a white rim: visible on the white highlight and on the dark ground. */
+  --map-pin: #0a0a0a;
+  --map-pin-edge: #ffffff;
 }
 
 .campus-map-card {

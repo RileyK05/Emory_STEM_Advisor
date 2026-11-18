@@ -123,7 +123,8 @@ def query(
     response = query_response(body, conn, effective_settings, effective_config, embedder, provider,
                           workspace_key=workspace,
                           connection_profiles=request.app.state.connection_profiles,
-                          connection_runtime=request.app.state.connection_runtime)
+                          connection_runtime=request.app.state.connection_runtime,
+                          decider=getattr(request.app.state, "decision_provider", None))
     return type(response).model_validate(public_payload(response.model_dump(mode="json"), principal))
 
 

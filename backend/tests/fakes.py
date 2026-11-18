@@ -268,3 +268,35 @@ class FakeClock:
                     self._listeners.remove(listener)
 
         return unsubscribe
+
+
+class FakeDecisionProvider:
+    """A decision model with fixed answers: `scores` maps a noul question name to its
+    probability, `choices` a choice question name to its probabilities. Unnamed
+    questions score 0 (a choice puts everything on its first option). `error`
+    makes every call fail."""
+
+    model_id = "fake-decider"
+
+    def __init__(self, scores=None, choices=None, error=None):
+        self.scores, self.choices, self.error = scores or {}, choices or {}, error
+        self.states: list[dict] = []
+
+    def decide(self, state, questions):
+        from app.llm.base import DecisionAnswer
+
+        self.states.append(dict(state))
+        if self.error is not None:
+            raise self.error
+        answers = {}
+        for question in questions:
+            if question.type == "noul":
+                answers[question.name] = DecisionAnswer(
+                    question.name, probability=self.scores.get(question.name, 0.0))
+            else:
+                first = next(iter(question.criteria))
+                probabilities = self.choices.get(question.name, {first: 1.0})
+                answers[question.name] = DecisionAnswer(
+                    question.name, choice=max(probabilities, key=probabilities.get),
+                    probabilities={key: probabilities.get(key, 0.0) for key in question.criteria})
+        return answers, Usage(prompt_tokens=100, completion_tokens=0, source="provider")

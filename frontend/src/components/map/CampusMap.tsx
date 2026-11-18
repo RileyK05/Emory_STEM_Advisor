@@ -15,10 +15,20 @@ const LINE_KINDS = ['stream', 'path', 'road', 'road-major'] as const;
 // A teardrop pin, 28 px tall, its tip at (0, 0).
 const PIN = 'M0 0C-2-6-9-10-9-17a9 9 0 0 1 18 0C9-10 2-6 0 0Z';
 
-function fit(box: Box, aspect: number, minWidth: number, pad: number): View {
-  const w = Math.max((box.maxX - box.minX) * pad, (box.maxY - box.minY) * pad * aspect, minWidth);
+function fit(box: Box, aspect: number, minWidth: number, pad: number, margin = 0): View {
+  const w = Math.max(
+    (box.maxX - box.minX + 2 * margin) * pad,
+    (box.maxY - box.minY + 2 * margin) * pad * aspect,
+    minWidth,
+  );
   return { cx: (box.minX + box.maxX) / 2, cy: (box.minY + box.maxY) / 2, w };
 }
+
+// Pinned buildings: a fixed margin in metres (room for the pin and name above
+// each one) plus a little air, and never closer than PIN_MIN_WIDTH, so a single
+// building still shows the buildings around it.
+const PIN_MARGIN = 70;
+const PIN_MIN_WIDTH = 400;
 
 /** Our own drawing of a campus, from `public/maps/<campus>.json`. Drag, the arrow
  *  keys, the buttons, or Ctrl + wheel move it; highlighted buildings get a pin. */
@@ -40,7 +50,7 @@ export function CampusMap({
   const maxWidth = (campusBox.maxX - campusBox.minX) * 1.6;
   const home = useMemo<View>(() => {
     if (!highlight.length) return fit(campusBox, aspect, MIN_WIDTH, 1.05);
-    return fit(boxOf(highlight.flatMap((b) => b.rings)), aspect, 260, 2.2);
+    return fit(boxOf(highlight.flatMap((b) => b.rings)), aspect, PIN_MIN_WIDTH, 1.15, PIN_MARGIN);
   }, [highlight, campusBox, aspect]);
   const [view, setView] = useState<View>(home);
   useEffect(() => setView(home), [home]);

@@ -127,7 +127,7 @@ max_picks = 3
 # Option order is from least to most severe; the router reads the
 # probabilities, not the single `choice`, so tie order does not matter.
 [distress]
-instructions = """Judge latest_message, but a sign of risk in previous_student_message still counts: a calm message right after one does not cancel it. How distressed does the student sound, and is there any sign of risk to their life or safety? Panic, crying or dread about a class, exam, grade or deadline is distress about a situation, not a risk. Look for risk beyond the situation: hopelessness about life itself, wanting to disappear or not exist, feeling like a burden, goodbyes that sound final, self-harm, danger from someone, or having no food or place to sleep."""
+instructions = """Judge latest_message, the only message you see. A calm or reassuring message ("I'm ok, just a rough week") is calm. How distressed does the student sound, and is there any sign of risk to their life or safety? Panic, crying or dread about a class, exam, grade or deadline is distress about a situation, not a risk. Look for risk beyond the situation: hopelessness about life itself, wanting to disappear or not exist, feeling like a burden, goodbyes that sound final, self-harm, danger from someone, or having no food or place to sleep."""
 crisis_at = 0.4
 check_in_at = 0.2
 steady_at = 0.5

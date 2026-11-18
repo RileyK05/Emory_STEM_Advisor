@@ -1677,10 +1677,33 @@ preserved. Partial investigations remain partial in the API and chat. Current
 sources/program projections, provider selection, cancellation and operation
 budgets fence publication.
 
+The question router (`generation/question_router.py`, see
+`docs/plans/question-router.md`) runs before research: a decision model scores
+fixed questions from `configs/question_router.toml`, fixed rules run beside it,
+and code turns the result into kinds and a distress tier. The kind sets the
+policy: how many `perspective` blocks of general advice an answer may have (none
+for Emory facts), which source kinds must be searched, and which found records
+must be cited. When every substantive kind on the route wants one source kind
+(careers: career references; study and wellbeing: policy), a plain
+`kind=any` search reads only that kind (the model may still name another), and
+code runs that search before research's first round and hands it to the model
+as its own previous round, through the same tool ledger and handles. A mixed or
+Emory-facts route searches everything, as before. A perspective block cites nothing and states no number, course
+code or Emory rule; it is rendered with a "General advice:" label. Distress
+escalates over turns instead of referring on the first sign: `steady` and
+`check_in` get a normal answer with no counseling contacts (code strips any the
+model writes; `check_in` ends with a human "how are you doing?"), `support`
+(the same signs again on the turn after a check-in) puts the fixed CAPS and 988
+note first and still answers, and `crisis` (an explicit statement of suicide,
+self-harm or danger) publishes the fixed reply with no research. Distress is
+judged on the latest message alone; the saved tier of the previous turn is the
+only memory. A request that is only out of scope gets the fixed decline with no
+research. The route is saved as a `route` research step.
+
 The `AnswerResponse` has optional nullable `research` metadata:
-`{runId, outcome, completeness, blocks, unresolvedQuestions}`. Each block has
+`{runId, outcome, completeness, blocks, unresolvedQuestions, places}`. Each block has
 `{kind, text, evidenceIds, citationNumbers, candidateIds}`; `kind` is
-`fact|judgment|assumption|limitation|question`. Outcome is
+`fact|judgment|assumption|limitation|question|perspective`. Outcome is
 `recommendation|information|clarification|insufficient_evidence`; completeness is
 `complete|partial`. This metadata survives saved-turn reload. Conversation
 progress also accepts `researching`, `comparing` and `finalizing`; the UI renders

@@ -46,13 +46,17 @@ from app.atlas.equivalence import is_oxford
 from app.atlas.records import SUBJECT_RENAMES, normalize_code
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
+from app.generation.question_router import Policy
 from app.generation.research_final import (
     DecisionRejected,
     declined_decision,
     disclose_retired_courses,
     disclose_special_courses,
     normalize_decision,
+    order_blocks,
+    perspective_problems,
     validate_final,
+    with_support_text,
 )
 from app.programs.rules import RuleValidationError
 from app.retrieval.retrieve import retrieve
@@ -686,6 +690,15 @@ class ResearchSession:
         self._master_codes: frozenset[str] = frozenset()
         self._retired_codes: frozenset[str] | None = None
         self.actions = []
+        # The question router's route (set by query_service); without one, no
+        # general advice is allowed and nothing extra must be searched.
+        self.route = None
+        self.route_policy = Policy()
+        self.prefetch: list[dict] = []
+        # The distress tier's fixed text, written by code around the answer.
+        self.support_first: str | None = None
+        self.support_last: str | None = None
+        self.strip_contacts = False
         self.checks: dict[str, dict] = {}
         self.unavailable_preparation_check_ids: set[str] = set()
         self.grading_rules: list[tuple[str, str, str]] = []
@@ -904,6 +917,9 @@ class ResearchSession:
         ]}, next_cursor=cursor)
 
     def search(self, value, _scope):
+        if value.kind == "any" and self.route_policy.search_kind:
+            # The route narrows a plain search; a named kind is the model's choice.
+            value = value.model_copy(update={"kind": self.route_policy.search_kind})
         policy_kinds = {"institutional_policy", "institutional_catalog",
                         "institutional_department", "institutional_publication"}
         sources = [s.source_id for s in self.scope.sources.values() if
@@ -1669,6 +1685,13 @@ class ResearchSession:
                            self._retired_courses(value.decision), self.instructions,
                            frozenset(self.unknown_question_codes()),
                            self.artifact_requested, tuple(self.grading_rules))
+            policy = self.route_policy
+            route_problems = perspective_problems(
+                value.decision, allowed=policy.perspective_blocks, must_search=policy.must_search,
+                searched=self.searched_kinds(), must_cite=policy.must_cite_kinds,
+                found=self.found_kinds())
+            if route_problems:
+                raise DecisionRejected("; ".join(route_problems))
         except DecisionRejected as exc:
             self.rejected_decision = value.decision
             # A judgment that names a course is a recommendation of it, so its
@@ -1686,7 +1709,32 @@ class ResearchSession:
         self.decision = value.decision
         return ResearchResult(data={"accepted": True})
 
+    def searched_kinds(self) -> set[str]:
+        """The source kinds this run searched (`any` counts as the route's default scope)."""
+        scoped = self.route_policy.search_kind
+        kinds = {a["arguments"].get("kind") for a in self.actions if a["tool"] == "advisor_search"}
+        return {scoped if kind in (None, "any") else kind for kind in kinds} - {None, "any"}
+
+    def found_kinds(self) -> dict[str, set[str]]:
+        """Evidence IDs the run acquired, by the search kind that would find them."""
+        policy = {"institutional_policy", "institutional_catalog", "institutional_department",
+                  "institutional_publication"}
+        found: dict[str, set[str]] = {}
+        for record in self.store.evidence(self.run.run_id):
+            if record.source_kind == "career_reference":
+                found.setdefault("career_reference", set()).add(record.evidence_id)
+            elif record.source_kind in policy:
+                found.setdefault("policy", set()).add(record.evidence_id)
+        return found
+
     def _disclose(self, decision):
+        """Database disclosures, then records-first order, then the distress tier's text."""
+        decision = order_blocks(self._disclose_records(decision))
+        if self.support_first or self.support_last or self.strip_contacts:
+            decision = with_support_text(decision, first=self.support_first, last=self.support_last)
+        return decision
+
+    def _disclose_records(self, decision):
         """Write the disclosures the database decides, rather than reject their wording.
 
         A course no checked Atlas term shows, and the same major under a degree
@@ -1739,6 +1787,8 @@ class ResearchSession:
         unknown = frozenset(nearest)
         kept, used, used_words = [], 0, 0
         for block in proposal.blocks:
+            if block.kind == "perspective" and not self.route_policy.perspective_blocks:
+                continue
             single = proposal.model_copy(update={
                 "outcome": "information", "completeness": "partial", "blocks": (block,),
                 "candidate_ids": (), "recommended_course_codes": (), "preparation_check_ids": (),

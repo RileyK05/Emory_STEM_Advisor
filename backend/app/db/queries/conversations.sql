@@ -161,3 +161,12 @@ WHERE r.state = 'pending'
   )
 ORDER BY r.created_at, r.request_id
 LIMIT %(limit)s;
+
+-- The router reads the turn before this request: the student's last message
+-- and the advisor's last reply (newest first, at most one of each role needed).
+-- name: router_previous_turns
+SELECT role, text FROM conversation_turns
+WHERE conversation_id = %(conversation_id)s
+  AND request_id IS DISTINCT FROM %(request_id)s
+  AND role IN ('user', 'assistant')
+ORDER BY sequence DESC LIMIT 4;

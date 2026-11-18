@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 from app.config import Settings, with_hf_model
-from app.llm.base import Provider
+from app.llm.base import DecisionProvider, Provider
 
 DEFAULT_PROVIDER_TIMEOUT_SECONDS = 60.0
 DEFAULT_LLM_MAX_CONCURRENCY = 8
@@ -92,6 +92,26 @@ def get_provider(settings: Settings, *, provider: str | None = None,
             client = _sdk_client("google", api_key, timeout_seconds, "to use this provider")
         return GoogleProvider(client, model_id, gate=gate)
     raise ValueError(f"unknown LLM_PROVIDER: {name!r}")
+
+
+def build_decision_provider(settings: Settings, *, client: Any = None) -> DecisionProvider | None:
+    """The question router's decision model, or None when DECISION_MODEL_ID is unset.
+
+    The endpoint and key default to the chat provider's (one Ollama Cloud account
+    serves both).
+    """
+    model_id = settings.decision_model_id
+    base_url = settings.decision_base_url or settings.llm_base_url
+    if not model_id or not base_url:
+        return None
+    _validate_timeout(settings.decision_timeout_seconds)
+    import httpx
+
+    from app.llm.systemone import SystemOneDecisionProvider
+    return SystemOneDecisionProvider(
+        client or httpx.Client(), model_id, base_url=base_url,
+        api_key=settings.decision_api_key or settings.llm_api_key,
+        timeout_seconds=settings.decision_timeout_seconds)
 
 
 def _validate_timeout(timeout_seconds: float) -> None:

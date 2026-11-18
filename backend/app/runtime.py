@@ -16,7 +16,8 @@ from app.connections.repository import ConnectionProfiles
 from app.embeddings import get_embedder
 from app.embeddings.base import Embedder
 from app.llm import get_provider
-from app.llm.base import Provider
+from app.llm.base import DecisionProvider, Provider
+from app.llm.factory import build_decision_provider
 from app.retrieval.config import RetrievalConfig, load_retrieval_config
 
 
@@ -31,6 +32,8 @@ class Runtime:
     provider_error: str | None
     connection_profiles: ConnectionProfiles
     connection_runtime: ConnectionRuntime
+    # The question router's decision model; None runs the router on rules only.
+    decision_provider: DecisionProvider | None = None
 
 
 def build_connections(settings: Settings) -> tuple[ConnectionProfiles, ConnectionRuntime]:
@@ -68,6 +71,10 @@ def build_runtime(
     if provider is None:
         provider, provider_error = build_provider(settings, skip_when_routing=skip_provider_when_routing)
     profiles, connection_runtime = build_connections(settings)
+    try:
+        decider = build_decision_provider(settings)
+    except Exception:  # noqa: BLE001 - a broken router config leaves answering on rules only
+        decider = None
     return Runtime(
         settings=settings,
         config=config or load_retrieval_config(settings=settings),
@@ -76,4 +83,5 @@ def build_runtime(
         provider_error=provider_error,
         connection_profiles=profiles,
         connection_runtime=connection_runtime,
+        decision_provider=decider,
     )

@@ -2096,3 +2096,152 @@ def test_a_program_question_gets_citable_requirement_lines(db, collection, tmp_p
                                                    "Computer Science (Minor)"}
     held = {record.evidence_id for record in store.evidence(run.run_id)}
     assert all(line["evidence_ids"] and set(line["evidence_ids"]) <= held for line in lines)
+
+
+@pytest.mark.parametrize(("question", "scores", "levels", "researched", "outcome", "first"), [
+    # Clear risk: the fixed support reply, written by code; research never runs.
+    ("I want to end my life", {"institutional": 0.1}, {"clear_risk": 0.9}, False, "information",
+     "crisis"),
+    # Nothing but a request outside advising: the fixed decline, no research.
+    ("write my essay on the french revolution", {"out_of_scope": 0.95}, {"none": 1.0}, False,
+     "declined", None),
+    # A first sign of possible risk: research answers, and nothing code-written
+    # sends the student to counseling.
+    ("I failed again, what's the point. Can I retake a course?", {"institutional": 0.9},
+     {"possible_risk": 0.8}, True, "clarification", None),
+])
+def test_the_router_decides_what_runs_and_what_code_writes(
+        db, collection, monkeypatch, question, scores, levels, researched, outcome, first):
+    from app.api.query_service import query_response
+    from app.api.schemas import QueryRequest
+    from app.config import load_settings
+    from app.generation.question_router import load_support_replies
+    from app.llm.base import ToolCall
+    from tests.fakes import FakeDecisionProvider, FakeEmbedder
+    from tests.helpers import MODEL, collection_name, lenient_config
+
+    def script(context, index):
+        return [ToolCall("finish", "advisor_finish", {"decision": {
+            "outcome": "clarification", "completeness": "complete",
+            "blocks": [{"kind": "question", "text": "Which course do you mean?"}]}})]
+
+    provider = _research_provider(monkeypatch, script)
+    distress = {level: levels.get(level, 0.0) for level in
+                ("none", "everyday_stress", "acute_distress", "possible_risk", "clear_risk")}
+    decider = FakeDecisionProvider(scores, {"distress": distress})
+    settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
+                       tools_enabled=True, routing_enabled=False, embedding_model_id=MODEL,
+                       db_pool_max_size=0)
+    response = query_response(QueryRequest(query=question, collectionId=collection_name(db, collection)),
+                              db, settings, lenient_config(), FakeEmbedder(8), provider, decider=decider)
+    assert bool(provider.requests) is researched
+    assert response.research.outcome == outcome
+    replies = load_support_replies()
+    texts = [block.text for block in response.research.blocks]
+    if first:
+        assert texts[0] == getattr(replies, first)
+    else:
+        assert replies.support not in texts and replies.crisis not in texts
+    steps = ResearchStore(db, "development").steps(UUID(response.research.runId))
+    route, = [s["details"] for s in steps if s["action_kind"] == "route"]
+    expected = {"crisis": "crisis"}.get(first, "check_in" if levels.get("possible_risk") else "calm")
+    assert route["distress"] == expected
+
+
+def test_the_router_reads_the_turn_before_and_steps_in_when_it_comes_up_again(
+        db, collection, monkeypatch):
+    from app.generation.question_router import LEVELS, load_support_replies
+    from app.llm.base import ToolCall
+    from tests.fakes import FakeDecisionProvider
+    from tests.helpers import api_client, collection_name, send_turn
+
+    def script(context, index):
+        return [ToolCall("finish", "advisor_finish", {"decision": {
+            "outcome": "clarification", "completeness": "complete",
+            "blocks": [{"kind": "question", "text": "Which course do you mean?"}]}})]
+
+    client = api_client(db, collection, provider=_research_provider(monkeypatch, script))
+    client.app.state.settings = replace(client.app.state.settings, llm_provider="openai",
+        llm_model_id="fake", tools_enabled=True, routing_enabled=False, db_pool_max_size=0)
+    risk = {level: 0.0 for level in LEVELS} | {"possible_risk": 0.9, "none": 0.1}
+    decider = FakeDecisionProvider({"institutional": 0.9}, {"distress": risk})
+    client.app.state.decision_provider = decider
+    conversation = client.post("/api/conversations", json={"title": "t"}).json()["conversationId"]
+    send_turn(client, conversation, {"query": "what's the point of anything",
+        "requestId": str(uuid4()), "expectedSequence": 0,
+        "collectionId": collection_name(db, collection)})
+    first = client.get(f"/api/conversations/{conversation}").json()["turns"][-1]
+    support = load_support_replies().support
+    # The first sign gets no referral; the same worry again gets the support note first.
+    assert support not in [b["text"] for b in first["evidence"]["research"]["blocks"]]
+    send_turn(client, conversation, {"query": "honestly nothing matters. can I retake a course?",
+        "requestId": str(uuid4()), "expectedSequence": 2})
+    answer = client.get(f"/api/conversations/{conversation}").json()["turns"][-1]
+    assert answer["evidence"]["research"]["blocks"][0]["text"] == support
+    second = next(s for s in decider.states if "previous_student_message" in s)
+    assert second["latest_message"] == "honestly nothing matters. can I retake a course?"
+    assert second["previous_student_message"] == "what's the point of anything"
+    assert "previous_advisor_reply" in second
+
+
+def test_a_career_route_searches_career_data_before_the_first_round(
+        db, collection, monkeypatch, tmp_path):
+    from app.api.query_service import query_response
+    from app.api.schemas import QueryRequest
+    from app.config import load_settings
+    from app.ingest.pipeline import ingest_file
+    from app.ingest.provenance import provenance_from_manifest
+    from app.llm.base import AssistantToolMessage, ToolCall, ToolResultMessage
+    from tests.fakes import FakeDecisionProvider, FakeEmbedder, whitespace_tokens
+    from tests.helpers import MODEL, collection_name, lenient_config
+
+    _corpus(db, collection, tmp_path)
+    path = tmp_path / "data-scientists.md"
+    path.write_text("# Data scientists\n\nData scientists earn a median wage in computer "
+                    "science and statistics roles.\n", encoding="utf-8")
+    entry = {"origin_key": "careers:fixture:data-scientists", "acquired_at": "2026-10-12",
+             "source_url": "https://careers.example.test/data-scientists",
+             "provenance": {"source_category": "career_reference", "publisher": "Fixture",
+                            "geography": "United States", "published_at": "2026-01-15",
+                            "title": "Data scientists", "document_roles": ["career_preparation"],
+                            "applicability_status": "unknown"}}
+    ingest_file(db, collection_id=collection, path=path, content_type="text/markdown",
+                         count_tokens=whitespace_tokens, embedder=FakeEmbedder(8), embed_model=MODEL,
+                         config=lenient_config(), origin_key=entry["origin_key"],
+                         provenance=provenance_from_manifest(entry))
+    db.commit()
+    seen = {}
+
+    def leads(message):
+        return [(lead["kind"], lead["title"]) for lead in
+                json.loads(message.content)["data"]["leads"]]
+
+    def script(context, index, request):
+        if index == 0:
+            # The first request already holds the route's search, as a finished round.
+            call, result = request.messages[2:4]
+            assert isinstance(call, AssistantToolMessage) and isinstance(result, ToolResultMessage)
+            assert call.tool_calls[0].arguments["kind"] == "career_reference"
+            seen["prefetched"] = leads(result)
+            # A plain search on this route reads career data too, not the catalog.
+            return [ToolCall("search", "advisor_search",
+                             {"query": "computer science statistics", "kind": "any"})]
+        seen["plain"] = leads(request.messages[-1])
+        return [ToolCall("finish", "advisor_finish", {"decision": {
+            "outcome": "clarification", "completeness": "complete",
+            "blocks": [{"kind": "question", "text": "Which kind of role do you mean?"}]}})]
+
+    provider = _research_provider(monkeypatch, script)
+    decider = FakeDecisionProvider({"career_outlook": 0.9}, {"career_field": {"none": 1.0}})
+    settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
+                       tools_enabled=True, routing_enabled=False, embedding_model_id=MODEL,
+                       db_pool_max_size=0)
+    response = query_response(
+        QueryRequest(query="what do data scientists earn?", collectionId=collection_name(db, collection)),
+        db, settings, lenient_config(), FakeEmbedder(8), provider, decider=decider)
+    # Two model rounds, not three: the required career search was already done, so
+    # the finish is accepted without another "search career_reference first".
+    assert len(provider.requests) == 2 and response.research.outcome == "clarification"
+    for found in (seen["prefetched"], seen["plain"]):
+        assert found and {kind for kind, _ in found} == {"document"}
+        assert {title for _, title in found} == {"Data scientists"}

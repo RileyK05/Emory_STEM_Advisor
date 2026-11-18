@@ -155,6 +155,7 @@ def create_app(
     state.provider_error = runtime.provider_error
     state.connection_profiles = runtime.connection_profiles
     state.connection_runtime = runtime.connection_runtime
+    state.decision_provider = runtime.decision_provider
     # Added first so it runs inside the size limit: nothing oversized is buffered.
     app.add_middleware(NulTextMiddleware)
     app.add_middleware(MaxBodyMiddleware, max_bytes=state.settings.request_max_bytes)

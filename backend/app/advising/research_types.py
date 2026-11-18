@@ -71,7 +71,9 @@ DecisionOutcome = Literal[
     "recommendation", "information", "clarification", "insufficient_evidence", "declined"
 ]
 DecisionCompleteness = Literal["complete", "partial"]
-BlockKind = Literal["fact", "judgment", "assumption", "limitation", "question"]
+# `perspective` is general advice: it cites nothing and states no number, course or
+# Emory rule. Only a route that allows it (app/generation/question_router.py) may use it.
+BlockKind = Literal["fact", "judgment", "assumption", "limitation", "question", "perspective"]
 PreparationConclusion = Literal["blocked", "dependency_order", "unresolved"]
 
 
@@ -241,7 +243,8 @@ class DecisionBlock(_Strict):
     external claims. ``judgment`` may express a preference and must name the
     facts behind it. ``question`` needs no evidence. Text cannot escape factual
     validation by labeling itself judgment or limitation; that is a review
-    responsibility, not something this schema can prove.
+    responsibility, not something this schema can prove. ``perspective`` is
+    general advice: no evidence, and no numbers, course codes or Emory rules.
     """
 
     kind: BlockKind

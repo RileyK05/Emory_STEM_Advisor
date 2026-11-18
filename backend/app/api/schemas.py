@@ -101,7 +101,7 @@ class ClaimReviewUnit(BaseModel):
 
 
 class ResearchBlock(BaseModel):
-    kind: Literal["fact", "judgment", "assumption", "limitation", "question"]
+    kind: Literal["fact", "judgment", "assumption", "limitation", "question", "perspective"]
     text: str
     evidenceIds: list[str]
     citationNumbers: list[int]

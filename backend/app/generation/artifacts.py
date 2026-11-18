@@ -507,5 +507,6 @@ def build_worker_handlers(settings) -> WorkerHandlers:
         connection_runtime=runtime.connection_runtime,
         connect=connector(settings, pool_name="conversation_execution"),
         job_store=JobStore(connector(settings)),
+        decider=runtime.decision_provider,
     )
     return WorkerHandlers(artifacts=artifacts, conversation=conversation)

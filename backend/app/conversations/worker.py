@@ -113,7 +113,7 @@ class ConversationTurnExecutor:
     retryable_codes = frozenset({"provider_busy"})
 
     def __init__(self, *, settings, config, embedder, provider, connection_profiles,
-                 connection_runtime, connect, job_store=None):
+                 connection_runtime, connect, job_store=None, decider=None):
         self.settings = settings
         self.config = config
         self.embedder = embedder
@@ -122,6 +122,7 @@ class ConversationTurnExecutor:
         self.connection_runtime = connection_runtime
         self.connect = connect
         self.job_store = job_store
+        self.decider = decider
 
     def __call__(self, job: Job, context: JobContext) -> ConversationTurnResult:
         if job.kind != "conversation.turn":
@@ -182,6 +183,7 @@ class ConversationTurnExecutor:
                     history_context=_history_context(snapshot, effective),
                     conversation_id=conversation_id, conversation_request_id=request_id,
                     retry=job.attempt_count > 1,
+                    decider=self.decider,
                 )
             except HTTPException as exc:
                 cause = exc.__cause__

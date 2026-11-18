@@ -3,6 +3,7 @@
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -12,6 +13,7 @@ from psycopg import Error as DatabaseError
 
 from app.advising.research_repository import ScopeChanged, build_scope, verify_manifest
 from app.advising.research_store import ResearchStore, RunClosed
+from app.advising.research_types import DecisionBlock, FinalDecision
 from app.api import deps
 from app.api.schemas import (
     AnswerResponse,
@@ -37,15 +39,26 @@ from app.gaps.store import GapError, GapStore
 from app.generation.controller import GenerationCancelled, ToolConversationError
 from app.generation.evidence import persist_response, record_attempt
 from app.generation.operation import GenerationOperation
+from app.generation.question_router import (
+    TIERS,
+    Route,
+    combined,
+    load_router_config,
+    load_support_replies,
+    only_out_of_scope,
+    prefetch_searches,
+    route_question,
+)
 from app.generation.research_controller import ResearchController, asks_for_advice
 from app.generation.research_final import (
     RESEARCH_PROMPT_VERSION,
     RESEARCH_RENDER_VERSION,
+    declined_decision,
     render_final,
 )
 from app.generation.research_tools import ResearchSession
 from app.jobs.store import JobCancelled, LeaseLost
-from app.llm.base import Provider, ProviderError, provider_failure_detail
+from app.llm.base import DecisionProvider, Provider, ProviderError, Usage, provider_failure_detail
 from app.operations.budget import OperationBudgetError, OperationLimits
 from app.places import places_in
 from app.retrieval.config import RetrievalConfig
@@ -54,6 +67,11 @@ from app.retrieval.types import RetrievalTrace, Retrieved
 from app.tools.executions import ToolExecutionLedger, ToolLedgerError
 
 logger = logging.getLogger(__name__)
+
+# Blocks whose building names become map pins: the answer's own claims. A
+# limitation or question ("ask the Emory Student Center desk") names a place it
+# is not saying the thing is in, and a wrong pin sends a student to the wrong building.
+PIN_BLOCKS = frozenset({"fact", "judgment", "assumption"})
 
 FAILED_ANSWER = "The advisor couldn't answer that. Try again."
 
@@ -168,6 +186,63 @@ class _AttemptAudit:
         self._started = time.perf_counter()
 
 
+def _route_inputs(conn, workspace_key, conversation_id, request_id):
+    """The turn before this one, for the router: the student's last message, the
+    advisor's last reply, and the distress tier the last run saved."""
+    if conversation_id is None:
+        return None, None, "calm"
+    rows = conn.execute(queries.get("router_previous_turns"), {
+        "conversation_id": conversation_id, "request_id": request_id}).fetchall()
+    row = conn.execute(queries.get("previous_route_distress"), {
+        "conversation_id": conversation_id, "workspace_key": workspace_key,
+        "request_id": request_id}).fetchone()
+    conn.commit()
+    student = next((r["text"] for r in rows if r["role"] == "user"), None)
+    reply = next((r["text"] for r in rows if r["role"] == "assistant"), None)
+    tier = row["distress"] if row and row["distress"] in TIERS else "calm"
+    return student, reply, tier
+
+
+def _routed(future, question) -> Route:
+    """The router's answer; anything unexpected falls back to the strict route."""
+    try:
+        return future.result()
+    except Exception:
+        logger.exception("question router failed")
+        from app.generation.question_router import SELF_HARM
+        return Route(frozenset({"institutional"}), "fallback",
+                     distress="crisis" if SELF_HARM.search(question) else "calm")
+
+
+def _record_route_call(conn, route: Route, trace_id, settings, latency_ms: int) -> None:
+    if route.model_id is None:
+        return
+    from app.pricing import PricingService
+
+    with conn.transaction():
+        PricingService.record_model_call(
+            conn, provider="systemone", model_id=route.model_id,
+            usage=route.usage or Usage(source="unknown"), created_at=datetime.now(UTC),
+            trace_id=trace_id, status="completed" if route.usage else "failed",
+            latency_ms=latency_ms,
+            requested_timeout_seconds=settings.decision_timeout_seconds)
+
+
+def _scope_and_trace(conn, settings, config, body, collection_id, workspace_key, source_ids,
+                     source_snapshot):
+    scope = build_scope(conn, collection_id=collection_id, workspace_key=workspace_key,
+                        source_ids=source_ids, frozen_snapshot=source_snapshot)
+    conn.commit()
+    trace_id = write_trace(conn, collection_id=collection_id, query=body.query,
+                           config_version=config.version, embed_model=settings.embedding_model_id,
+                           refused=False, seams=[], contributions=[],
+                           workspace_key=workspace_key)
+    conn.commit()
+    conn.execute(queries.get("mark_research_trace"), {"trace_id": trace_id})
+    conn.commit()
+    return scope, trace_id
+
+
 def _select_connection(conn, settings, body, workspace_key, profiles, runtime):
     """The evaluated tools-capable connection that serves this query, or None for the default provider."""
     if not settings.routing_enabled:
@@ -198,6 +273,7 @@ def query_response(
     conversation_id: UUID | None = None,
     conversation_request_id: UUID | None = None,
     retry: bool = False,
+    decider: DecisionProvider | None = None,
 ) -> AnswerResponse:
     from app.auth.capabilities import EXECUTION_SETTINGS, execution_settings
 
@@ -229,21 +305,27 @@ def query_response(
             on_profile_selection(selection)
     if provider is None or not callable(getattr(provider, "generate", None)):
         raise HTTPException(503, "Research advising requires an available tools-capable connection.")
-    if asks_for_advice(body.query):
+    # The router runs while the scope and trace are built: it needs only the
+    # question and the turn before, and opens no database connection.
+    router_config = load_router_config()
+    previous_student, previous_reply, previous_tier = _route_inputs(
+        conn, workspace_key, conversation_id, conversation_request_id)
+    route_started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="question-router") as routing:
+        route_future = routing.submit(
+            route_question, decider, body.query, config=router_config,
+            previous_student=previous_student, previous_reply=previous_reply,
+            previous_tier=previous_tier)
+        scope, trace_id = _scope_and_trace(conn, settings, config, body, collection_id,
+                                           workspace_key, source_ids, source_snapshot)
+        route = _routed(route_future, body.query)
+    _record_route_call(conn, route, trace_id, settings,
+                       int((time.perf_counter() - route_started) * 1000))
+    if "choice" in route.categories or asks_for_advice(body.query):
         settings = advice_budget(settings)
     settings = replace(settings,
         llm_max_output_tokens=settings.research_max_output_tokens,
         **research_sampling(settings))
-    scope = build_scope(conn, collection_id=collection_id, workspace_key=workspace_key,
-                        source_ids=source_ids, frozen_snapshot=source_snapshot)
-    conn.commit()
-    trace_id = write_trace(conn, collection_id=collection_id, query=body.query,
-                           config_version=config.version, embed_model=settings.embedding_model_id,
-                           refused=False, seams=[], contributions=[],
-                           workspace_key=workspace_key)
-    conn.commit()
-    conn.execute(queries.get("mark_research_trace"), {"trace_id": trace_id})
-    conn.commit()
     # Rounds request the ordinary allowance; the per-call cap admits the larger
     # allowance a truncated round retries with (research_controller).
     operation = GenerationOperation(conn, settings, trace_id, workspace_key, limits=OperationLimits(
@@ -286,6 +368,15 @@ def query_response(
         conn, scope, store, run, settings=settings, config=config, embedder=embedder,
         artifact_references=enriched_refs,
     )
+    store.record_action(run.run_id, action_kind="route", details=route.details())
+    replies = load_support_replies()
+    session.route, session.route_policy = route, combined(route)
+    session.prefetch = prefetch_searches(route, session.route_policy, router_config, body.query)
+    if route.distress == "support":
+        session.support_first = replies.support
+    # Before support, nothing in the reply points to counseling, even if the model
+    # writes it: venting is answered, not referred.
+    session.strip_contacts = route.distress in {"steady", "check_in", "support"}
     outcome = Retrieved([], RetrievalTrace(trace_id, collection_id, body.query,
                         normalize_query(body.query), config.version, settings.embedding_model_id,
                         False, ()))
@@ -299,15 +390,26 @@ def query_response(
     try:
         guard()
         session.open_workspace(conversation_id)
-        decision, usage, system, user, model = ResearchController().run(
-            session, provider, operation, ledger=ledger, check_cancelled=guard,
-            on_progress=on_progress, question=body.query, history_context=history_context,
-            artifact_choice=getattr(body, "makeArtifact", None),
-            persona=getattr(body, "persona", None),
-            selection_identity={"profile": str(selection.profile_id), "revision": selection.profile_revision}
-            if selection else {"provider": settings.llm_provider, "model": settings.llm_model_id},
-            on_attempt=lambda prepared, result, error: audit.record(result, error, prepared),
-            before_provider_call=lambda: release_borrow(conn))
+        if route.distress == "crisis" or only_out_of_scope(route):
+            # Written by code: clear risk gets the support reply, a request with no
+            # advising in it gets the decline. No research runs for either.
+            decision = (FinalDecision(outcome="information", completeness="complete", blocks=(
+                            DecisionBlock(kind="limitation", text=replies.crisis),))
+                        if route.distress == "crisis" else
+                        declined_decision(FinalDecision(outcome="declined", completeness="complete")))
+            session.decision = decision
+            usage, system, user, model = Usage(), "", "", None
+        else:
+            decision, usage, system, user, model = ResearchController().run(
+                session, provider, operation, ledger=ledger, check_cancelled=guard,
+                on_progress=on_progress, question=body.query, history_context=history_context,
+                artifact_choice=getattr(body, "makeArtifact", None),
+                persona=getattr(body, "persona", None),
+                selection_identity={"profile": str(selection.profile_id),
+                                    "revision": selection.profile_revision}
+                if selection else {"provider": settings.llm_provider, "model": settings.llm_model_id},
+                on_attempt=lambda prepared, result, error: audit.record(result, error, prepared),
+                before_provider_call=lambda: release_borrow(conn))
         rendered = render_final(decision, store.evidence(run.run_id), system_prompt=system,
                                 user_prompt=user, usage=usage, model_id=model)
         outcome = replace(outcome, chunks=rendered.chunks)
@@ -353,7 +455,9 @@ def query_response(
         response.research = ResearchDecisionInfo(runId=str(run.run_id), outcome=decision.outcome,
             completeness=decision.completeness, blocks=rendered.blocks, artifact=artifact,
             unresolvedQuestions=list(decision.unresolved_questions),
-            places=places_in(body.query, *(block["text"] for block in rendered.blocks)))
+            places=[] if route.distress == "crisis" else
+            places_in(body.query, *(block["text"] for block in rendered.blocks
+                                    if block["kind"] in PIN_BLOCKS)))
         cited_source_ids = sorted({
             UUID(str(item.source_id)) for item in rendered.answer.citations if item.source_id
         })

@@ -1,9 +1,12 @@
 """Requested live, saved-conversation audit; fictional students, real provider.
 
-Uses the synchronous persisted conversation HTTP route, including its real
-history selection, archive/recall tools and research workspace. This does not
-exercise the browser or streaming job transport. Results are manual evidence,
-not pytest tests or automatically graded answers.
+Starts each turn on the real streamed route (/turns/stream) and answers it with
+one pass of the real conversation worker, as the app does, including history
+selection, archive/recall tools, the research workspace and the question router
+(DECISION_MODEL_ID). It does not exercise the browser. Results are manual
+evidence, not pytest tests or automatically graded answers.
+
+    python -m scripts.manual.advisor_conversation_audit --cases CASES.json --output DIR
 """
 
 from __future__ import annotations
@@ -23,9 +26,12 @@ from fastapi.testclient import TestClient
 
 from app.api import create_app
 from app.config import load_settings
-from app.db.connection import close_pools
+from app.conversations.worker import ConversationTurnExecutor
+from app.db.connection import close_pools, connect
 from app.generation.research_final import RESEARCH_PROMPT_VERSION
 from app.generation.research_tools import RESEARCH_TOOLS_VERSION
+from app.jobs.store import JobStore
+from app.jobs.worker import run_once
 from app.runtime import build_provider
 from scripts.manual.advisor_prompt_audit import CASE, RecordedProvider
 
@@ -82,7 +88,8 @@ def main():
         "cases_sha256": hashlib.sha256(args.cases.read_bytes()).hexdigest(),
         "workers": args.workers, "conversation_count": len(cases),
         "planned_turns": sum(len(c["turns"]) for c in cases),
-        "transport": "Real persisted /api/conversations/{id}/turns via FastAPI TestClient",
+        "transport": "Real /api/conversations/{id}/turns/stream via FastAPI TestClient, "
+                     "answered by one conversation worker pass",
         "scope": "Fictional student reports; real models, corpus, saved history and research workspace. No browser/stream-worker claim.",
         "data_modifications": "Audit conversations, ordinary research/traces/usage only; no course, program or prerequisite edits",
         "audit_limits": {"provider_calls": recording.max_calls, "tokens": recording.max_tokens}}
@@ -138,12 +145,23 @@ def main():
                     "started_at": datetime.now(UTC).isoformat()}
                 start = time.perf_counter()
                 try:
-                    response = client.post(path + "/turns", json=body)
+                    response = client.post(path + "/turns/stream", json=body)
                     row["http_status"] = response.status_code
-                    try:
+                    if response.status_code == 202:
+                        executor = ConversationTurnExecutor(
+                            settings=app.state.settings, config=app.state.config,
+                            embedder=app.state.embedder, provider=app.state.provider,
+                            connection_profiles=app.state.connection_profiles,
+                            connection_runtime=app.state.connection_runtime,
+                            connect=lambda: connect(settings.database_url),
+                            decider=app.state.decision_provider)
+                        run_once(JobStore(lambda: connect(settings.database_url)),
+                                 "audit-worker", executor)
+                        saved = client.get(path).json()["turns"][-1]
+                        row["response"] = {"type": saved.get("status"), "text": saved.get("text"),
+                                           **(saved.get("evidence") or {})}
+                    else:
                         row["response"] = response.json()
-                    except ValueError:
-                        row["response"] = {"type": "non_json_error"}
                 except Exception as exc:  # noqa: BLE001 - preserve safe manual diagnostics
                     row["runner_error_type"] = type(exc).__name__
                 row["seconds"] = round(time.perf_counter() - start, 3)

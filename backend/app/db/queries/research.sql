@@ -440,3 +440,13 @@ WHERE run_id = %(run_id)s
 SELECT COALESCE(max(ordinal) + 1, 0) AS ordinal
 FROM research_steps
 WHERE run_id = %(run_id)s;
+
+-- The distress tier the router saved on this conversation's previous run.
+-- name: previous_route_distress
+SELECT s.details->>'distress' AS distress
+FROM research_runs r
+JOIN research_steps s ON s.run_id = r.run_id AND s.action_kind = 'route'
+WHERE r.conversation_id = %(conversation_id)s
+  AND r.workspace_key = %(workspace_key)s
+  AND r.conversation_request_id IS DISTINCT FROM %(request_id)s
+ORDER BY r.created_at DESC, s.ordinal DESC LIMIT 1;

@@ -175,6 +175,7 @@ def send_turn(client, conversation_id, body):
     executor = ConversationTurnExecutor(
         settings=state.settings, config=state.config, embedder=state.embedder,
         provider=state.provider, connection_profiles=state.connection_profiles,
-        connection_runtime=state.connection_runtime, connect=lambda: connect(dsn))
+        connection_runtime=state.connection_runtime, connect=lambda: connect(dsn),
+        decider=getattr(state, "decision_provider", None))
     run_once(JobStore(lambda: connect(dsn)), "test-worker", executor)
     return started

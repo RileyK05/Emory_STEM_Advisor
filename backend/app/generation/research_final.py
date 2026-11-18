@@ -23,7 +23,7 @@ from app.generation.answer import NONSUPPORT_RE, Citation, GeneratedAnswer
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
-RESEARCH_PROMPT_VERSION = "research-57"
+RESEARCH_PROMPT_VERSION = "research-60"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
 # A fact block that asserts a course is required, listed or part of a program
@@ -518,6 +518,84 @@ def normalize_decision(decision: FinalDecision, supplied) -> FinalDecision:
     return decision.model_copy(update={"blocks": tuple(blocks)}) if changed else decision
 
 
+# --- general advice (question router policies) ---------------------------------
+
+_PERSPECTIVE_RULE_RE = re.compile(
+    r"\b(emory requires|you must|must take|required|requirement|deadline|credit hours?|"
+    r"prerequisite|gpa|catalog says|policy says)\b", re.IGNORECASE)
+_BLOCK_ORDER = {"fact": 0, "judgment": 0, "perspective": 1, "assumption": 2, "limitation": 2,
+                "question": 2}
+
+
+def perspective_content_problems(decision: FinalDecision) -> list[str]:
+    """General advice may only be perspective: no numbers, courses, rules or citations."""
+    problems = []
+    for block in decision.blocks:
+        if block.kind != "perspective":
+            continue
+        if block.evidence_ids or block.candidate_ids:
+            problems.append("general advice cites nothing; cite records in a fact block")
+        elif (canonical_codes_in(block.text) or re.search(r"[0-9%$]", block.text)
+              or _PERSPECTIVE_RULE_RE.search(block.text)):
+            problems.append("general advice cannot state numbers, courses or Emory rules; put that "
+                            "in a fact block that cites its record")
+    return problems
+
+
+def perspective_problems(decision: FinalDecision, *, allowed: int, must_search: frozenset[str],
+                         searched: set[str], must_cite: frozenset[str],
+                         found: dict[str, set[str]]) -> list[str]:
+    """The route's obligations: how much general advice, what to search, what to cite.
+
+    `searched` holds the advisor_search kinds the run used; `found` maps a source
+    kind to the evidence IDs of that kind the run acquired.
+    """
+    problems = []
+    if sum(block.kind == "perspective" for block in decision.blocks) > allowed:
+        problems.append("this question needs records, not general advice; move it into a fact "
+                        "with evidence_ids or remove it" if not allowed else
+                        f"at most {allowed} perspective blocks of general advice for this question")
+    problems += perspective_content_problems(decision)
+    if decision.outcome != "declined":
+        for kind in sorted(must_search - searched):
+            problems.append(f"search {kind} sources before answering (advisor_search with "
+                            f"kind={kind})")
+        cited = {e for block in decision.blocks if block.kind == "fact" for e in block.evidence_ids}
+        for kind in sorted(must_cite):
+            if found.get(kind) and not found[kind] & cited:
+                problems.append(f"you read {kind} records; answer from them first, in a fact block "
+                                "that cites them")
+    return problems
+
+
+def order_blocks(decision: FinalDecision) -> FinalDecision:
+    """Records first: facts and judgments, then general advice, then the rest."""
+    ordered = tuple(sorted(decision.blocks, key=lambda b: _BLOCK_ORDER.get(b.kind, 2)))
+    return decision if ordered == decision.blocks else decision.model_copy(update={"blocks": ordered})
+
+
+_CONTACT_RE = re.compile(r"727-7450|\b988\b|727-6111|\b911\b|\bCAPS\b|"
+                         r"Counseling and Psychological Services")
+
+
+def with_support_text(decision: FinalDecision, *, first: str | None = None,
+                      last: str | None = None) -> FinalDecision:
+    """The distress tier's fixed text, written by code, and nothing else of the kind.
+
+    A block the model wrote that names support contacts goes: before `support`
+    the student gets none, and from then on they get them once, in the checked
+    wording. Cited facts stay (a student who asks where CAPS is gets the answer).
+    """
+    blocks = [b for b in decision.blocks if b.text not in {first, last}
+              and not (b.kind in {"limitation", "perspective", "assumption"}
+                       and _CONTACT_RE.search(b.text))]
+    if first:
+        blocks.insert(0, DecisionBlock(kind="limitation", text=first))
+    if last:
+        blocks.append(DecisionBlock(kind="limitation", text=last))
+    return decision.model_copy(update={"blocks": tuple(blocks)})
+
+
 def validate_final(decision: FinalDecision, state: ResearchState | None,
                    evidence: list[EvidenceRecord], supplied: set[str],
                    checks: dict[str, dict], entity_evidence: dict[str, set[str]] | None = None,
@@ -536,6 +614,7 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
                                            artifact_expected=artifact_expected)
                    if decision.blocks else [])
                 + grading_rule_problems(decision, grading_rules)
+                + perspective_content_problems(decision)
                 + validate_evidence_references(decision, supplied & records.keys())
                 + validate_candidate_references(decision, set(candidates)))
     if not decision.blocks:
@@ -736,7 +815,8 @@ def render_final(decision: FinalDecision, evidence: list[EvidenceRecord], *,
                                       UUID(record.chunk_id), UUID(record.source_id)))
         refs = list(dict.fromkeys(numbers[e] for e in block.evidence_ids))
         text = block.text + (" " + " ".join(f"[{n}]" for n in refs) if refs else "")
-        paragraphs.append(text)
+        # General advice is labeled where the student reads it: it cites nothing.
+        paragraphs.append(f"General advice: {text}" if block.kind == "perspective" else text)
         blocks.append({"kind": block.kind, "text": block.text,
                        "evidenceIds": list(block.evidence_ids), "citationNumbers": refs,
                        "candidateIds": list(block.candidate_ids)})

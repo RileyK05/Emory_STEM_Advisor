@@ -352,6 +352,34 @@ class Provider(Protocol):
     def generate(self, request: GenerationRequest) -> GenerationResult: ...
 
 
+@dataclass(frozen=True)
+class DecisionQuestion:
+    """One typed question for a decision model: `noul` returns the probability
+    that `criteria["true"]` describes the state; `choice` returns a probability
+    for each criteria key."""
+    name: str
+    type: Literal["noul", "choice"]
+    instructions: str
+    criteria: dict[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class DecisionAnswer:
+    name: str
+    probability: float | None = None
+    choice: str | None = None
+    probabilities: dict[str, float] = field(default_factory=dict)
+
+
+class DecisionProvider(Protocol):
+    """A decision model: fixed typed questions in, probabilities out. It writes
+    no text, so it can gate work without doing any."""
+    model_id: str
+
+    def decide(self, state: dict[str, str],
+               questions: Sequence[DecisionQuestion]) -> tuple[dict[str, DecisionAnswer], Usage]: ...
+
+
 def provider_failure_detail(exc: ProviderError, subject: str) -> str:
     """A 503 detail that blames settings only when a retry would not help."""
     if isinstance(exc, RateLimitError):

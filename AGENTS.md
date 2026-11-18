@@ -11,7 +11,9 @@ plans and `docs/audit/` the review status.
   - `llm/`, `embeddings/` — provider seams: `base.py` (Protocol) and `factory.py`,
     the only place concrete providers are imported or instantiated. The API and
     the job worker build providers, embedder, retrieval config and connection
-    runtime through `app/runtime.build_runtime`.
+    runtime through `app/runtime.build_runtime`. The question router's decision
+    model (`DecisionProvider`, `llm/systemone.py`, `DECISION_MODEL_ID`) is a
+    separate seam built there too; unset, the router runs on rules only.
   - `db/` — `connection.py` is the only place psycopg connects (`connect()`, and
     `connector(settings)`, the pooled factory; `DB_POOL_MAX_SIZE=0` disables
     pooling). Fresh installs apply `db/baseline/032_schema.sql`;
@@ -37,7 +39,9 @@ plans and `docs/audit/` the review status.
   - Generation: `retrieval/` (seams, fusion, traces, eval runner),
     `generation/` (the research loop, the only answering path, its final
     rendering and citation mapping, and the tool controller artifacts share;
-    `api/query_service.py` is its entry), `tools/`, `operations/`
+    `api/query_service.py` is its entry; `generation/question_router.py` routes
+    each question by kind and distress tier before research, and code enforces
+    the route), `tools/`, `operations/`
     (shared token/call/time budgets), `jobs/` (job store, worker runtime), `conversations/`, `artifacts/`,
     `sandbox/` (isolated Office/HTML execution on a separate worker).
   - Accounts and governance: `auth/` (`get_principal` is the one authentication
@@ -56,8 +60,12 @@ plans and `docs/audit/` the review status.
   `requirement_gold.toml` (hand-checked expected requirement trees, checked by
   `scripts.manual.data_audit`; an entry is ground truth only once `reviewed`),
   `career_occupations.toml` (hand-written SOC codes for federal pay data),
-  and `source_conflicts.toml` (hand-written disagreements between Emory sources that
-  answers must disclose).
+  `source_conflicts.toml` (hand-written disagreements between Emory sources that
+  answers must disclose), `question_router.toml` (hand-written decision-model
+  questions and thresholds, measured by `scripts.manual.router_eval`), and
+  `support_replies.toml` (the crisis and support texts code publishes, the only
+  places contacts appear;
+  Riley checks every number before `reviewed = true`).
 - `backend/scripts/` — run as `python -m scripts.<name>` from `backend/`; they
   use `DATABASE_URL`, or an embedded `pgserver` under `DATA_DIR/pgserver`.
   `scripts/smoke/` (real models/services) and `scripts/manual/` (reusable

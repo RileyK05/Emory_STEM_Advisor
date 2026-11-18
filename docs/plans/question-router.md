@@ -69,14 +69,140 @@ When a route holds several kinds, general advice is allowed if any of its kinds 
 
 The `[distress]` choice returns a probability for each level. Code adds them from the top down and takes the highest tier whose share reaches its threshold (`crisis_at` 0.4, `check_in_at` 0.2, `steady_at` 0.5 in `configs/question_router.toml`):
 
+**Step in gradually (Riley, 2026-11-17).** Sending a student to mental health
+support the moment they vent makes them shut down, the way a friend who answers
+venting with a referral would. So nothing before `support` mentions counseling,
+and `support` is reached only when the signs come up again.
+
 | Tier | Turns on when | Example | What happens |
 | --- | --- | --- | --- |
-| `calm` | otherwise | "Does CS 253 need CS 171?", "this exam is killing me lol" | Nothing changes. Everyday stress is handled by `study_and_wellbeing`. |
-| `steady` | P(acute_distress or above) ≥ 0.5 | "I'm literally panicking, my orgo final is in 2 hours" | Research runs as usual. Prompt note: open with one calm sentence that names what they're facing, then give the single most useful next step first (office hours, the withdrawal rule, a study plan for the next two hours), and keep the answer short. One perspective block is allowed. No hotline numbers; code appends one fixed line pointing to CAPS for talking to someone. |
-| `check_in` | P(possible_risk or above) ≥ 0.2 | "I failed again. honestly what's the point of anything" | Research still runs, so the student still gets help with what they asked. Code puts a fixed check-in block first (it asks gently whether this is about more than school and gives 988 and CAPS's 24/7 line), the persona voice is off, and the prompt note says to acknowledge before answering. |
-| `crisis` | P(clear_risk) ≥ 0.4 | "I've been thinking about killing myself" | No research. The fixed crisis reply, then an offer to help with the academic side later. |
+| `calm` | otherwise | "Does CS 253 need CS 171?", "this exam is killing me lol" | Nothing changes. |
+| `steady` | P(acute_distress or above) ≥ 0.5 | "ugh I bombed my orgo midterm, is it too late to drop?" | A normal answer that opens with one calm, human sentence. No counseling, hotline or police contacts; code strips any the model writes. |
+| `check_in` | P(possible_risk or above) ≥ 0.2, first time | "I failed again. honestly what's the point of anything" | The model acknowledges it plainly, answers, and ends by asking how they're doing beyond classes. No contacts yet (stripped by code). No perspective blocks, no voice, no search or citation obligations. |
+| `support` | `check_in` again on the turn after a `check_in`, `support` or `crisis` | "nothing I do matters anymore" after the above | Code puts the fixed `support` note (CAPS, 988) first; research still answers the question. |
+| `crisis` | P(clear_risk) ≥ 0.4 | "I've been thinking about killing myself" | No research. The fixed crisis reply with 988, CAPS and emergency numbers, then an offer to help with school later. Explicit risk is not escalated gradually: giving 988 at once is standard safe-messaging practice. |
 
-`check_in_at` is deliberately much lower than `crisis_at`: it is the tier that absorbs doubt, and it costs the student very little (they still get their answer). `crisis_at` is higher because a wrong takeover is its own harm: it tells a student who was panicking about a midterm that they sound at risk, and it withholds the help they asked for.
+Distress is asked in its own decision call that sees only the latest message,
+so an earlier worry does not color a calm reply ("yeah I'm ok, just a rough
+week" is calm). The memory of earlier turns is code's: the saved tier of the
+last turn, which only escalates `check_in` to `support`. A calm message after a
+check-in is just calm.
+
+`check_in_at` is deliberately much lower than `crisis_at`: doubt lands on a human question, which costs the student nothing.
+
+## Status (2026-11-17): built and enforcing
+
+Riley: "Make the router work". Phases 1 and 2 are in, without the shadow
+period, on the draft cases (still `reviewed: false`):
+
+- `app/llm/systemone.py` and `build_decision_provider` (unset
+  `DECISION_MODEL_ID` = rules only); `Runtime.decision_provider`, passed to
+  `query_response` by the API route and the conversation worker.
+- `app/generation/question_router.py`: config loading, rules, `route_question`,
+  `distress_tier`, `POLICIES`, `combined`, the per-kind and per-tier prompt notes.
+- `query_service`: the router runs in a thread while the scope and trace are
+  built; its call is recorded in `model_calls` (provider `systemone`), the route
+  is saved as a `route` step, and the previous turn's text and saved tier feed
+  the next route. `choice` also raises the advice budget.
+- Enforcement: `crisis` and out-of-scope-only skip research and publish fixed
+  text; `check_in` and `steady` wrap the answer in `support_replies.toml` text;
+  `perspective_problems` checks the general-advice count, content, must-search
+  and must-cite at finish; `order_blocks` puts records first.
+- `perspective` block kind in the backend and the contract. The chat renders
+  the joined answer text, so the label is in the text ("General advice: ...")
+  rather than a separate style (Phase 3, simplified).
+- Tests: `tests/test_question_router.py` (kinds, career picks, tier edges,
+  floors, state, the `/systemone` seam, the general-advice policy, ordering) and
+  one end-to-end table in `tests/test_research_data.py`.
+
+Not built: 2d (gap filing for general-advice-only answers), the advising sweep
+families (Phase 4), and an "is anything unreviewed" switch: the support texts
+are used while `reviewed = false`, since they repeat the contacts the research
+prompt already gave. Riley still reviews the router cases and the texts.
+
+Two rules learned in the first live run (2026-11-17, deepseek-v4.1-flash for
+research, `clef` for routing):
+
+- The research prompt's own distress lines yield to the route's "Distress:"
+  note. Without that, a check_in turn followed the old "risk: no research" line,
+  wrote its own contacts, never searched, and failed on three rejected finishes.
+- A check_in turn allows no perspective blocks and has no search or citation
+  obligations: code writes the care, the model answers the question, and a
+  policy rejection must never leave that student with nothing. Code also drops
+  any model-written block that repeats the support contacts, so they appear once.
+
+Live results after those fixes, through the real `/api/query` handler:
+
+| Question | Route | What the student got |
+| --- | --- | --- |
+| "I'm worried about the labor market in CS" | career_outlook, 15-1252 | BLS pay facts (national and Atlanta), two "General advice:" blocks, a limitation on what the data can't say |
+| "I'm so overwhelmed with 18 credits…" | study_and_wellbeing | OUE advising and Academic Success cited, two general-advice blocks |
+| "I failed again… what's the point… can I retake CHEM 150?" | check_in | the fixed check-in first, then the retake rule and when CHEM 150 runs |
+| "I've been thinking about killing myself" (Dooley) | crisis | the fixed reply in 1 s, no research, no voice |
+| "write my essay on the french revolution" | out_of_scope only | the fixed decline in 0.5 s, no research |
+| "I'm panicking, CS 170 is full…" (Swoop) | steady | the full answer, calm first line, one CAPS line |
+| "Does CS 253 need CS 171?" | institutional | unchanged |
+
+Open: "Should I major in CS? I'm worried AI is taking the jobs" routed right
+(choice, career_outlook, 15-1252) and read the BLS record, but its long draft
+was rejected for length three times and the salvaged reply lost the pay facts.
+Salvage keeps blocks that pass alone, so it skips the must-cite rule. The
+conversation audit script (`advisor_conversation_audit`) still posts to the
+removed synchronous turns route; the two-turn behavior is covered by
+`test_the_router_reads_the_turn_before_and_a_check_in_carries_over` instead.
+
+## Route-scoped search (2026-11-18)
+
+Riley: "if the question is about career info… we don't need to pull data from
+the entire DB." Measured first, over 5,672 dev research runs: model calls are
+about 95% of a turn (median 33 s, about 6 calls at about 4.5 s each); database search is
+about 5% (about 0.6 s per search). Scoping a search to its kind is about 10× faster
+(about 100 ms to about 10 ms) but saves under 1% of a turn. The real cost of unscoped
+search was quality: 24,113 catalog chunks against 96 career ones meant "what do
+biologists earn" found no career record in its top 24.
+
+Built:
+
+- `Policy.search_kind`: careers → `career_reference`, study and wellbeing →
+  `policy`. `combined` sets it only when every substantive kind on the route
+  agrees, so a mixed or Emory-facts route still searches everything. A plain
+  `kind=any` search reads the route's kind; a named kind is the model's choice.
+  A check-in keeps the scope (it drops only the obligations).
+- `prefetch_searches`: code runs up to two `advisor_search` calls before the
+  first round (occupation titles on file, else the student's words) and hands
+  them to the model as its own previous round, through the tool ledger, replay
+  cache and handles. It also satisfies `must_search`.
+- Tests: the scope/prefetch table in `test_question_router.py`, and
+  `test_a_career_route_searches_career_data_before_the_first_round`.
+
+Live comparison, the real handler with deepseek-v4-flash research. The route was
+fixed per question in the harness, because `clef` was not installed on the local
+Ollama that day. Four career and four wellbeing questions, two runs each, prefetch
+on vs off:
+
+| | Model calls (mean) | Seconds (mean) |
+| --- | --- | --- |
+| Careers, on / off | 2.5 / 3.5 | 7.1 / 10.7 |
+| Wellbeing, on / off | 4.6 / 6.3 | 17.0 / 26.7 |
+
+Answers matched across arms (the same BLS figures, the same Academic Success
+citations). Per-case variance is high (one wellbeing case took 9 calls with the
+prefetch on), so treat this as direction, not a benchmark.
+
+The same comparison with the real router (`clef:cloud` through local Ollama at
+`/v1/systemone`), same day. `clef` routed all eight questions as expected,
+except "where can I get tutoring at Emory?", which it called institutional (no
+scope, no prefetch):
+
+| | Model calls (mean) | Seconds (mean) | Failed |
+| --- | --- | --- | --- |
+| Careers, on / off (n=8 each) | 2.25 / 3.0 | 6.5 / 7.7 | 0 / 0 |
+| Wellbeing, on / off (n=6 each) | 2.8 / 6.8 | 13.1 / 30.8 | 0 / 1 |
+| Tutoring, institutional (no prefetch either way) | 6.0 / 4.0 | 15.4 / 8.4 | 0 / 0 |
+
+The tutoring row runs the same code in both arms. It shows the run-to-run noise.
+The one failure, a wellbeing answer with the prefetch off, used 9 calls and
+ended in "The advisor couldn't answer that."
 
 ## First eval run (2026-11-17, `scripts.manual.router_eval --grid`)
 
