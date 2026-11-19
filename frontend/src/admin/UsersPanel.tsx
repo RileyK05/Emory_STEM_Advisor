@@ -6,17 +6,17 @@ import { formatTimestamp } from '../lib/format';
 import {
   AdminError,
   AdminSearch,
+  AdminSection,
   AdminWorkspace,
   DetailHead,
+  EmptyRow,
   FieldLine,
   PAGE,
   Pager,
-  RefreshButton,
   usePagedList,
-  type AdminPanelProps,
 } from './adminUi';
 
-export function UsersPanel({ toolbar }: AdminPanelProps) {
+export function UsersPanel() {
   const [search, setSearch] = useState('');
   const list = usePagedList((offset) => listAdminUsers({ query: search, limit: PAGE, offset }), [search]);
   const [selected, setSelected] = useState<AdminUser | null>(null);
@@ -47,8 +47,12 @@ export function UsersPanel({ toolbar }: AdminPanelProps) {
     });
 
   return (
-    <>
-      <RefreshButton toolbar={toolbar} busy={list.working} onRefresh={() => void list.reload()} />
+    <AdminSection
+      title="Accounts"
+      description="Users appear after their first verified login; roles and status are managed here."
+      busy={list.working}
+      onRefresh={() => void list.reload()}
+    >
       <AdminError error={list.error} />
       <AdminSearch
         placeholder="Search name, email, subject, or workspace"
@@ -72,7 +76,6 @@ export function UsersPanel({ toolbar }: AdminPanelProps) {
         }
       >
         <div>
-          <p className="admin-sub">Users appear after their first verified login; roles and status are managed here.</p>
           <div className="admin-table-wrap">
             <table className="admin-table">
               <thead>
@@ -88,6 +91,11 @@ export function UsersPanel({ toolbar }: AdminPanelProps) {
                 </tr>
               </thead>
               <tbody>
+                {list.rows.length === 0 && (
+                  <EmptyRow columns={8} loading={list.working}>
+                    No users match.
+                  </EmptyRow>
+                )}
                 {list.rows.map((user) => (
                   <UserRow
                     key={user.userId}
@@ -104,7 +112,7 @@ export function UsersPanel({ toolbar }: AdminPanelProps) {
         </div>
         <Pager offset={list.offset} count={list.rows.length} busy={list.working} onOffset={list.setOffset} />
       </AdminWorkspace>
-    </>
+    </AdminSection>
   );
 }
 

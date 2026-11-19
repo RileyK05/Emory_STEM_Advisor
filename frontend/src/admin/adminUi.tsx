@@ -1,14 +1,67 @@
 import { useState, type DependencyList, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
 import { useAsyncAction } from '../lib/useAsyncAction';
 import { useLoad } from '../lib/useLoad';
 
 /** Rows per page in the paged admin lists. */
 export const PAGE = 50;
 
-/** Props every listing tab receives: the tab bar it puts its Refresh button into. */
-export interface AdminPanelProps {
-  toolbar: HTMLElement | null;
+/** A count with thousands separators, or a dash when the backend did not report it. */
+export function formatCount(value?: number | null): string {
+  return value != null ? value.toLocaleString() : '—';
+}
+
+/**
+ * One admin panel as a card: its heading, a line on what it is for, and its own actions. A panel
+ * that loads a listing passes `onRefresh`, so every Refresh sits beside the list it reloads.
+ */
+export function AdminSection({
+  title,
+  description,
+  actions,
+  busy = false,
+  onRefresh,
+  label,
+  children,
+}: {
+  title: string;
+  description?: ReactNode;
+  actions?: ReactNode;
+  busy?: boolean;
+  onRefresh?: () => void;
+  /** Accessible name when it differs from the visible title. */
+  label?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="admin-section" aria-label={label ?? title}>
+      <header className="admin-section-head">
+        <div className="admin-section-title">
+          <h2>{title}</h2>
+          {description && <p>{description}</p>}
+        </div>
+        {(actions || onRefresh) && (
+          <div className="admin-section-actions">
+            {actions}
+            {onRefresh && (
+              <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy}>
+                Refresh
+              </button>
+            )}
+          </div>
+        )}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+/** The one row an empty table shows: loading, or what an empty list means. */
+export function EmptyRow({ columns, loading, children }: { columns: number; loading?: boolean; children: ReactNode }) {
+  return (
+    <tr className="admin-empty-row">
+      <td colSpan={columns}>{loading ? 'Loading…' : children}</td>
+    </tr>
+  );
 }
 
 export function FieldLine({ label, children }: { label: string; children: ReactNode }) {
@@ -26,21 +79,6 @@ export function AdminError({ error }: { error: string | null }) {
     <p role="alert" className="admin-error">
       {error}
     </p>
-  );
-}
-
-/** The open tab's Refresh button, rendered at the end of the tab bar. */
-export function RefreshButton({
-  toolbar,
-  busy,
-  onRefresh,
-}: AdminPanelProps & { busy: boolean; onRefresh: () => void }) {
-  if (!toolbar) return null;
-  return createPortal(
-    <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy}>
-      Refresh
-    </button>,
-    toolbar,
   );
 }
 
@@ -80,6 +118,8 @@ export function Pager({
   busy: boolean;
   onOffset: (offset: number) => void;
 }) {
+  // One page of rows has nothing to page through.
+  if (offset === 0 && count < PAGE) return null;
   return (
     <div className="admin-pagination">
       <span>{count ? `${offset + 1}–${offset + count}` : 'No rows'}</span>

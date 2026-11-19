@@ -11,6 +11,7 @@ import {
 } from '../api/backoffice';
 import { useAsyncAction } from '../lib/useAsyncAction';
 import { useLoad } from '../lib/useLoad';
+import { AdminSection } from './adminUi';
 
 type ProgramRef = { programId: string; title: string };
 
@@ -92,8 +93,10 @@ export function ProgramRulesPanel() {
     });
 
   return (
-    <section className="admin-review" aria-label="Program rules">
-      <h3>Program rules</h3>
+    <AdminSection
+      title="Program rules"
+      description="Requirement clauses parsed from a catalog source. Draft, approve and publish a release to change what students see."
+    >
       {error && (
         <p role="alert">
           {error}{' '}
@@ -108,8 +111,8 @@ export function ProgramRulesPanel() {
         </p>
       )}
       {notice && <p>{notice}</p>}
-      <label className="admin-field-line">
-        <span>Catalog source</span>
+      <label className="admin-form admin-inline-field admin-source-pick">
+        Catalog source
         <select value={sourceId} onChange={(event) => chooseSource(event.target.value)}>
           <option value="">Select a source</option>
           {sources.map((source) => (
@@ -121,7 +124,7 @@ export function ProgramRulesPanel() {
       </label>
       {sourceId && !busy && programs.length === 0 && <p>No programs are bound to this source.</p>}
       {programs.length > 0 && (
-        <div className="admin-actions">
+        <div className="admin-chip-row">
           {programs.map((row) => (
             <button
               key={row.programId}
@@ -136,7 +139,7 @@ export function ProgramRulesPanel() {
         </div>
       )}
       {programId && (
-        <div className="admin-actions">
+        <div className="admin-form-actions">
           <button type="button" className="primary-button" disabled={busy || !program} onClick={() => void draft()}>
             Draft rules
           </button>
@@ -167,12 +170,12 @@ export function ProgramRulesPanel() {
         </div>
       )}
       {program && (
-        <ul>
+        <ul className="admin-clauses">
           {(program.items ?? []).map((item) => (
             <li key={item.position}>{item.text}</li>
           ))}
         </ul>
       )}
-    </section>
+    </AdminSection>
   );
 }

@@ -1,3 +1,4 @@
+import { AdminSection } from '../adminUi';
 import { GapItem } from './GapItem';
 import { useGapQueue } from './useGapQueue';
 import { useGapResolution } from './useGapResolution';
@@ -9,25 +10,13 @@ export function GapReviewPanel() {
   const openCount = gaps.filter((gap) => gap.state === 'open').length;
 
   return (
-    <section className="gap-review-panel" aria-label="Retrieval gap review">
-      <div className="gap-review-heading">
-        <div>
-          <h3>Retrieval gaps</h3>
-          <p>
-            Human source attestation helps diagnose retrieval. It does not prove that a generated answer is factually
-            correct or that the sources answer the query.
-          </p>
-        </div>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label="Refresh retrieval gaps"
-          onClick={() => void queue.refresh().catch(() => {})}
-          disabled={loading}
-        >
-          ↻
-        </button>
-      </div>
+    <AdminSection
+      title="Retrieval gaps"
+      label="Retrieval gap review"
+      description="Human source attestation helps diagnose retrieval. It does not prove that a generated answer is factually correct or that the sources answer the query."
+      busy={loading}
+      onRefresh={() => void queue.refresh().catch(() => {})}
+    >
       {metrics && (
         <p className="gap-review-metrics" role="note">
           {metrics.recurrenceRate === null
@@ -65,6 +54,6 @@ export function GapReviewPanel() {
           />
         ))}
       </ul>
-    </section>
+    </AdminSection>
   );
 }

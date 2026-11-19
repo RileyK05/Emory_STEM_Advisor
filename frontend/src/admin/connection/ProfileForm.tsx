@@ -17,12 +17,13 @@ export function ProfileForm({ form, onChange, editing, busy, onSubmit, onClear }
   const set = (patch: Partial<ProfileFormState>) => onChange({ ...form, ...patch });
   return (
     <form
+      className="admin-form admin-form-grid admin-subsection"
       onSubmit={(event) => {
         event.preventDefault();
         onSubmit();
       }}
     >
-      <h3>{editing ? 'Edit connection profile' : 'Add connection profile'}</h3>
+      <h3 className="admin-subhead">{editing ? 'Edit connection profile' : 'Add connection profile'}</h3>
       <label>
         Name
         <input required maxLength={120} value={form.name} onChange={(event) => set({ name: event.target.value })} />
@@ -99,19 +100,19 @@ export function ProfileForm({ form, onChange, editing, busy, onSubmit, onClear }
           onChange={(event) => set({ priority: Number(event.target.value) })}
         />
       </label>
-      <label>
-        Enabled profile
+      <label className="admin-check admin-check-field">
         <input type="checkbox" checked={form.enabled} onChange={(event) => set({ enabled: event.target.checked })} />
+        Enabled profile
       </label>
-      <p>
+      <p className="admin-note">
         Profile edits cannot set evaluation status or promote a route. Only backend evaluation records can make a
         profile eligible.
       </p>
-      <div className="artifact-actions">
-        <button type="submit" disabled={busy || !form.roles.length}>
+      <div className="admin-form-actions">
+        <button type="submit" className="primary-button" disabled={busy || !form.roles.length}>
           {editing ? 'Save profile' : 'Create profile'}
         </button>
-        <button type="button" onClick={onClear}>
+        <button type="button" className="secondary-button" onClick={onClear}>
           Clear form
         </button>
       </div>

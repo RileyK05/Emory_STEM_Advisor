@@ -8,18 +8,18 @@ import { useReindex } from './useReindex';
 import { useSourceUpload } from './useSourceUpload';
 import {
   AdminError,
+  AdminSection,
+  EmptyRow,
   AdminWorkspace,
   DetailHead,
   FieldLine,
   PAGE,
   Pager,
-  RefreshButton,
   usePagedList,
-  type AdminPanelProps,
 } from './adminUi';
 import { SourceReviewPanel } from './SourceReviewPanel';
 
-export function SourcesPanel({ toolbar, canReview }: AdminPanelProps & { canReview: boolean }) {
+export function SourcesPanel({ canReview }: { canReview: boolean }) {
   const list = usePagedList((offset) => listAdminSources('', PAGE, offset));
   const [selected, setSelected] = useState<AdminSource | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -32,19 +32,25 @@ export function SourcesPanel({ toolbar, canReview }: AdminPanelProps & { canRevi
   const reindex = useReindex(refreshSources);
 
   return (
-    <>
-      <RefreshButton toolbar={toolbar} busy={list.working} onRefresh={() => void list.reload()} />
-      <AdminError error={list.error} />
-      <div className="admin-upload-row">
+    <AdminSection
+      title="Indexed sources"
+      description="Documents the advisor can cite. Select one to review its classification or reindex it."
+      busy={list.working}
+      onRefresh={() => void list.reload()}
+      actions={
         <button
           type="button"
-          className="secondary-button"
+          className="primary-button"
           disabled={upload.uploading}
           onClick={() => fileInput.current?.click()}
         >
           <UploadIcon size={16} />
           {upload.uploading ? 'Uploading…' : 'Upload a source'}
         </button>
+      }
+    >
+      <AdminError error={list.error} />
+      <div className="admin-upload-row">
         <input
           ref={fileInput}
           className="visually-hidden"
@@ -122,6 +128,11 @@ export function SourcesPanel({ toolbar, canReview }: AdminPanelProps & { canRevi
               </tr>
             </thead>
             <tbody>
+              {list.rows.length === 0 && (
+                <EmptyRow columns={6} loading={list.working}>
+                  No sources yet. Upload a PDF, text or Markdown file to index it.
+                </EmptyRow>
+              )}
               {list.rows.map((source) => (
                 <tr key={source.sourceId} className="admin-clickable" onClick={() => setSelected(source)}>
                   <td>{source.filename}</td>
@@ -137,6 +148,6 @@ export function SourcesPanel({ toolbar, canReview }: AdminPanelProps & { canRevi
         </div>
         <Pager offset={list.offset} count={list.rows.length} busy={list.working} onOffset={list.setOffset} />
       </AdminWorkspace>
-    </>
+    </AdminSection>
   );
 }

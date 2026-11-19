@@ -24,7 +24,7 @@ export function ProfileCard(props: Props) {
   return (
     <article className="connection-profile">
       <h3>{profile.name}</h3>
-      <p>
+      <p className="admin-sub">
         {profile.provider} · {profile.model_id} · revision {profile.revision}
       </p>
       <p>
@@ -35,22 +35,27 @@ export function ProfileCard(props: Props) {
         Credential: {profile.secret_configured ? 'configured (masked)' : 'not configured'} · current evaluation:{' '}
         {profile.eval_passed ? 'passed' : 'not passed'}
       </p>
-      <div className="artifact-actions">
-        <button type="button" disabled={busy} onClick={props.onEdit}>
+      <div className="admin-form-actions">
+        <button type="button" className="secondary-button" disabled={busy} onClick={props.onEdit}>
           Edit profile
         </button>
-        <button type="button" disabled={busy || props.replaceBlocked} onClick={props.onStartReplace}>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={busy || props.replaceBlocked}
+          onClick={props.onStartReplace}
+        >
           Replace credential
         </button>
         {profile.secret_configured && (
-          <button type="button" disabled={busy} onClick={props.onClearSecret}>
+          <button type="button" className="secondary-button" disabled={busy} onClick={props.onClearSecret}>
             Delete credential
           </button>
         )}
-        <button type="button" disabled={busy} onClick={props.onDiagnose}>
+        <button type="button" className="secondary-button" disabled={busy} onClick={props.onDiagnose}>
           Diagnose
         </button>
-        <button type="button" disabled={busy} onClick={props.onDelete}>
+        <button type="button" className="danger-button" disabled={busy} onClick={props.onDelete}>
           Delete profile
         </button>
       </div>
@@ -60,7 +65,7 @@ export function ProfileCard(props: Props) {
         </p>
       )}
       {replacingSecret && (
-        <div>
+        <div className="admin-form admin-inline-form">
           <label>
             Replace API key for “{profile.name}”
             <input
@@ -70,10 +75,10 @@ export function ProfileCard(props: Props) {
               onChange={(event) => props.onSecretDraftChange(event.target.value)}
             />
           </label>
-          <button type="button" disabled={busy || !secretDraft} onClick={props.onReplace}>
+          <button type="button" className="primary-button" disabled={busy || !secretDraft} onClick={props.onReplace}>
             Replace credential
           </button>
-          <button type="button" onClick={props.onCancelReplace}>
+          <button type="button" className="secondary-button" onClick={props.onCancelReplace}>
             Cancel
           </button>
         </div>

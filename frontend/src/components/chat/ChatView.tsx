@@ -19,9 +19,12 @@ export function ChatView({ chat, attachments, onRemoveAttachment }: Props) {
   // leaves earlier replies as they were.
   const { theme } = useTheme();
   const persona: AdvisorPersona = theme === 'dark' ? 'dooley' : 'swoop';
+  // Follow the newest message. An empty chat stays at the top, or the welcome scrolls past its
+  // own heading on a short screen.
+  const hasContent = chat.entries.length > 0 || chat.pending !== null;
   useEffect(() => {
-    bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [chat.entries, chat.pending !== null]);
+    if (hasContent) bottom.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [chat.entries, chat.pending !== null, hasContent]);
 
   const suggest = (text: string) => {
     chat.setDraft(text);

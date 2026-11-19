@@ -44,7 +44,7 @@ function DownloadMenu({
         <DownloadIcon size={16} /> Download
       </button>
       {open && (
-        <div className="popover menu menu-right" role="menu">
+        <div className="popover menu" role="menu">
           {FORMATS[record.kind].map(({ format, label }) => (
             <button
               key={format}
@@ -64,6 +64,12 @@ function DownloadMenu({
     </div>
   );
 }
+
+const versionLabel = (index: number, count: number) =>
+  `Version ${index + 1}${index === count - 1 && count > 1 ? ' (latest)' : ''}`;
+
+const shortDate = (value: string) =>
+  new Date(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 
 interface Props {
   record: NativeArtifactRecord;
@@ -87,6 +93,9 @@ export function ArtifactEditor({ record, onOpenVersion, onClose }: Props) {
       .then(setRevisions)
       .catch(() => setRevisions([]));
   }, [record.artifactId, record.revisionId]);
+
+  // Revisions arrive oldest first, so a revision's place in the list is its version number.
+  const shownIndex = revisions.findIndex((item) => item.revisionId === record.revisionId);
 
   const download = (format: Format) =>
     run(async () => saveBlob(await getClient().downloadArtifact(record.artifactId, record.revisionId, format)));
@@ -115,9 +124,9 @@ export function ArtifactEditor({ record, onOpenVersion, onClose }: Props) {
             }}
           >
             {revisions.length === 0 && <option value={record.revisionId}>Current</option>}
-            {revisions.map((item) => (
+            {revisions.map((item, index) => (
               <option key={item.revisionId} value={item.revisionId}>
-                {item.revisionId.slice(0, 8)} · {new Date(item.createdAt).toLocaleDateString()}
+                {versionLabel(index, revisions.length)} · {shortDate(item.createdAt)}
               </option>
             ))}
           </select>
@@ -147,7 +156,8 @@ export function ArtifactEditor({ record, onOpenVersion, onClose }: Props) {
       </div>
       <footer className="canvas-footer">
         <span className="muted" title={`Artifact ${record.artifactId} · revision ${record.revisionId}`}>
-          {KIND_LABEL[record.kind]} · version {record.revisionId.slice(0, 8)}
+          {KIND_LABEL[record.kind]}
+          {shownIndex >= 0 && revisions.length > 1 && ` · version ${shownIndex + 1} of ${revisions.length}`}
         </span>
       </footer>
     </section>

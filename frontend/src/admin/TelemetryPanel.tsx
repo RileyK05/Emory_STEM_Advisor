@@ -3,7 +3,7 @@ import type { ModelPriceSchedule, TelemetryUsageResponse } from '../api/types';
 import { getAdminTelemetryUsage, listAdminPriceSchedules } from '../api/backoffice';
 import { formatTimestamp } from '../lib/format';
 import { useLoad } from '../lib/useLoad';
-import { AdminError, AdminWorkspace, RefreshButton, type AdminPanelProps } from './adminUi';
+import { AdminError, AdminSection, EmptyRow, formatCount } from './adminUi';
 
 type GroupBy = 'date' | 'model' | 'operation';
 
@@ -26,11 +26,7 @@ function percent(fraction?: number | null): string {
   return fraction != null ? `${(fraction * 100).toFixed(1)}%` : '—';
 }
 
-function count(value?: number | null): string {
-  return value != null ? value.toLocaleString() : '—';
-}
-
-export function TelemetryPanel({ toolbar }: AdminPanelProps) {
+export function TelemetryPanel() {
   const [groupBy, setGroupBy] = useState<GroupBy>('date');
   const [usage, setUsage] = useState<TelemetryUsageResponse | null>(null);
   const [schedules, setSchedules] = useState<ModelPriceSchedule[]>([]);
@@ -49,80 +45,65 @@ export function TelemetryPanel({ toolbar }: AdminPanelProps) {
 
   return (
     <>
-      <RefreshButton toolbar={toolbar} busy={loading} onRefresh={() => void reload()} />
-      <AdminError error={error} />
-      <AdminWorkspace>
-        <div className="admin-audit-panel">
-          <div
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              marginBottom: '1rem',
-            }}
-          >
-            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-              <label htmlFor="telemetry-group" style={{ fontSize: '0.85rem', fontWeight: 600 }}>
-                Group by:
-              </label>
-              <select
-                id="telemetry-group"
-                value={groupBy}
-                onChange={(e) => setGroupBy(e.target.value as GroupBy)}
-                disabled={loading}
-              >
-                <option value="date">Date</option>
-                <option value="model">Model</option>
-                <option value="operation">Operation</option>
-              </select>
-            </div>
-          </div>
-
-          {usage && <UsageSection usage={usage} />}
-
-          <h3>Model Price Schedules</h3>
-          <div className="admin-table-wrap">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Provider</th>
-                  <th>Model</th>
-                  <th>Billing / currency</th>
-                  <th>Input / 1M</th>
-                  <th>Cached Read / 1M</th>
-                  <th>Output / 1M</th>
-                  <th>Effective From</th>
-                  <th>Provenance</th>
-                </tr>
-              </thead>
-              <tbody>
-                {schedules.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem' }}>
-                      No price schedules configured.
+      <AdminSection
+        title="Model usage"
+        description="Calls, tokens and estimated cost from recorded model calls."
+        busy={loading}
+        onRefresh={() => void reload()}
+        actions={
+          <label className="admin-inline-field">
+            Group by
+            <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as GroupBy)} disabled={loading}>
+              <option value="date">Date</option>
+              <option value="model">Model</option>
+              <option value="operation">Operation</option>
+            </select>
+          </label>
+        }
+      >
+        <AdminError error={error} />
+        {usage && <UsageSection usage={usage} />}
+      </AdminSection>
+      <AdminSection title="Model price schedules" description="The tariffs cost estimates are computed from.">
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>Model</th>
+                <th>Billing / currency</th>
+                <th>Input / 1M</th>
+                <th>Cached Read / 1M</th>
+                <th>Output / 1M</th>
+                <th>Effective From</th>
+                <th>Provenance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {schedules.length === 0 ? (
+                <EmptyRow columns={8} loading={loading}>
+                  No price schedules configured.
+                </EmptyRow>
+              ) : (
+                schedules.map((s) => (
+                  <tr key={s.scheduleId}>
+                    <td>{s.provider}</td>
+                    <td className="mono">{s.modelId}</td>
+                    <td>
+                      {s.billingMode} / {s.currency}
                     </td>
+                    <td>{s.inputRatePerMillion.toFixed(6)}</td>
+                    <td>{s.cachedReadRatePerMillion.toFixed(6)}</td>
+                    <td>{s.outputRatePerMillion.toFixed(6)}</td>
+                    <td>{formatTimestamp(s.effectiveFrom)}</td>
+                    <td>{s.provenance}</td>
                   </tr>
-                ) : (
-                  schedules.map((s) => (
-                    <tr key={s.scheduleId}>
-                      <td>{s.provider}</td>
-                      <td className="mono">{s.modelId}</td>
-                      <td>
-                        {s.billingMode} / {s.currency}
-                      </td>
-                      <td>{s.inputRatePerMillion.toFixed(6)}</td>
-                      <td>{s.cachedReadRatePerMillion.toFixed(6)}</td>
-                      <td>{s.outputRatePerMillion.toFixed(6)}</td>
-                      <td>{formatTimestamp(s.effectiveFrom)}</td>
-                      <td>{s.provenance}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+                ))
+              )}
+            </tbody>
+          </table>
         </div>
-      </AdminWorkspace>
+      </AdminSection>
     </>
   );
 }
@@ -132,40 +113,40 @@ function UsageSection({ usage }: { usage: TelemetryUsageResponse }) {
   const cost = costHeadline(summary);
   return (
     <>
-      <div className="admin-overview-grid" style={{ marginBottom: '1.5rem' }}>
-        <div className="admin-stat-card">
-          <div className="admin-stat-number">{summary.totalCalls}</div>
-          <div className="admin-stat-label">
-            Total Calls ({summary.completedCalls} ok, {summary.failedCalls} failed)
-          </div>
+      <div className="admin-cards">
+        <div className="admin-card">
+          <span>
+            Total calls ({summary.completedCalls} ok, {summary.failedCalls} failed)
+          </span>
+          <strong>{formatCount(summary.totalCalls)}</strong>
         </div>
-        <div className="admin-stat-card">
-          <div className="admin-stat-number">{cost.headline}</div>
-          <div className="admin-stat-label">
+        <div className="admin-card">
+          <span>
             Cost
             {cost.known ? ` (${cost.known})` : ''}
-          </div>
+          </span>
+          <strong>{cost.headline}</strong>
         </div>
-        <div className="admin-stat-card">
-          <div className="admin-stat-number">{percent(summary.cachedTokenShare)}</div>
-          <div className="admin-stat-label">Cached Token Share (reporting calls)</div>
+        <div className="admin-card">
+          <span>Cached Token Share (reporting calls)</span>
+          <strong>{percent(summary.cachedTokenShare)}</strong>
         </div>
-        <div className="admin-stat-card">
-          <div className="admin-stat-number">{percent(summary.cacheHitFraction)}</div>
-          <div className="admin-stat-label">
-            Cache Hit Rate ({summary.callsWithCacheHits}/{summary.callsReportingCache} reported)
-          </div>
+        <div className="admin-card">
+          <span>
+            Cache hit rate ({summary.callsWithCacheHits}/{summary.callsReportingCache} reported)
+          </span>
+          <strong>{percent(summary.cacheHitFraction)}</strong>
         </div>
       </div>
 
-      <p className="muted">
+      <p className="admin-note">
         Costs use recorded tariff versions, not reconciled invoices. Unknown cost is not zero. Cache metrics are not
         answer quality. Cache usage is known for {summary.callsReportingCache} of {summary.totalCalls} calls.
         {(summary.costCurrencies?.length || 0) > 1 &&
           ' Cost totals span multiple currencies; filter by model to inspect them separately.'}
       </p>
-      <h3>Usage Breakdown</h3>
-      <div className="admin-table-wrap" style={{ marginBottom: '2rem' }}>
+      <h3 className="admin-subhead">Breakdown</h3>
+      <div className="admin-table-wrap">
         <table className="admin-table">
           <thead>
             <tr>
@@ -180,19 +161,15 @@ function UsageSection({ usage }: { usage: TelemetryUsageResponse }) {
           </thead>
           <tbody>
             {usage.breakdown.length === 0 ? (
-              <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: '1.5rem' }}>
-                  No usage records found.
-                </td>
-              </tr>
+              <EmptyRow columns={7}>No usage records found.</EmptyRow>
             ) : (
               usage.breakdown.map((row) => (
                 <tr key={`${row.bucket}-${row.provider || ''}-${row.modelId || ''}`}>
                   <td className="mono">{row.bucket}</td>
                   <td>{row.totalCalls}</td>
-                  <td>{count(row.totalPromptTokens)}</td>
-                  <td>{count(row.totalCachedTokens)}</td>
-                  <td>{count(row.totalCompletionTokens)}</td>
+                  <td>{formatCount(row.totalPromptTokens)}</td>
+                  <td>{formatCount(row.totalCachedTokens)}</td>
+                  <td>{formatCount(row.totalCompletionTokens)}</td>
                   <td>{percent(row.cachedTokenShare)}</td>
                   <td>{row.unknownCostCalls > 0 ? 'Unknown' : costHeadline(row).headline}</td>
                 </tr>

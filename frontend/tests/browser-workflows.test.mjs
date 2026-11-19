@@ -2235,26 +2235,29 @@ test('saved conversation opens on the latest bounded page and explicitly loads o
   }
 });
 
-test('the mascot face switches between the Swoop and Dooley themes and the choice persists', async () => {
+test('the mascot face in the top bar switches between the Swoop and Dooley themes and the choice persists', async () => {
   const { context, page } = await setupPage();
   try {
     const startTheme = await page.evaluate(() => document.documentElement.dataset.theme);
-    const account = page.locator('.account-trigger');
-    await account.click();
     const toDark = page.getByRole('button', { name: 'Switch to dark mode (Dooley)' });
     const toLight = page.getByRole('button', { name: 'Switch to light mode (Swoop)' });
-    if (startTheme === 'dark') await toLight.click();
+    // The theme lands one frame after the click, once the page's old look is captured for the reveal.
+    const themeIs = (name) => page.waitForFunction((value) => document.documentElement.dataset.theme === value, name);
+    if (startTheme === 'dark') {
+      await toLight.click();
+      await themeIs('light');
+    }
     await toDark.click();
-    assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
+    await themeIs('dark');
     assert.equal(
       await page.evaluate(() => getComputedStyle(document.querySelector('.topbar')).backgroundColor),
       'rgb(0, 0, 0)',
     );
     await page.reload();
-    await page.locator('.account-trigger').click();
     await toLight.waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), 'dark');
     await toLight.click();
+    await themeIs('light');
     assert.equal(
       await page.evaluate(() => getComputedStyle(document.querySelector('.topbar')).backgroundColor),
       'rgb(1, 33, 105)',

@@ -4,17 +4,17 @@ import { cancelAdminJob, listAdminJobs } from '../api/backoffice';
 import { formatTimestamp } from '../lib/format';
 import {
   AdminError,
+  AdminSection,
   AdminWorkspace,
   DetailHead,
+  EmptyRow,
   FieldLine,
   PAGE,
   Pager,
-  RefreshButton,
   usePagedList,
-  type AdminPanelProps,
 } from './adminUi';
 
-export function JobsPanel({ toolbar }: AdminPanelProps) {
+export function JobsPanel() {
   const list = usePagedList((offset) => listAdminJobs('', PAGE, offset));
   const [selected, setSelected] = useState<AdminJob | null>(null);
 
@@ -28,8 +28,12 @@ export function JobsPanel({ toolbar }: AdminPanelProps) {
   };
 
   return (
-    <>
-      <RefreshButton toolbar={toolbar} busy={list.working} onRefresh={() => void list.reload()} />
+    <AdminSection
+      title="Background jobs"
+      description="Saved conversation turns and other work the job worker runs. Select a job to see its detail."
+      busy={list.working}
+      onRefresh={() => void list.reload()}
+    >
       <AdminError error={list.error} />
       <AdminWorkspace
         detail={
@@ -80,6 +84,11 @@ export function JobsPanel({ toolbar }: AdminPanelProps) {
               </tr>
             </thead>
             <tbody>
+              {list.rows.length === 0 && (
+                <EmptyRow columns={6} loading={list.working}>
+                  No jobs yet.
+                </EmptyRow>
+              )}
               {list.rows.map((job) => (
                 <tr key={job.jobId} className="admin-clickable" onClick={() => setSelected(job)}>
                   <td>{job.kind}</td>
@@ -111,6 +120,6 @@ export function JobsPanel({ toolbar }: AdminPanelProps) {
         </div>
         <Pager offset={list.offset} count={list.rows.length} busy={list.working} onOffset={list.setOffset} />
       </AdminWorkspace>
-    </>
+    </AdminSection>
   );
 }

@@ -49,6 +49,7 @@
   --ok-soft: #e5f3eb;
   --shadow-sm: 0 1px 2px rgba(1, 33, 105, 0.06);
   --shadow: 0 1px 2px rgba(1, 33, 105, 0.06), 0 10px 28px rgba(1, 33, 105, 0.1);
+  --shadow-lg: 0 2px 6px rgba(1, 33, 105, 0.08), 0 18px 44px rgba(1, 33, 105, 0.18);
   --backdrop: rgba(1, 17, 54, 0.45);
 }
 
@@ -85,6 +86,7 @@
   --ok-soft: #222222;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.6), 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.6), 0 18px 44px rgba(0, 0, 0, 0.7);
   --backdrop: rgba(0, 0, 0, 0.7);
 }
 
@@ -412,22 +414,30 @@ textarea.code {
   min-width: 0;
 }
 
-.identity {
-  font-size: 13px;
-  opacity: 0.85;
-  white-space: nowrap;
-}
-
 .topbar-button {
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  border-radius: 8px;
-  padding: 5px 12px;
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: var(--radius-sm);
+  padding: 0 10px 0 12px;
   font-size: 13px;
   font-weight: 600;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
 }
 
-.topbar-button:hover {
+.topbar-button:hover,
+.topbar-button[aria-expanded='true'] {
   background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.topbar-button[aria-expanded='true'] .icon {
+  transform: rotate(180deg);
+}
+
+.topbar-button .icon {
+  transition: transform 0.15s;
 }
 
 .account-menu {
@@ -440,62 +450,91 @@ textarea.code {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 240px;
   white-space: nowrap;
 }
 
-.account-popover {
+.account-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Doubled class: .popover comes later in this file and would otherwise win. */
+.popover.account-popover {
+  top: calc(100% + 8px);
   right: 0;
   left: auto;
-  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 260px;
   padding: 6px;
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow-lg);
 }
 
-.account-popover button,
-.account-link {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 9px 10px;
-  border-radius: 7px;
-  color: var(--text);
-  text-align: left;
-  font-size: 13px;
+.account-label {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 
-.account-popover button:hover,
-.account-link:hover {
+.account-popover [role='menuitem'] {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+  font-size: 13.5px;
+}
+
+.account-popover [role='menuitem']:not(:disabled):hover {
   background: var(--surface-2);
 }
 
-.account-theme {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 10px 8px;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-  color: var(--text-2);
+.account-popover .menuitem-danger {
+  color: var(--danger);
+}
+
+.account-popover .menuitem-danger:not(:disabled):hover {
+  background: var(--danger-soft);
+}
+
+.menu-rule {
+  margin: 6px 4px;
+  border: 0;
+  border-top: 1px solid var(--border);
 }
 
 .account-confirm {
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 0;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
 }
 
 .account-confirm p {
-  margin: 0 0 8px;
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.45;
   color: var(--text-2);
+}
+
+.account-confirm .link-button {
+  align-self: center;
+  padding: 2px 6px;
 }
 
 .account-message {
@@ -507,17 +546,26 @@ textarea.code {
 .destructive-button {
   width: 100%;
   padding: 8px 10px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   background: var(--danger);
-  color: #fff;
+  color: #ffffff;
   font-size: 13px;
   font-weight: 600;
 }
 
-/* The mascot face is the theme switch: Swoop on the front, Dooley on the back. */
+:root[data-theme='dark'] .destructive-button {
+  color: #1a0605;
+}
+
+.destructive-button:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+
+/* The mascot face is the theme switch, always in the top bar: Swoop on the front, Dooley on
+ * the back. Clicking flips the coin and the whole page turns with it. */
 .mascot-toggle {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   perspective: 500px;
   flex: none;
@@ -525,11 +573,29 @@ textarea.code {
 }
 
 .mascot-toggle:hover {
-  transform: scale(1.07) rotate(-4deg);
+  transform: scale(1.08) rotate(-5deg);
 }
 
 .mascot-toggle:active {
-  transform: scale(0.95);
+  transform: scale(0.94);
+}
+
+.topbar .mascot-toggle:focus-visible {
+  outline-offset: 3px;
+}
+
+/* While the theme swaps, nothing eases between the two palettes except the coin's flip. */
+.theme-switching *:not(.mascot-toggle):not(.mascot-coin),
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
+}
+
+/* The theme change is a circle growing from the coin (MascotToggle), not the default cross-fade. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
 }
 
 .mascot-coin {
@@ -560,13 +626,17 @@ textarea.code {
 
 .mascot-swoop {
   object-position: 66% 25%;
-  box-shadow: 0 0 0 2px var(--emory-gold);
+  box-shadow:
+    0 0 0 2px var(--emory-gold),
+    0 2px 8px rgba(0, 0, 0, 0.25);
 }
 
 .mascot-dooley {
   object-position: 52% 10%;
   transform: rotateY(180deg);
-  box-shadow: 0 0 0 2px #ffffff;
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 /* ---------- sidebar ---------- */
@@ -764,7 +834,9 @@ textarea.code {
   padding: 8px 10px;
   border-radius: 8px;
   color: var(--text-2);
+  font-size: 14px;
   font-weight: 500;
+  text-decoration: none;
 }
 
 .sidebar-advising:hover {
@@ -886,30 +958,6 @@ textarea.code {
 }
 
 .source-summary {
-  font-size: 13px;
-}
-
-.admin-overview-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 12px;
-}
-
-.admin-stat-card {
-  padding: 12px 14px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-}
-
-.admin-stat-number {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--heading);
-}
-
-.admin-stat-label {
-  color: var(--muted);
   font-size: 13px;
 }
 
@@ -1664,7 +1712,33 @@ button.artifact-card:not(:disabled):hover {
 }
 
 .artifact-version select {
-  max-width: 210px;
+  max-width: 230px;
+  height: 32px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    right 14px center,
+    right 9px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--text);
+  font-size: 13px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.artifact-version select:not(:disabled):hover {
+  border-color: var(--accent);
+}
+
+.artifact-version select:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .toolbar-spacer {
@@ -1706,6 +1780,11 @@ button.artifact-card:not(:disabled):hover {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.preview-note {
+  font-size: 12.5px;
+  color: var(--muted);
 }
 
 .artifact-preview iframe {
@@ -1966,10 +2045,6 @@ button.artifact-card:not(:disabled):hover {
     display: inline-grid;
   }
 
-  .identity {
-    display: none;
-  }
-
   .brand-mark {
     display: none;
   }
@@ -2041,9 +2116,28 @@ button.artifact-card:not(:disabled):hover {
     font-size: 18px;
   }
 
+  /* On a phone the account button is its icon; the name stays as its accessible label. */
   .account-trigger {
-    max-width: 42vw;
-    padding: 5px 8px;
+    padding: 0 6px 0 8px;
+    gap: 4px;
+  }
+
+  .account-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .mascot-toggle {
+    width: 36px;
+    height: 36px;
+  }
+
+  .topbar-actions {
+    gap: 8px;
   }
 
   .composer-hint {
@@ -2051,100 +2145,398 @@ button.artifact-card:not(:disabled):hover {
   }
 }
 
-/* Institutional Admin and Debug surfaces */
+/* ---------- institutional admin ---------- */
+
 .admin-shell {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
-}
-
-.surface-nav {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 8px 24px;
-  border-bottom: 1px solid var(--border);
   background: var(--bg-soft);
-  font-size: 13px;
-}
-
-.surface-nav strong {
-  color: var(--heading);
-  margin-right: auto;
-}
-
-.surface-nav a {
-  color: var(--accent);
-  text-decoration: none;
 }
 
 .admin-main {
   flex: 1;
   overflow: auto;
-  padding: 20px 24px 48px;
-  max-width: 1500px;
   width: 100%;
+  max-width: 1440px;
   margin: 0 auto;
-  box-sizing: border-box;
+  padding: 24px 28px 56px;
 }
 
-.admin-tabs {
+.admin-page-head {
   display: flex;
-  align-items: center;
-  gap: 8px;
   flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 16px;
 }
 
+.admin-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.admin-page-head h2 {
+  margin-top: 2px;
+  font-family: var(--font-serif);
+  font-size: 30px;
+  font-weight: 400;
+  color: var(--heading);
+}
+
+.admin-page-head .secondary-button {
+  text-decoration: none;
+}
+
+/* Underlined tabs with the gold rule of the top bar under the open one. */
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
 .admin-tab {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-2);
-  border-radius: 999px;
-  padding: 7px 14px;
-  cursor: pointer;
-  font: inherit;
+  flex: none;
+  margin-bottom: -1px;
+  padding: 10px 14px;
+  border-bottom: 3px solid transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.admin-tab:hover {
+  color: var(--text);
 }
 
 .admin-tab.active {
-  background: var(--accent);
-  color: var(--accent-contrast);
-  border-color: var(--accent);
+  color: var(--heading);
+  border-bottom-color: var(--highlight);
 }
 
-.admin-tabs .secondary-button {
-  margin-left: auto;
+.admin-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* One panel: a card with its title, what it is for, and its own actions. */
+.admin-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 22px 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.admin-section-title {
+  min-width: 0;
+}
+
+.admin-section-title h2 {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--heading);
+}
+
+.admin-section-title p {
+  max-width: 760px;
+  margin-top: 4px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.admin-section-actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.admin-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.admin-subhead {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.admin-note {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.admin-notice {
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--ok-soft);
+  color: var(--ok);
+  font-size: 13.5px;
+}
+
+.admin-error {
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13.5px;
+}
+
+.admin-error .secondary-button {
+  margin-left: 8px;
+}
+
+.admin-callout {
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--highlight);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
+  font-size: 13.5px;
+}
+
+.admin-callout > * + * {
+  margin-top: 6px;
+}
+
+.admin-callout h4 {
+  font-size: 14.5px;
+  color: var(--heading);
+}
+
+.admin-callout h5 {
+  margin-top: 6px;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.admin-callout ul,
+.admin-clauses {
+  padding-left: 1.2em;
+}
+
+.admin-clauses li + li {
+  margin-top: 4px;
+}
+
+/* ---------- admin forms ---------- */
+
+.admin-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.admin-main input:not([type='checkbox']):not([type='radio']):not([type='file']),
+.admin-main select,
+.admin-main textarea {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.admin-main textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.admin-main input:not([type='checkbox']):hover,
+.admin-main select:not(:disabled):hover,
+.admin-main textarea:hover {
+  border-color: var(--muted);
+}
+
+.admin-main input:not([type='checkbox']):focus,
+.admin-main select:focus,
+.admin-main textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.admin-main input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.admin-main ::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.admin-form-grid,
+.admin-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px 14px;
+  align-items: end;
+}
+
+.admin-filter-grid {
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+}
+
+.admin-form-grid > :is(h3, p, fieldset, .admin-form-actions, .admin-check-field),
+.admin-span-2 {
+  grid-column: 1 / -1;
+}
+
+@media (min-width: 900px) {
+  .admin-span-2 {
+    grid-column: span 2;
+  }
+}
+
+.admin-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-filter-grid .admin-form-actions {
+  align-self: end;
+  min-height: 36px;
+}
+
+.admin-form .admin-check,
+.admin-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.admin-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin: 0;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.admin-checks legend {
+  padding: 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.admin-inline-field,
+.admin-form .admin-inline-field {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.admin-inline-field select {
+  width: auto;
+  min-width: 140px;
+}
+
+.admin-source-pick select {
+  min-width: 260px;
+}
+
+.admin-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.admin-inline-form label {
+  flex: 1 1 260px;
 }
 
 .admin-search {
   display: flex;
   gap: 8px;
-  margin-bottom: 14px;
 }
 
 .admin-search input {
   flex: 1;
   min-width: 200px;
-  padding: 9px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
 }
 
-.admin-error {
-  color: var(--danger);
-  background: var(--danger-soft);
-  border: 1px solid var(--danger);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
+.admin-upload-row:empty {
+  display: none;
 }
+
+.admin-upload-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 13.5px;
+}
+
+.admin-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+/* ---------- admin cards, tables and details ---------- */
 
 .admin-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 12px;
 }
 
@@ -2154,25 +2546,28 @@ button.artifact-card:not(:disabled):hover {
   gap: 6px;
   padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  border-top: 3px solid var(--highlight);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
 }
 
 .admin-card span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12.5px;
 }
 
 .admin-card strong {
   font-size: 26px;
+  font-weight: 600;
+  line-height: 1.1;
   color: var(--heading);
+  font-variant-numeric: tabular-nums;
 }
 
 .admin-table-wrap {
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: var(--surface);
 }
 
@@ -2190,27 +2585,55 @@ button.artifact-card:not(:disabled):hover {
   vertical-align: top;
 }
 
+.admin-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
 .admin-table th {
   position: sticky;
   top: 0;
+  z-index: 1;
   background: var(--surface-2);
   color: var(--text-2);
-  z-index: 1;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
-.admin-table select {
-  padding: 5px 6px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
+.admin-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.admin-main .admin-table select {
+  width: auto;
+  min-height: 30px;
+  padding: 3px 8px;
+  font-size: 13px;
+}
+
+.admin-table tbody tr:hover {
+  background: var(--bg-soft);
+}
+
+.admin-table .admin-empty-row:hover {
+  background: none;
+}
+
+.admin-empty-row td {
+  padding: 28px 12px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.admin-clickable {
+  cursor: pointer;
 }
 
 .admin-sub {
+  margin-top: 2px;
   color: var(--muted);
   font-size: 12px;
-  margin-top: 2px;
 }
 
 .admin-actions {
@@ -2230,14 +2653,23 @@ button.artifact-card:not(:disabled):hover {
   word-break: break-all;
 }
 
-@media (max-width: 900px) {
-  .admin-main {
-    padding: 14px 12px 40px;
-  }
+.admin-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
 
-  .admin-actions {
-    flex-direction: column;
-  }
+.admin-pagination-start {
+  justify-content: flex-start;
+}
+
+.admin-pagination .secondary-button {
+  padding: 5px 12px;
+  font-size: 13px;
 }
 
 .admin-workspace {
@@ -2247,22 +2679,24 @@ button.artifact-card:not(:disabled):hover {
 }
 
 .admin-list {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  gap: 12px;
   min-width: 0;
 }
 
 .admin-detail-panel {
-  flex: 0 0 360px;
-  width: 360px;
-  max-height: calc(100vh - 210px);
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  padding: 14px 16px 18px;
-  box-sizing: border-box;
   position: sticky;
   top: 0;
+  flex: 0 0 360px;
+  width: 360px;
+  max-height: calc(100dvh - 220px);
+  overflow: auto;
+  padding: 14px 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-soft);
 }
 
 .admin-detail-head {
@@ -2274,18 +2708,43 @@ button.artifact-card:not(:disabled):hover {
 }
 
 .admin-detail-head h2 {
-  margin: 0;
-  font-size: 18px;
+  font-size: 16px;
   color: var(--heading);
   word-break: break-word;
 }
 
 .admin-detail-panel h3 {
   margin: 16px 0 6px;
-  font-size: 13px;
+  font-size: 12.5px;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--muted);
+}
+
+.admin-detail-panel .admin-actions {
+  flex-wrap: wrap;
+  margin-top: 10px;
+  white-space: normal;
+}
+
+.admin-detail-panel > .secondary-button,
+.admin-detail-panel > .danger-button {
+  margin-top: 12px;
+}
+
+/* The source review inside a source's detail panel. */
+.admin-review {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.admin-detail-panel .admin-review h3 {
+  margin: 0;
 }
 
 .admin-field-line {
@@ -2302,15 +2761,11 @@ button.artifact-card:not(:disabled):hover {
   color: var(--muted);
 }
 
-.admin-field-line input {
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  box-sizing: border-box;
+.admin-main .admin-field-line input:not([type='checkbox']),
+.admin-main .admin-field-line select {
+  min-height: 32px;
+  padding: 5px 8px;
+  font-size: 13px;
 }
 
 .admin-session {
@@ -2332,7 +2787,7 @@ button.artifact-card:not(:disabled):hover {
   overflow: auto;
   padding: 10px;
   border-radius: var(--radius-sm);
-  background: var(--bg-soft);
+  background: var(--surface-2);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -2340,56 +2795,86 @@ button.artifact-card:not(:disabled):hover {
   word-break: break-word;
 }
 
-.admin-pagination {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  justify-content: flex-end;
-  margin-top: 12px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
 .danger-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
   border: 1px solid var(--danger);
+  border-radius: 10px;
   background: var(--danger-soft);
   color: var(--danger);
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.danger-button:not(:disabled):hover {
+  background: var(--danger);
+  color: #ffffff;
+}
+
+:root[data-theme='dark'] .danger-button:not(:disabled):hover {
+  color: #1a0605;
+}
+
+.connection-profile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 7px 12px;
-  cursor: pointer;
-  font: inherit;
+  background: var(--bg-soft);
+  font-size: 13.5px;
 }
 
-.danger-button:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-.admin-detail-panel .admin-actions {
-  margin-top: 10px;
+.connection-profile h3 {
+  font-size: 15px;
+  color: var(--heading);
 }
 
 @media (max-width: 1100px) {
+  /* Stacked, the list takes the screen's width, so a wide table scrolls inside its wrapper. */
   .admin-workspace {
     flex-direction: column;
+    align-items: stretch;
   }
 
   .admin-detail-panel {
+    position: static;
     width: 100%;
     flex-basis: auto;
     max-height: none;
-    position: static;
   }
 }
 
-.admin-clickable {
-  cursor: pointer;
-}
+@media (max-width: 900px) {
+  .admin-main {
+    padding: 16px 16px 40px;
+  }
 
-.admin-table tbody tr:hover {
-  background: var(--bg-soft);
-}
+  .admin-section {
+    padding: 16px;
+  }
 
+  .admin-section-head {
+    flex-direction: column;
+  }
+
+  .admin-section-actions {
+    justify-content: flex-start;
+  }
+
+  .admin-page-head h2 {
+    font-size: 24px;
+  }
+
+  .admin-actions {
+    flex-direction: column;
+  }
+}
 
 /* Item 7: Source applicability and freshness banner */
 .callout-warning {

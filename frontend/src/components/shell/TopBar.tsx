@@ -3,7 +3,7 @@ import { getClient } from '../../api/client';
 import type { AuthSession } from '../../api/types';
 import { useDismiss } from '../../lib/useDismiss';
 import { saveBlob } from '../artifact/download';
-import { ChevronDownIcon, MenuIcon } from '../icons';
+import { ChevronDownIcon, MenuIcon, PersonIcon } from '../icons';
 import { MascotToggle } from './MascotToggle';
 
 interface Props {
@@ -80,6 +80,7 @@ export function TopBar({ session, onLogout, onMenu }: Props) {
         </h1>
       </div>
       <div className="topbar-actions">
+        <MascotToggle />
         {identity && (
           <div className="account-menu" ref={ref}>
             <button
@@ -89,20 +90,23 @@ export function TopBar({ session, onLogout, onMenu }: Props) {
               aria-expanded={open}
               onClick={() => setOpen((value) => !value)}
             >
-              {identity}
+              <PersonIcon size={16} />
+              <span className="account-name">{identity}</span>
               <ChevronDownIcon size={14} />
             </button>
             {open && (
-              <div className="popover menu menu-right account-popover" role="menu">
-                <div className="account-theme">
-                  <span>Theme</span>
-                  <MascotToggle />
-                </div>
+              <div className="popover account-popover" role="menu">
+                <p className="account-label">Your data</p>
                 <button type="button" role="menuitem" disabled={busy} onClick={() => void download()}>
                   Download my data
                 </button>
                 {!confirmDelete ? (
-                  <button type="button" role="menuitem" onClick={() => setConfirmDelete(true)}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    className="menuitem-danger"
+                    onClick={() => setConfirmDelete(true)}
+                  >
                     Delete my data
                   </button>
                 ) : (
@@ -116,6 +120,7 @@ export function TopBar({ session, onLogout, onMenu }: Props) {
                     </button>
                   </div>
                 )}
+                {(session?.role === 'admin' || onLogout) && <hr className="menu-rule" />}
                 {session?.role === 'admin' && (
                   <a className="account-link" href="/admin.html" role="menuitem">
                     Admin

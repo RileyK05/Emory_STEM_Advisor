@@ -3,6 +3,7 @@ import { listFeedbackTriage, promoteEvalCandidate, recordFeedbackTriage } from '
 import type { EvalCandidatePromotionResponse, FeedbackTriageListItem, FeedbackTriageResponse } from '../api/types';
 import { useAsyncAction } from '../lib/useAsyncAction';
 import { useLoad } from '../lib/useLoad';
+import { AdminSection } from './adminUi';
 
 type IssueType = 'missing_evidence' | 'provider' | 'explanation' | 'privacy' | 'ui';
 
@@ -76,84 +77,112 @@ export function FeedbackTriagePanel() {
   };
 
   return (
-    <section className="stack">
-      {busy && items === null && <p>Loading feedback triage...</p>}
-      {items && items.length === 0 && !triage && <p>No feedback triage is recorded.</p>}
+    <AdminSection
+      title="Feedback triage"
+      description="Turn a student’s thumbs-down into an investigation, then save a redacted copy of the question as an evaluation candidate."
+    >
+      {busy && items === null && <p className="admin-note">Loading feedback triage...</p>}
+      {items && items.length === 0 && !triage && <p className="admin-note">No feedback triage is recorded.</p>}
       {error && (
-        <p role="alert">
+        <p role="alert" className="admin-error">
           {error}{' '}
           <button
             type="button"
+            className="secondary-button"
             onClick={() => void (lastAction === 'promote' ? promote() : lastAction === 'record' ? record() : load())}
           >
             Retry feedback triage
           </button>
         </p>
       )}
-      {notice && <p>{notice}</p>}
-      <label>
-        Feedback id
-        <input value={feedbackId} onChange={(event) => setFeedbackId(event.target.value)} />
-      </label>
-      <label>
-        Issue type
-        <select value={issueType} onChange={(event) => setIssueType(event.target.value as IssueType)}>
-          <option value="missing_evidence">missing evidence</option>
-          <option value="provider">provider</option>
-          <option value="explanation">explanation</option>
-          <option value="privacy">privacy</option>
-          <option value="ui">ui</option>
-        </select>
-      </label>
-      <label>
-        Triage note
-        <input value={note} onChange={(event) => setNote(event.target.value)} />
-      </label>
-      <label>
-        Trace id
-        <input value={traceId} onChange={(event) => setTraceId(event.target.value)} />
-      </label>
-      <label>
-        Collection id
-        <input value={collectionId} onChange={(event) => setCollectionId(event.target.value)} />
-      </label>
-      <label>
-        Investigation query
-        <input value={investigationQuery} onChange={(event) => setInvestigationQuery(event.target.value)} />
-      </label>
-      <button type="button" disabled={busy || !feedbackId.trim()} onClick={() => void record()}>
-        Record feedback triage
-      </button>
-      {triage && (
-        <p>
-          Issue {triage.issueType}. Triage revision {triage.triageRevision}.
-          {triage.gapId ? ` Gap ${triage.gapId} is an investigation.` : ' No institutional fact was written.'}
+      {notice && (
+        <p className="admin-notice" role="status">
+          {notice}
         </p>
       )}
-      <label>
-        Source id
-        <input value={sourceId} onChange={(event) => setSourceId(event.target.value)} />
-      </label>
-      <label>
-        Redacted prompt
-        <input value={redactedPrompt} onChange={(event) => setRedactedPrompt(event.target.value)} />
-      </label>
-      <label>
-        Redacted expected
-        <input value={redactedExpected} onChange={(event) => setRedactedExpected(event.target.value)} />
-      </label>
-      <button
-        type="button"
-        disabled={busy || !triage || !sourceId.trim() || !redactedPrompt.trim() || !redactedExpected.trim()}
-        onClick={() => void promote()}
-      >
-        Save redacted candidate
-      </button>
-      {candidate && (
-        <p>
-          Candidate {candidate.candidateId} stores no student history. Review {candidate.reviewState}.
-        </p>
-      )}
-    </section>
+      <div className="admin-subsection">
+        <h3 className="admin-subhead">1. Record the triage</h3>
+        <div className="admin-form admin-form-grid">
+          <label>
+            Feedback id
+            <input value={feedbackId} onChange={(event) => setFeedbackId(event.target.value)} />
+          </label>
+          <label>
+            Issue type
+            <select value={issueType} onChange={(event) => setIssueType(event.target.value as IssueType)}>
+              <option value="missing_evidence">missing evidence</option>
+              <option value="provider">provider</option>
+              <option value="explanation">explanation</option>
+              <option value="privacy">privacy</option>
+              <option value="ui">ui</option>
+            </select>
+          </label>
+          <label className="admin-span-2">
+            Triage note
+            <input value={note} onChange={(event) => setNote(event.target.value)} />
+          </label>
+          <label>
+            Trace id
+            <input value={traceId} onChange={(event) => setTraceId(event.target.value)} />
+          </label>
+          <label>
+            Collection id
+            <input value={collectionId} onChange={(event) => setCollectionId(event.target.value)} />
+          </label>
+          <label className="admin-span-2">
+            Investigation query
+            <input value={investigationQuery} onChange={(event) => setInvestigationQuery(event.target.value)} />
+          </label>
+          <div className="admin-form-actions">
+            <button
+              type="button"
+              className="primary-button"
+              disabled={busy || !feedbackId.trim()}
+              onClick={() => void record()}
+            >
+              Record feedback triage
+            </button>
+          </div>
+        </div>
+        {triage && (
+          <p className="admin-note">
+            Issue {triage.issueType}. Triage revision {triage.triageRevision}.
+            {triage.gapId ? ` Gap ${triage.gapId} is an investigation.` : ' No institutional fact was written.'}
+          </p>
+        )}
+      </div>
+      <div className="admin-subsection">
+        <h3 className="admin-subhead">2. Save a redacted evaluation candidate</h3>
+        <div className="admin-form admin-form-grid">
+          <label className="admin-span-2">
+            Source id
+            <input value={sourceId} onChange={(event) => setSourceId(event.target.value)} />
+          </label>
+          <label className="admin-span-2">
+            Redacted prompt
+            <input value={redactedPrompt} onChange={(event) => setRedactedPrompt(event.target.value)} />
+          </label>
+          <label className="admin-span-2">
+            Redacted expected
+            <input value={redactedExpected} onChange={(event) => setRedactedExpected(event.target.value)} />
+          </label>
+          <div className="admin-form-actions">
+            <button
+              type="button"
+              className="primary-button"
+              disabled={busy || !triage || !sourceId.trim() || !redactedPrompt.trim() || !redactedExpected.trim()}
+              onClick={() => void promote()}
+            >
+              Save redacted candidate
+            </button>
+          </div>
+        </div>
+        {candidate && (
+          <p className="admin-note">
+            Candidate {candidate.candidateId} stores no student history. Review {candidate.reviewState}.
+          </p>
+        )}
+      </div>
+    </AdminSection>
   );
 }

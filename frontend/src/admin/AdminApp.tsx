@@ -51,8 +51,6 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
   const [tab, setTab] = useState<Tab>('overview');
   // Bumped on every tab click so a listing tab, even the open one, starts fresh at its first page.
   const [visit, setVisit] = useState(0);
-  // Listing tabs put their Refresh button at the end of the tab bar.
-  const [toolbar, setToolbar] = useState<HTMLElement | null>(null);
 
   if (isDemoMode()) {
     return (
@@ -80,19 +78,19 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
       case 'overview':
         return (
           <>
-            <OverviewPanel key={`overview-${visit}`} toolbar={toolbar} />
-            <JobsPanel key={`jobs-${visit}`} toolbar={toolbar} />
+            <OverviewPanel key={`overview-${visit}`} />
+            <JobsPanel key={`jobs-${visit}`} />
           </>
         );
       case 'users':
         return (
           <>
-            <UsersPanel key={`users-${visit}`} toolbar={toolbar} />
-            <AuditPanel key={`audit-${visit}`} toolbar={toolbar} />
+            <UsersPanel key={`users-${visit}`} />
+            <AuditPanel key={`audit-${visit}`} />
           </>
         );
       case 'sources':
-        return <SourcesPanel key={visit} toolbar={toolbar} canReview />;
+        return <SourcesPanel key={visit} canReview />;
       case 'courses':
         return (
           <>
@@ -108,7 +106,7 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
           </>
         );
       case 'usage':
-        return <TelemetryPanel key={visit} toolbar={toolbar} />;
+        return <TelemetryPanel key={visit} />;
       case 'connections':
         return <ConnectionSettings />;
     }
@@ -117,12 +115,17 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
   return (
     <div className="shell admin-shell">
       <TopBar session={session} onLogout={onLogout} />
-      <div className="surface-nav">
-        <strong>Institutional Admin</strong>
-        <a href="/">Main</a>
-      </div>
       <main className="admin-main">
-        <div className="admin-tabs" role="tablist" ref={setToolbar}>
+        <header className="admin-page-head">
+          <div>
+            <p className="admin-kicker">Institutional admin</p>
+            <h2>{TABS.find(([value]) => value === tab)?.[1]}</h2>
+          </div>
+          <a className="secondary-button" href="/">
+            Back to the advisor
+          </a>
+        </header>
+        <div className="admin-tabs" role="tablist" aria-label="Admin sections">
           {TABS.map(([value, label]) => (
             <button
               key={value}
@@ -139,7 +142,7 @@ function AdminSurface({ session, onLogout }: { session: AuthSession; onLogout?: 
             </button>
           ))}
         </div>
-        {panel}
+        <div className="admin-panels">{panel}</div>
       </main>
     </div>
   );

@@ -3,37 +3,10 @@ import { getClient } from '../../api/client';
 import { errorMessage, statusOf } from '../../lib/errors';
 import type { ConnectionDiagnostic, ConnectionProfile } from '../../api/types';
 import { useAsyncAction } from '../../lib/useAsyncAction';
+import { AdminSection } from '../adminUi';
 import { ProfileCard } from './ProfileCard';
 import { ProfileForm } from './ProfileForm';
 import { blankForm, formFromProfile, secretBody } from './formState';
-
-/** Connection management is offered only when the page itself is served from this machine. */
-function isLoopbackHost() {
-  const hostname = window.location.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  return hostname === 'localhost' || hostname === '::1' || /^127(?:\.\d{1,3}){3}$/.test(hostname);
-}
-
-/**
- * Whether local connection management is offered: only when the page is served from this machine
- * and the backend exposes the admin endpoint (it answers 404 otherwise).
- */
-export function useLocalConnectionsAvailable() {
-  const [available, setAvailable] = useState(false);
-  useEffect(() => {
-    if (!isLoopbackHost()) return;
-    let active = true;
-    getClient()
-      .listConnectionProfiles()
-      .then(() => active && setAvailable(true))
-      .catch((cause: unknown) => {
-        if (active && statusOf(cause) !== 404) setAvailable(true);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-  return available;
-}
 
 export function ConnectionSettings() {
   const [profiles, setProfiles] = useState<ConnectionProfile[]>([]);
@@ -42,6 +15,8 @@ export function ConnectionSettings() {
   const [secretProfile, setSecretProfile] = useState<string | null>(null);
   const [secretDraft, setSecretDraft] = useState('');
   const [diagnostics, setDiagnostics] = useState<Record<string, ConnectionDiagnostic>>({});
+  // The backend answers 404 while ADMIN_API_ENABLED is off; then there is nothing here to manage.
+  const [unavailable, setUnavailable] = useState(false);
   const {
     busy,
     error,
@@ -56,7 +31,11 @@ export function ConnectionSettings() {
     void getClient()
       .listConnectionProfiles()
       .then((items) => active && setProfiles(items))
-      .catch((cause: unknown) => active && setError(errorMessage(cause, 'Could not load local connection settings.')));
+      .catch((cause: unknown) => {
+        if (!active) return;
+        if (statusOf(cause) === 404) setUnavailable(true);
+        else setError(errorMessage(cause, 'Could not load local connection settings.'));
+      });
     return () => {
       active = false;
     };
@@ -131,48 +110,69 @@ export function ConnectionSettings() {
     });
   };
 
+  const description =
+    'Available only from the local backend. Credentials are sent once to the encrypted server store and never ' +
+    'shown again. A profile is used for routing only after the current evaluation suite passes.';
+
+  if (unavailable) {
+    return (
+      <AdminSection title="Model connections" label="Local connection settings" description={description}>
+        <p className="admin-callout">
+          Connection management is turned off on this backend. Set <span className="mono">ADMIN_API_ENABLED=true</span>{' '}
+          in the backend settings and open this page from the same machine (localhost) to add or change a profile.
+        </p>
+      </AdminSection>
+    );
+  }
+
   return (
-    <section aria-label="Local connection settings" className="connection-settings-panel stack">
-      <p className="muted">
-        Available only from the local backend. Credentials are sent once to the encrypted server store and never shown
-        again. A profile is used for routing only after the current evaluation suite passes.
-      </p>
-      {profiles.map((profile) => (
-        <ProfileCard
-          key={profile.profile_id}
-          profile={profile}
+    <AdminSection title="Model connections" label="Local connection settings" description={description}>
+      <div className="connection-settings-panel stack">
+        {profiles.map((profile) => (
+          <ProfileCard
+            key={profile.profile_id}
+            profile={profile}
+            busy={busy}
+            diagnostic={diagnostics[profile.profile_id]}
+            replacingSecret={secretProfile === profile.profile_id}
+            replaceBlocked={secretProfile !== null && secretProfile !== profile.profile_id}
+            secretDraft={secretDraft}
+            onSecretDraftChange={setSecretDraft}
+            onEdit={() => {
+              setEditing(profile.profile_id);
+              setForm(formFromProfile(profile));
+            }}
+            onStartReplace={() => {
+              // Never carry a draft typed for another profile into this target.
+              setSecretDraft('');
+              setSecretProfile(profile.profile_id);
+            }}
+            onCancelReplace={closeSecretForm}
+            onReplace={() => replaceSecret(profile)}
+            onClearSecret={() => clearSecret(profile)}
+            onDiagnose={() => diagnose(profile.profile_id)}
+            onDelete={() => removeProfile(profile)}
+          />
+        ))}
+        <ProfileForm
+          form={form}
+          onChange={setForm}
+          editing={editing !== null}
           busy={busy}
-          diagnostic={diagnostics[profile.profile_id]}
-          replacingSecret={secretProfile === profile.profile_id}
-          replaceBlocked={secretProfile !== null && secretProfile !== profile.profile_id}
-          secretDraft={secretDraft}
-          onSecretDraftChange={setSecretDraft}
-          onEdit={() => {
-            setEditing(profile.profile_id);
-            setForm(formFromProfile(profile));
-          }}
-          onStartReplace={() => {
-            // Never carry a draft typed for another profile into this target.
-            setSecretDraft('');
-            setSecretProfile(profile.profile_id);
-          }}
-          onCancelReplace={closeSecretForm}
-          onReplace={() => replaceSecret(profile)}
-          onClearSecret={() => clearSecret(profile)}
-          onDiagnose={() => diagnose(profile.profile_id)}
-          onDelete={() => removeProfile(profile)}
+          onSubmit={submit}
+          onClear={clearForm}
         />
-      ))}
-      <ProfileForm
-        form={form}
-        onChange={setForm}
-        editing={editing !== null}
-        busy={busy}
-        onSubmit={submit}
-        onClear={clearForm}
-      />
-      {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
-    </section>
+        {error && (
+          <p role="alert" className="admin-error">
+            {error}
+          </p>
+        )}
+        {notice && (
+          <p role="status" className="admin-notice">
+            {notice}
+          </p>
+        )}
+      </div>
+    </AdminSection>
   );
 }

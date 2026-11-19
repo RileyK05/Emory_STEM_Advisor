@@ -9,10 +9,10 @@ interface Props<T extends string> {
 
 export function CheckboxGroup<T extends string>({ legend, options, selected, onChange }: Props<T>) {
   return (
-    <fieldset>
+    <fieldset className="admin-checks">
       <legend>{legend}</legend>
       {options.map((option) => (
-        <label key={option}>
+        <label key={option} className="admin-check">
           <input
             type="checkbox"
             checked={selected.includes(option)}

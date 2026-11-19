@@ -10,15 +10,21 @@ interface Props {
 
 export function PreviewPane({ preview, recordTitle }: Props) {
   const html = preview.kind === 'html' || preview.kind === 'document' ? preview.html : undefined;
+  // The canvas header already shows the artifact's title; repeat it only when the preview's differs.
+  const heading = preview.title && preview.title !== recordTitle ? preview.title : null;
   return (
     <section className="artifact-preview" aria-label="Artifact preview">
-      <h3>{preview.title ?? recordTitle ?? 'Artifact preview'}</h3>
+      {heading && <h3>{heading}</h3>}
       {preview.status === 'needs_recalculation' && (
-        <p role="status">Formula values need recalculation. Preview shows formulas and does not guess results.</p>
+        <p className="preview-note" role="status">
+          Some totals haven’t been worked out yet, so the preview shows the formulas instead of guessing.
+        </p>
       )}
       {html !== undefined ? (
         <>
-          <p role="status">HTML preview is static for safety: scripts and navigation are disabled.</p>
+          <p className="preview-note" role="status">
+            Links and buttons are turned off in this preview. Download the file to use them.
+          </p>
           <iframe
             title="Isolated artifact preview"
             sandbox=""

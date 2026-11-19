@@ -19,6 +19,7 @@ import { getClient } from '../api/client';
 import { errorMessage } from '../lib/errors';
 import { useAsyncAction } from '../lib/useAsyncAction';
 import { useLoad } from '../lib/useLoad';
+import { AdminSection, EmptyRow, formatCount } from './adminUi';
 
 const LIFECYCLES = ['', 'current', 'retired'];
 const AUTHORITIES = ['', 'atlas', 'catalog', 'admin_correction', 'admin_created'];
@@ -154,14 +155,16 @@ export function CourseMaintenancePanel() {
   const total = data?.total ?? 0;
 
   return (
-    <section className="admin-review" aria-label="Course maintenance">
-      <h3>Course maintenance</h3>
-      <p className="admin-sub">
-        Course edits are versioned. A manual correction keeps <span className="mono">admin_correction</span> authority
-        and never claims to be an Atlas statement. Prerequisites are re-parsed by the deterministic parser; unresolved
-        wording is shown without invented edges.
-      </p>
-
+    <AdminSection
+      title="Course maintenance"
+      description={
+        <>
+          Course edits are versioned. A manual correction keeps <span className="mono">admin_correction</span> authority
+          and never claims to be an Atlas statement. Prerequisites are re-parsed by the deterministic parser; unresolved
+          wording is shown without invented edges.
+        </>
+      }
+    >
       {loading && <p>Loading courses...</p>}
       {collectionError && <p role="alert">Could not resolve a course collection: {collectionError}</p>}
       {!collectionId && !collectionError && <p className="admin-sub">Resolving the course collection...</p>}
@@ -175,13 +178,13 @@ export function CourseMaintenancePanel() {
       )}
       {notice && <p>{notice}</p>}
 
-      <div className="admin-filters">
-        <label className="admin-field-line">
-          <span>Search code or title</span>
+      <div className="admin-form admin-filter-grid">
+        <label>
+          Search code or title
           <input value={query} onChange={(event) => setQuery(event.target.value)} />
         </label>
-        <label className="admin-field-line">
-          <span>Subject</span>
+        <label>
+          Subject
           <select value={subject} onChange={(event) => setSubject(event.target.value)}>
             <option value="">All subjects</option>
             {(data?.subjects ?? []).map((value) => (
@@ -191,8 +194,8 @@ export function CourseMaintenancePanel() {
             ))}
           </select>
         </label>
-        <label className="admin-field-line">
-          <span>Lifecycle</span>
+        <label>
+          Lifecycle
           <select value={lifecycle} onChange={(event) => setLifecycle(event.target.value)}>
             {LIFECYCLES.map((value) => (
               <option key={value || 'all'} value={value}>
@@ -201,8 +204,8 @@ export function CourseMaintenancePanel() {
             ))}
           </select>
         </label>
-        <label className="admin-field-line">
-          <span>Authority</span>
+        <label>
+          Authority
           <select value={authority} onChange={(event) => setAuthority(event.target.value)}>
             {AUTHORITIES.map((value) => (
               <option key={value || 'all'} value={value}>
@@ -211,8 +214,8 @@ export function CourseMaintenancePanel() {
             ))}
           </select>
         </label>
-        <label className="admin-field-line">
-          <span>Campus</span>
+        <label>
+          Campus
           <select value={campus} onChange={(event) => setCampus(event.target.value)}>
             {CAMPUSES.map((value) => (
               <option key={value || 'all'} value={value}>
@@ -223,8 +226,10 @@ export function CourseMaintenancePanel() {
         </label>
       </div>
 
-      <p className="admin-sub">
-        {total} course identities. Page {Math.floor(offset / PAGE) + 1}.
+      <div className="admin-pagination admin-pagination-start">
+        <span>
+          {formatCount(total)} course identities · page {Math.floor(offset / PAGE) + 1}
+        </span>
         <button
           type="button"
           className="secondary-button"
@@ -241,7 +246,7 @@ export function CourseMaintenancePanel() {
         >
           Next
         </button>
-      </p>
+      </div>
 
       {conflicts.length > 0 && (
         <div role="status">
@@ -272,6 +277,11 @@ export function CourseMaintenancePanel() {
             </tr>
           </thead>
           <tbody>
+            {courses.length === 0 && (
+              <EmptyRow columns={8} loading={loading}>
+                No courses match these filters.
+              </EmptyRow>
+            )}
             {courses.map((course) => (
               <tr key={course.courseId}>
                 <td className="mono">{course.code}</td>
@@ -292,9 +302,9 @@ export function CourseMaintenancePanel() {
         </table>
       </div>
 
-      <h4>Add or edit an identity</h4>
-      <label className="admin-field-line">
-        <span>
+      <div className="admin-subsection admin-form">
+        <h3 className="admin-subhead">Add or edit an identity</h3>
+        <label className="admin-check">
           <input
             type="checkbox"
             checked={newCourse}
@@ -303,73 +313,73 @@ export function CourseMaintenancePanel() {
               setChange(null);
               setPreview(null);
             }}
-          />{' '}
+          />
           New course (requires an indexed source to anchor it)
-        </span>
-      </label>
-      {newCourse ? (
-        <label className="admin-field-line">
-          <span>New code</span>
-          <input value={newCode} onChange={(event) => setNewCode(event.target.value)} placeholder="MATH 111" />
         </label>
-      ) : (
-        <p className="admin-sub">
-          {detail ? (
-            <>
-              Editing <span className="mono">{detail.course.code}</span> at revision {detail.course.adminRevision},
-              authority {detail.course.authority}.
-            </>
-          ) : (
-            'Choose a course above to edit it.'
-          )}
-        </p>
-      )}
-      <label className="admin-field-line">
-        <span>Title</span>
-        <input value={title} onChange={(event) => setTitle(event.target.value)} />
-      </label>
-      <label className="admin-field-line">
-        <span>Raw requisite wording</span>
-        <textarea rows={4} value={requisites} onChange={(event) => setRequisites(event.target.value)} />
-      </label>
-      <label className="admin-field-line">
-        <span>Edit reason (required)</span>
-        <input value={reason} onChange={(event) => setReason(event.target.value)} />
-      </label>
+        {newCourse ? (
+          <label>
+            New code
+            <input value={newCode} onChange={(event) => setNewCode(event.target.value)} placeholder="MATH 111" />
+          </label>
+        ) : (
+          <p className="admin-sub">
+            {detail ? (
+              <>
+                Editing <span className="mono">{detail.course.code}</span> at revision {detail.course.adminRevision},
+                authority {detail.course.authority}.
+              </>
+            ) : (
+              'Choose a course above to edit it.'
+            )}
+          </p>
+        )}
+        <label>
+          Title
+          <input value={title} onChange={(event) => setTitle(event.target.value)} />
+        </label>
+        <label>
+          Raw requisite wording
+          <textarea rows={4} value={requisites} onChange={(event) => setRequisites(event.target.value)} />
+        </label>
+        <label>
+          Edit reason (required)
+          <input value={reason} onChange={(event) => setReason(event.target.value)} />
+        </label>
 
-      <p>
-        <button
-          type="button"
-          className="secondary-button"
-          disabled={busy || !reason.trim()}
-          onClick={() => void stage(newCourse ? 'create' : 'update')}
-        >
-          {newCourse ? 'Stage new course' : 'Stage correction'}
-        </button>
-        {detail && detail.course.lifecycle === 'current' && !newCourse && (
+        <div className="admin-form-actions">
           <button
             type="button"
-            className="secondary-button"
+            className="primary-button"
             disabled={busy || !reason.trim()}
-            onClick={() => void stage('retire')}
+            onClick={() => void stage(newCourse ? 'create' : 'update')}
           >
-            Stage retirement
+            {newCourse ? 'Stage new course' : 'Stage correction'}
           </button>
-        )}
-        {detail && detail.course.lifecycle === 'retired' && !newCourse && (
-          <button
-            type="button"
-            className="secondary-button"
-            disabled={busy || !reason.trim()}
-            onClick={() => void stage('restore')}
-          >
-            Stage restoration
-          </button>
-        )}
-      </p>
+          {detail && detail.course.lifecycle === 'current' && !newCourse && (
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy || !reason.trim()}
+              onClick={() => void stage('retire')}
+            >
+              Stage retirement
+            </button>
+          )}
+          {detail && detail.course.lifecycle === 'retired' && !newCourse && (
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={busy || !reason.trim()}
+              onClick={() => void stage('restore')}
+            >
+              Stage restoration
+            </button>
+          )}
+        </div>
+      </div>
 
       {preview && (
-        <div className="admin-review" role="region" aria-label="Publication preview">
+        <div className="admin-callout" role="region" aria-label="Publication preview">
           <h4>Publication preview</h4>
           <p>
             Changed fields: <span className="mono">{preview.changedFields.join(', ') || 'none'}</span>
@@ -397,19 +407,19 @@ export function CourseMaintenancePanel() {
               {warning}
             </p>
           ))}
-          <p>
-            <button type="button" className="secondary-button" disabled={busy} onClick={() => void publish()}>
+          <div className="admin-form-actions">
+            <button type="button" className="primary-button" disabled={busy} onClick={() => void publish()}>
               Publish
             </button>
             <button type="button" className="secondary-button" disabled={busy} onClick={() => void reject()}>
               Reject draft
             </button>
-          </p>
+          </div>
         </div>
       )}
 
       {detail && (
-        <div className="admin-review" role="region" aria-label="Course detail">
+        <div className="admin-callout" role="region" aria-label="Course detail">
           <h4>
             {detail.course.code} — {detail.course.title}
           </h4>
@@ -456,6 +466,6 @@ export function CourseMaintenancePanel() {
           )}
         </div>
       )}
-    </section>
+    </AdminSection>
   );
 }

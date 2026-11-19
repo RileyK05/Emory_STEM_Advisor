@@ -4,7 +4,7 @@ import { listAdminAudit } from '../api/backoffice';
 import type { AdminAuditParams } from '../api/backoffice';
 import { formatTimestamp } from '../lib/format';
 import { useLoad } from '../lib/useLoad';
-import { AdminError, AdminWorkspace, PAGE, RefreshButton, type AdminPanelProps } from './adminUi';
+import { AdminError, AdminSection, EmptyRow, PAGE } from './adminUi';
 
 /** The filter form's draft; nothing is queried until it is applied. */
 const NO_FILTERS = { action: '', actor: '', targetType: '', targetId: '', since: '', until: '' };
@@ -22,7 +22,7 @@ function toParams(filters: AuditFilters): AdminAuditParams {
   };
 }
 
-export function AuditPanel({ toolbar }: AdminPanelProps) {
+export function AuditPanel() {
   const [draft, setDraft] = useState<AuditFilters>(NO_FILTERS);
   const [applied, setApplied] = useState<AdminAuditParams>({});
   const [cursor, setCursor] = useState('');
@@ -60,105 +60,111 @@ export function AuditPanel({ toolbar }: AdminPanelProps) {
   };
 
   return (
-    <>
-      <RefreshButton toolbar={toolbar} busy={loading} onRefresh={() => void reload()} />
+    <AdminSection
+      title="Audit log"
+      description="Every admin action, read only. Times are in your local time zone."
+      busy={loading}
+      onRefresh={() => void reload()}
+    >
       <AdminError error={error} />
-      <AdminWorkspace>
-        <div>
-          <form
-            className="admin-search"
-            onSubmit={(event) => {
-              event.preventDefault();
-              apply();
-            }}
-            style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '1rem' }}
-          >
+      <div>
+        <form
+          className="admin-form admin-filter-grid"
+          onSubmit={(event) => {
+            event.preventDefault();
+            apply();
+          }}
+        >
+          <label>
+            Action
             <input
               value={draft.action}
               onChange={edit('action')}
               placeholder="Filter by action (e.g. user.role_status)"
               aria-label="Filter action"
-              style={{ flex: '1 1 180px' }}
             />
+          </label>
+          <label>
+            Actor
             <input
               value={draft.actor}
               onChange={edit('actor')}
               placeholder="Filter by actor (email, workspace)"
               aria-label="Filter actor"
-              style={{ flex: '1 1 180px' }}
             />
+          </label>
+          <label>
+            Target type
             <input
               value={draft.targetType}
               onChange={edit('targetType')}
               placeholder="Target type (e.g. user, conversation)"
               aria-label="Filter target type"
-              style={{ flex: '1 1 140px' }}
             />
+          </label>
+          <label>
+            Target ID
             <input
               value={draft.targetId}
               onChange={edit('targetId')}
               placeholder="Target ID"
               aria-label="Filter target ID"
-              style={{ flex: '1 1 140px' }}
             />
-            <label>
-              From (local time)
-              <input type="datetime-local" aria-label="Filter from date" value={draft.since} onChange={edit('since')} />
-            </label>
-            <label>
-              Until (local time)
-              <input
-                type="datetime-local"
-                aria-label="Filter until date"
-                value={draft.until}
-                onChange={edit('until')}
-              />
-            </label>
-            <button type="submit" className="secondary-button" disabled={loading}>
+          </label>
+          <label>
+            From
+            <input type="datetime-local" aria-label="Filter from date" value={draft.since} onChange={edit('since')} />
+          </label>
+          <label>
+            Until
+            <input type="datetime-local" aria-label="Filter until date" value={draft.until} onChange={edit('until')} />
+          </label>
+          <div className="admin-form-actions">
+            <button type="submit" className="primary-button" disabled={loading}>
               Apply filters
             </button>
             <button type="button" className="secondary-button" disabled={loading} onClick={reset}>
               Reset
             </button>
-          </form>
-
-          <div className="admin-table-wrap">
-            <table className="admin-table">
-              <thead>
-                <tr>
-                  <th>Action</th>
-                  <th>Actor</th>
-                  <th>Target</th>
-                  <th>Detail</th>
-                  <th>When</th>
-                </tr>
-              </thead>
-              <tbody>
-                {entries.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: '2rem' }}>
-                      {loading ? 'Loading audit logs...' : 'No audit records match the current filters.'}
-                    </td>
-                  </tr>
-                ) : (
-                  entries.map((entry) => (
-                    <tr key={entry.auditId}>
-                      <td>{entry.action}</td>
-                      <td>{entry.actorEmail || entry.actorDisplayName || entry.actorWorkspace}</td>
-                      <td className="mono">
-                        {entry.targetType}:{entry.targetId || '—'}
-                      </td>
-                      <td className="mono admin-detail">{JSON.stringify(entry.detail)}</td>
-                      <td>{formatTimestamp(entry.createdAt)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
           </div>
+        </form>
 
+        <div className="admin-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Actor</th>
+                <th>Target</th>
+                <th>Detail</th>
+                <th>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {entries.length === 0 ? (
+                <EmptyRow columns={5} loading={loading}>
+                  No audit records match the current filters.
+                </EmptyRow>
+              ) : (
+                entries.map((entry) => (
+                  <tr key={entry.auditId}>
+                    <td>{entry.action}</td>
+                    <td>{entry.actorEmail || entry.actorDisplayName || entry.actorWorkspace}</td>
+                    <td className="mono">
+                      {entry.targetType}:{entry.targetId || '—'}
+                    </td>
+                    <td className="mono admin-detail">{JSON.stringify(entry.detail)}</td>
+                    <td>{formatTimestamp(entry.createdAt)}</td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {(cursor || nextCursor) && (
           <div className="admin-pagination">
-            <span>{entries.length ? `Showing ${entries.length} records` : 'No rows'}</span>
+            <span>Showing {entries.length} records</span>
             {cursor && (
               <button type="button" className="secondary-button" disabled={loading} onClick={() => setCursor('')}>
                 First page
@@ -175,8 +181,8 @@ export function AuditPanel({ toolbar }: AdminPanelProps) {
               Next page
             </button>
           </div>
-        </div>
-      </AdminWorkspace>
-    </>
+        )}
+      </div>
+    </AdminSection>
   );
 }

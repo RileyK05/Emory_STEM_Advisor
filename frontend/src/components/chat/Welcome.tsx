@@ -1,3 +1,5 @@
+import { useTheme } from '../../state/ThemeContext';
+
 const SAVED_SUGGESTIONS = [
   'What do I need before taking Organic Chemistry?',
   'Make a checklist for the Biology BS.',
@@ -19,9 +21,11 @@ interface Props {
 }
 
 export function Welcome({ demo, onSuggest }: Props) {
+  // The theme picks the advisor's voice, so the welcome names who is answering.
+  const { theme } = useTheme();
   return (
     <section className="welcome" aria-labelledby="welcome-title">
-      <p className="welcome-kicker">Emory STEM Advisor</p>
+      <p className="welcome-kicker">{theme === 'dark' ? 'Dooley' : 'Swoop'} is advising</p>
       <h2 id="welcome-title">What are you planning?</h2>
       <p className="welcome-lede">
         Ask about courses, prerequisites, and program requirements. Answers cite their sources. To keep something, tick
