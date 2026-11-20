@@ -55,8 +55,7 @@ from app.artifacts.models import (
     WorkbookSpec,
 )
 from app.artifacts.storage import validate_spec
-from app.atlas.display import canonicalize_codes
-from app.atlas.records import normalize_code
+from app.atlas.display import canonical_code, canonicalize_codes
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
 from app.generation.artifact_builders import (
@@ -105,8 +104,29 @@ from app.generation.native_tools import (
     validate_generation_size,
 )
 from app.generation.operation import GenerationOperation
+from app.generation.student_request import (
+    CHECKLIST_REQUEST,
+    COMPARISON_REQUEST,
+    NO_CHEM_RE,
+    PREMED_RE,
+    TERM_PLAN_REQUEST,
+    WHATIF_REQUEST,
+    builder_for,
+    completed_from_text,
+    premed_courses,
+    requested_course_cap,
+    requested_credit_cap,
+    requested_terms,
+    strict_term_limit,
+)
 from app.jobs.store import SafeJobError
 from app.llm.base import GenerationRequest, GenerationResult, ToolCall
+from app.programs.naming import (
+    choose_program_title,
+    normalized_title,
+    program_named_in,
+    programs_named_in,
+)
 from app.retrieval.types import CitedChunk
 from app.tools.executions import ToolExecutionLedger
 from app.tools.registry import ToolInputError, ToolRegistry, repair_arguments
@@ -140,18 +160,6 @@ _MAX_SECTION_TEXT_CHARS = 12_000
 # consumes a correction or a continuation.
 _OUTPUT_LIMIT_CONTINUATIONS = 2
 _TRANSIENT_RETRIES = 2
-_TERM_PLAN_REQUEST = re.compile(
-    r"\b(?:plans?|planning|semesters?|four[- ]year|schedules?)\b", re.IGNORECASE)
-_CHECKLIST_REQUEST = re.compile(r"\bcheck[- ]?lists?\b", re.IGNORECASE)
-# "What if I switched to the Math BS?", "how would my courses count toward Physics".
-_WHATIF_REQUEST = re.compile(
-    r"\bwhat[- ]if\b"
-    r"|\bswitch(?:ed|ing)?\b[^.?!]{0,40}\b(?:majors?|minors?|programs?|to)\b"
-    r"|\bchang(?:e|ed|ing)\b[^.?!]{0,20}\b(?:majors?|minors?)\b"
-    r"|\bhow (?:would|do|does|will|could) my (?:courses|classes|credits)\b[^.?!]{0,50}"
-    r"\b(?:count|apply|fit)\b",
-    re.IGNORECASE)
-_COMPARISON_REQUEST = re.compile(r"\bcompar(?:e|es|ed|ing|ison|isons)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -213,10 +221,6 @@ def _first_sentence(text: str) -> str:
         return ""
     match = re.search(r"[.!?](?:\s|$)", clean)
     return clean[:match.end()] if match else clean[:240]
-
-
-def _normalized_title(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", str(text or "").casefold()).strip()
 
 
 def _column_letters(index: int) -> str:
@@ -299,13 +303,13 @@ class ArtifactPipeline:
         self.total_requested = (kind == "workbook"
                                 and bool(re.search(r"\btotals?\b", request_text, re.IGNORECASE)))
         self.plan_requested = (kind in {"document", "workbook"} and inputs.mode == "grounded"
-                               and not _CHECKLIST_REQUEST.search(request_text)
-                               and bool(_TERM_PLAN_REQUEST.search(request_text)))
+                               and not CHECKLIST_REQUEST.search(request_text)
+                               and bool(TERM_PLAN_REQUEST.search(request_text)))
         # A major-switch question gets a chart and line tables built from the
         # programs' own lines; the model only names the programs and courses.
         self.whatif_requested = (kind == "document" and inputs.mode == "grounded"
                                  and not self.plan_requested
-                                 and bool(_WHATIF_REQUEST.search(request_text)))
+                                 and bool(WHATIF_REQUEST.search(request_text)))
         # A weak model should fill a known structure, not invent one. The
         # template also becomes the outline if the model never produces one.
         self.template = (choose_template(kind, request_text)
@@ -313,7 +317,7 @@ class ArtifactPipeline:
                          and not self.whatif_requested else None)
         # Code fills a template from the program's records when it can, so the
         # model's part shrinks to naming the program and picking sentences.
-        self.builder = (_builder_for(kind, self.template.id if self.template else None)
+        self.builder = (builder_for(kind, self.template.id if self.template else None)
                         if inputs.mode == "grounded" and not self.plan_requested
                         and not self.whatif_requested else None)
         self.built_programs: list[str] = []
@@ -545,7 +549,7 @@ class ArtifactPipeline:
 
     def _fallback_plan_outline(self) -> bool:
         """Build a term plan from the program's own lines when outlining fails."""
-        requested = _program_named_in(self.request_text, self.program_titles)
+        requested = program_named_in(self.request_text, self.program_titles)
         if requested is None:
             return False
         try:
@@ -558,7 +562,7 @@ class ArtifactPipeline:
             queries.get("list_program_items"), {"program_id": program_id}
         ).fetchall()
         self.conn.commit()
-        completed = _completed_from_text(
+        completed = completed_from_text(
             self.student_text,
             self.known_courses,
             self.campus_equivalents,
@@ -567,14 +571,14 @@ class ArtifactPipeline:
         completed_all = set(completed)
         for code in completed:
             completed_all.update(self.campus_equivalents.get(code, frozenset()))
-        req_terms = _requested_terms(self.request_text)
+        req_terms = requested_terms(self.request_text)
         target = max(16, req_terms * 4 if req_terms else 16)
         required = _program_plan_codes(items, self._course_exists, target=target)
-        if _PREMED_RE.search(self.request_text):
-            for code in _premed_courses(self._course_exists, self.campus_equivalents):
+        if PREMED_RE.search(self.request_text):
+            for code in premed_courses(self._course_exists, self.campus_equivalents):
                 if code not in required:
                     required.append(code)
-        if _NO_CHEM_RE.search(self.request_text):
+        if NO_CHEM_RE.search(self.request_text):
             required = [code for code in required if not code.startswith(("CHEM ", "CHEM_"))]
         selected = [code for code in required if code not in completed_all][:_MAX_GROUNDED_COURSES]
         if not selected:
@@ -595,16 +599,16 @@ class ArtifactPipeline:
 
     def _plan_needs_no_outline(self) -> bool:
         text = self.request_text + "\n" + self.brief
-        if _PREMED_RE.search(text):
+        if PREMED_RE.search(text):
             return False
-        if _completed_from_text(self.student_text, self.known_courses, self.campus_equivalents):
+        if completed_from_text(self.student_text, self.known_courses, self.campus_equivalents):
             return False
         return (not canonical_codes_in(text)
-                and len(_programs_named_in(self.request_text, self.program_titles)) == 1)
+                and len(programs_named_in(self.request_text, self.program_titles)) == 1)
 
     def _fallback_whatif_outline(self) -> bool:
         """Build the what-if comparison from the request's own program and course names."""
-        program = _program_named_in(self.request_text, self.program_titles)
+        program = program_named_in(self.request_text, self.program_titles)
         if program is None:
             return False
         completed = [
@@ -627,7 +631,7 @@ class ArtifactPipeline:
         if self.template is None:
             return False
         slot_numbers = [index for index, _slot in self._outline_slots()][:12]
-        program = _program_named_in(self.request_text, self.program_titles)
+        program = program_named_in(self.request_text, self.program_titles)
         title = (f"{program}: {self.template.title}" if program else self.template.title)[:200]
         if self.template.sheets:
             sheets = [
@@ -679,7 +683,7 @@ class ArtifactPipeline:
             return
         if self.builder:
             names = [name for name in dict.fromkeys([value.program, *value.programs]) if name]
-            names = names or _programs_named_in(self.request_text, self.program_titles)
+            names = names or programs_named_in(self.request_text, self.program_titles)
             if names:
                 self._apply_builder(value, names)
                 return
@@ -727,8 +731,8 @@ class ArtifactPipeline:
             # A checklist, tracker or report about one named program is checked
             # against that program's lines. A comparison covers two, so its
             # single `program` field cannot stand for both.
-            if (not _COMPARISON_REQUEST.search(self.brief)
-                    and _choose_program_title(self.brief, [title])):
+            if (not COMPARISON_REQUEST.search(self.brief)
+                    and choose_program_title(self.brief, [title])):
                 self.program_title = title
 
     def _match_program(self, requested: str) -> tuple[str, int | None, set[str]]:
@@ -740,21 +744,21 @@ class ArtifactPipeline:
         title = requested
         program_id = row["program_id"] if row else None
         if program_id is None:
-            wanted = _normalized_title(requested)
+            wanted = normalized_title(requested)
             candidates = sorted(
-                ((len(_normalized_title(candidate)), candidate)
+                ((len(normalized_title(candidate)), candidate)
                  for candidate in self.program_titles
-                 if wanted and wanted in _normalized_title(candidate)),
+                 if wanted and wanted in normalized_title(candidate)),
                 reverse=True,
             )
             if not candidates and wanted:
                 # Models often embellish the exact title with the campus or
                 # catalog year; accept a supplied title contained in it.
                 candidates = sorted(
-                    ((len(_normalized_title(candidate)), candidate)
+                    ((len(normalized_title(candidate)), candidate)
                      for candidate in self.program_titles
-                     if _normalized_title(candidate)
-                     and _normalized_title(candidate) in wanted),
+                     if normalized_title(candidate)
+                     and normalized_title(candidate) in wanted),
                     reverse=True,
                 )
             if candidates:
@@ -782,7 +786,7 @@ class ArtifactPipeline:
         # The outline's completed_courses are the model's reading; only courses the
         # student's own turns call done are left out of the plan.
         completed = list(dict.fromkeys(
-            code for code in _completed_from_text(
+            code for code in completed_from_text(
                 self.student_text, self.known_courses, self.campus_equivalents)
             if self._course_exists(code)
         ))
@@ -790,7 +794,7 @@ class ArtifactPipeline:
         for code in completed:
             completed_all.update(self.campus_equivalents.get(code, frozenset()))
         model_selected = list(dict.fromkeys(
-            code for code in (_canonical_code(c) for c in raw_selected)
+            code for code in (canonical_code(c) for c in raw_selected)
             if self._course_exists(code) and code not in completed_all
         ))
         if not value.program:
@@ -823,12 +827,12 @@ class ArtifactPipeline:
         selected = model_selected
         if not explicit_selected and (
             not completed
-            or _programs_named_in(self.request_text, self.program_titles)
-            or _requested_terms(self.request_text) is not None
+            or programs_named_in(self.request_text, self.program_titles)
+            or requested_terms(self.request_text) is not None
         ):
             # A full plan from scratch (or with completed courses/named programs):
             # derive the core sequence deterministically from the program records.
-            req_terms = _requested_terms(self.request_text)
+            req_terms = requested_terms(self.request_text)
             target = max(16, req_terms * 4 if req_terms else 16)
             planned_from_program: list[str] = []
             for program_id in program_ids:
@@ -847,12 +851,12 @@ class ArtifactPipeline:
                     if code in allowed_all and code not in planned_from_program
                 ]
                 selected = [*planned_from_program, *extra_valid]
-        if _PREMED_RE.search(self.request_text + "\n" + self.brief):
+        if PREMED_RE.search(self.request_text + "\n" + self.brief):
             selected = list(dict.fromkeys([
                 *selected,
-                *_premed_courses(self._course_exists, self.campus_equivalents),
+                *premed_courses(self._course_exists, self.campus_equivalents),
             ]))
-        if _NO_CHEM_RE.search(self.request_text):
+        if NO_CHEM_RE.search(self.request_text):
             selected = [code for code in selected if not code.startswith(("CHEM ", "CHEM_"))]
         selected = [
             code for code in selected
@@ -894,13 +898,13 @@ class ArtifactPipeline:
         """
         requested = [name for name in dict.fromkeys([value.program, *value.programs]) if name]
         if not requested:
-            named = _program_named_in(self.request_text, self.program_titles)
+            named = program_named_in(self.request_text, self.program_titles)
             requested = [named] if named else []
         if not requested:
             raise ValueError("a what-if comparison needs at least one program; copy its exact "
                              "title from the supplied programs list into programs")
         completed = list(dict.fromkeys(
-            code for code in (_canonical_code(str(raw).strip())
+            code for code in (canonical_code(str(raw).strip())
                               for raw in value.completed_courses if str(raw).strip())
             if self._course_exists(code)))
         if not completed:
@@ -966,7 +970,7 @@ class ArtifactPipeline:
 
     def _build_from_request(self) -> bool:
         """Build the whole artifact when the request names its program(s) plainly."""
-        names = _programs_named_in(self.request_text, self.program_titles)
+        names = programs_named_in(self.request_text, self.program_titles)
         need = 2 if self.builder == "comparison" else 1
         if len(names) < need or (need == 1 and len(names) > 1):
             return False
@@ -1145,7 +1149,7 @@ class ArtifactPipeline:
         if not codes:
             raise ValueError("the program lists no required courses to track")
         records = self._course_facts(codes, scope)
-        completed_list = _completed_from_text(
+        completed_list = completed_from_text(
             self.student_text,
             self.known_courses,
             self.campus_equivalents,
@@ -1477,23 +1481,23 @@ class ArtifactPipeline:
         for blocker in plan.blockers:
             reason = blocker.reason.replace("_", " ")
             reasons.append(f"{blocker.code}: {reason}")
-        requested_terms = _requested_terms(self.request_text)
+        asked_terms = requested_terms(self.request_text)
         packed = pack_terms(
             plan, credits=self.plan_credits, seasons=self.plan_seasons,
-            completed=completed, max_credits=_requested_credit_cap(self.request_text),
-            max_courses=_requested_course_cap(self.request_text),
-            max_terms=requested_terms or 8,
+            completed=completed, max_credits=requested_credit_cap(self.request_text),
+            max_courses=requested_course_cap(self.request_text),
+            max_terms=asked_terms or 8,
         )
-        if packed.unscheduled and not _strict_term_limit(self.request_text):
+        if packed.unscheduled and not strict_term_limit(self.request_text):
             # A descriptive "four-semester plan" can need more terms for a full
             # program; a student who said "finish in four semesters" cannot.
             packed = pack_terms(
                 plan, credits=self.plan_credits, seasons=self.plan_seasons,
-                completed=completed, max_credits=_requested_credit_cap(self.request_text),
-                max_courses=_requested_course_cap(self.request_text), max_terms=12,
+                completed=completed, max_credits=requested_credit_cap(self.request_text),
+                max_courses=requested_course_cap(self.request_text), max_terms=12,
             )
         if packed.unscheduled:
-            limit = requested_terms or 12
+            limit = asked_terms or 12
             raise ValueError(
                 f"these courses cannot fit in {limit} terms at this credit cap: "
                 + ", ".join(packed.unscheduled)
@@ -1505,13 +1509,13 @@ class ArtifactPipeline:
             raise ValueError("a term plan needs at least two terms; include the rest of "
                              "the program's courses")
         stages = [list(term) for term in packed.terms]
-        if requested_terms and len(stages) > requested_terms:
+        if asked_terms and len(stages) > asked_terms:
             # "A four-semester plan" is a description, so a program that cannot fit
             # gets more terms; the student is told why instead of finding a Term 5.
             chain = _longest_chain(plan.prerequisites, {code for stage in stages for code in stage})
             reason = (f"; {' → '.join(chain)} alone is {len(chain)} courses taken one after "
-                      "another" if len(chain) > requested_terms else " at this credit load")
-            note = (f"You asked for {requested_terms} terms; these courses need "
+                      "another" if len(chain) > asked_terms else " at this credit load")
+            note = (f"You asked for {asked_terms} terms; these courses need "
                     f"{len(stages)}{reason}.")
             if note not in self.plan_notes:
                 self.plan_notes.append(note)
@@ -2022,7 +2026,7 @@ class ArtifactPipeline:
         entities = {slot.entity for _, slot in slots}
         if len(entities) != 1 or None in entities:
             return None
-        texts = [(index, f" {_normalized_title(slot.text[:_MAX_SECTION_SLOT_CHARS])} ")
+        texts = [(index, f" {normalized_title(slot.text[:_MAX_SECTION_SLOT_CHARS])} ")
                  for index, slot in slots]
         bindings = []
         for block in blocks:
@@ -2033,7 +2037,7 @@ class ArtifactPipeline:
                       or [content])
             matches = []
             for piece in pieces:
-                excerpt = _normalized_title(piece)
+                excerpt = normalized_title(piece)
                 slot = next((index for index, text in texts if excerpt and f" {excerpt} " in text),
                             None)
                 if slot is None:
@@ -2264,7 +2268,7 @@ class ArtifactPipeline:
             if total_credits == int(total_credits)
             else f"{total_credits:.1f}"
         )
-        cap = _requested_credit_cap(self.request_text)
+        cap = requested_credit_cap(self.request_text)
         cap_label = str(int(cap)) if cap == int(cap) else f"{cap:.1f}"
         # The terms the file shows, not the planner's prerequisite stages.
         shown_terms = len(self.plan_layout[0]) if self.plan_layout else len(self.plan.stages)
@@ -2661,7 +2665,7 @@ def add_database_slots(conn, *, collection_id: UUID, workspace_key: str, source_
             seen.add(chunk.chunk_id)
             added.append(_slot_from_chunk(chunk, scope))
 
-    program_title = _choose_program_title(prompt, program_titles)
+    program_title = choose_program_title(prompt, program_titles)
     if codes:
         pending = list(codes)
         while pending:
@@ -2686,16 +2690,6 @@ def add_database_slots(conn, *, collection_id: UUID, workspace_key: str, source_
                 for chunk, _start, _end in field.support:
                     include(chunk, ("program", program_title))
     return [replace(slot, entity=entities.get(slot.chunk_id)) for slot in added], program_title
-
-
-def _choose_program_title(prompt: str, titles: list[str]) -> str | None:
-    normalized = _normalized_title(prompt)
-    matches = sorted(
-        ((len(_normalized_title(title)), title) for title in titles
-         if _normalized_title(title) and _normalized_title(title) in normalized),
-        reverse=True,
-    )
-    return matches[0][1] if matches else None
 
 
 def _slot_from_chunk(chunk, scope) -> ArtifactSlot:
@@ -2739,61 +2733,6 @@ _PROGRAM_KIND_ASKED = re.compile(r"\b(minor|major|b\.?a\.?|b\.?s\.?|bba|bachelor
                                  re.IGNORECASE)
 _CREDITS_IN_RECORD = re.compile(
     r"Credits:\s*(\d+(?:\.\d+)?)(?:\s*-\s*(\d+(?:\.\d+)?))?", re.IGNORECASE)
-_ANECDOTE_CLAUSE = re.compile(
-    r"\b(?:my\s+)?(?:friend|friends|roommate|roommates|brother|sister|cousin|classmate|peer)s?\s+"
-    r"(?:took|take|taken|had|did|does|usually|recommend(?:s|ed)?)\b[^.!?\n;]{0,80}",
-    re.IGNORECASE,
-)
-_FLOOR_PREFIX = re.compile(
-    r"\b(?:at\s+least|minimum(?:\s+of)?|min(?:\s+of)?|more\s+than|no\s+fewer\s+than|"
-    r"no\s+less\s+than|at\s+a\s+minimum|greater\s+than|over|above)\s*$",
-    re.IGNORECASE,
-)
-_DEGREE_LABEL_YEARS = re.compile(
-    r"\b(?:one|two|three|four|five|six|\d{1,2})[- ]years?\s+"
-    r"(?:bs|ba|b\.s\.|b\.a\.|degree|degrees|program|programs|university|universities|"
-    r"college|colleges|transfer|transfers|student|students|school|schools)\b",
-    re.IGNORECASE,
-)
-_REMAINING_TERMS = re.compile(
-    r"\b(?:(?:remaining|last|next|final)\s+"
-    r"(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})"
-    r"[- ]?(?:semesters?|terms?)|"
-    r"(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})"
-    r"[- ]?(?:semesters?|terms?)\s+(?:left|remaining))\b",
-    re.IGNORECASE,
-)
-_REMAINING_YEARS = re.compile(
-    r"\b(?:(?:remaining|last|next|final)\s+"
-    r"(one|two|three|four|five|six|\d{1,2})[- ]?years?|"
-    r"(one|two|three|four|five|six|\d{1,2})[- ]?years?\s+(?:left|remaining))\b",
-    re.IGNORECASE,
-)
-_CREDIT_CAP_PATTERNS = (
-    re.compile(r"\b(?:no more than|at most|maximum(?: of)?|max(?:imum)?|under|"
-               r"fewer than|up to)\s+(\d{1,2})\s*(?:credits?|hours?)\b", re.IGNORECASE),
-    re.compile(r"\b(\d{1,2})[- ](?:credit|hour)s?\s*(?:cap|limit|maximum|max)\b",
-               re.IGNORECASE),
-    re.compile(r"\b(\d{1,2})\s*(?:credits?|hours?)\s*(?:per|a|each)\s*(?:term|semester)\b",
-               re.IGNORECASE),
-    re.compile(r"\b(\d{1,2})\s*(?:credits?|hours?)\s*(?:in any|in a|each)\s*(?:term|semester)\b",
-               re.IGNORECASE),
-    re.compile(r"\b(?:cap|limit)(?:\s+of)?\s*(\d{1,2})\s*(?:credits?|hours?)\b",
-               re.IGNORECASE),
-)
-_COURSE_CAP_PATTERNS = (
-    re.compile(r"\b(?:no more than|at most|maximum(?: of)?|max(?:imum)?|under|"
-               r"fewer than|up to)\s+(\d)\s*(?:courses?|classes?)\b", re.IGNORECASE),
-    re.compile(r"\b(\d)\s*(?:courses?|classes?)\s*(?:per|a|each)\s*(?:term|semester)\b",
-               re.IGNORECASE),
-)
-_TERM_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-               "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12}
-_YEAR_TERMS = re.compile(
-    r"\b(one|two|three|four|five|six|\d{1,2})[- ]years?\b", re.IGNORECASE)
-_TERM_COUNT = re.compile(
-    r"\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|\d{1,2})"
-    r"[- ](?:semesters?|terms?)\b", re.IGNORECASE)
 
 
 def _stated_credits(text: str) -> float | None:
@@ -2809,64 +2748,6 @@ def _credits_from_record(text: str) -> float:
         return 3.0
     values = [float(value) for value in match.groups() if value]
     return max(values) if values else 3.0
-
-
-def _requested_credit_cap(text: str) -> float:
-    cleaned = _ANECDOTE_CLAUSE.sub(" ", text or "")
-    for pattern in _CREDIT_CAP_PATTERNS:
-        for match in pattern.finditer(cleaned):
-            prefix = cleaned[max(0, match.start() - 32):match.start()]
-            if _FLOOR_PREFIX.search(prefix):
-                continue
-            value = int(match.group(1))
-            if 3 <= value <= 30:
-                return float(value)
-    return 16.0
-
-
-def _requested_course_cap(text: str) -> int:
-    cleaned = _ANECDOTE_CLAUSE.sub(" ", text or "")
-    for pattern in _COURSE_CAP_PATTERNS:
-        for match in pattern.finditer(cleaned):
-            prefix = cleaned[max(0, match.start() - 32):match.start()]
-            if _FLOOR_PREFIX.search(prefix):
-                continue
-            value = int(match.group(1))
-            if 1 <= value <= 8:
-                return value
-    return 5
-
-
-def _parse_count(raw: str | None) -> int:
-    if not raw:
-        return 0
-    word = raw.casefold()
-    return _TERM_WORDS.get(word, 0) or (int(word) if word.isdigit() else 0)
-
-
-def _requested_terms(text: str) -> int | None:
-    cleaned = _DEGREE_LABEL_YEARS.sub(" ", text or "")
-    rem_terms = _REMAINING_TERMS.search(cleaned)
-    if rem_terms:
-        count = _parse_count(rem_terms.group(1) or rem_terms.group(2))
-        if 1 <= count <= 12:
-            return count
-    rem_years = _REMAINING_YEARS.search(cleaned)
-    if rem_years:
-        count = _parse_count(rem_years.group(1) or rem_years.group(2))
-        if 1 <= count <= 6:
-            return count * 2
-    terms = _TERM_COUNT.search(cleaned)
-    if terms:
-        count = _parse_count(terms.group(1))
-        if 1 <= count <= 12:
-            return count
-    years = _YEAR_TERMS.search(cleaned)
-    if years:
-        count = _parse_count(years.group(1))
-        if 1 <= count <= 6:
-            return count * 2
-    return None
 
 
 def _longest_chain(prerequisites, courses: set[str]) -> list[str]:
@@ -2892,13 +2773,6 @@ def _longest_chain(prerequisites, courses: set[str]) -> list[str]:
                key=len, default=[])
 
 
-def _strict_term_limit(text: str) -> bool:
-    """A student who says "finish in four semesters" set a hard limit."""
-    return bool(re.search(
-        r"\b(?:finish|complete|graduate)\b[^.?!]{0,25}\b(?:in|within)\b"
-        r"[^.?!]{0,25}\b(?:semesters?|terms?|years?)\b", text or "", re.IGNORECASE))
-
-
 _NON_REQUIRED_SECTION = re.compile(
     r"\b(?:electives?|choices?|options?|tracks?|concentrations?|emphases|emphasis|"
     r"breadth|distribution|general education|ger|survey|honors?|colloqui(?:um|a)|"
@@ -2912,147 +2786,6 @@ _NON_REQUIRED_TEXT = re.compile(
     r"seminars?|recommended)\b",
     re.IGNORECASE,
 )
-_PREMED_RE = re.compile(
-    r"\b(?:pre[- ]?med(?:ical)?|mcat|medical\s+school)\b",
-    re.IGNORECASE,
-)
-_NO_CHEM_RE = re.compile(
-    r"\b(?:no|without|exclude|excluding|skip|drop|avoid)\s+(?:any\s+)?chem(?:istry)?\b",
-    re.IGNORECASE,
-)
-_PREMED_SPINE = (
-    "BIOL 141", "BIOL 141L", "BIOL 142", "BIOL 142L",
-    "CHEM 150", "CHEM 150L", "CHEM 202", "CHEM 202L",
-    "CHEM 203", "CHEM 203L", "CHEM 204", "CHEM 204L",
-    "PHYS 141", "PHYS 142",
-)
-_COMPLETED_CUE_RE = re.compile(
-    r"(?:(?:already|i(?:'ve| have)?|we(?:'ve| have)?|student(?:\s+has)?)\s+)?"
-    r"(?:completed|took|taken|finished|passed|did|earned\s+(?:ap|ib|transfer)?\s*credit\s+(?:for|in)|"
-    r"have\s+(?:ap\s+|ib\s+|transfer\s+)?credit\s+(?:for|in)|"
-    r"have\s+(?:already\s+)?(?:completed|taken|finished|passed|done)|"
-    r"(?:already|i(?:'ve| have)|we(?:'ve| have))\s+done(?:\s+with)?|"
-    r"done\s+with|ap\s+(?:credit\s+)?(?:for|in)|exempt(?:ed)?\s+from|placed\s+out\s+of|"
-    r"completed\s+equivalent\s+of)\b(?P<span>[^.!?\n]+)",
-    re.IGNORECASE,
-)
-_WITH_DONE_RE = re.compile(
-    r"\bwith\s+(?P<span>[^.!?\n]{1,100}?)\s+(?:done|completed|finished|taken|out\s+of\s+the\s+way)\b",
-    re.IGNORECASE,
-)
-_HAVE_AP_RE = re.compile(
-    r"\b(?:have|with|got)\s+(?:ap|ib)\s+(?P<span>[^.!?\n]{1,60})",
-    re.IGNORECASE,
-)
-_PLAN_STOP_RE = re.compile(
-    r"\b(?:plan|build|make|create|design|schedule|what\s+should|which|how|"
-    r"need\s+to\s+take|remaining)\b",
-    re.IGNORECASE,
-)
-_NEG_BEFORE_CUE_RE = re.compile(
-    r"(?:\b(?:not|never|no|without|neither|nor|haven['’]?t|hasn['’]?t|didn['’]?t|"
-    r"hadn['’]?t|don['’]?t|won['’]?t)\s+(?:already\s+|yet\s+)?)$",
-    re.IGNORECASE,
-)
-_NEG_STOP_RE = re.compile(
-    r"\b(?:not|never|haven['’]?t|hasn['’]?t|didn['’]?t|need(?:s)?|still|"
-    r"plan(?:s|ning)?\s+(?:to|on)|without|will|won['’]?t|['’]ll|want(?:s|ed)?|"
-    r"would\s+like|hope|going\s+to|gonna|intend(?:s|ing)?|next|later|then|"
-    r"upcoming|future|currently|enrolled|registered|signed\s+up)\b",
-    re.IGNORECASE,
-)
-_TITLE_COURSE_ALIASES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
-    (re.compile(r"\bintro(?:ductory)?\s+psych(?:ology)?\b", re.IGNORECASE),
-     ("PSYC 110", "PSYC 111")),
-    (re.compile(r"\bgen(?:eral)?\s+chem(?:istry)?\s*(?:ii|2)\b", re.IGNORECASE),
-     ("CHEM 202", "CHEM 142")),
-    (re.compile(r"\bgen(?:eral)?\s+chem(?:istry)?(?:\s*(?:i|1))?\b", re.IGNORECASE),
-     ("CHEM 150", "CHEM 141")),
-    (re.compile(r"\borg(?:anic|o)\s*(?:chem(?:istry)?\s*)?(?:ii|2)\b", re.IGNORECASE),
-     ("CHEM 204", "CHEM 222")),
-    (re.compile(r"\borg(?:anic|o)\s*(?:chem(?:istry)?\s*)?(?:i|1)\b", re.IGNORECASE),
-     ("CHEM 203", "CHEM 221")),
-    (re.compile(r"\bcalc(?:ulus)?\s*(?:iii|3)|multivariable(?:\s+calc(?:ulus)?)?\b",
-                re.IGNORECASE),
-     ("MATH 211",)),
-    (re.compile(r"\b(?:calc(?:ulus)?\s*(?:ii|2|bc)|ap\s+calc(?:ulus)?\s+bc)\b", re.IGNORECASE),
-     ("MATH 112",)),
-    (re.compile(r"\b(?:calc(?:ulus)?\s*(?:i|1|ab)|ap\s+calc(?:ulus)?\s+ab)\b", re.IGNORECASE),
-     ("MATH 111",)),
-    (re.compile(r"\blinear\s+algebra\b", re.IGNORECASE),
-     ("MATH 221",)),
-    (re.compile(r"\bintro(?:ductory)?\s+bio(?:logy)?\b|\bgen(?:eral)?\s+bio(?:logy)?\s*(?:i|1)?\b|\bap\s+bio(?:logy)?\b",
-                re.IGNORECASE),
-     ("BIOL 141",)),
-    (re.compile(r"\bintro(?:ductory)?\s+cs\b|\bap\s+cs(?:\s*a)?\b", re.IGNORECASE),
-     ("CS 170",)),
-)
-
-
-def _premed_courses(course_exists, campus_equivalents) -> list[str]:
-    out: list[str] = []
-    for code in _PREMED_SPINE:
-        resolved = code if course_exists(code) else next(
-            (alt for alt in sorted(campus_equivalents.get(code, ())) if course_exists(alt)),
-            None,
-        )
-        if resolved and resolved not in out:
-            out.append(resolved)
-    return out
-
-
-def _completed_from_text(
-    text: str,
-    known_courses: set[str],
-    campus_equivalents: dict[str, frozenset[str]],
-) -> list[str]:
-    spans: list[str] = []
-    source_text = text or ""
-    for regex in (_COMPLETED_CUE_RE, _WITH_DONE_RE, _HAVE_AP_RE):
-        for match in regex.finditer(source_text):
-            prefix = re.split(r"[.!?\n;]", source_text[max(0, match.start() - 28):match.start()])[-1]
-            if _NEG_BEFORE_CUE_RE.search(prefix):
-                continue
-            span = match.group("span")
-            if regex is _COMPLETED_CUE_RE:
-                if match.group(0).split()[0].lower() == "did" and re.match(
-                        r"^\s*(?:not|n['’]t)\b", span, re.IGNORECASE):
-                    continue
-                stops = [s.start() for pattern in (_PLAN_STOP_RE, _NEG_STOP_RE)
-                         if (s := pattern.search(span)) is not None]
-                if stops:
-                    span = span[:min(stops)]
-            elif regex is _WITH_DONE_RE and re.search(
-                    r"\b(?:not|never|no|without|yet)\s*$", span, re.IGNORECASE):
-                continue
-            spans.append(span)
-    found: list[str] = []
-    for span in spans:
-        for code in canonical_codes_in(span):
-            canonical = normalize_code(code) or code
-            if canonical in known_courses and canonical not in found:
-                found.append(canonical)
-                continue
-            for alt in sorted(campus_equivalents.get(canonical, ())):
-                if alt in known_courses and alt not in found:
-                    found.append(alt)
-                    break
-        for pattern, candidates in _TITLE_COURSE_ALIASES:
-            if not pattern.search(span):
-                continue
-            resolved = next((c for c in candidates if c in known_courses), None)
-            if resolved is None:
-                for c in candidates:
-                    resolved = next(
-                        (alt for alt in sorted(campus_equivalents.get(c, ()))
-                         if alt in known_courses),
-                        None,
-                    )
-                    if resolved:
-                        break
-            if resolved and resolved not in found:
-                found.append(resolved)
-    return found
 
 
 def _required_program_codes(items, course_exists) -> list[str]:
@@ -3118,39 +2851,6 @@ _BUILDER_LABELS = {"checklist": "Requirements checklist", "overview": "Program o
                    "comparison": "Program comparison", "tracker": "Credit tracker"}
 
 
-def code_built_template(kind: str, request_text: str) -> str | None:
-    """The template code fills for a grounded request of this kind, if any.
-
-    The choice the pipeline makes when it starts (plan, then what-if, then the
-    templates). Research reads it to know the file comes from program records,
-    so the turn before it need not research the program (2026-11-20).
-    """
-    text = request_text or ""
-    if (kind in {"document", "workbook"} and not _CHECKLIST_REQUEST.search(text)
-            and _TERM_PLAN_REQUEST.search(text)):
-        return "plan"
-    if kind == "document" and _WHATIF_REQUEST.search(text):
-        return None
-    template = choose_template(kind, text)
-    return _builder_for(kind, template.id if template else None)
-
-
-def programs_named_in(text: str, titles: list[str]) -> list[str]:
-    """Every program whose full title the text names, as the pipeline matches them."""
-    return _programs_named_in(text, titles)
-
-
-def _builder_for(kind: str, template_id: str | None) -> str | None:
-    """Which code-built template fills this request, if any."""
-    if kind == "workbook":
-        return "tracker" if template_id == "tracker" else None
-    if template_id in {"checklist", "comparison"}:
-        return template_id
-    # A guide, report or page about a program; a narrower question about one
-    # ("describe its degree") is still written from the slots.
-    return "overview" if template_id in {"report", "page"} else None
-
-
 def _next_steps() -> Built:
     """Fixed advice every program artifact ends with; it states no program fact."""
     built = Built()
@@ -3161,43 +2861,6 @@ def _next_steps() -> Built:
         "Confirm in the Course Atlas that each course is offered in the term you plan.",
     ]})
     return built
-
-
-def _programs_named_in(text: str, titles: list[str]) -> list[str]:
-    """Every program whose full title the request names, in the order it names them.
-
-    A title inside a longer matched title ("Economics (BA)" inside "Economics and
-    Mathematics (BA)") is left out.
-    """
-    lowered = text.casefold()
-    words = set(re.findall(r"[a-z0-9]+", lowered))
-    matched = [(set(re.findall(r"[a-z0-9]+", title.casefold())), title) for title in titles]
-    matched = [(title_words, title) for title_words, title in matched
-               if title_words and title_words <= words]
-    kept = [(title_words, title) for title_words, title in matched
-            if not any(title_words < other for other, _title in matched)]
-
-    def first_seen(item) -> int:
-        positions = [lowered.find(word) for word in item[0] if lowered.find(word) >= 0]
-        return min(positions, default=len(lowered))
-
-    return [title for _words, title in sorted(kept, key=first_seen)]
-
-
-def _program_named_in(text: str, titles: list[str]) -> str | None:
-    """The one program whose full title appears in the request, if unambiguous."""
-    words = set(re.findall(r"[a-z0-9]+", text.casefold()))
-    matches = sorted(
-        ((len(title_words), title) for title in titles
-         for title_words in [set(re.findall(r"[a-z0-9]+", title.casefold()))]
-         if title_words and title_words <= words),
-        reverse=True,
-    )
-    if not matches:
-        return None
-    if len(matches) > 1 and matches[0][0] == matches[1][0]:
-        return None
-    return matches[0][1]
 
 
 def _check_program_kind(brief: str, title: str) -> None:
@@ -3227,12 +2890,6 @@ def _canonical_block_codes(raw: dict) -> dict:
                         for cell in row] if isinstance(row, list) else row
                        for row in raw["rows"]]
     return raw
-
-
-def _canonical_code(code: str) -> str:
-    """The Atlas identity of one written code, when it resolves to exactly one."""
-    codes = canonical_codes_in(code)
-    return codes[0] if len(codes) == 1 else code
 
 
 def _plain_table_cells(raw: dict) -> dict:

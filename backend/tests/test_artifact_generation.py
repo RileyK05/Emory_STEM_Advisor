@@ -1041,15 +1041,15 @@ def test_a_plan_request_is_not_turned_into_a_checklist_by_the_model_brief(db, co
     ("Last semester I took 19 credits; keep me under 15 credits next.", 15.0, 5, None),
 ])
 def test_the_student_term_limits_are_read(text, credits, courses, terms):
-    from app.generation.artifact_pipeline import (
-        _requested_course_cap,
-        _requested_credit_cap,
-        _requested_terms,
+    from app.generation.student_request import (
+        requested_course_cap,
+        requested_credit_cap,
+        requested_terms,
     )
 
-    assert _requested_credit_cap(text) == credits
-    assert _requested_course_cap(text) == courses
-    assert _requested_terms(text) == terms
+    assert requested_credit_cap(text) == credits
+    assert requested_course_cap(text) == courses
+    assert requested_terms(text) == terms
 
 
 @pytest.mark.parametrize(("prerequisites", "courses", "chain"), [
@@ -1075,9 +1075,9 @@ def test_the_longest_prerequisite_chain_explains_extra_terms(prerequisites, cour
     ("I already took ECON 101 and I'm currently in MATH 111.", ["ECON 101"]),
 ])
 def test_only_courses_the_student_finished_count_as_completed(text, completed):
-    from app.generation.artifact_pipeline import _completed_from_text
+    from app.generation.student_request import completed_from_text
 
-    assert _completed_from_text(text, {"ECON 101", "ECON 201", "MATH 111"}, {}) == completed
+    assert completed_from_text(text, {"ECON 101", "ECON 201", "MATH 111"}, {}) == completed
 
 
 @pytest.mark.parametrize(("prompt", "selected", "completed", "expected_header", "formula_prefix"), [

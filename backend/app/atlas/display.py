@@ -17,13 +17,14 @@ _WRITTEN_CODE = re.compile(
 )
 
 
+def canonical_code(code: str) -> str:
+    """The Atlas identity of one written code, when it resolves to exactly one."""
+    codes = canonical_codes_in(code)
+    return codes[0] if len(codes) == 1 else code
+
+
 def canonicalize_codes(text: str) -> str:
-    """Rewrite a written course code to the Atlas identity it resolves to."""
+    """Rewrite each written course code in a text to the Atlas identity it resolves to."""
     if not text:
         return text
-
-    def replace(match: re.Match) -> str:
-        canonical = canonical_codes_in(match.group(0))
-        return canonical[0] if len(canonical) == 1 else match.group(0)
-
-    return _WRITTEN_CODE.sub(replace, text)
+    return _WRITTEN_CODE.sub(lambda match: canonical_code(match.group(0)), text)

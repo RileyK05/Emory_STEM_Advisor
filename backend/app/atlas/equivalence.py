@@ -131,10 +131,6 @@ def titles_compatible(left: str | None, right: str | None) -> bool | None:
     return left_set <= right_set or right_set <= left_set
 
 
-def _codes_in(text: str, reader) -> list[str]:
-    return list(reader(text))
-
-
 def _clause_codes(text: str, reader) -> list[str]:
     """Every course code a clause names, in one alternative list.
 
@@ -144,7 +140,7 @@ def _clause_codes(text: str, reader) -> list[str]:
     """
     codes: list[str] = []
     for part in _ALTERNATIVE.split(text):
-        for code in _codes_in(part, reader):
+        for code in reader(part):
             if code not in codes:
                 codes.append(code)
     return codes
@@ -179,7 +175,7 @@ def derive_campus_equivalents(
     oxford_codes = {code for code in titles if is_oxford(code)}
     for text in requirement_texts:
         for clause in _CLAUSE.split(text or ""):
-            for code in _codes_in(clause, reader):
+            for code in reader(clause):
                 if is_oxford(code):
                     oxford_codes.add(code)
 

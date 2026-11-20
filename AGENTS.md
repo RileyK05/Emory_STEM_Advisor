@@ -29,9 +29,12 @@ plans and `docs/audit/` the review status.
     field sets diverge.
   - Deterministic data: `atlas/` (course records, the requisites parser,
     importer, `course_writer.course_uuid`, the Atlanta/Oxford campus
-    equivalence), `programs/` (catalog PDF split, page
+    equivalence; `requisites.canonical_codes_in` reads course codes in prose and
+    `programs/requirements.course_mentions` reads them in requirement lines;
+    every other code reader wraps one of the two), `programs/` (catalog PDF split, page
     conversion, requirement parser, exact-source binding, reviewed rule
-    releases), `advising/` (citation-scoped snapshots, the sequence planner,
+    releases; `naming.py` is the one reader of program names in a text),
+    `advising/` (citation-scoped snapshots, the sequence planner,
     program audit engine, comparisons, research advisor data layer),
     `simgraph/` (fixed departments → learned topics → courses; no lateral
     course links), `places/` (campus buildings named in a text, from the
@@ -41,7 +44,8 @@ plans and `docs/audit/` the review status.
     rendering and citation mapping, and the tool controller artifacts share;
     `api/query_service.py` is its entry; `generation/question_router.py` routes
     each question by kind and distress tier before research, and code enforces
-    the route), `tools/`, `operations/`
+    the route; `generation/student_request.py` reads what a request asks for: file
+    kind, template, plan and term caps, courses the student finished), `tools/`, `operations/`
     (shared token/call/time budgets), `jobs/` (job store, worker runtime), `conversations/`, `artifacts/`,
     `sandbox/` (isolated Office/HTML execution on a separate worker).
   - Accounts and governance: `auth/` (`get_principal` is the one authentication

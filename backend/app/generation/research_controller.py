@@ -10,7 +10,6 @@ from uuid import uuid5
 
 from app.advising.research_repository import verify_sources
 from app.advising.research_types import FinalDecision
-from app.generation.artifact_pipeline import code_built_template, programs_named_in
 from app.generation.controller import (
     GenerationCancelled,
     ToolConversationController,
@@ -28,6 +27,11 @@ from app.generation.research_tools import (
     RESEARCH_TOOLS_VERSION,
     source_conflicts,
 )
+from app.generation.student_request import (
+    asked_file_kind,
+    asks_for_sheet_or_page,
+    code_built_template,
+)
 from app.llm.base import (
     AssistantToolMessage,
     GenerationRequest,
@@ -43,6 +47,7 @@ from app.operations.budget import (
     estimate_prompt_reservation,
 )
 from app.places import place_mentions
+from app.programs.naming import DEGREE_TOKEN, missing_program, programs_named_in
 from app.retrieval.seams.keyword import _tokens
 from app.tools.executions import ToolCallChanged
 from app.util.digest import json_digest
@@ -417,44 +422,6 @@ _REVISE_ASK = re.compile(
     re.IGNORECASE)
 # "sheet" alone is a cheat sheet as often as a spreadsheet; only a spreadsheet
 # word makes a workbook.
-_SHEET_ASK = re.compile(r"\b(?:spreadsheet|workbook|excel|csv|worksheet)\b", re.IGNORECASE)
-_PAGE_ASK = re.compile(r"\b(?:web ?page|webpage|html|website|interactive)\b", re.IGNORECASE)
-_DEGREE_TOKEN = re.compile(
-    r"(?<![A-Za-z])(?:BS|BA|BBA|B\.S\.|B\.A\.|minor|major|co-major)(?![A-Za-z])",
-    re.IGNORECASE)
-_NAME_STOPWORDS = frozenset({"and", "of", "in", "for", "the", "&"})
-_REQUEST_LEAD = frozenset({
-    "make", "makes", "me", "a", "an", "the", "plan", "plans", "planning", "for",
-    "my", "our", "build", "create", "draft", "generate", "give", "want", "need",
-    "can", "could", "would", "should", "may", "you", "please", "help", "with",
-    "of", "to", "in", "on", "and", "or", "i", "i'm", "im", "we", "already",
-    "took", "taken", "completed", "finished", "passed", "done", "have", "has",
-    "had", "compare", "comparison", "what", "which", "how", "does", "do", "is",
-    "are", "tell", "about", "explain", "describe", "show", "list", "difference",
-    "between", "any", "all", "requirements", "requirement", "interested",
-    "curious", "considering", "wondering", "map", "out", "lay", "sketch",
-    "put", "together", "write", "up", "declare", "declaring", "pick", "picking",
-    "choose", "choosing", "find", "finding", "study", "studying", "switch",
-    "switching", "pursue", "pursuing", "doing", "completing", "taking", "take",
-    "finish", "finishing", "start", "starting", "earn", "earning", "get",
-    "getting", "spreadsheet", "workbook", "checklist", "roadmap", "handout",
-    "worksheet", "page", "webpage", "website", "document", "doc", "guide",
-    "overview", "report", "table", "chart", "tracker", "semester", "semesters",
-    "term", "terms", "year", "years", "four-year", "4-year", "three-year",
-    "3-year", "two-year", "2-year", "semester-by-semester", "term-by-term",
-    "year-by-year", "remaining", "rest", "next", "graduation", "premed",
-    "pre-med", "complete", "full", "detailed", "sample", "possible",
-    "recommended", "double", "dual", "joint", "combined", "plus", "vs",
-    "versus", "if", "when", "while", "since", "after", "before", "undergrad",
-    "undergraduate", "emory", "oxford", "college", "bs", "ba", "bba", "minor",
-    "major", "co-major",
-})
-_PROGRAM_MODIFIERS = frozenset({"honors", "honours", "with", "program", "degree"})
-_DEGREE_FOLLOWERS = frozenset({
-    "requirement", "requirements", "degree", "program", "programs", "declaration",
-    "advisor", "advisors", "office", "sheet", "worksheet", "checklist", "class",
-    "classes", "course", "courses", "credit", "credits", "hour", "hours", "gpa",
-})
 
 
 # A request for advice: a choice, a recommendation or a comparison. "X or Y for Z"
@@ -510,7 +477,7 @@ def file_turn(question, requested, program_titles) -> tuple[str, list[str]] | No
         return None
     if _SUMMARY_ASK.search(text) or _REVISE_ASK.search(text):
         return None
-    kind = "workbook" if _SHEET_ASK.search(text) else "html" if _PAGE_ASK.search(text) else "document"
+    kind = asked_file_kind(text)
     template = code_built_template(kind, text)
     programs = programs_named_in(text, list(program_titles))
     if template is None or not programs:
@@ -528,103 +495,6 @@ def _asks_for_artifact(question) -> bool:
     if _NOT_ARTIFACT_ASK.search(text):
         return False
     return bool(_ARTIFACT_ASK.search(text) or _SUMMARY_ASK.search(text))
-
-
-_PROGRAM_ACRO_ALIASES: dict[str, tuple[str, ...]] = {
-    "cs": ("computer", "science"),
-    "nbb": ("neuroscience", "behavioral", "biology"),
-    "qss": ("quantitative", "sciences"),
-    "qtm": ("quantitative", "theory", "methods"),
-    "ams": ("applied", "mathematics", "statistics"),
-    "ppa": ("public", "policy", "analysis"),
-    "bba": ("business", "administration"),
-    "envs": ("environmental", "sciences"),
-}
-_GENERIC_PROGRAM_WORDS = frozenset({
-    "studies", "study", "science", "sciences", "health", "arts", "art",
-    "engineering", "management", "policy", "affairs", "history", "culture",
-    "cultures", "language", "languages", "literature", "system", "systems",
-    "analysis", "theory", "methods",
-})
-
-
-def _missing_program(question, titles) -> str | None:
-    """A degree program the student named that no program in scope matches.
-
-    Known acronyms (CS, NBB, QSS, QTM, AMS, PPA, BBA, ENVS) and one-word names
-    ("Astrology BS") are judged against the programs in scope.
-    """
-    titles = list(titles)
-    text = question or ""
-    if not titles:
-        return None
-    # The last degree phrase is usually the program the request turns on.
-    for match in reversed(list(_DEGREE_TOKEN.finditer(text))):
-        if match.group(0).casefold() in {"major", "minor", "co-major"}:
-            following = re.match(r"[A-Za-z]+", text[match.end():].lstrip())
-            if following and following.group(0).casefold() in _DEGREE_FOLLOWERS:
-                continue  # "the major requirements", not a program named "major"
-        clause = re.split(r"[.?!\n:;]+", text[:match.start()])[-1]
-        window = re.findall(r"[A-Za-z][\w'’&-]*", clause)[-10:]
-        while window and window[0].casefold() in _REQUEST_LEAD:
-            window.pop(0)
-        raw = [word for word in window]
-        content = [word for word in raw if word.casefold() not in _NAME_STOPWORDS]
-        if not content:
-            continue
-        has_non_acro = any(
-            not (word.isupper() and len(word) <= 4)
-            or word.casefold() in _PROGRAM_ACRO_ALIASES
-            for word in content
-        )
-        words: list[str] = []
-        for word in content:
-            alias = _PROGRAM_ACRO_ALIASES.get(word.casefold())
-            if alias is not None:
-                words.extend(alias)
-            elif word.isupper() and len(word) <= 4 and has_non_acro:
-                continue
-            else:
-                words.append(word.casefold())
-        if not words:
-            continue
-        meaningful = [word for word in words if word not in _PROGRAM_MODIFIERS] or words
-        if len(meaningful) == 1 and meaningful[0] in _GENERIC_PROGRAM_WORDS:
-            continue
-        if _matches_program(meaningful, titles):
-            return None
-        return " ".join(window).strip(" ,.;:")
-    return None
-
-
-_PROGRAM_WORD_ALIASES = {
-    "math": "mathematics", "maths": "mathematics", "stat": "statistics",
-    "stats": "statistics", "bio": "biology", "chem": "chemistry",
-    "phys": "physics", "econ": "economics", "psych": "psychology",
-    "neuro": "neuroscience", "neurosciences": "neuroscience",
-    "behaviour": "behavioral", "behavior": "behavioral",
-    "behavioural": "behavioral", "sciences": "science", "comp": "computer",
-    "sci": "science",
-}
-
-
-def _program_word(word: str) -> str:
-    return _PROGRAM_WORD_ALIASES.get(word.casefold(), word.casefold())
-
-
-def _matches_program(words: list[str], titles: list[str]) -> bool:
-    norm_words = [_program_word(word) for word in words]
-    raw_words = [word.casefold() for word in words]
-    for title in titles:
-        have = [_program_word(word) for word in re.findall(r"[a-z]+", title.casefold())]
-        for start in range(len(norm_words)):
-            tail = norm_words[start:]
-            raw_tail = raw_words[start:]
-            if len(tail) == 1 and raw_tail[0] in _GENERIC_PROGRAM_WORDS:
-                continue
-            if all(word in have for word in tail):
-                return True
-    return False
 
 
 _TITLE_LEAD_RE = re.compile(
@@ -659,7 +529,7 @@ def _artifact_for(question: str, *, grounding: str = "corpus"):
     if _SUMMARY_ASK.search(text):
         return ArtifactRequest(kind="document", title="Conversation summary",
                                brief=text[:4_000], purpose="summary")
-    kind = "workbook" if _SHEET_ASK.search(text) else "html" if _PAGE_ASK.search(text) else "document"
+    kind = asked_file_kind(text)
     return ArtifactRequest(kind=kind, title=_clean_artifact_title(text, kind),
                            brief=text[:4_000], grounding=grounding)
 
@@ -672,7 +542,7 @@ def _revise_artifact_for(question: str, references, reference_details=None):
     aid, rid = next(iter(references))
     kind, title = (reference_details or {}).get((aid, rid), (None, None))
     if kind not in {"document", "workbook", "html"}:
-        kind = "workbook" if _SHEET_ASK.search(question) else "html" if _PAGE_ASK.search(question) else "document"
+        kind = asked_file_kind(question)
     text = " ".join((question or "").split())
     clean_title = (title or "Revised artifact")[:200]
     try:
@@ -709,12 +579,12 @@ def _with_requested_artifact(decision, question, titles, *, referenced: bool,
     does not exist, for a declined or clarifying answer, when the turn revised an
     attached one, or when it asks for an attached one in another format.
     """
-    missing = _missing_program(question, titles)
+    missing = missing_program(question, titles)
     decision_text = " ".join(block.text for block in decision.blocks)
     refuses_program = bool(_NO_PROGRAM_REFUSAL.search(decision_text))
     if (missing is not None
             or refuses_program
-            or unknown_codes and not _DEGREE_TOKEN.search(question or "")
+            or unknown_codes and not DEGREE_TOKEN.search(question or "")
             or referenced and _EXPORT_ASK.search(question or "")
             or requested is False and decision.artifact is not None
             and decision.artifact.purpose != "revise"):
@@ -738,7 +608,7 @@ def _with_requested_artifact(decision, question, titles, *, referenced: bool,
         return decision.model_copy(update={"artifact": _artifact_for(question)})
     if (artifact is None and decision.outcome == "declined"
             and asked
-            and (_PAGE_ASK.search(question or "") or _SHEET_ASK.search(question or ""))):
+            and asks_for_sheet_or_page(question)):
         # The file is a container for the student's own text, not advising
         # content. It is built without corpus evidence and sanitized at render.
         request = _artifact_for(question, grounding="authoring")
@@ -949,7 +819,7 @@ class ResearchController:
             return True
         artifact_reminded = False
         program_titles = [pin.title for pin in session.scope.programs.values()]
-        missing_program = _missing_program(question, program_titles)
+        unknown_program = missing_program(question, program_titles)
         # A reply cut off at the output limit is not a malformed answer: reasoning
         # models can spend the whole allowance on hidden deliberation. Retry the
         # same round with a larger allowance before falling back to corrections.
@@ -1191,13 +1061,13 @@ class ResearchController:
                     if (not artifact_reminded and accepted.get("status") == "ok"
                             and session.decision is not None
                             and session.decision.outcome != "declined"
-                            and missing_program and session.decision.artifact is not None
+                            and unknown_program and session.decision.artifact is not None
                             and corrections_used < 2
                             and tools_used < settings.research_max_tool_calls
                             and _round + 1 < settings.research_max_calls
                             and status.remaining_calls > 1
                             and status.remaining_seconds > _SALVAGE_RESERVE_SECONDS):
-                        nudge = (f"The student named {missing_program}, which is not a program in "
+                        nudge = (f"The student named {unknown_program}, which is not a program in "
                                  "the catalog. Say so, name the closest programs, and set no "
                                  "decision.artifact.")
                     if nudge:

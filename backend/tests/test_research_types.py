@@ -1368,7 +1368,7 @@ _PROGRAMS = ["NEUROSCIENCE AND BEHAVIORAL BIOLOGY (BS)", "APPLIED MATHEMATICS (M
     ("What does MATH 111 require?", None),
 ])
 def test_a_named_program_that_is_not_in_scope_is_found(question, missing):
-    from app.generation.research_controller import _missing_program
+    from app.programs.naming import missing_program as _missing_program
 
     assert _missing_program(question, _PROGRAMS) == missing
     assert _missing_program(question, []) is None
@@ -1430,7 +1430,8 @@ def test_research_hands_the_students_request_to_the_artifact_pipeline(
                                        referenced=False, unknown_codes={"MATH 967": []})
     # A degree-named request keeps its artifact and lets the outline drop the
     # one fake code; a code-only request makes no artifact at all.
-    from app.generation.research_controller import _DEGREE_TOKEN, _missing_program
+    from app.programs.naming import DEGREE_TOKEN as _DEGREE_TOKEN
+    from app.programs.naming import missing_program as _missing_program
 
     unknown_expected = (expected if expected and _DEGREE_TOKEN.search(question)
                         and _missing_program(question, _PROGRAMS) is None else None)

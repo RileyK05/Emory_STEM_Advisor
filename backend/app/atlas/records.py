@@ -14,17 +14,6 @@ _CODE_RE = re.compile(
     r"^\s*([A-Za-z](?:[A-Za-z0-9]{0,5}[A-Za-z])?(?:_OX)?)\s*"
     r"(\d{2,4})([A-Za-z][A-Za-z0-9]{0,7})?\s*$"
 )
-_REFERENCE_RE = re.compile(
-    r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9]{0,5}?[A-Za-z](?:_OX)?)\s*"
-    r"(\d{2,4}(?:[A-Za-z][A-Za-z0-9]{0,7})?)(?![A-Za-z0-9_])",
-    re.IGNORECASE,
-)
-_PROSE_LABELS = frozenset({
-    "ALL", "AND", "ANY", "OR", "THE", "NOT", "ONLY", "OF", "ONE", "TWO", "SOME",
-    "EACH", "IN", "AT", "ON", "FOR", "IS", "SPRING", "SUMMER", "FALL", "AUTUMN",
-    "WINTER", "YEAR", "AY", "TERM", "SECTION", "CLASS", "PAGE", "CHAPTER", "TABLE",
-    "FIGURE", "CREDIT", "CREDITS", "LEVEL",
-})
 
 
 class AtlasCourse(BaseModel):
@@ -70,18 +59,6 @@ def normalize_code(value: str) -> str | None:
     subject, digits, letter = match.groups()
     subject = SUBJECT_RENAMES.get(subject.upper(), subject.upper())
     return f"{subject} {digits}{(letter or '').upper()}"
-
-
-def course_codes_in(text: str) -> list[str]:
-    """Find literal course identities in prose, preserving order and campus."""
-    codes: list[str] = []
-    for subject, tail in _REFERENCE_RE.findall(text):
-        if subject.upper() in _PROSE_LABELS:
-            continue
-        code = normalize_code(f"{subject} {tail}")
-        if code is not None and code not in codes:
-            codes.append(code)
-    return codes
 
 
 def _normalize_crosslisted(code: str, raw: list) -> list[str]:
