@@ -10,6 +10,7 @@ from uuid import uuid5
 
 from app.advising.research_repository import verify_sources
 from app.advising.research_types import FinalDecision
+from app.generation.artifact_pipeline import code_built_template, programs_named_in
 from app.generation.controller import (
     GenerationCancelled,
     ToolConversationController,
@@ -474,6 +475,49 @@ def asks_for_advice(question) -> bool:
     return bool(_ADVICE_ASK.search(question or ""))
 
 
+_FILE_LABELS = {"plan": "term plan", "checklist": "requirements checklist",
+                "tracker": "credit tracker", "comparison": "comparison",
+                "overview": "program overview"}
+# What each code-built file holds, so the reply describes the file code makes
+# instead of one the model imagines (a live reply promised a tracker grades and
+# area subtotals it does not have, 2026-11-20).
+_FILE_CONTENTS = {
+    "plan": "terms in prerequisite order, starting after the courses the student said they "
+            "finished, with credits per term, a course map, and the courses to check with an "
+            "advisor",
+    "checklist": "the program's header facts, each requirement line as a box to tick, notes "
+                 "on courses with their own rules, and next steps",
+    "tracker": "one row per course the program names outright, with credits, term and "
+               "status, then totals: completed, remaining, the program's required hours and "
+               "what the rows leave out for electives and choices",
+    "comparison": "the programs' header facts side by side, a chart and table of the courses "
+                  "each one names, and each program's requirement lines",
+    "overview": "the program's header facts, its requirement lines, a prerequisite map of its "
+                "required courses, and next steps",
+}
+
+
+def file_turn(question, requested, program_titles) -> tuple[str, list[str]] | None:
+    """A file code builds from named programs: its template and those programs.
+
+    Such a turn's research only introduces the file (2026-11-20: research before a
+    code-built plan spent 150-300k tokens; the file itself about 3k). `requested`
+    is the composer's checkbox; unset, the wording decides, as for the file itself.
+    A summary, a revision or a file for an unnamed program is researched as usual.
+    """
+    text = question or ""
+    if requested is False or (requested is None and not _asks_for_artifact(text)):
+        return None
+    if _SUMMARY_ASK.search(text) or _REVISE_ASK.search(text):
+        return None
+    kind = "workbook" if _SHEET_ASK.search(text) else "html" if _PAGE_ASK.search(text) else "document"
+    template = code_built_template(kind, text)
+    programs = programs_named_in(text, list(program_titles))
+    if template is None or not programs:
+        return None
+    return template, programs[:2 if template == "comparison" else 1]
+
+
 def _asks_for_artifact(question) -> bool:
     """The student asked for something to keep: a plan, checklist, sheet or page.
 
@@ -865,13 +909,13 @@ class ResearchController:
         discovery_rounds = 0
         corrections_used = 0
         format_slips = 0
-        # The route's searches run before the first round and reach the model as
-        # its own previous round: the same ledger, handles and replay cache, one
-        # fewer provider call.
+        # The route's searches, and a file turn's program reads, run before the first
+        # round and reach the model as its own previous round: the same ledger,
+        # handles and replay cache, fewer provider calls.
         prefetched = []
-        for number, arguments in enumerate(getattr(session, "prefetch", ()), start=1):
+        for number, (tool, arguments) in enumerate(getattr(session, "prefetch", ()), start=1):
             check_cancelled()
-            call = ToolCall(f"route_search_{number}", "advisor_search", dict(arguments))
+            call = ToolCall(f"prefetch_{number}", tool, dict(arguments))
             _validate_call(call)
             session.execution_id = uuid5(session.run.run_id, call.id)
             output, ran = executor._invoke(call, registry=registry,
@@ -1271,6 +1315,16 @@ class ResearchController:
                     "are done to fit a term count. The file numbers the terms, so explain "
                     "order and priorities without a Term 1, Term 2 schedule of your own."}
                    if getattr(session, "artifact_requested", False) else {}),
+                **({"file_turn": (
+                    f"Code builds the {_FILE_LABELS[file[0]]} for {' and '.join(file[1])} from "
+                    "the program record already read above; this reply only introduces it. "
+                    f"The file holds exactly this: {_FILE_CONTENTS[file[0]]}. Describe it only "
+                    "that way. Finish now, in at most four short blocks citing that record: "
+                    "what the program requires in a sentence or two, what the file will hold, "
+                    "and one question only if the file needs the answer (for a plan or tracker, "
+                    "which courses the student has finished). Do not search or read course "
+                    "records.")}
+                   if (file := getattr(session, "file_turn", None)) else {}),
                 **({"referenced_artifacts": [
                     {"artifact_id": aid, "revision_id": rid,
                      **({"kind": detail[0], "title": detail[1]}

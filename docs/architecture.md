@@ -1688,7 +1688,12 @@ must be cited. When every substantive kind on the route wants one source kind
 `kind=any` search reads only that kind (the model may still name another), and
 code runs that search before research's first round and hands it to the model
 as its own previous round, through the same tool ledger and handles. A mixed or
-Emory-facts route searches everything, as before. A perspective block cites nothing and states no number, course
+Emory-facts route searches everything, as before. A file turn (the file box is
+ticked and code will build the file from a program the request names: a plan,
+checklist, tracker, comparison or overview, per `artifact_pipeline.code_built_template`)
+gets a smaller budget (`RESEARCH_FILE_*`) instead of the advice budget: code reads
+the named programs before round one, and the reply only introduces the file,
+described from a fixed account of what that template holds. A perspective block cites nothing and states no number, course
 code or Emory rule; it is rendered with a "General advice:" label. Distress
 escalates over turns instead of referring on the first sign: `steady` and
 `check_in` get a normal answer with no counseling contacts (code strips any the

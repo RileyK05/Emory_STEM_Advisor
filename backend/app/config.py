@@ -229,6 +229,14 @@ class Settings:
     research_advice_max_tool_calls: int = 20
     research_advice_operation_timeout_seconds: float = 540.0
     research_advice_operation_token_budget: int = 360_000
+    # A file code builds from a named program's records (plan, checklist, tracker,
+    # comparison, overview): code reads the program first and the reply only
+    # introduces the file. Measured 2026-11-20: that research spent 150-300k
+    # tokens over 13-24 rounds while the file itself took about 3k. Each only
+    # lowers the matching RESEARCH_* limit above, never raises it.
+    research_file_reasoning_effort: str | None = "low"
+    research_file_max_calls: int = 4
+    research_file_max_tool_calls: int = 4
     audit_max_search_states: int = 50_000
     office_enabled: bool = False
     sandbox_remote_url: str | None = None
@@ -340,6 +348,12 @@ class Settings:
                 or self.research_advice_operation_timeout_seconds <= 0
                 or not 1_000 <= self.research_advice_operation_token_budget <= 20_000_000):
             raise ValueError("research advice limits are invalid")
+        if self.research_file_reasoning_effort not in {None, "none", "minimal", "low", "medium",
+                                                        "high", "xhigh", "max"}:
+            raise ValueError("RESEARCH_FILE_REASONING_EFFORT is unsupported")
+        if (not 1 <= self.research_file_max_calls <= 100
+                or not 1 <= self.research_file_max_tool_calls <= 100):
+            raise ValueError("research file-turn limits are invalid")
         if self.llm_compatible_thinking not in {None, "enabled", "disabled"}:
             raise ValueError("LLM_COMPATIBLE_THINKING must be enabled or disabled")
         if self.llm_sampling_policy == "greedy" and self.llm_reasoning_effort not in {None, "none"}:
@@ -547,6 +561,10 @@ def load_settings() -> Settings:
             "RESEARCH_ADVICE_OPERATION_TIMEOUT_SECONDS", 540),
         research_advice_operation_token_budget=_int(
             "RESEARCH_ADVICE_OPERATION_TOKEN_BUDGET", 360_000),
+        research_file_reasoning_effort=(
+            os.environ.get("RESEARCH_FILE_REASONING_EFFORT", "low") or None),
+        research_file_max_calls=_int("RESEARCH_FILE_MAX_CALLS", 4),
+        research_file_max_tool_calls=_int("RESEARCH_FILE_MAX_TOOL_CALLS", 4),
         audit_max_search_states=_int("AUDIT_MAX_SEARCH_STATES", 50_000),
         office_enabled=_bool("OFFICE_ENABLED", False),
         sandbox_remote_url=_optional("SANDBOX_REMOTE_URL"),

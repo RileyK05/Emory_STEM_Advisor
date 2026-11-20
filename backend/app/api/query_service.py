@@ -49,7 +49,7 @@ from app.generation.question_router import (
     prefetch_searches,
     route_question,
 )
-from app.generation.research_controller import ResearchController, asks_for_advice
+from app.generation.research_controller import ResearchController, asks_for_advice, file_turn
 from app.generation.research_final import (
     RESEARCH_PROMPT_VERSION,
     RESEARCH_RENDER_VERSION,
@@ -105,6 +105,19 @@ def advice_budget(settings):
             settings.research_advice_operation_timeout_seconds),
         research_operation_token_budget=max(settings.research_operation_token_budget,
                                             settings.research_advice_operation_token_budget))
+
+
+def file_budget(settings):
+    """A turn whose file code builds only introduces it: fewer rounds, less effort.
+
+    Only lowered, never raised, so an operator's smaller research limits stand.
+    """
+    return replace(
+        settings,
+        research_reasoning_effort=settings.research_file_reasoning_effort,
+        research_max_calls=min(settings.research_max_calls, settings.research_file_max_calls),
+        research_max_tool_calls=min(settings.research_max_tool_calls,
+                                    settings.research_file_max_tool_calls))
 
 
 def _settle_usage(conn, workspace_key: str, trace_id: UUID, answer, settings) -> None:
@@ -321,7 +334,14 @@ def query_response(
         route = _routed(route_future, body.query)
     _record_route_call(conn, route, trace_id, settings,
                        int((time.perf_counter() - route_started) * 1000))
-    if "choice" in route.categories or asks_for_advice(body.query):
+    # A file code builds from a named program: code reads the program before round
+    # one and the reply only introduces the file. An attached file is a revision.
+    file = (None if getattr(body, "artifactReferences", None) else
+            file_turn(body.query, getattr(body, "makeArtifact", None),
+                      [pin.title for pin in scope.programs.values()]))
+    if file is not None:
+        settings = file_budget(settings)
+    elif "choice" in route.categories or asks_for_advice(body.query):
         settings = advice_budget(settings)
     settings = replace(settings,
         llm_max_output_tokens=settings.research_max_output_tokens,
@@ -371,7 +391,14 @@ def query_response(
     store.record_action(run.run_id, action_kind="route", details=route.details())
     replies = load_support_replies()
     session.route, session.route_policy = route, combined(route)
-    session.prefetch = prefetch_searches(route, session.route_policy, router_config, body.query)
+    session.prefetch = [("advisor_search", arguments) for arguments in
+                        prefetch_searches(route, session.route_policy, router_config, body.query)]
+    if file is not None:
+        pins = {pin.title: pin for pin in scope.programs.values()}
+        session.file_turn = file
+        session.prefetch = [("advisor_read_program",
+                             {"handle": session.handle("program", pins[title].program_id)})
+                            for title in file[1]]
     if route.distress == "support":
         session.support_first = replies.support
     # Before support, nothing in the reply points to counseling, even if the model

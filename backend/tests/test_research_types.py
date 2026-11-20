@@ -1516,6 +1516,28 @@ def test_a_reply_never_says_its_artifact_is_ready(text, rejected):
     assert any("still being made" in p for p in expected) is rejected
 
 
+_TITLES = ["Computer Science (BS)", "Computer Science (Minor)", "Biology (BS)"]
+
+
+@pytest.mark.parametrize(("question", "requested", "expected"), [
+    ("Make a checklist for the Computer Science BS.", True, ("checklist", ["Computer Science (BS)"])),
+    ("Make a four-semester plan for the Computer Science BS.", True, ("plan", ["Computer Science (BS)"])),
+    ("Make a spreadsheet tracking my Biology BS credits, with totals.", True,
+     ("tracker", ["Biology (BS)"])),
+    ("Compare the Computer Science BS and the Computer Science minor.", True,
+     ("comparison", ["Computer Science (BS)", "Computer Science (Minor)"])),
+    # Box unticked, no program named, a summary, or no file asked for: research as usual.
+    ("Make a checklist for the Computer Science BS.", False, None),
+    ("Make a checklist for my major.", True, None),
+    ("Make a summary of this conversation about the Biology BS.", True, None),
+    ("What does the Computer Science BS require?", None, None),
+])
+def test_a_file_code_builds_from_a_named_program_is_a_file_turn(question, requested, expected):
+    from app.generation.research_controller import file_turn
+
+    assert file_turn(question, requested, _TITLES) == expected
+
+
 _ASSUMED = "assumes courses are done"
 _SCHEDULE = "lays out its own term schedule"
 

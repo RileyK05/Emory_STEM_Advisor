@@ -25,6 +25,36 @@
 
 ## Done
 
+### Make-a-file turns (2026-11-20)
+
+Since the code-built templates (2026-11-16), a templated file costs 0 to 3k
+tokens. The research turn before it was the cost: it ran on the advice budget
+and read course records the file never uses. Each turn's calls are joined to its
+file by the `trace_id` in the file's provenance and split by operation.
+
+| Request | Research before | Research now | Whole turn now |
+|---|---|---|---|
+| Four-semester plan, CS BS | 13-24 calls, 170-330k tokens | 2 calls, 19k | 25k |
+| Checklist, Biology BS | about 7 calls, 89k | 2 calls, 19k | 23k |
+| Credit tracker, Biology BS | about 5 calls, 60k | 1 call, 8k | 11k |
+| Comparison, Biology BA vs BS | about 5 calls, 58k | 2 calls, 21k | 24k |
+
+- **What changed.** `research_controller.file_turn` recognizes the request:
+  the file box is ticked, `code_built_template` names a template, and the
+  request names its programs. It applies only when no file is attached.
+  - Such a turn gets `RESEARCH_FILE_*`: 4 calls, 4 tool calls, low effort, each
+    only lowering the normal limit.
+  - Code reads the named programs before round one.
+  - A note tells the model what that template holds, so the reply cannot
+    promise columns or sections the file lacks.
+- **Answers held.** The answers state the program's requirements and cite
+  them. Each asks the one question the file needs, and the Biology answers
+  raise the catalog's 62 against 57 hours unprompted. The model still reads
+  some course records (the CS checklist took 3 rounds); the cap bounds it.
+- **Not done.** A conversation summary is still written by the model. The
+  plan's outline call (about 3k) could be skipped when code names the
+  program, and code could write the requirements summary itself.
+
 ### Chat answers (LLM tokens and rounds)
 
 - **The system prompt is identical every round.** The per-round "CURRENT

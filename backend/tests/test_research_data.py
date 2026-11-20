@@ -2245,3 +2245,41 @@ def test_a_career_route_searches_career_data_before_the_first_round(
     for found in (seen["prefetched"], seen["plain"]):
         assert found and {kind for kind, _ in found} == {"document"}
         assert {title for _, title in found} == {"Data scientists"}
+
+
+def test_a_file_turn_reads_its_program_first_and_runs_light(db, collection, monkeypatch, tmp_path):
+    # Research before a code-built file spent 150-300k tokens on 13-24 rounds while
+    # the file took about 3k (2026-11-20). Code now reads the program first.
+    from app.api.query_service import query_response
+    from app.api.schemas import QueryRequest
+    from app.config import load_settings
+    from app.llm.base import ToolCall
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import MODEL, collection_name, lenient_config
+
+    _corpus(db, collection, tmp_path)
+    seen = {}
+
+    def script(context, index, request):
+        # The first round already holds the program, read in full, and is asked to finish.
+        seen["read"] = [(item["title"], item["read_items"], item["total_items"])
+                        for item in context["program_read_progress"]]
+        seen["finish_required"] = context.get("finish_required")
+        seen["effort"] = request.reasoning_effort
+        seen["note"] = context.get("file_turn", "")
+        return [ToolCall("finish", "advisor_finish", {"decision": {
+            "outcome": "clarification", "completeness": "complete",
+            "blocks": [{"kind": "question", "text": "Which courses have you finished?"}]}})]
+
+    provider = _research_provider(monkeypatch, script)
+    settings = replace(load_settings(), llm_provider="openai", llm_model_id="fake",
+                       tools_enabled=True, routing_enabled=False, embedding_model_id=MODEL,
+                       db_pool_max_size=0)
+    query_response(
+        QueryRequest(query="Make a checklist for the Computer Science (BS).", makeArtifact=True,
+                     collectionId=collection_name(db, collection)),
+        db, settings, lenient_config(), FakeEmbedder(8), provider)
+    assert seen["read"] == [("Computer Science (BS)", 8, 8)] and seen["finish_required"] is True
+    assert len(provider.requests) == 1
+    assert seen["effort"] == settings.research_file_reasoning_effort
+    assert "requirements checklist" in seen["note"]

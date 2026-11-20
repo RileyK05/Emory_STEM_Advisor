@@ -3118,6 +3118,28 @@ _BUILDER_LABELS = {"checklist": "Requirements checklist", "overview": "Program o
                    "comparison": "Program comparison", "tracker": "Credit tracker"}
 
 
+def code_built_template(kind: str, request_text: str) -> str | None:
+    """The template code fills for a grounded request of this kind, if any.
+
+    The choice the pipeline makes when it starts (plan, then what-if, then the
+    templates). Research reads it to know the file comes from program records,
+    so the turn before it need not research the program (2026-11-20).
+    """
+    text = request_text or ""
+    if (kind in {"document", "workbook"} and not _CHECKLIST_REQUEST.search(text)
+            and _TERM_PLAN_REQUEST.search(text)):
+        return "plan"
+    if kind == "document" and _WHATIF_REQUEST.search(text):
+        return None
+    template = choose_template(kind, text)
+    return _builder_for(kind, template.id if template else None)
+
+
+def programs_named_in(text: str, titles: list[str]) -> list[str]:
+    """Every program whose full title the text names, as the pipeline matches them."""
+    return _programs_named_in(text, titles)
+
+
 def _builder_for(kind: str, template_id: str | None) -> str | None:
     """Which code-built template fills this request, if any."""
     if kind == "workbook":
