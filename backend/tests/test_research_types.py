@@ -1514,3 +1514,36 @@ def test_a_reply_never_says_its_artifact_is_ready(text, rejected):
     expected = answer_content_problems(unasked, instructions=None, evidence=[],
                                        artifact_expected=True)
     assert any("still being made" in p for p in expected) is rejected
+
+
+_ASSUMED = "assumes courses are done"
+_SCHEDULE = "lays out its own term schedule"
+
+
+@pytest.mark.parametrize(("text", "problem"), [
+    # Live answers to "Make a four-semester plan for the Computer Science BS." whose
+    # files started from CS 170 and numbered their own terms (2026-11-19).
+    ("This plan assumes CS 170, CS 171, MATH 111 and MATH 112 are already on your record.",
+     _ASSUMED),
+    (("You didn't say what you've finished, so this is junior fall on with CS 170 and CS 171 "
+      "already done."), _ASSUMED),
+    (("I'm assuming the two calculus courses and the first two computer science courses are "
+      "done or under way."), _ASSUMED),
+    ("Term 2: CS 371W plus two of your 300-level courses.", _SCHEDULE),
+    ("Terms 3 and 4: the last 300-level with CS 442, then two 400-levels.", _SCHEDULE),
+    ("This assumes no courses are done yet, so it starts with CS 170.", None),
+    ("You said you have already completed CS 170, so the plan starts with CS 171.", None),
+    ("If CS 170 is still ahead of you, the prerequisites need a fifth term.", None),
+])
+def test_a_reply_with_a_file_neither_assumes_courses_nor_numbers_terms(text, problem):
+    from app.generation.research_final import answer_content_problems
+
+    decision = _decision(outcome="information", blocks=(DecisionBlock(kind="judgment", text=text),),
+                         artifact=ArtifactRequest(kind="document", title="Plan", brief="Plan."))
+    problems = answer_content_problems(decision, instructions=None, evidence=[])
+    for name in (_ASSUMED, _SCHEDULE):
+        assert any(name in p for p in problems) is (name == problem)
+    # Without a file there is nothing to contradict.
+    unasked = decision.model_copy(update={"artifact": None})
+    assert not any(name in p for name in (_ASSUMED, _SCHEDULE)
+                   for p in answer_content_problems(unasked, instructions=None, evidence=[]))

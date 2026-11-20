@@ -58,6 +58,10 @@ class ArtifactGenerationInput(BaseModel):
     # The student's own turn text, before the research model rewrites it as a
     # brief. A plan request must be recognized from these words.
     requestText: str | None = Field(default=None, max_length=20_000)
+    # Every turn the student wrote in this conversation, this one included. Only
+    # these words can say a course is done; the brief and the published answer
+    # are the research model's, and it guesses to fit a term count.
+    studentText: str | None = Field(default=None, max_length=20_000)
     sourceIds: list[UUID] | None = Field(default=None, max_length=500)
     collectionId: str | None = Field(default=None, max_length=200)
     mode: Literal["grounded", "authoring"] = "grounded"

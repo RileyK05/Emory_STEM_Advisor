@@ -1264,7 +1264,12 @@ class ResearchController:
                    if (renamed := session.renamed_question_codes()
                        if hasattr(session, "renamed_question_codes") else None) else {}),
                 **({"artifact_requested": "The student asked for a plan, checklist, "
-                    "sheet or page to keep: set finish.decision.artifact."}
+                    "sheet or page to keep: set finish.decision.artifact. Code builds the "
+                    "file from the program's records: it counts as done only the courses "
+                    "the student said they finished, and a plan takes as many terms as the "
+                    "prerequisites need. Describe it that way; never assume other courses "
+                    "are done to fit a term count. The file numbers the terms, so explain "
+                    "order and priorities without a Term 1, Term 2 schedule of your own."}
                    if getattr(session, "artifact_requested", False) else {}),
                 **({"referenced_artifacts": [
                     {"artifact_id": aid, "revision_id": rid,

@@ -164,6 +164,12 @@ LIMIT %(limit)s;
 
 -- The router reads the turn before this request: the student's last message
 -- and the advisor's last reply (newest first, at most one of each role needed).
+-- name: student_turn_texts
+SELECT text FROM conversation_turns
+WHERE conversation_id = %(conversation_id)s AND role = 'user'
+  AND sequence <= %(sequence)s
+ORDER BY sequence;
+
 -- name: router_previous_turns
 SELECT role, text FROM conversation_turns
 WHERE conversation_id = %(conversation_id)s

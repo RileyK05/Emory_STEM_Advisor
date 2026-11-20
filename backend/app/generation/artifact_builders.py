@@ -115,12 +115,37 @@ def requirement_blocks(program: ProgramData, prefix: str, *, checklist: bool,
     return built
 
 
+# A program line stating the whole program's credit total, as the Biology BS does
+# ("The BS degree requires at least 57 credit hours") under a header of 62.
+_STATED_TOTAL = re.compile(
+    r"\b(?:degree|major|minor|program)\s+requires\s+(?:at\s+least\s+|a\s+minimum\s+of\s+|"
+    r"a\s+total\s+of\s+)?(\d{2,3})\s+(?:credit\s+|semester\s+)?hours\b", re.IGNORECASE)
+
+
+def _hours_fact(program: ProgramData) -> tuple[str, tuple] | None:
+    """The header's credit hours, noting a line of the program that states another total.
+
+    Both are Emory's words; the table shows the disagreement instead of picking one.
+    """
+    fact = program.facts.get("hours")
+    if not fact:
+        return fact
+    bounds = [float(value) for value in re.findall(r"\d+(?:\.\d+)?", fact[0])]
+    for item in program.items:
+        match = _STATED_TOTAL.search(item.line.text)
+        if match and bounds and not min(bounds) <= float(match.group(1)) <= max(bounds):
+            return (f"{fact[0]} (the requirements say \u201c{match.group(0)}\u201d)",
+                    (*fact[1], *_support(item)))
+    return fact
+
+
 def facts_table(programs: Sequence[ProgramData], block_id: str) -> Built:
     """An "At a glance" table: one row per header fact, one column per program."""
     built = Built()
     rows, chunks = [], []
     for key, label in FACT_LABELS:
-        values = [program.facts.get(key) for program in programs]
+        values = [(_hours_fact(program) if key == "hours" else program.facts.get(key))
+                  for program in programs]
         if not any(values):
             continue
         rows.append([label, *((value[0] if value else "Not listed") for value in values)])

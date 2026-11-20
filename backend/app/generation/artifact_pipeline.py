@@ -293,6 +293,9 @@ class ArtifactPipeline:
         # turn "plan" into "checklist". The student's own words decide.
         request_text = (inputs.requestText or brief).strip() or brief
         self.request_text = request_text
+        # Only the student's own words say a course is done. The brief and the
+        # published answer can assume courses to fit a term count (2026-11-19).
+        self.student_text = (inputs.studentText or request_text).strip() or request_text
         self.total_requested = (kind == "workbook"
                                 and bool(re.search(r"\btotals?\b", request_text, re.IGNORECASE)))
         self.plan_requested = (kind in {"document", "workbook"} and inputs.mode == "grounded"
@@ -556,7 +559,7 @@ class ArtifactPipeline:
         ).fetchall()
         self.conn.commit()
         completed = _completed_from_text(
-            self.request_text + "\n" + self.brief,
+            self.student_text,
             self.known_courses,
             self.campus_equivalents,
         )
@@ -594,7 +597,7 @@ class ArtifactPipeline:
         text = self.request_text + "\n" + self.brief
         if _PREMED_RE.search(text):
             return False
-        if _completed_from_text(text, self.known_courses, self.campus_equivalents):
+        if _completed_from_text(self.student_text, self.known_courses, self.campus_equivalents):
             return False
         return (not canonical_codes_in(text)
                 and len(_programs_named_in(self.request_text, self.program_titles)) == 1)
@@ -776,14 +779,11 @@ class ArtifactPipeline:
 
     def _apply_plan(self, value: StageOutline):
         raw_selected = [str(code).strip() for code in value.selected_courses if str(code).strip()]
-        raw_completed = [str(code).strip() for code in value.completed_courses if str(code).strip()]
-        text_completed = _completed_from_text(
-            self.request_text + "\n" + self.brief,
-            self.known_courses,
-            self.campus_equivalents,
-        )
+        # The outline's completed_courses are the model's reading; only courses the
+        # student's own turns call done are left out of the plan.
         completed = list(dict.fromkeys(
-            code for code in [*(_canonical_code(c) for c in raw_completed), *text_completed]
+            code for code in _completed_from_text(
+                self.student_text, self.known_courses, self.campus_equivalents)
             if self._course_exists(code)
         ))
         completed_all = set(completed)
@@ -1146,7 +1146,7 @@ class ArtifactPipeline:
             raise ValueError("the program lists no required courses to track")
         records = self._course_facts(codes, scope)
         completed_list = _completed_from_text(
-            self.request_text + "\n" + self.brief,
+            self.student_text,
             self.known_courses,
             self.campus_equivalents,
         )
@@ -1199,18 +1199,45 @@ class ArtifactPipeline:
                           "style": {"bold": True}})
             cells.append({"id": "remaining-label", "row": row + 2, "column": 2,
                           "value": "Credits Remaining", "style": {"bold": True}})
+            # Everything not completed is still to do, "In progress" included.
             cells.append({"id": "remaining-total", "row": row + 2, "column": 3,
-                          "formula": f'=SUMIF(E2:E{last_row},"Not started",C2:C{last_row})',
+                          "formula": f"=C{row}-C{row + 1}",
                           "style": {"bold": True}})
             skip.update({
                 f"{sheet_id}/total-label", f"{sheet_id}/total",
                 f"{sheet_id}/completed-label", f"{sheet_id}/completed-total",
                 f"{sheet_id}/remaining-label", f"{sheet_id}/remaining-total",
             })
-            if wants_gpa:
-                cells.append({"id": "gpa-label", "row": row + 3, "column": 2, "value": "GPA",
+            next_row = row + 3
+            # The rows list the courses the program names outright; its electives and
+            # choices are not rows. The program's own credit total shows the gap, so
+            # the Total is not read as the whole degree.
+            required = self._program_required_hours(title, program_id, scope)
+            if required is not None:
+                hours, chunks = required
+                cells.append({"id": "required-label", "row": next_row, "column": 2,
+                              "value": "Program requires at least", "style": {"bold": True}})
+                cells.append({"id": "required-total", "row": next_row, "column": 3,
+                              "value": hours, "style": {"bold": True}})
+                cells.append({"id": "unlisted-label", "row": next_row + 1, "column": 2,
+                              "value": "Not listed above (electives and choices)",
                               "style": {"bold": True}})
-                cells.append({"id": "gpa-total", "row": row + 3, "column": 3,
+                cells.append({"id": "unlisted-total", "row": next_row + 1, "column": 3,
+                              "formula": f"=MAX(0,C{next_row}-C{row})",
+                              "style": {"bold": True}})
+                slots = [self._slot_for_chunk(chunk, scope) for chunk in chunks]
+                if any(slots):
+                    evidence[f"{sheet_id}/required-total"] = _slot_refs(
+                        [slot for slot in slots if slot], self.grounding.slots)
+                else:
+                    skip.add(f"{sheet_id}/required-total")
+                skip.update({f"{sheet_id}/required-label", f"{sheet_id}/unlisted-label",
+                             f"{sheet_id}/unlisted-total"})
+                next_row += 2
+            if wants_gpa:
+                cells.append({"id": "gpa-label", "row": next_row, "column": 2, "value": "GPA",
+                              "style": {"bold": True}})
+                cells.append({"id": "gpa-total", "row": next_row, "column": 3,
                               "formula": f"=IF(SUM(C2:C{last_row})>0,"
                                          f"SUMPRODUCT(C2:C{last_row},G2:G{last_row})/SUM(C2:C{last_row}),0)",
                               "style": {"bold": True}})
@@ -1232,6 +1259,15 @@ class ArtifactPipeline:
         value.selected_courses, value.completed_courses = [], []
         self.program_title = title
         self.built_programs = [title]
+
+    def _program_required_hours(self, title: str, program_id, scope):
+        """The least credit hours the program's header states, with its chunks."""
+        fact = self._program_data(title, program_id, scope).facts.get("hours")
+        match = re.search(r"\d+(?:\.\d+)?", fact[0]) if fact else None
+        if match is None:
+            return None
+        hours = float(match.group())
+        return (int(hours) if hours == int(hours) else hours), fact[1]
 
     def _course_facts(self, codes: list[str], scope) -> dict[str, tuple[str, float | None, int]]:
         """Each course's title, credits and record slot, read from its Atlas record."""
@@ -1469,6 +1505,16 @@ class ArtifactPipeline:
             raise ValueError("a term plan needs at least two terms; include the rest of "
                              "the program's courses")
         stages = [list(term) for term in packed.terms]
+        if requested_terms and len(stages) > requested_terms:
+            # "A four-semester plan" is a description, so a program that cannot fit
+            # gets more terms; the student is told why instead of finding a Term 5.
+            chain = _longest_chain(plan.prerequisites, {code for stage in stages for code in stage})
+            reason = (f"; {' → '.join(chain)} alone is {len(chain)} courses taken one after "
+                      "another" if len(chain) > requested_terms else " at this credit load")
+            note = (f"You asked for {requested_terms} terms; these courses need "
+                    f"{len(stages)}{reason}.")
+            if note not in self.plan_notes:
+                self.plan_notes.append(note)
         self.plan_layout = (stages, blocked)
         parts =[(f"term{index}", f"Term {index}", stage, [])
                  for index, stage in enumerate(stages, 1)]
@@ -2150,8 +2196,9 @@ class ArtifactPipeline:
             if section_id in self.kept and self.prior is None:
                 # A built section is assembled as built: a rewrite would be
                 # ignored and the same finding would come back every round.
-                logger.warning("artifact job %s: a code-built section failed %s",
-                               self.job.job_id, section_findings[0].check)
+                logger.warning("artifact job %s: code-built section %s failed %s: %s",
+                               self.job.job_id, section_id, section_findings[0].check,
+                               section_findings[0].message)
                 raise SafeJobError("invalid_output", section_findings[0].student_message)
             items.append((section,
                           " ".join(finding.message for finding in section_findings[:5]),
@@ -2219,9 +2266,11 @@ class ArtifactPipeline:
         )
         cap = _requested_credit_cap(self.request_text)
         cap_label = str(int(cap)) if cap == int(cap) else f"{cap:.1f}"
+        # The terms the file shows, not the planner's prerequisite stages.
+        shown_terms = len(self.plan_layout[0]) if self.plan_layout else len(self.plan.stages)
         parts = [
             (
-                f"Scheduled credits shown: {total_label} across {len(self.plan.stages)} term(s) "
+                f"Scheduled credits shown: {total_label} across {shown_terms} term(s) "
                 f"(up to {cap_label} credits per term)."
             )
         ]
@@ -2818,6 +2867,29 @@ def _requested_terms(text: str) -> int | None:
         if 1 <= count <= 6:
             return count * 2
     return None
+
+
+def _longest_chain(prerequisites, courses: set[str]) -> list[str]:
+    """The longest run of courses where each is a prerequisite of the next."""
+    needs: dict[str, list[str]] = {}
+    for course, prerequisite in prerequisites:
+        if course in courses and prerequisite in courses:
+            needs.setdefault(course, []).append(prerequisite)
+    best: dict[str, list[str]] = {}
+
+    def chain_to(course: str, seen: frozenset[str]) -> list[str]:
+        if course not in best:
+            longest: list[str] = []
+            for prerequisite in sorted(needs.get(course, ())):
+                if prerequisite not in seen:
+                    found = chain_to(prerequisite, seen | {course})
+                    if len(found) > len(longest):
+                        longest = found
+            best[course] = [*longest, course]
+        return best[course]
+
+    return max((chain_to(course, frozenset()) for course in sorted(courses)),
+               key=len, default=[])
 
 
 def _strict_term_limit(text: str) -> bool:

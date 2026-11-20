@@ -446,7 +446,7 @@ def _econ(db, collection, tmp_path, extra="", program=ECON_MINOR):
     ("Plan ECON 201 with ECON 101 done", True, [], ["ECON 201"]),
     ("Plan ECON 201 with ECON 101 done", True, ["ECON 101"] * 23, ["ECON 201"]),
     # The grounding never retrieved the record: the planner appends it mid-run.
-    ("Plan my semester after Calculus I limits", True, [], ["ECON 201"]),
+    ("Plan my semester after Calculus I limits; I've taken ECON 101", True, [], ["ECON 201"]),
     ("Make a checklist covering ECON 201 this semester", False, [], []),
     ("Make a checklist covering ECON 201\n\nPublished answer:\nPlan ECON 201 for next semester.",
      False, [], ["ECON 201"]),
@@ -499,6 +499,32 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
     # The schedule is code-built: no term spends a model call on a note.
     assert not any(block.get("text") == "Macro theory." for block in spec["blocks"])
     assert not any(request.tools[0].name == SECTION_TOOL for request in provider.requests)
+
+
+@pytest.mark.parametrize(("student_text", "shown"), [
+    # The model's outline says ECON 101 is done; the student never did (a live
+    # four-semester answer assumed the intro courses away, 2026-11-19).
+    (None, [("Check with your advisor",
+             ["ECON 201 — Intermediate Macroeconomics (missing prerequisite)"])]),
+    # An earlier turn of the student's own does say it.
+    ("I finished ECON 101 last spring.\n\nPlan ECON 201.",
+     [("Term 1", ["ECON 201 — Intermediate Macroeconomics"])]),
+])
+def test_only_the_students_own_words_mark_a_course_done(
+        db, collection, tmp_path, student_text, shown):
+    source = _econ(db, collection, tmp_path)
+    provider = ArtifactStageProvider(outline=_plan_outline(["ECON 201"], completed=["ECON 101"]))
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    inputs = {"prompt": "Plan ECON 201.", "requestText": "Plan ECON 201.",
+              "sourceIds": [str(source)], **({"studentText": student_text} if student_text else {})}
+    run_id = start_run(client, "document", inputs, "plan-student-words")
+    finished = run_once(store, "plan", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    blocks = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]["blocks"]
+    lists = [(blocks[index - 1]["text"], block["items"]) for index, block in enumerate(blocks)
+             if block["type"] == "list" and blocks[index - 1]["type"] == "heading"]
+    assert lists == shown
 
 
 def test_a_whatif_request_charts_the_program_lines_a_students_courses_name(
@@ -584,6 +610,23 @@ def test_catalog_sentences_offered_for_picking_are_whole_and_not_already_shown()
         "The minor gives students a grounding in economic reasoning."])
     assert [text for text, _chunk in offered] == [
         "Students must earn a C or better in every course counted toward the minor."]
+
+
+@pytest.mark.parametrize(("header", "line", "shown"), [
+    # The Biology BS header says 62; its own text says 57. Both are Emory's words.
+    ("62", "The BS degree requires at least 57 credit hours, including eleven biology classes.",
+     "62 (the requirements say “degree requires at least 57 credit hours”)"),
+    # Inside a header range, or a subtotal of one section, is no disagreement.
+    ("24-28", "The minor requires a minimum of 26 credit hours.", "24-28"),
+    ("42", "Electives: a total of 16 hours from the list.", "42"),
+])
+def test_the_glance_credit_row_shows_a_program_line_that_disagrees(header, line, shown):
+    from app.advising.research_repository import ProgramItem, SupportedText
+    from app.generation.artifact_builders import ProgramData, facts_table
+
+    item = ProgramItem(1, "Requirements", SupportedText(line), (), None)
+    built = facts_table([ProgramData("Program", {"hours": (header, ())}, (item,))], "g")
+    assert built.blocks[0]["rows"] == [["Credit hours", shown]]
 
 
 _MATH_MINOR = """Mathematics (Minor)
@@ -926,6 +969,19 @@ def test_the_course_check_reads_a_catalog_spelling_the_import_linked(
     assert invalid_course_codes({code}, known, {}) == {code}
 
 
+def test_a_labeled_code_from_a_slash_line_passes_the_course_check(db, collection, tmp_path):
+    # "Biol/NBB 361" is BIOL 361 and NBB 361 to the program import, so a built
+    # comparison table lists BIOL 361; K4 failed it as invented (2026-11-19).
+    from app.advising.catalog import load_program_quoted_codes
+    from app.artifacts.checks import label_absent_codes, undisclosed_course_codes
+
+    _econ(db, collection, tmp_path,
+          program="Economics (Minor)\nDEGREE AWARDED N/A\nRequirements\n• Econ/Math 498\n")
+    quoted = load_program_quoted_codes(db, collection_id=collection)
+    cell = label_absent_codes("ECON 498", {"ECON 101"}, {})
+    assert undisclosed_course_codes(cell, {"ECON 101"}, {}, quoted_codes=quoted) == set()
+
+
 @pytest.mark.parametrize(("line", "labeled", "quoted", "invalid"), [
     # The note is read with K4's own parser: spelled subjects, bare numbers and ranges.
     ("Linguistics 401 (only in senior year)",
@@ -996,6 +1052,22 @@ def test_the_student_term_limits_are_read(text, credits, courses, terms):
     assert _requested_terms(text) == terms
 
 
+@pytest.mark.parametrize(("prerequisites", "courses", "chain"), [
+    # The Computer Science BS: why a "four-semester plan" came back with a Term 5.
+    ((("CS 171", "CS 170"), ("CS 253", "CS 171"), ("CS 326", "CS 253"),
+      ("CS 371W", "CS 326"), ("CS 224", "CS 170")),
+     {"CS 170", "CS 171", "CS 224", "CS 253", "CS 326", "CS 371W"},
+     ["CS 170", "CS 171", "CS 253", "CS 326", "CS 371W"]),
+    # A prerequisite outside the plan (already done) does not lengthen the chain.
+    ((("CS 171", "CS 170"),), {"CS 171"}, ["CS 171"]),
+    ((), set(), []),
+])
+def test_the_longest_prerequisite_chain_explains_extra_terms(prerequisites, courses, chain):
+    from app.generation.artifact_pipeline import _longest_chain
+
+    assert _longest_chain(prerequisites, courses) == chain
+
+
 @pytest.mark.parametrize(("text", "completed"), [
     ("I finished ECON 101, have not taken ECON 201, and did not finish MATH 111.", ["ECON 101"]),
     ("I took ECON 101 and will take ECON 201 next fall.", ["ECON 101"]),
@@ -1024,8 +1096,10 @@ def test_credit_workbooks_include_totals_and_completed_status(
         for line in ATLAS_SAMPLE.splitlines()
     )
     source = import_atlas_sample(db, collection, tmp_path, text=credit_atlas)
+    # The header's credit total lets the tracker show what its rows leave out.
+    program = ECON_MINOR.replace("DEGREE AWARDED N/A", "DEGREE AWARDED N/A\nHOURS TO COMPLETE 20")
     import_programs(db, collection_id=collection,
-                    path=_write_programs(tmp_path, ("Economics (Minor)", ECON_MINOR)))
+                    path=_write_programs(tmp_path, ("Economics (Minor)", program)))
     db.commit()
     provider = ArtifactStageProvider(
         outline=_plan_outline(selected, completed=completed),
@@ -1043,6 +1117,13 @@ def test_credit_workbooks_include_totals_and_completed_status(
         assert any(str(cell.get("formula", "")).startswith(formula_prefix) for cell in cells)
     if completed:
         assert any(cell.get("value") == "Completed" for cell in cells)
+    if expected_header == "Credits Completed":
+        # Remaining is everything not completed; the rows are not the whole minor.
+        by_id = {cell["id"]: cell for cell in cells}
+        total_row = by_id["total"]["row"]
+        assert by_id["remaining-total"]["formula"] == f"=C{total_row}-C{total_row + 1}"
+        assert by_id["required-total"]["value"] == 20
+        assert by_id["unlisted-total"]["formula"] == f"=MAX(0,C{total_row + 3}-C{total_row})"
 
 
 @pytest.mark.parametrize(("written", "printed"), [

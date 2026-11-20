@@ -239,10 +239,18 @@ def load_catalog_code_aliases(conn, *, collection_id: UUID) -> dict[str, frozens
 
 
 def load_program_quoted_codes(conn, *, collection_id: UUID) -> frozenset[str]:
-    """Every course code an active program's own lines print, read as K4 reads them."""
-    return frozenset(code for row in conn.execute(
-        queries.get("list_active_program_line_texts"), {"collection_id": collection_id})
-        for code in canonical_codes_in(row["text"]))
+    """Every course code an active program's own lines name.
+
+    That is each line read as K4 reads it, plus the codes the program import
+    stored for it: "Biol/NBB 361" is BIOL 361 and NBB 361 to the import and to
+    the artifacts built from it, but only NBB 361 to K4's parser.
+    """
+    codes = set()
+    for row in conn.execute(queries.get("list_active_program_line_texts"),
+                            {"collection_id": collection_id}):
+        codes.update(canonical_codes_in(row["text"]))
+        codes.update(row["courses"])
+    return frozenset(codes)
 
 
 def load_advising_context(

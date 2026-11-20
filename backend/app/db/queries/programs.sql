@@ -162,7 +162,12 @@ WHERE p.collection_id = %(collection_id)s
   AND m.target_code <> c.code;
 
 -- name: list_active_program_line_texts
-SELECT i.text
+SELECT i.text,
+       coalesce(array_agg(m.target_code) FILTER (WHERE m.target_code IS NOT NULL),
+                '{}') AS courses
 FROM program_items i
 JOIN programs p ON p.program_id = i.program_id
-WHERE p.collection_id = %(collection_id)s AND p.is_active;
+LEFT JOIN program_course_mentions m
+       ON m.program_id = i.program_id AND m.position = i.position
+WHERE p.collection_id = %(collection_id)s AND p.is_active
+GROUP BY i.program_id, i.position, i.text;

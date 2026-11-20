@@ -264,9 +264,14 @@ class ConversationTurnExecutor:
             brief = str(artifact.get("brief") or "").strip()
             if not brief:
                 raise ValueError("artifact brief is empty")
+            student_turns = [row["text"] for row in conn.execute(
+                queries.get("student_turn_texts"),
+                {"conversation_id": conversation_id, "sequence": sequence})]
             inputs = {
                 "prompt": brief + "\n\nPublished answer:\n" + answer,
                 "requestText": value.request_text,
+                # The latest turns win when the whole history is too long.
+                "studentText": "\n\n".join(student_turns)[-20_000:] or value.request_text,
                 # Only a page or sheet can hold the student's own text without
                 # citations. A document always stays grounded in the corpus.
                 "mode": ("authoring" if artifact.get("grounding") == "authoring"
