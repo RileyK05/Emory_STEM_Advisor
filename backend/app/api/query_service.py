@@ -271,6 +271,65 @@ def _select_connection(conn, settings, body, workspace_key, profiles, runtime):
         raise HTTPException(503, "Research advising has no authorized tools-capable connection.") from exc
 
 
+def research_budget(settings, body, scope, route):
+    """The research limits this turn gets, and its file turn if it is one.
+
+    A file code builds from a named program: code reads the program before round
+    one and the reply only introduces the file. An attached file is a revision.
+    Otherwise a request for advice gets the longer budget.
+    """
+    file = (None if getattr(body, "artifactReferences", None) else
+            file_turn(body.query, getattr(body, "makeArtifact", None),
+                      [pin.title for pin in scope.programs.values()]))
+    if file is not None:
+        settings = file_budget(settings)
+    elif "choice" in route.categories or asks_for_advice(body.query):
+        settings = advice_budget(settings)
+    return settings, file
+
+
+def _enriched_artifact_references(conn, settings, workspace_key: str, body) -> list[dict]:
+    """The turn's attached artifacts, each with its saved spec when the caller sent none."""
+    raw_refs = list(getattr(body, "artifactReferences", ()) or ())
+    enriched_refs = []
+    if raw_refs:
+        from app.artifacts.storage import ArtifactStore
+
+        artifact_store = ArtifactStore(conn, workspace_key=workspace_key, data_dir=settings.data_dir)
+        for item in raw_refs:
+            spec = getattr(item, "spec", None) if not isinstance(item, dict) else item.get("spec")
+            aid = item["artifactId"] if isinstance(item, dict) else item.artifactId
+            rid = item["revisionId"] if isinstance(item, dict) else item.revisionId
+            if not isinstance(spec, dict):
+                try:
+                    record = artifact_store.get(UUID(str(aid)), revision_id=UUID(str(rid)))
+                    spec = record.get("spec")
+                except (HTTPException, ValueError):
+                    spec = None
+            enriched_refs.append({"artifactId": str(aid), "revisionId": str(rid),
+                                  **({"spec": spec} if isinstance(spec, dict) else {})})
+        conn.commit()
+    return enriched_refs
+
+
+def _apply_route(session, route, router_config, body, scope, file, replies) -> None:
+    """Give the session its route: the policy, the prefetched calls, the distress handling."""
+    session.route, session.route_policy = route, combined(route)
+    session.prefetch = [("advisor_search", arguments) for arguments in
+                        prefetch_searches(route, session.route_policy, router_config, body.query)]
+    if file is not None:
+        pins = {pin.title: pin for pin in scope.programs.values()}
+        session.file_turn = file
+        session.prefetch = [("advisor_read_program",
+                             {"handle": session.handle("program", pins[title].program_id)})
+                            for title in file[1]]
+    if route.distress == "support":
+        session.support_first = replies.support
+    # Before support, nothing in the reply points to counseling, even if the model
+    # writes it: venting is answered, not referred.
+    session.strip_contacts = route.distress in {"steady", "check_in", "support"}
+
+
 def query_response(
     body: QueryRequest, conn, settings: Settings, config: RetrievalConfig,
     embedder: Embedder, provider: Provider, *,
@@ -334,15 +393,7 @@ def query_response(
         route = _routed(route_future, body.query)
     _record_route_call(conn, route, trace_id, settings,
                        int((time.perf_counter() - route_started) * 1000))
-    # A file code builds from a named program: code reads the program before round
-    # one and the reply only introduces the file. An attached file is a revision.
-    file = (None if getattr(body, "artifactReferences", None) else
-            file_turn(body.query, getattr(body, "makeArtifact", None),
-                      [pin.title for pin in scope.programs.values()]))
-    if file is not None:
-        settings = file_budget(settings)
-    elif "choice" in route.categories or asks_for_advice(body.query):
-        settings = advice_budget(settings)
+    settings, file = research_budget(settings, body, scope, route)
     settings = replace(settings,
         llm_max_output_tokens=settings.research_max_output_tokens,
         **research_sampling(settings))
@@ -365,45 +416,13 @@ def query_response(
         request_id=conversation_request_id, retry=retry)
     if not created:
         raise HTTPException(409, "This conversation request already owns a research run; reconnect to it.")
-    raw_refs = list(getattr(body, "artifactReferences", ()) or ())
-    enriched_refs = []
-    if raw_refs:
-        from app.artifacts.storage import ArtifactStore
-
-        artifact_store = ArtifactStore(conn, workspace_key=workspace_key, data_dir=settings.data_dir)
-        for item in raw_refs:
-            spec = getattr(item, "spec", None) if not isinstance(item, dict) else item.get("spec")
-            aid = item["artifactId"] if isinstance(item, dict) else item.artifactId
-            rid = item["revisionId"] if isinstance(item, dict) else item.revisionId
-            if not isinstance(spec, dict):
-                try:
-                    record = artifact_store.get(UUID(str(aid)), revision_id=UUID(str(rid)))
-                    spec = record.get("spec")
-                except (HTTPException, ValueError):
-                    spec = None
-            enriched_refs.append({"artifactId": str(aid), "revisionId": str(rid),
-                                  **({"spec": spec} if isinstance(spec, dict) else {})})
-        conn.commit()
     session = ResearchSession(
         conn, scope, store, run, settings=settings, config=config, embedder=embedder,
-        artifact_references=enriched_refs,
+        artifact_references=_enriched_artifact_references(conn, settings, workspace_key, body),
     )
     store.record_action(run.run_id, action_kind="route", details=route.details())
     replies = load_support_replies()
-    session.route, session.route_policy = route, combined(route)
-    session.prefetch = [("advisor_search", arguments) for arguments in
-                        prefetch_searches(route, session.route_policy, router_config, body.query)]
-    if file is not None:
-        pins = {pin.title: pin for pin in scope.programs.values()}
-        session.file_turn = file
-        session.prefetch = [("advisor_read_program",
-                             {"handle": session.handle("program", pins[title].program_id)})
-                            for title in file[1]]
-    if route.distress == "support":
-        session.support_first = replies.support
-    # Before support, nothing in the reply points to counseling, even if the model
-    # writes it: venting is answered, not referred.
-    session.strip_contacts = route.distress in {"steady", "check_in", "support"}
+    _apply_route(session, route, router_config, body, scope, file, replies)
     outcome = Retrieved([], RetrievalTrace(trace_id, collection_id, body.query,
                         normalize_query(body.query), config.version, settings.embedding_model_id,
                         False, ()))

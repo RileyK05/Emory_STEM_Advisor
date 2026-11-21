@@ -716,6 +716,147 @@ def _with_retry_allowance(request, truncations, settings):
                    max_output_tokens=min(ceiling, request.max_output_tokens * 2 ** truncations))
 
 
+def _situation_notes(session, question) -> dict:
+    """Notes for this question's situation, each present only when it applies.
+
+    They sit after the run's stable context keys and before the round's changing
+    ones, in this order, so a provider's prompt cache keeps the longest prefix.
+    """
+    return {
+        **({"program_lines": lines} if (lines := getattr(session, "line_facts", None)) else {}),
+        **({"source_conflicts": [entry["note"] for entry in conflicts]}
+           if (conflicts := source_conflicts(question)) else {}),
+        **({"no_current_course": unknown, "no_current_course_note": (
+            "The Course Atlas has no current course with these exact codes. Open with a "
+            "limitation block, which takes no citations, naming the code. With no codes "
+            "listed, say \"There is no\" and the code. With codes listed, the student "
+            "most likely means that course (another campus, suffix or subject name): say "
+            "the code is not in the Course Atlas, point to the listed course, and answer "
+            "about it.")}
+           if (unknown := session.unknown_question_codes()
+               if hasattr(session, "unknown_question_codes") else None) else {}),
+        **({"renamed_courses": renamed, "renamed_courses_note": (
+            "The student wrote a subject's former name. Say once that the course is now "
+            "the listed code, then answer about it; the old code is not missing.")}
+           if (renamed := session.renamed_question_codes()
+               if hasattr(session, "renamed_question_codes") else None) else {}),
+        **({"artifact_requested": "The student asked for a plan, checklist, "
+            "sheet or page to keep: set finish.decision.artifact. Code builds the "
+            "file from the program's records: it counts as done only the courses "
+            "the student said they finished, and a plan takes as many terms as the "
+            "prerequisites need. Describe it that way; never assume other courses "
+            "are done to fit a term count. The file numbers the terms, so explain "
+            "order and priorities without a Term 1, Term 2 schedule of your own."}
+           if getattr(session, "artifact_requested", False) else {}),
+        **({"file_turn": (
+            f"Code builds the {_FILE_LABELS[file[0]]} for {' and '.join(file[1])} from "
+            "the program record already read above; this reply only introduces it. "
+            f"The file holds exactly this: {_FILE_CONTENTS[file[0]]}. Describe it only "
+            "that way. Finish now, in at most four short blocks citing that record: "
+            "what the program requires in a sentence or two, what the file will hold, "
+            "and one question only if the file needs the answer (for a plan or tracker, "
+            "which courses the student has finished). Do not search or read course "
+            "records.")}
+           if (file := getattr(session, "file_turn", None)) else {}),
+        **({"referenced_artifacts": [
+            {"artifact_id": aid, "revision_id": rid,
+             **({"kind": detail[0], "title": detail[1]}
+                if (detail := (getattr(session, "artifact_reference_details", None) or {}).get((aid, rid)))
+                else {})}
+            for aid, rid in (getattr(session, "artifact_reference_list", None)
+                             or sorted(getattr(session, "artifact_references", ())))],
+            **({"artifact_export_note": (
+                "The student asked to export or convert an attached artifact. Do not set "
+                "decision.artifact; tell them to use the Download/Export button in the "
+                "artifact panel (Markdown, Word, Excel, HTML) or Print / Save as PDF in their browser."
+            )} if _EXPORT_ASK.search(question or "") else {})}
+           if getattr(session, "artifact_references", None) else {}),
+    }
+
+
+def _round_tools(session, registry, question, *, finishing, state_required, program_required,
+                 read_required, policy_required, continuation_required):
+    """The tools this round offers, and whether the previous round's messages are dropped.
+
+    A required step narrows the tools to the ones that take it; a continuation round
+    also pins the handle and cursor, and drops older read outputs it supersedes.
+    """
+    drop_last_round = False
+    tools = tuple(t for t in registry.definitions if not finishing or t.name == "advisor_finish")
+    if state_required:
+        allowed = {"advisor_update_research", "advisor_finish"}
+        if _requests_preparation(question):
+            allowed.add("advisor_check_preparation")
+        tools = tuple(t for t in tools if t.name in allowed)
+    elif program_required:
+        tools = tuple(t for t in tools if t.name in {"advisor_read_program", "advisor_finish"})
+    elif read_required:
+        tools = tuple(t for t in tools if t.name in {
+            "advisor_read_program", "advisor_read_document", "advisor_read_courses", "advisor_recall", "advisor_read_conversation", "advisor_finish"})
+    if policy_required:
+        pending = getattr(session, "pending_policy_reads", ())
+        tools = tuple(t for t in tools if t.name in {"advisor_read_document", "advisor_finish"})
+        narrowed = []
+        for tool in tools:
+            if tool.name != "advisor_read_document":
+                narrowed.append(tool)
+                continue
+            schema = deepcopy(tool.input_schema)
+            schema["properties"]["handle"] = {"type": "string", "enum": list(pending)}
+            schema["required"] = list(dict.fromkeys([*schema.get("required", []), "handle"]))
+            narrowed.append(replace(tool, input_schema=schema))
+        tools = tuple(narrowed)
+    if continuation_required and not finishing:
+        required = "advisor_update_research" if state_required else "advisor_read_program"
+        tools = tuple(t for t in tools if t.name == required)
+        if not state_required:
+            pending = [(handle, cursor) for handle, cursor in session.program_cursors.items() if cursor]
+            narrowed = []
+            for tool in tools:
+                schema = deepcopy(tool.input_schema)
+                schema["properties"]["handle"] = {"type": "string", "enum": [h for h, _ in pending]}
+                schema["properties"]["cursor"] = {"type": "string", "enum": [c for _, c in pending]}
+                schema["required"] = list(dict.fromkeys([*schema.get("required", []), "handle", "cursor"]))
+                narrowed.append(replace(tool, input_schema=schema))
+            tools = tuple(narrowed)
+        # Current progress and exact evidence replace duplicate older read
+        # outputs, whose superseded cursors otherwise invite cached rereads.
+        drop_last_round = True
+    return tools, drop_last_round
+
+
+def _run_prefetch(session, executor, registry, ledger, operation, fingerprint, check_cancelled,
+                  on_progress, calls, argument_cache):
+    """Run the turn's prefetched tool calls before round one; return them as a round.
+
+    The route's searches, and a file turn's program reads, reach the model as its
+    own previous round: the same ledger, handles and replay cache, fewer provider
+    calls. ``calls`` and ``argument_cache`` are filled as a model round fills them.
+    Returns the round's messages (empty when nothing was prefetched) and the
+    number of tools run.
+    """
+    prefetched = []
+    tools_used = 0
+    for number, (tool, arguments) in enumerate(getattr(session, "prefetch", ()), start=1):
+        check_cancelled()
+        call = ToolCall(f"prefetch_{number}", tool, dict(arguments))
+        _validate_call(call)
+        session.execution_id = uuid5(session.run.run_id, call.id)
+        output, ran = executor._invoke(call, registry=registry,
+            scope=session.tool_scope(check_cancelled), ledger=ledger,
+            operation_id=operation.operation_id, workspace_key=session.scope.workspace_key,
+            scope_fingerprint=fingerprint,
+            on_progress=lambda event, payload: on_progress({"stage": event, **payload}))
+        tools_used += ran
+        identity = (call.name, _canonical_arguments(call.arguments))
+        calls[call.id] = (identity, output)
+        argument_cache[identity] = output
+        prefetched.append((call, ToolResultMessage(call.id, call.name, output)))
+    if not prefetched:
+        return [], tools_used
+    return [AssistantToolMessage(tuple(call for call, _ in prefetched)),
+            *(message for _, message in prefetched)], tools_used
+
 class ResearchController:
     def run(self, session, provider, operation, **kwargs):
         usages: list = []
@@ -779,28 +920,12 @@ class ResearchController:
         discovery_rounds = 0
         corrections_used = 0
         format_slips = 0
-        # The route's searches, and a file turn's program reads, run before the first
-        # round and reach the model as its own previous round: the same ledger,
-        # handles and replay cache, fewer provider calls.
-        prefetched = []
-        for number, (tool, arguments) in enumerate(getattr(session, "prefetch", ()), start=1):
-            check_cancelled()
-            call = ToolCall(f"prefetch_{number}", tool, dict(arguments))
-            _validate_call(call)
-            session.execution_id = uuid5(session.run.run_id, call.id)
-            output, ran = executor._invoke(call, registry=registry,
-                scope=session.tool_scope(check_cancelled), ledger=ledger,
-                operation_id=operation.operation_id, workspace_key=session.scope.workspace_key,
-                scope_fingerprint=fingerprint,
-                on_progress=lambda event, payload: on_progress({"stage": event, **payload}))
-            tools_used += ran
-            identity = (call.name, _canonical_arguments(call.arguments))
-            calls[call.id] = (identity, output)
-            argument_cache[identity] = output
-            prefetched.append((call, ToolResultMessage(call.id, call.name, output)))
-        if prefetched:
-            last_round = [AssistantToolMessage(tuple(call for call, _ in prefetched)),
-                          *(message for _, message in prefetched)]
+        prefetched_round, ran = _run_prefetch(
+            session, executor, registry, ledger, operation, fingerprint, check_cancelled,
+            on_progress, calls, argument_cache)
+        tools_used += ran
+        if prefetched_round:
+            last_round = prefetched_round
 
         def spend_correction(format_slip: bool) -> bool:
             """Take one correction round; False when none is left.
@@ -1160,54 +1285,7 @@ class ResearchController:
                     "complete", "conclusion", "evidence_ids", "unexplored_codes",
                     "enrollment_eligibility_verified", "scope")}
                     for check in session.checks.values()],
-                **({"program_lines": lines} if (lines := getattr(session, "line_facts", None)) else {}),
-                **({"source_conflicts": [entry["note"] for entry in conflicts]}
-                   if (conflicts := source_conflicts(question)) else {}),
-                **({"no_current_course": unknown, "no_current_course_note": (
-                    "The Course Atlas has no current course with these exact codes. Open with a "
-                    "limitation block, which takes no citations, naming the code. With no codes "
-                    "listed, say \"There is no\" and the code. With codes listed, the student "
-                    "most likely means that course (another campus, suffix or subject name): say "
-                    "the code is not in the Course Atlas, point to the listed course, and answer "
-                    "about it.")}
-                   if (unknown := session.unknown_question_codes()
-                       if hasattr(session, "unknown_question_codes") else None) else {}),
-                **({"renamed_courses": renamed, "renamed_courses_note": (
-                    "The student wrote a subject's former name. Say once that the course is now "
-                    "the listed code, then answer about it; the old code is not missing.")}
-                   if (renamed := session.renamed_question_codes()
-                       if hasattr(session, "renamed_question_codes") else None) else {}),
-                **({"artifact_requested": "The student asked for a plan, checklist, "
-                    "sheet or page to keep: set finish.decision.artifact. Code builds the "
-                    "file from the program's records: it counts as done only the courses "
-                    "the student said they finished, and a plan takes as many terms as the "
-                    "prerequisites need. Describe it that way; never assume other courses "
-                    "are done to fit a term count. The file numbers the terms, so explain "
-                    "order and priorities without a Term 1, Term 2 schedule of your own."}
-                   if getattr(session, "artifact_requested", False) else {}),
-                **({"file_turn": (
-                    f"Code builds the {_FILE_LABELS[file[0]]} for {' and '.join(file[1])} from "
-                    "the program record already read above; this reply only introduces it. "
-                    f"The file holds exactly this: {_FILE_CONTENTS[file[0]]}. Describe it only "
-                    "that way. Finish now, in at most four short blocks citing that record: "
-                    "what the program requires in a sentence or two, what the file will hold, "
-                    "and one question only if the file needs the answer (for a plan or tracker, "
-                    "which courses the student has finished). Do not search or read course "
-                    "records.")}
-                   if (file := getattr(session, "file_turn", None)) else {}),
-                **({"referenced_artifacts": [
-                    {"artifact_id": aid, "revision_id": rid,
-                     **({"kind": detail[0], "title": detail[1]}
-                        if (detail := (getattr(session, "artifact_reference_details", None) or {}).get((aid, rid)))
-                        else {})}
-                    for aid, rid in (getattr(session, "artifact_reference_list", None)
-                                     or sorted(getattr(session, "artifact_references", ())))],
-                    **({"artifact_export_note": (
-                        "The student asked to export or convert an attached artifact. Do not set "
-                        "decision.artifact; tell them to use the Download/Export button in the "
-                        "artifact panel (Markdown, Word, Excel, HTML) or Print / Save as PDF in their browser."
-                    )} if _EXPORT_ASK.search(question or "") else {})}
-                   if getattr(session, "artifact_references", None) else {}),
+                **_situation_notes(session, question),
                 "omitted_evidence_ids": [],
                 "remaining_limits": session.remaining_limits,
                 "finish_required": finishing, "instruction": hint,
@@ -1218,46 +1296,12 @@ class ResearchController:
             base["conversation_recall_index"] = deepcopy(session.recall_page)
             if session.conversation_page is not None:
                 base["conversation_page_untrusted"] = session.conversation_page
-        tools = tuple(t for t in registry.definitions if not finishing or t.name == "advisor_finish")
         empty_scope = not session.scope.sources and not records
-        if state_required:
-            allowed = {"advisor_update_research", "advisor_finish"}
-            if _requests_preparation(question):
-                allowed.add("advisor_check_preparation")
-            tools = tuple(t for t in tools if t.name in allowed)
-        elif program_required:
-            tools = tuple(t for t in tools if t.name in {"advisor_read_program", "advisor_finish"})
-        elif read_required:
-            tools = tuple(t for t in tools if t.name in {
-                "advisor_read_program", "advisor_read_document", "advisor_read_courses", "advisor_recall", "advisor_read_conversation", "advisor_finish"})
-        if policy_required:
-            pending = getattr(session, "pending_policy_reads", ())
-            tools = tuple(t for t in tools if t.name in {"advisor_read_document", "advisor_finish"})
-            narrowed = []
-            for tool in tools:
-                if tool.name != "advisor_read_document":
-                    narrowed.append(tool)
-                    continue
-                schema = deepcopy(tool.input_schema)
-                schema["properties"]["handle"] = {"type": "string", "enum": list(pending)}
-                schema["required"] = list(dict.fromkeys([*schema.get("required", []), "handle"]))
-                narrowed.append(replace(tool, input_schema=schema))
-            tools = tuple(narrowed)
-        if continuation_required and not finishing:
-            required = "advisor_update_research" if state_required else "advisor_read_program"
-            tools = tuple(t for t in tools if t.name == required)
-            if not state_required:
-                pending = [(handle, cursor) for handle, cursor in session.program_cursors.items() if cursor]
-                narrowed = []
-                for tool in tools:
-                    schema = deepcopy(tool.input_schema)
-                    schema["properties"]["handle"] = {"type": "string", "enum": [h for h, _ in pending]}
-                    schema["properties"]["cursor"] = {"type": "string", "enum": [c for _, c in pending]}
-                    schema["required"] = list(dict.fromkeys([*schema.get("required", []), "handle", "cursor"]))
-                    narrowed.append(replace(tool, input_schema=schema))
-                tools = tuple(narrowed)
-            # Current progress and exact evidence replace duplicate older read
-            # outputs, whose superseded cursors otherwise invite cached rereads.
+        tools, drop_last_round = _round_tools(
+            session, registry, question, finishing=finishing, state_required=state_required,
+            program_required=program_required, read_required=read_required,
+            policy_required=policy_required, continuation_required=continuation_required)
+        if drop_last_round:
             last_round = []
         if empty_scope:
             base["source_scope_empty"] = True
