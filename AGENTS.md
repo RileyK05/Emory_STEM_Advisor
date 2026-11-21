@@ -45,7 +45,10 @@ plans and `docs/audit/` the review status.
     `api/query_service.py` is its entry; `generation/question_router.py` routes
     each question by kind and distress tier before research, and code enforces
     the route; `generation/student_request.py` reads what a request asks for: file
-    kind, template, plan and term caps, courses the student finished), `tools/`, `operations/`
+    kind, template, plan and term caps, courses the student finished;
+    `generation/artifact_pipeline.ArtifactPipeline` joins the stage mixins in
+    `generation/pipeline/`: outline, plans, templates, revisions, sections,
+    assembly), `tools/`, `operations/`
     (shared token/call/time budgets), `jobs/` (job store, worker runtime), `conversations/`, `artifacts/`,
     `sandbox/` (isolated Office/HTML execution on a separate worker).
   - Accounts and governance: `auth/` (`get_principal` is the one authentication

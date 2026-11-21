@@ -414,7 +414,7 @@ def test_workbook_rows_become_code_built_cells_and_formulas(db, collection, tmp_
     ("Plan my Economics BA", "Economics (Minor)", True),
 ])
 def test_an_outline_keeps_the_program_kind_the_student_named(brief, title, refused):
-    from app.generation.artifact_pipeline import _check_program_kind
+    from app.generation.pipeline.shared import _check_program_kind
 
     if refused:
         with pytest.raises(ValueError, match="asked about a"):
@@ -1063,7 +1063,7 @@ def test_the_student_term_limits_are_read(text, credits, courses, terms):
     ((), set(), []),
 ])
 def test_the_longest_prerequisite_chain_explains_extra_terms(prerequisites, courses, chain):
-    from app.generation.artifact_pipeline import _longest_chain
+    from app.generation.pipeline.plans import _longest_chain
 
     assert _longest_chain(prerequisites, courses) == chain
 
