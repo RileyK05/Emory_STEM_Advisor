@@ -51,6 +51,8 @@ _WRAP_WIDTH = 80
 _SUBJECT_WORD = r"[A-Z]{2,7}(?:_OX|\s+OX(?=\s?\d))?|[A-Z][a-z]{1,20}"
 _SUBJECTS = rf"(?P<subjects>(?:{_SUBJECT_WORD})(?:\s*/\s*(?:{_SUBJECT_WORD}))*)"
 # "LING-101" is how the catalog writes Linguistics.
+# "IDS 201_OX": Oxford's mark after the number; it names IDS_OX 201.
+OX_AFTER_NUMBER_RE = re.compile(r"\b([A-Za-z]{2,8})\s+(\d{3}[A-Z]{0,4})_OX\b")
 _CODE_RE = re.compile(rf"\b{_SUBJECTS}(?:\s|-)?(?P<number>{_NUMBER})\b")
 # A number after "#" is a stray HTML entity ("&#160;"), never a course.
 _BARE_RE = re.compile(rf"(?<!#)\b(?P<number>{_NUMBER})\b")
@@ -176,6 +178,8 @@ def _is_level_descriptor(text: str, number_end: int) -> bool:
 
 def course_mentions(text: str) -> tuple[str, ...]:
     """Every course code a requirement line mentions, in order, de-duplicated."""
+    # "IDS 201_OX" is IDS_OX 201, read as the prose reader reads it.
+    text = OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", text)
     found: list[tuple[int, int, list[str]]] = []
     last_subjects: list[str] | None = None
     previous_end = 0

@@ -64,6 +64,11 @@ Electives (select 2 courses required, 6 CU)
     # not catalog subjects: the parser of record reads the literal subject and
     # never remaps them to MATH or CS.
     ("MTH 111 and CMPSC 170", ["MTH 111", "CMPSC 170"]),
+    # Oxford's mark after the number, as four program lines print it; the prose
+    # reader already read these, so the lines now link to their Oxford course.
+    ("IDS 201_OX", ["IDS_OX 201"]),
+    ("Introduction to American Studies (AMST 201 or AMST 201_OX)", ["AMST 201", "AMST_OX 201"]),
+    ("IDS 216W or IDS 216_OX", ["IDS 216W", "IDS_OX 216"]),
 ])
 def test_course_mentions(text, codes):
     assert list(course_mentions(text)) == codes
@@ -500,3 +505,30 @@ def test_a_bare_number_is_a_course_only_when_the_subject_has_it(text, subject, e
     known = {"PSYC 209", "PSYC 212", "PSYC 128", "PSYC 300", "DANC 221R", "DANC 321R"}
     assert bare_course_mentions(text, subject, known, {"PSYC 209"} if "and 212" in text else set()
                                 ) == expected
+
+
+_TITLES = ["Computer Science (BS)", "Computer Science (BA)", "Biology (BS)", "Biology (BA)",
+           "Applied Mathematics and Statistics (BS)", "Mathematics (BS)",
+           "Neuroscience and Behavioral Biology (BS)"]
+
+
+@pytest.mark.parametrize(("text", "named"), [
+    # Acronyms and short forms name a program, as research reads them (2026-11-21).
+    ("Make a checklist for the CS BS.", ["Computer Science (BS)"]),
+    ("AMS BS checklist", ["Applied Mathematics and Statistics (BS)"]),
+    ("math BS tracker", ["Mathematics (BS)"]),
+    # NBB contains "Biology (BS)"'s words; the longer title wins.
+    ("NBB BS requirements", ["Neuroscience and Behavioral Biology (BS)"]),
+    # A subject before a course number is a course, never a program.
+    ("I took CS 170; make a checklist for the Biology BS.", ["Biology (BS)"]),
+    ("Plan Math 111 then the bio BS", ["Biology (BS)"]),
+    # Several programs come back in the order the request names them.
+    ("Compare the CS BS and the Biology BS", ["Computer Science (BS)", "Biology (BS)"]),
+    ("Make a checklist for my major.", []),
+])
+def test_program_names_in_a_request(text, named):
+    from app.programs.naming import program_named_in, programs_named_in
+
+    assert programs_named_in(text, _TITLES) == named
+    # One program is "the" program only when it is the only one named.
+    assert program_named_in(text, _TITLES) == (named[0] if len(named) == 1 else None)

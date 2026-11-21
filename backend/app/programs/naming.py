@@ -7,16 +7,16 @@ different question:
 - ``programs_named_in``: every program whose full title a text names (all of its
   words appear), longest titles winning over titles they contain. Used to find
   the programs a file request is about.
-- ``program_named_in``: the single program a text names, or None when two equally
-  long titles tie.
+- ``program_named_in``: the single program a text names, or None when it names
+  none or several.
 - ``choose_program_title``: the longest title appearing in the text as one
   contiguous phrase.
 - ``missing_program``: a degree program the student named that no program in
   scope matches, read with acronyms (CS, NBB) and short forms (bio, math).
 - ``normalized_title``: lower case, punctuation folded to single spaces.
 
-Only ``missing_program`` reads aliases; the title matchers need every word of a
-title (2026-11-20: "CS BS" names no program for them).
+The title matchers and ``missing_program`` read the same acronyms and short forms
+(2026-11-21: before, "CS BS" named a program for research but not for the file).
 """
 
 from __future__ import annotations
@@ -182,38 +182,52 @@ def choose_program_title(prompt: str, titles: list[str]) -> str | None:
     return matches[0][1] if matches else None
 
 
+# A word followed by a course number is a course's subject ("Math 111", "CS 170"),
+# never a program name, so it is read as written and not expanded.
+_BEFORE_COURSE_NUMBER = re.compile(r"\s?\d{3}")
+
+
+def _request_words(text: str) -> dict[str, int]:
+    """Each program word a request uses, with where it first appears.
+
+    Acronyms expand (CS -> computer science) and short forms fold (bio ->
+    biology), as research reads a missing program, except before a course number.
+    """
+    words: dict[str, int] = {}
+    for match in re.finditer(r"[a-z0-9]+", text.casefold()):
+        word, position = match.group(0), match.start()
+        expanded = [word]
+        if not _BEFORE_COURSE_NUMBER.match(text, match.end()):
+            expanded = [*_PROGRAM_ACRO_ALIASES.get(word, ()), _program_word(word)]
+        for each in expanded:
+            words.setdefault(each, position)
+    return words
+
+
+def _title_words(title: str) -> set[str]:
+    """A title's program words: short forms folded, connecting words dropped."""
+    return {_program_word(word) for word in re.findall(r"[a-z0-9]+", title.casefold())
+            if word not in _NAME_STOPWORDS}
+
+
 def programs_named_in(text: str, titles: list[str]) -> list[str]:
     """Every program whose full title the request names, in the order it names them.
 
-    A title inside a longer matched title ("Economics (BA)" inside "Economics and
-    Mathematics (BA)") is left out.
+    A title is named when each of its words appears, read with acronyms and short
+    forms ("CS BS" names Computer Science (BS)). A title inside a longer matched
+    title ("Economics (BA)" inside "Economics and Mathematics (BA)") is left out.
     """
-    lowered = text.casefold()
-    words = set(re.findall(r"[a-z0-9]+", lowered))
-    matched = [(set(re.findall(r"[a-z0-9]+", title.casefold())), title) for title in titles]
+    words = _request_words(text)
+    matched = [(_title_words(title), title) for title in titles]
     matched = [(title_words, title) for title_words, title in matched
-               if title_words and title_words <= words]
+               if title_words and title_words <= words.keys()]
     kept = [(title_words, title) for title_words, title in matched
             if not any(title_words < other for other, _title in matched)]
-
-    def first_seen(item) -> int:
-        positions = [lowered.find(word) for word in item[0] if lowered.find(word) >= 0]
-        return min(positions, default=len(lowered))
-
-    return [title for _words, title in sorted(kept, key=first_seen)]
+    return [title for title_words, title in
+            sorted(kept, key=lambda item: min(words[word] for word in item[0]))]
 
 
 def program_named_in(text: str, titles: list[str]) -> str | None:
-    """The one program whose full title appears in the request, if unambiguous."""
-    words = set(re.findall(r"[a-z0-9]+", text.casefold()))
-    matches = sorted(
-        ((len(title_words), title) for title in titles
-         for title_words in [set(re.findall(r"[a-z0-9]+", title.casefold()))]
-         if title_words and title_words <= words),
-        reverse=True,
-    )
-    if not matches:
-        return None
-    if len(matches) > 1 and matches[0][0] == matches[1][0]:
-        return None
-    return matches[0][1]
+    """The one program a request names, or None when it names none or several."""
+    named = programs_named_in(text, titles)
+    return named[0] if len(named) == 1 else None

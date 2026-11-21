@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from app.atlas.records import normalize_code
 from app.programs.requirements import (
     _NOT_SUBJECTS,
+    OX_AFTER_NUMBER_RE,
     SUBJECT_ALIASES,
     _is_level_descriptor,
 )
@@ -345,7 +346,7 @@ def _requisite_parts(text: str, course_code: str | None) -> tuple[tuple[str, str
     stripped = _repair_typing(_REPEATED_SENTENCE_RE.sub(r"\1", text.strip()))
     stripped = _OPENER_RE.sub("", stripped)
     stripped = _MISSPELLED_LABEL_RE.sub(r"prerequisite\1", stripped)
-    stripped = _OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", stripped)
+    stripped = OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", stripped)
     stripped = _SHARED_NUMBER_RE.sub(r"\1 \3/\2 \3", stripped)
     stripped = _FORMER_NUMBER_RE.sub(r"\1 or \2", stripped)
     stripped = re.sub(r"\s+&\s+", " and ", stripped)
@@ -424,8 +425,8 @@ _SENTENCE_END_RE = re.compile(r"(?<=[a-z0-9)])\s*[.;]\s*(?=[A-Za-z])")
 _RESTRICTION_WORDS_RE = re.compile(
     r"\b(?:open|only|restricted|limited|must|requires?|required|permission|consent|approval"
     r"|eligib\w+|majors?|minors?|candidates?|seniors?|juniors?)\b", re.IGNORECASE)
-# "Math 112_OX" puts Oxford's suffix after the number; the code is MATH_OX 112.
-_OX_AFTER_NUMBER_RE = re.compile(r"\b([A-Za-z]{2,8})\s+(\d{3}[A-Z]{0,4})_OX\b")
+# "Math 112_OX" (Oxford's suffix after the number) is OX_AFTER_NUMBER_RE, shared
+# with the program-line reader in programs/requirements.py.
 # "ECON _OX 100": a stray space before the campus mark, as twelve Atlas requisites print it.
 _SPACED_OX_RE = re.compile(r"\b([A-Za-z]{2,8})\s+_OX\b", re.IGNORECASE)
 # "BIOL/ENVS 247" names one cross-listed number under two subjects.
@@ -639,7 +640,7 @@ def canonical_codes_in(text: str) -> tuple[str, ...]:
     ("ECS 49") do not.
     """
     prepared = _SPACED_OX_RE.sub(r"\1_OX", text)
-    prepared = _OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", prepared)
+    prepared = OX_AFTER_NUMBER_RE.sub(r"\1_OX \2", prepared)
     prepared = _SHARED_NUMBER_RE.sub(r"\1 \3/\2 \3", prepared)
     prepared = _RUN_TOGETHER_RE.sub(r"\1 \2 ", prepared)
     codes: list[str] = []
