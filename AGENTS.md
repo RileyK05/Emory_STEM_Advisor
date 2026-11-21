@@ -48,7 +48,9 @@ plans and `docs/audit/` the review status.
     kind, template, plan and term caps, courses the student finished;
     `generation/artifact_pipeline.ArtifactPipeline` joins the stage mixins in
     `generation/pipeline/`: outline, plans, templates, revisions, sections,
-    assembly), `tools/`, `operations/`
+    assembly; `research_final.validate_final` runs the reply checks in
+    `generation/answer_checks/`, one module per family: safety, file claims,
+    policy facts, perspective, course claims), `tools/`, `operations/`
     (shared token/call/time budgets), `jobs/` (job store, worker runtime), `conversations/`, `artifacts/`,
     `sandbox/` (isolated Office/HTML execution on a separate worker).
   - Accounts and governance: `auth/` (`get_principal` is the one authentication

@@ -32,9 +32,9 @@ from app.advising.research_types import (
     EvidenceRecord,
     FinalDecision,
 )
+from app.generation.answer_checks.policy_facts import disclose_retired_courses
 from app.generation.research_final import (
     DecisionRejected,
-    disclose_retired_courses,
     validate_final,
 )
 
@@ -221,7 +221,7 @@ def test_an_atlas_title_names_a_course_with_its_own_rules(title, kind):
 ])
 def test_an_answer_naming_a_special_course_carries_its_caveat(blocks, caveated):
     from app.atlas.designations import course_designation
-    from app.generation.research_final import disclose_special_courses
+    from app.generation.answer_checks.policy_facts import disclose_special_courses
 
     decision = _decision([DecisionBlock(kind=kind, text=text, evidence_ids=("e1",))
                           for kind, text in blocks])

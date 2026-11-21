@@ -1,7 +1,6 @@
 """Validate research references and render server-owned citation numbers."""
 
 import re
-import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from uuid import UUID
@@ -16,287 +15,37 @@ from app.advising.research_types import (
     validate_evidence_references,
     validate_fact_support,
 )
-from app.atlas.designations import caveat_sentence
-from app.atlas.records import normalize_code
-from app.atlas.requisites import canonical_codes_in
-from app.generation.answer import NONSUPPORT_RE, Citation, GeneratedAnswer
+from app.generation.answer import Citation, GeneratedAnswer
+from app.generation.answer_checks.course_claims import (
+    absent_code_problems,
+    advised_courses,
+    cited_support_problems,
+    entry_claim_problems,
+    established_codes,
+    identity_problems,
+    recommendation_problems,
+    unread_course_problems,
+)
+from app.generation.answer_checks.file_claims import (
+    file_claim_problems,
+)
+from app.generation.answer_checks.perspective import (
+    perspective_content_problems,
+)
+from app.generation.answer_checks.policy_facts import (
+    grading_rule_problems,
+    policy_number_problems,
+    retired_course_problems,
+)
+from app.generation.answer_checks.safety import (
+    answer_safety_problems,
+)
 from app.llm.base import Usage
 from app.retrieval.types import CitedChunk
 
 RESEARCH_PROMPT_VERSION = "research-60"
 RESEARCH_RENDER_VERSION = "research-1"
 _MARKER = re.compile(r"\[\s*(?:e\d+|\d+(?:\s*[,;-]\s*\d+)*)\s*\]", re.IGNORECASE)
-# A fact block that asserts a course is required, listed or part of a program
-# must be backed by the passage it cites. A block that only describes a course
-# makes no such assertion.
-_INCLUSION = re.compile(
-    r"\b(?:required|requirement|elective|counts?|sits? within|list(?:ed)?|"
-    r"program|major|minor|degree)\b", re.IGNORECASE)
-_ENTRY = re.compile(
-    r"\b(?:entry point|starting point|first course|initial course|"
-    r"begin with|start with)\b", re.IGNORECASE)
-_ENTRY_NEGATED = re.compile(
-    r"\b(?:not|never|rather than|instead of)\b[^.]{0,80}"
-    r"\b(?:entry point|starting point|first course|initial course)\b", re.IGNORECASE)
-_PREREQUISITE = re.compile(r"\b(?:prerequisite|prerequisites|requisite|requisites)\b",
-                           re.IGNORECASE)
-
-
-def _program_requirement_mentions(records, cited: set[str]) -> set[str]:
-    """Codes mentioned in cited program reads, including alternatives and exclusions.
-
-    A mention alone does not prove eligibility or support a course recommendation.
-    Program evidence carries the issued program handle as an entity reference;
-    the parser handles catalog shorthand such as ``BIOL 141/141L``.
-    """
-    mentioned: set[str] = set()
-    for evidence_id in cited:
-        record = records.get(evidence_id)
-        if record is None or not any(ref.startswith("h_") for ref in record.entity_refs):
-            continue
-        mentioned.update(canonical_codes_in(record.exact_text))
-    return mentioned
-
-
-_RETIRED_SAID = re.compile(r"no longer (?:offered|runs?|available)|not (?:been )?offered|retired|"
-                           r"discontinued|(?:isn't|aren't|not) on (?:any )?recent",
-                           re.IGNORECASE)
-
-
-_CLAUSE_SPLIT = re.compile(r"([;\n]|(?<=[.!?])\s+)")
-_CLAUSE_END = re.compile(r"[.!?]*[\"'”’)]*$")
-
-
-def disclose_retired_courses(decision: FinalDecision, retired: frozenset[str]) -> FinalDecision:
-    """Say in each sentence that names a retired course that it is not offered:
-    the full label at its first mention in the answer, a short one after that.
-
-    Which courses no checked Atlas term shows is a database fact, so the server
-    writes the disclosure instead of rejecting the answer for wording it
-    (round 8: every model, the strongest included, lost rounds to it). The note
-    goes at the end of the sentence, so it reads the same however the code was
-    spelled. Recommending a retired course is still refused: that is advice,
-    and a note cannot fix it.
-    """
-    if not retired:
-        return decision
-    blocks, changed, labeled = [], False, set()
-    for block in decision.blocks:
-        parts = _CLAUSE_SPLIT.split(block.text)
-        for index in range(0, len(parts), 2):
-            clause = parts[index]
-            if _RETIRED_SAID.search(clause):
-                continue
-            named = [code for code in dict.fromkeys(canonical_codes_in(clause)) if code in retired]
-            if not named:
-                continue
-            # The full label once per answer; a later sentence gets the short form.
-            fresh = [code for code in named if code not in labeled]
-            labeled.update(named)
-            note = (" (not on recent schedules)" if not fresh
-                    else f" ({fresh[0]} isn't on any recent Course Atlas schedule)" if len(fresh) == 1
-                    else f" ({', '.join(fresh[:-1])} and {fresh[-1]} aren't on any recent "
-                         "Course Atlas schedule)")
-            end = _CLAUSE_END.search(clause).start()
-            parts[index] = clause[:end].rstrip() + note + clause[end:]
-        text = "".join(parts)
-        if text != block.text:
-            block, changed = block.model_copy(update={"text": text}), True
-        blocks.append(block)
-    return decision.model_copy(update={"blocks": tuple(blocks)}) if changed else decision
-
-
-#: Special courses one answer caveats; past this the caveats would bury the answer.
-MAX_SPECIAL_CAVEATS = 4
-
-
-def disclose_special_courses(decision: FinalDecision, special: dict) -> FinalDecision:
-    """Give each special topics, research, honors, internship, practicum or capstone
-    course the answer names its caveat, once, unless the answer already says it.
-
-    The kind is read from the Atlas title (``app.atlas.designations``), so the
-    server writes the caveat rather than trusting each model to remember it. It
-    goes after the first block that names the course; a block that names the
-    course in the caveat's own words ("arranged with a faculty mentor") counts.
-    """
-    if not special:
-        return decision
-    blocks = list(decision.blocks)
-    added = 0
-    for code, designation in special.items():
-        naming = [index for index, block in enumerate(blocks)
-                  if block.kind != "question" and code in canonical_codes_in(block.text)]
-        if not naming or any(designation.said.search(blocks[index].text) for index in naming):
-            continue
-        first = naming[0]
-        blocks[first] = blocks[first].model_copy(update={
-            "text": f"{blocks[first].text.rstrip()} {caveat_sentence(code, designation)}"})
-        added += 1
-        if added == MAX_SPECIAL_CAVEATS:
-            break
-    return decision.model_copy(update={"blocks": tuple(blocks)}) if added else decision
-
-
-def retired_course_problems(decision: FinalDecision, recommended: set[str],
-                            retired: frozenset[str]) -> list[str]:
-    """A course the Atlas shows in no checked term is never presented as current.
-
-    The record is deterministic and the instruction alone does not hold: a model
-    that has read "no longer offered" can still recommend the course from its
-    catalog description. So each sentence naming one has to say so itself.
-    """
-    if not retired:
-        return []
-    problems = [f"recommended course {code} is no longer offered; recommend the course that "
-                "replaced it" for code in sorted({normalize_code(c) for c in recommended} & retired)]
-    unsaid = set()
-    for block in decision.blocks:
-        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
-            if not _RETIRED_SAID.search(clause):
-                unsaid |= set(canonical_codes_in(clause)) & retired
-    if unsaid:
-        problems.append(
-            f"{', '.join(sorted(unsaid))}: no checked Course Atlas term shows it. Say in the same "
-            "sentence that it is not offered in any checked term; a student who completed it "
-            "still meets a requirement that names it. Keep it in a requisite or program list, "
-            "and name the current course that list gives for a student choosing now")
-    return problems
-
-
-# A cap, minimum or threshold: a number next to hours, credits or a GPA.
-_POLICY_NUMBER = re.compile(
-    r"(?<![\d.])(\d+(?:\.\d+)?)[\s-]*(?:semester[\s-]+|credit[\s-]+)?(?:hours?|credits?)\b"
-    r"|\bGPA\b[^.\d]{0,30}?(\d+(?:\.\d{1,2})?)(?!\d)"
-    r"|(?<![\d.])(\d+(?:\.\d{1,2})?)\s+(?:[a-z]+\s+)?GPA\b", re.IGNORECASE)
-_WORD_NUMBER_TEXT = (
-    r"(?:(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
-    r"thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|"
-    r"thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)(?:[-\s]+(?:one|two|"
-    r"three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|"
-    r"fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|"
-    r"sixty|seventy|eighty|ninety|hundred))*|\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)")
-_POLICY_WORD_NUMBER = re.compile(
-    rf"\b({_WORD_NUMBER_TEXT})\s+(?=(?:credit|semester)\s+hours?\b|\bcredits?\b|"
-    rf"hours?\s+of\s+(?:[a-z]+\s+){{0,2}}credits?\b)",
-    re.IGNORECASE)
-_NUMBER = re.compile(r"(?<![\d.,])(?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?![\d])")
-_UNIT_WORDS = {word: n for n, word in enumerate((
-    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
-    "nineteen"))}
-_TEN_WORDS = {word: 10 * n for n, word in enumerate((
-    "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety"), start=2)}
-
-
-def _numbers_in(text: str) -> set[float]:
-    """Every number a passage states, in digits or in words ("twenty-four")."""
-    found = {float(number.replace(",", "")) for number in _NUMBER.findall(text)}
-    total, spelled = 0, False
-    for word in [*re.findall(r"[a-z]+", text.lower()), ""]:
-        if word in _UNIT_WORDS or word in _TEN_WORDS:
-            total += _UNIT_WORDS.get(word, 0) + _TEN_WORDS.get(word, 0)
-            spelled = True
-        elif word == "hundred" and spelled:
-            total *= 100
-        elif word == "and" and spelled:
-            continue
-        else:
-            if spelled:
-                found.add(float(total))
-            total, spelled = 0, False
-    return found
-
-
-_GRADING_TEXT = re.compile(
-    r"(?<![A-Za-z])s[/-]u(?![A-Za-z])|pass[/-]fail|credit[/-]no[- ]credit|"
-    r"letter[- ]grade|satisfactory|grading basis|\bgrading\b|\bgrade mode\b",
-    re.IGNORECASE)
-_LETTER_ONLY_RULE = re.compile(
-    r"\bno\s+s[/-]u\b|\bnot\s+(?:be\s+)?taken\s+(?:on\s+|for\s+)?s[/-]u\b|"
-    r"\bletter[- ]grad(?:e|ed|ing)\b|"
-    r"\bonly\b[^.;]{0,60}\belectives?\b[^.;]{0,40}(?<![A-Za-z])s[/-]u(?![A-Za-z])",
-    re.IGNORECASE)
-# A rule that lets electives be taken S/U ("only courses in the elective component
-# may be taken S/U") makes an answer about an elective an exception, not a conflict.
-_RULE_ALLOWS_ELECTIVE_SU = re.compile(
-    r"\belectives?\b[^.;]{0,80}(?<![A-Za-z])s[/-]u(?![A-Za-z])|"
-    r"(?<![A-Za-z])s[/-]u(?![A-Za-z])[^.;]{0,80}\belectives?\b",
-    re.IGNORECASE)
-_ELECTIVE_WORD = re.compile(r"\belectives?\b", re.IGNORECASE)
-_SU_ALLOW = re.compile(
-    r"(?<![A-Za-z])s[/-]u(?![A-Za-z])|pass[/-]fail|credit[/-]no[- ]credit|"
-    r"satisfactory/?unsatisfactory", re.IGNORECASE)
-_SU_PERM = re.compile(r"\b(?:can|may|allowed|eligible|permitted|option|possible)\b",
-                      re.IGNORECASE)
-_SU_NEG = re.compile(
-    r"\b(?:no|not|n['’]t|never|cannot|can['’]t|prohibit(?:ed)?|ineligible|"
-    r"disallowed|forbidden|must\s+be\s+(?:taken\s+(?:for\s+)?)?a?\s*letter)\b",
-    re.IGNORECASE)
-_ELECTIVE_EXCEPTION = re.compile(
-    r"\b(?:general\s+electives?|free\s+electives?|non-major|outside\s+the\s+(?:major|minor))\b",
-    re.IGNORECASE)
-
-
-def grading_rule_problems(decision: FinalDecision,
-                          rules: Sequence[tuple[str, str, str]]) -> list[str]:
-    """A grading answer must cite and follow the program's own rule when one was read."""
-    if not rules:
-        return []
-    written = "\n".join(block.text for block in decision.blocks)
-    if not _GRADING_TEXT.search(written):
-        return []
-    cited = {eid for block in decision.blocks for eid in block.evidence_ids}
-    cited_rules = [(title, text, evidence_id) for title, text, evidence_id in rules
-                   if evidence_id in cited]
-    if not cited_rules:
-        title, text, _evidence_id = rules[0]
-        return [(f"the answer discusses grading but does not cite {title}'s own rule "
-                 f"({text[:300]}); use that rule instead of the College default")]
-    for title, text, _eid in cited_rules:
-        if not _LETTER_ONLY_RULE.search(text):
-            continue
-        electives_allowed = bool(_RULE_ALLOWS_ELECTIVE_SU.search(text))
-        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", written):
-            if (_SU_ALLOW.search(clause) and _SU_PERM.search(clause)
-                    and not _SU_NEG.search(clause)
-                    and not _ELECTIVE_EXCEPTION.search(clause)
-                    and not (electives_allowed and _ELECTIVE_WORD.search(clause))):
-                return [(f"the answer states courses may be taken S/U in conflict with "
-                         f"{title}'s grading rule ({text[:300]})")]
-    return []
-
-
-def policy_number_problems(decision: FinalDecision, records: dict) -> list[str]:
-    """A fact or judgment stating a cap, minimum or GPA threshold cites a passage with it.
-
-    A model that read the College default and the program rule can give the
-    wrong one's number, or none of them ("24 hours" when the rule says 12). Advice
-    carries numbers as often as facts do; only its opinion is beyond checking.
-    """
-    problems = []
-    for block in decision.blocks:
-        if block.kind not in {"fact", "judgment"}:
-            continue
-        support = _numbers_in("\n".join(
-            records[e].exact_text for e in block.evidence_ids if e in records))
-        unsupported = set()
-        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
-            if NONSUPPORT_RE.search(clause):
-                continue
-            for match in _POLICY_NUMBER.finditer(clause):
-                number = next(group for group in match.groups() if group)
-                if float(number) not in support:
-                    unsupported.add(match.group(0).strip())
-            # "twenty-four credit hours": the number itself can be written out.
-            for match in _POLICY_WORD_NUMBER.finditer(clause):
-                for number in _numbers_in(match.group(1)):
-                    if number not in support:
-                        unsupported.add(f"{number:g}")
-        if unsupported:
-            problems.append(
-                f"{block.kind} block states " + ", ".join(sorted(unsupported)) + " but its cited passages "
-                "do not contain that number; cite the passage that states it, or drop it")
-    return problems
 
 
 # The whole reply to a request outside academic advising. It is fixed so a
@@ -309,235 +58,12 @@ class DecisionRejected(ValueError):
     pass
 
 
-# A clause that names a course the master says does not exist must say so. The
-# finish gate requires naming it, so this is the one wording that may.
-_ABSENT_SAID = re.compile(
-    r"\b(?:does(?: not|n['’]t) exist|no such (?:course|class)|"
-    r"(?:is|are)(?: not|n['’]t) (?:a |an )?(?:current |real |valid )?(?:emory )?"
-    r"(?:course|class)(?:es)?\b|"
-    r"there (?:is|are) no (?:[A-Z][A-Z0-9]{1,7}(?:_OX)?\s?\d{3}[A-Z]?|"
-    r"such (?:course|class)|course|class)\b|"
-    r"(?:not|(?:is|are)n['’]t) (?:in|found in|listed in) the course atlas|no record of)",
-    re.IGNORECASE)
-
-
-# What an answer is made of, checked before what it claims. A model that is
-# injected or misfires can return a stub, its own instructions, or text shaped
-# like a secret; none of it may reach a student.
-_STUB = re.compile(r"(?:placeholder|lorem ipsum|todo|tbd|n/?a|answer|text|none|null)?",
-                   re.IGNORECASE)
-_STUB_START = re.compile(r"^(?:placeholder|lorem ipsum|todo|tbd)\b", re.IGNORECASE)
-_STUB_INLINE = re.compile(
-    r"\[\s*(?:todo|tbd|placeholder|insert\b[^\]]{0,40})\s*\]|\b(?:lorem ipsum|todo\s*:|tbd\s*:)",
-    re.IGNORECASE)
-_MIN_ANSWER_LETTERS = 12
-_ECHO_SHINGLE = 5
-_ECHO_MIN_SHARED = 5
-_ECHO_RATIO = 0.25
-_ZERO_WIDTH = str.maketrans("", "", "\u00ad\u200b\u200c\u200d\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2060\ufeff")
-_CONFUSABLES = str.maketrans({
-    "А": "A", "В": "B", "Е": "E", "І": "I", "Ј": "J", "К": "K", "М": "M",
-    "Н": "H", "О": "O", "Р": "P", "С": "C", "Т": "T", "У": "Y", "Х": "X", "Ѕ": "S",
-    "а": "a", "е": "e", "і": "i", "ј": "j", "к": "k", "м": "m", "о": "o",
-    "р": "p", "с": "c", "т": "t", "у": "y", "х": "x", "ѕ": "s",
-    "Α": "A", "Β": "B", "Ε": "E", "Ζ": "Z", "Η": "H", "Ι": "I", "Κ": "K",
-    "Μ": "M", "Ν": "N", "Ο": "O", "Ρ": "P", "Τ": "T", "Υ": "Y", "Χ": "X",
-    "α": "a", "ε": "e", "ι": "i", "κ": "k", "ν": "v", "ο": "o", "ρ": "p",
-    "τ": "t", "υ": "u", "χ": "x",
-})
-_SECRET = re.compile(
-    r"\bsk-[A-Za-z0-9_-]{16,}|\b[A-Z][A-Z0-9_]{2,}_(?:API_)?KEY\s*=|"
-    r"\b[a-z][a-z0-9+.-]*://[^\s/:@]+:[^\s/@]+@|-----BEGIN [A-Z0-9 ]*KEY-----|"
-    r"\bAKIA[0-9A-Z]{16}\b|\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|"
-    r"\bgh[pousr]_[A-Za-z0-9]{36}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}|"
-    r"\bAIza[0-9A-Za-z_-]{35}\b|"
-    r"(?i:\bBearer\s+[A-Za-z0-9._-]{16,}|\bAccountKey\s*=\s*[^\s;]{8,}|"
-    r"\b(?:api[_-]?key|access[_-]?token|secret|password|passwd|pwd)\s*[:=]\s*"
-    r"(?=['\"]?(?:[^\s'\";]*[\d_/+=-]|[A-Za-z]{16,}))['\"]?[A-Za-z0-9_/+=-]{8,})|"
-    r"Traceback \(most recent call last\):|File \"[^\"]+\", line \d+")
-_MARKUP = re.compile(
-    r"<\s*(?:script|style|iframe|object|embed|svg)\b|javascript:|data\s*:\s*text/html|"
-    r"\bon(?:click|error|load|mouseover|mouseout|focus|blur|submit|change|input|keydown|keyup)\s*=",
-    re.IGNORECASE)
-_URL = re.compile(
-    r"\bhttps?://[^\s)\]>\"']+|\bwww\.[^\s)\]>\"']+|"
-    r"(?<=\]\()(?:[a-z0-9-]{2,}\.)+[a-z]{2,10}(?:/[^\s)]*)?(?=\))|"
-    r"(?<![A-Za-z0-9.@])(?:[a-z0-9-]{2,}\.)+"
-    r"(?:com|org|net|example|xyz|info|biz|[a-z]{2,10}(?=/[^\s)\]>\"']+))(?:/[^\s)\]>\"']*)?",
-    re.IGNORECASE)
-_CREDENTIAL_ASK = re.compile(
-    r"\b(?:verify|enter|provide|send|confirm|share|submit|type|give|reply\s+with|tell\s+me)\b"
-    r"[^.!?\n]{0,60}\b(?:password|passcode|credentials|ssn|social\s+security(?:\s+number)?|"
-    r"api[\s_-]?key|secret[\s_-]?token|access[\s_-]?token)\b"
-    r"|\b(?:send|share|give|reply\s+with|tell\s+me)\b[^.!?\n]{0,40}\b(?:your\s+)?(?:netid|login|pin)\b",
-    re.IGNORECASE)
-_SPACED_OBF = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9](?:\s+[A-Za-z0-9]){2,}(?![A-Za-z0-9])")
-_DOTTED_OBF = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9](?:\.[A-Za-z0-9]){3,}(?![A-Za-z0-9])")
-_DOT_SPACED = re.compile(
-    r"(?<=[A-Za-z0-9])\s*\.\s*(?=(?:com|org|net|edu|gov|io|co|example|xyz|info|biz)\b)|"
-    r"(?<=[A-Za-z0-9])\s+\.\s+(?=[A-Za-z0-9])|(?<=\bwww)\s*\.\s*(?=[A-Za-z0-9])",
-    re.IGNORECASE,
-)
-_SCHEME_SPACED = re.compile(r"\b(https?)\s*:\s*/\s*/", re.IGNORECASE)
-
-
-def _clean_safety_text(text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", text or "")
-    without_marks = "".join(
-        ch for ch in unicodedata.normalize("NFKD", normalized)
-        if unicodedata.category(ch) != "Mn"
-    )
-    return without_marks.translate(_ZERO_WIDTH).translate(_CONFUSABLES)
-
-
-def _safety_variants(text: str) -> tuple[str, ...]:
-    clean = _clean_safety_text(text)
-    spaced = _SPACED_OBF.sub(lambda m: re.sub(r"\s+", "", m.group(0)), clean)
-    spaced = _SCHEME_SPACED.sub(r"\1://", _DOT_SPACED.sub(".", spaced))
-    dotted = _DOTTED_OBF.sub(lambda m: m.group(0).replace(".", ""), clean)
-    return tuple(dict.fromkeys((text or "", clean, spaced, dotted)))
-
-
-def _normalize_match_text(text: str) -> str:
-    return _clean_safety_text(text).casefold()
-
-
-def _shingles(text: str) -> set[tuple[str, ...]]:
-    words = re.findall(r"[a-z0-9]+", _normalize_match_text(text))
-    return {tuple(words[i:i + _ECHO_SHINGLE]) for i in range(len(words) - _ECHO_SHINGLE + 1)}
-
-
-def _is_stub_block(text: str) -> bool:
-    for variant in _safety_variants(text):
-        if (not re.search(r"[A-Za-z]", variant)
-                or _STUB.fullmatch(variant.strip(" .,:;!?-*#\"'[]"))
-                or _STUB_START.match(variant.strip())
-                or _STUB_INLINE.search(variant)):
-            return True
-    return False
-
-
 def answer_content_problems(decision: FinalDecision, *, instructions: str | None,
                             evidence: list[EvidenceRecord],
                             artifact_expected: bool = False) -> list[str]:
-    """Reject a reply that is empty, echoes the instructions, or carries a secret or link."""
-    texts = [block.text for block in decision.blocks]
-    problems = []
-    if any(_is_stub_block(text) for text in texts) or sum(
-            len(re.findall(r"[A-Za-z]", _clean_safety_text(t))) for t in texts) < (
-                _MIN_ANSWER_LETTERS):
-        problems.append("a block has no answer in it; write the answer itself in plain sentences")
-    written = "\n".join(texts)
-    variants = _safety_variants(written)
-    reply_shingles = _shingles(written)
-    prompt_shingles = _instruction_shingles(instructions) if instructions else set()
-    shared = len(reply_shingles & prompt_shingles)
-    if (shared >= _ECHO_MIN_SHARED
-            and shared / max(1, len(reply_shingles)) >= _ECHO_RATIO):
-        problems.append("the reply repeats the advisor's instructions; answer the student instead")
-    if any(_SECRET.search(variant) for variant in variants):
-        problems.append("the reply contains credential, key or error text; remove it")
-    if any(_MARKUP.search(variant) for variant in variants):
-        problems.append("the reply contains HTML markup; answer in plain text")
-    known = "\n".join(
-        f"{record.source_name}\n{record.source_url or ''}\n{record.exact_text}"
-        for record in evidence).lower()
-    if any(re.sub(r"^https?://", "", url.rstrip(".,;:!?").lower()).rstrip("/") not in known
-           for variant in variants for url in _URL.findall(variant)):
-        problems.append("the reply links to a page no evidence names; remove the link")
-    if any(_asks_for_credentials(variant) for variant in variants):
-        problems.append("the reply asks the student for a password or credentials; remove it")
-    # The answer is published before the artifact run starts, and that run can fail.
-    if ((decision.artifact is not None or artifact_expected)
-            and any(_ARTIFACT_READY.search(variant) for variant in variants)):
-        problems.append("the reply says the artifact is ready; it is still being made, so say "
-                        "it is being made")
-    # The file counts as done only what the student said they finished (the artifact
-    # pipeline's rule); an answer that guesses more promises a plan the file is not.
-    if ((decision.artifact is not None or artifact_expected)
-            and any(_assumes_courses_done(variant) for variant in variants)):
-        problems.append("the reply assumes courses are done that the student did not say "
-                        "they finished; the file plans from the start and counts only what "
-                        "the student said, so do not assume any course is done, say how many "
-                        "terms the prerequisites need, and ask what they have finished")
-    # The file is built after this reply and numbers its own terms; a schedule written
-    # here would disagree with it ("Term 2: CS 371W" against a file's Term 5).
-    if ((decision.artifact is not None or artifact_expected)
-            and any(_TERM_SCHEDULE.search(sentence) and _COURSE_NUMBER.search(sentence)
-                    for variant in variants
-                    for sentence in re.split(r"(?<=[.!?])\s+", variant))):
-        problems.append("the reply lays out its own term schedule; the file numbers the "
-                        "terms, so explain the order and priorities without Term 1, Term 2")
-    if (decision.artifact is None and not artifact_expected
-            and any(_ARTIFACT_PROGRESS.search(variant) for variant in variants)):
-        problems.append("the reply says an artifact is being made, but no artifact was "
-                        "requested; make the request or answer without promising one")
-    return problems
-
-
-def _asks_for_credentials(text: str) -> bool:
-    for match in _CREDENTIAL_ASK.finditer(text):
-        prefix = text[max(0, match.start() - 24):match.start()].lower()
-        if re.search(r"\b(?:never|not|don['’]t|avoid|no need to)\b", prefix):
-            continue  # safety advice, not a request
-        return True
-    return False
-
-
-_ARTIFACT_READY = re.compile(
-    r"\bhere(?:['’]s| is| are) your (?:[a-z]+\s+){0,3}"
-    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\b"
-    r"|\b(?:the|your) (?:[a-z]+\s+){0,3}"
-    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\s+"
-    r"(?:is|are) (?:now )?(?:ready|attached)\b"
-    r"|\bI(?:['’]ve| have) (?:made|created|built|attached|prepared|put together) "
-    r"(?:your |the )?(?:[a-z]+\s+){0,3}"
-    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\b",
-    re.IGNORECASE)
-_DONE_CLAIM = re.compile(
-    r"\balready\s+(?:done|taken|completed|finished|behind\s+you|on\s+(?:your|the)\s+record)\b"
-    r"|\b(?:are|is|were)\s+(?:all\s+)?(?:done|finished|completed|taken|behind\s+you)\b"
-    r"|\bon\s+(?:your|the)\s+record\b", re.IGNORECASE)
-# "Assumes nothing is done" is the honest version, not a guess.
-_NOTHING_DONE = re.compile(r"\b(?:nothing|none|no\s+courses?)\b", re.IGNORECASE)
-_GUESS = re.compile(
-    r"\bassum\w*|\bpresum\w*|\b(?:didn['’]t|did\s+not|haven['’]t|have\s+not)\s+"
-    r"(?:say|said|tell|told|mention|mentioned)\b", re.IGNORECASE)
-# "Term 2: CS 371W", "Terms 3 and 4: ..."; "a fifth term" is a count, not a schedule.
-_TERM_SCHEDULE = re.compile(r"\bterms?\s+\d\b", re.IGNORECASE)
-_COURSE_NUMBER = re.compile(r"\b\d{3}[A-Z]?\b")
-# A course by number, or by name ("the two calculus courses").
-_COURSE_MENTION = re.compile(r"\b\d{3}[A-Z]?\b|\bcourses?\b|\bclasses?\b|\bcalculus\b",
-                             re.IGNORECASE)
-
-
-def _assumes_courses_done(text: str) -> bool:
-    """A sentence that guesses which courses are done ("assumes CS 170 is already done")."""
-    return any(_GUESS.search(sentence) and _DONE_CLAIM.search(sentence)
-               and _COURSE_MENTION.search(sentence) and not _NOTHING_DONE.search(sentence)
-               for sentence in re.split(r"(?<=[.!?])\s+", text))
-
-
-_ARTIFACT_PROGRESS = re.compile(
-    r"\b(?:the|your) (?:[a-z]+\s+){0,3}"
-    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\s+"
-    r"(?:is|are)\s+being\s+(?:made|written|prepared|created|built)\b"
-    r"|\bI(?:['’]m| am)\s+(?:making|writing|preparing|creating|building)\b"
-    r"|\b(?:are\s+now|is\s+now|have\s+been|has\s+been)\s+"
-    r"(?:ticked\s+off|checked\s+off|crossed\s+off|marked\s+(?:as\s+)?(?:done|complete|completed)"
-    r"|updated\s+in\s+(?:your|the)\s+(?:checklist|tracker|plan|sheet|table|workbook))\b",
-    re.IGNORECASE)
-
-
-_INSTRUCTION_SHINGLES: dict[int, set[tuple[str, ...]]] = {}
-
-
-def _instruction_shingles(instructions: str) -> set[tuple[str, ...]]:
-    # The instructions are a few fixed strings; shingle each once.
-    key = hash(instructions)
-    if key not in _INSTRUCTION_SHINGLES:
-        _INSTRUCTION_SHINGLES[key] = _shingles(instructions)
-    return _INSTRUCTION_SHINGLES[key]
+    """Reject a reply that is unsafe, or that misstates the file being made."""
+    return (answer_safety_problems(decision, instructions=instructions, evidence=evidence)
+            + file_claim_problems(decision, artifact_expected=artifact_expected))
 
 
 def normalize_decision(decision: FinalDecision, supplied) -> FinalDecision:
@@ -560,52 +86,8 @@ def normalize_decision(decision: FinalDecision, supplied) -> FinalDecision:
 
 # --- general advice (question router policies) ---------------------------------
 
-_PERSPECTIVE_RULE_RE = re.compile(
-    r"\b(emory requires|you must|must take|required|requirement|deadline|credit hours?|"
-    r"prerequisite|gpa|catalog says|policy says)\b", re.IGNORECASE)
 _BLOCK_ORDER = {"fact": 0, "judgment": 0, "perspective": 1, "assumption": 2, "limitation": 2,
                 "question": 2}
-
-
-def perspective_content_problems(decision: FinalDecision) -> list[str]:
-    """General advice may only be perspective: no numbers, courses, rules or citations."""
-    problems = []
-    for block in decision.blocks:
-        if block.kind != "perspective":
-            continue
-        if block.evidence_ids or block.candidate_ids:
-            problems.append("general advice cites nothing; cite records in a fact block")
-        elif (canonical_codes_in(block.text) or re.search(r"[0-9%$]", block.text)
-              or _PERSPECTIVE_RULE_RE.search(block.text)):
-            problems.append("general advice cannot state numbers, courses or Emory rules; put that "
-                            "in a fact block that cites its record")
-    return problems
-
-
-def perspective_problems(decision: FinalDecision, *, allowed: int, must_search: frozenset[str],
-                         searched: set[str], must_cite: frozenset[str],
-                         found: dict[str, set[str]]) -> list[str]:
-    """The route's obligations: how much general advice, what to search, what to cite.
-
-    `searched` holds the advisor_search kinds the run used; `found` maps a source
-    kind to the evidence IDs of that kind the run acquired.
-    """
-    problems = []
-    if sum(block.kind == "perspective" for block in decision.blocks) > allowed:
-        problems.append("this question needs records, not general advice; move it into a fact "
-                        "with evidence_ids or remove it" if not allowed else
-                        f"at most {allowed} perspective blocks of general advice for this question")
-    problems += perspective_content_problems(decision)
-    if decision.outcome != "declined":
-        for kind in sorted(must_search - searched):
-            problems.append(f"search {kind} sources before answering (advisor_search with "
-                            f"kind={kind})")
-        cited = {e for block in decision.blocks if block.kind == "fact" for e in block.evidence_ids}
-        for kind in sorted(must_cite):
-            if found.get(kind) and not found[kind] & cited:
-                problems.append(f"you read {kind} records; answer from them first, in a fact block "
-                                "that cites them")
-    return problems
 
 
 def order_blocks(decision: FinalDecision) -> FinalDecision:
@@ -634,6 +116,36 @@ def with_support_text(decision: FinalDecision, *, first: str | None = None,
     if last:
         blocks.append(DecisionBlock(kind="limitation", text=last))
     return decision.model_copy(update={"blocks": tuple(blocks)})
+
+
+
+def preparation_problems(decision, checks, supplied) -> list[str]:
+    """Each cited preparation check must have run, and each claim must match it."""
+    problems = []
+    for check_id in decision.preparation_check_ids:
+        if check_id not in checks:
+            problems.append(f"preparation check {check_id} was not executed")
+    for claim in decision.preparation_claims:
+        check = checks.get(claim.check_id)
+        if (check is None or claim.check_id not in decision.preparation_check_ids
+                or set(claim.selected_codes) != set(check["selected_codes"])
+                or set(claim.completed_codes) != set(check["completed_codes"])
+                or claim.conclusion != check["conclusion"]):
+            problems.append(f"preparation claim does not match executed check {claim.check_id}")
+        elif not set(check["evidence_ids"]) <= supplied:
+            problems.append(f"reactivate evidence for preparation check {claim.check_id}")
+    return problems
+
+
+def revision_problems(decision, artifact_references) -> list[str]:
+    """A revision must target an artifact this turn referenced."""
+    problems = []
+    if decision.artifact is not None and decision.artifact.purpose == "revise":
+        revises = decision.artifact.revises
+        referenced = artifact_references or set()
+        if revises is None or (str(revises.artifact_id), str(revises.revision_id)) not in referenced:
+            problems.append("artifact revision was not referenced by this turn")
+    return problems
 
 
 def validate_final(decision: FinalDecision, state: ResearchState | None,
@@ -669,161 +181,20 @@ def validate_final(decision: FinalDecision, state: ResearchState | None,
     refs = {ref for e in cited if e in records for ref in records[e].entity_refs}
     if entity_evidence is not None:
         refs = {entity for entity, ids in entity_evidence.items() if ids & cited}
-    # Two different questions, checked at two different levels.
-    #
-    # Identity: a course the answer names must be a course that exists. The
-    # course master is the authority on existence, and the run's evidence is
-    # the authority on what the run established: a course the run never read
-    # is still a course, and an answer may say so, while a course that is in
-    # no master and in no passage is not a course at all. That is a question
-    # about the run and the collection, not about one block's citations: a
-    # block may cite a narrow passage while naming a course the run read
-    # elsewhere.
-    #
-    # Claim support: a passage must establish what a block asserts about a
-    # course. That is a question about the passage the block cites.
-    established: set[str] = set()
-    for record in records.values():
-        established |= set(canonical_codes_in(
-            f"{record.locator_label}\n{record.exact_text}"))
-    established |= _program_requirement_mentions(records, set(records))
-    if known_course_codes:
-        established |= set(known_course_codes)
-    # Codes the student asked about that are not courses. Naming one is how an
-    # answer says it does not exist, so a clause that says so is not an identity
-    # claim; a clause that names one any other way treats it as a course.
+    established = established_codes(records, known_course_codes)
     # A code a passage the run read names is real to this run, master or not.
     absent_codes = frozenset(absent_codes - established)
-    unsaid_absent: set[str] = set()
-    for block in decision.blocks:
-        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
-            if not _ABSENT_SAID.search(clause):
-                unsaid_absent |= set(canonical_codes_in(clause)) & absent_codes
-    if unsaid_absent:
-        problems.append(
-            f"{', '.join(sorted(unsaid_absent))} is not a course; say in the same sentence "
-            "that it does not exist, and claim nothing else about it")
+    problems += absent_code_problems(decision, absent_codes)
     established |= absent_codes
-    for block in decision.blocks:
-        if block.kind not in {"fact", "limitation"}:
-            # A judgment compares candidates the run already read; a question
-            # asks the student something. Neither asserts an institutional
-            # fact about a course, so neither is an identity claim.
-            continue
-        missing = set()
-        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
-            named = set(canonical_codes_in(clause)) - established
-            if not named or NONSUPPORT_RE.search(clause):
-                # A clause that says the evidence does not support the claim
-                # may name the absent code; that is the point of the clause.
-                continue
-            missing.update(named)
-        if missing:
-            problems.append(
-                f"{block.kind} block names course code(s) absent from the evidence "
-                "this run acquired: " + ", ".join(sorted(missing)))
-    for block in decision.blocks:
-        # Advice that says a course counts toward a program makes the same
-        # claim a fact does, so it names only courses its citations show.
-        if block.kind not in {"fact", "judgment"} or not _INCLUSION.search(block.text):
-            continue
-        # The locator is part of the cited passage: a course record's locator
-        # names the course the passage is about.
-        support = "\n".join(
-            f"{records[e].locator_label}\n{records[e].exact_text}"
-            for e in block.evidence_ids if e in records)
-        present = set(canonical_codes_in(support)) | _program_requirement_mentions(
-            records, set(block.evidence_ids)) | absent_codes
-        missing = set()
-        for clause in re.split(r"[;\n]|(?<=[.!?])\s+", block.text):
-            named = set(canonical_codes_in(clause)) - present
-            if not named or NONSUPPORT_RE.search(clause):
-                continue
-            missing.update(named)
-        if missing:
-            problems.append(
-                f"{block.kind} block names course code(s) absent from its cited evidence: "
-                + ", ".join(sorted(missing)))
+    problems += identity_problems(decision, established)
+    problems += cited_support_problems(decision, records, absent_codes)
     problems.extend(policy_number_problems(decision, records))
-    for block in decision.blocks:
-        if (block.kind not in {"fact", "judgment"} or not _ENTRY.search(block.text)
-                or _ENTRY_NEGATED.search(block.text)):
-            continue
-        mentions = canonical_codes_in(block.text)
-        if not mentions:
-            continue
-        course = mentions[0]
-        support = [records[e] for e in block.evidence_ids
-                   if e in records and course in set(records[e].entity_refs)]
-        if not support:
-            problems.append(
-                f"entry/starting-point claim names {course} without citing its course record")
-        elif any(_PREREQUISITE.search(record.exact_text) for record in support):
-            prerequisite_codes = {
-                code for record in support for code in canonical_codes_in(record.exact_text)
-            } - {course}
-            if not prerequisite_codes & set(mentions):
-                problems.append(
-                    f"entry/starting-point claim for {course} cites a record listing a prerequisite; "
-                    "state the prerequisite first")
-    course_recommendations = set(decision.recommended_course_codes)
-    # A judgment that names a course is advising the student to consider it, so
-    # the same read/current/exists checks apply however the model typed it. A
-    # course that a cited course record names besides its own (a prerequisite,
-    # say) is mentioned, not advised, and that read grounds it. The record's own
-    # course stays a recommendation, so the retired check still sees it. A
-    # program list's mention grounds nothing: citing the list would otherwise
-    # ground advice about every course on it.
-    for block in decision.blocks:
-        if block.kind != "judgment":
-            continue
-        named_by_reads = {code for e in block.evidence_ids if e in records
-                          and not any(ref.startswith("h_") for ref in records[e].entity_refs)
-                          for code in canonical_codes_in(records[e].exact_text)
-                          if code not in records[e].entity_refs}
-        course_recommendations.update(
-            code for code in canonical_codes_in(block.text) if code not in named_by_reads)
-    if decision.outcome == "recommendation":
-        if not any(block.kind == "judgment" for block in decision.blocks):
-            problems.append("recommendation requires a judgment block")
-        for cid in decision.candidate_ids:
-            candidate = candidates.get(cid)
-            if candidate is None:
-                continue
-            for handle in candidate.program_handles:
-                if handle not in refs:
-                    problems.append(f"candidate {cid}: read and cite program {handle}")
-            if not candidate.program_handles:
-                course_recommendations.update(candidate.course_codes)
-    for requested in course_recommendations:
-        code = normalize_code(requested)
-        if code is None:
-            problems.append(f"invalid recommended course code {requested!r}")
-        elif code in refs:
-            continue  # A cited course read, not merely a program mention.
-        elif not any(
-            b.kind == "limitation" and code in b.text
-            and re.search(r"missing|unavailable|unknown|not read", b.text, re.IGNORECASE)
-            for b in decision.blocks
-        ):
-            problems.append(f"read recommended course {code} or disclose its missing record")
-    for check_id in decision.preparation_check_ids:
-        if check_id not in checks:
-            problems.append(f"preparation check {check_id} was not executed")
-    for claim in decision.preparation_claims:
-        check = checks.get(claim.check_id)
-        if (check is None or claim.check_id not in decision.preparation_check_ids
-                or set(claim.selected_codes) != set(check["selected_codes"])
-                or set(claim.completed_codes) != set(check["completed_codes"])
-                or claim.conclusion != check["conclusion"]):
-            problems.append(f"preparation claim does not match executed check {claim.check_id}")
-        elif not set(check["evidence_ids"]) <= supplied:
-            problems.append(f"reactivate evidence for preparation check {claim.check_id}")
-    if decision.artifact is not None and decision.artifact.purpose == "revise":
-        revises = decision.artifact.revises
-        referenced = artifact_references or set()
-        if revises is None or (str(revises.artifact_id), str(revises.revision_id)) not in referenced:
-            problems.append("artifact revision was not referenced by this turn")
+    problems += entry_claim_problems(decision, records)
+    course_recommendations = advised_courses(decision, records)
+    problems += recommendation_problems(decision, candidates, refs, course_recommendations)
+    problems += unread_course_problems(decision, refs, course_recommendations)
+    problems += preparation_problems(decision, checks, supplied)
+    problems += revision_problems(decision, artifact_references)
     problems += retired_course_problems(decision, course_recommendations, retired_courses)
     if problems:
         raise DecisionRejected("; ".join(problems))

@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from app.advising.research_types import DecisionBlock, FinalDecision
+from app.generation.answer_checks.perspective import perspective_problems
 from app.generation.question_router import (
     combined,
     distress_tier,
@@ -14,7 +15,7 @@ from app.generation.question_router import (
     prefetch_searches,
     route_question,
 )
-from app.generation.research_final import order_blocks, perspective_problems, with_support_text
+from app.generation.research_final import order_blocks, with_support_text
 from app.llm.base import ProviderError, TransientProviderError
 from tests.fakes import FakeDecisionProvider
 

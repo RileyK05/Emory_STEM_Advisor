@@ -46,15 +46,17 @@ from app.atlas.equivalence import is_oxford
 from app.atlas.records import SUBJECT_RENAMES, normalize_code
 from app.atlas.requisites import AllOf, AnyOf, CourseRef, canonical_codes_in
 from app.db import queries
+from app.generation.answer_checks.perspective import perspective_problems
+from app.generation.answer_checks.policy_facts import (
+    disclose_retired_courses,
+    disclose_special_courses,
+)
 from app.generation.question_router import Policy
 from app.generation.research_final import (
     DecisionRejected,
     declined_decision,
-    disclose_retired_courses,
-    disclose_special_courses,
     normalize_decision,
     order_blocks,
-    perspective_problems,
     validate_final,
     with_support_text,
 )
