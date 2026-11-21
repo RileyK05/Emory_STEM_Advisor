@@ -101,7 +101,9 @@ plans and `docs/audit/` the review status.
   (a separate Vite entry bundle sharing `SessionGate`, `Shell` and the API
   client), `components/` (one chat with artifacts made from it;
   `shell/` holds the Swoop = light Emory blue/gold, Dooley = dark black/white
-  theme switch), `lib/` (shared hooks such as `useAsyncAction`, `useLoad`).
+  theme switch), `lib/` (shared hooks such as `useAsyncAction`, `useLoad`),
+  `styles.css` (imports one file per area from `styles/`; the import order is the
+  cascade, so a new rule goes in its area's file and the order stays).
   `frontend/tests/fixtures/` holds the offline real-API browser test server.
 - `data/` — gitignored: uploads, the dev database, atlas files, eval sets,
   personal review notes.

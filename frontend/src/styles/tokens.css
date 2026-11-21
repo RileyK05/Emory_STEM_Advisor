@@ -1,0 +1,91 @@
+/* Emory STEM Advisor
+ * Light theme is Swoop: Emory blue (#012169), Emory gold (#f2a900) and white.
+ * Dark theme is Dooley: black and white.
+ */
+
+:root {
+  --emory-blue: #012169;
+  --emory-blue-2: #0033a0;
+  --emory-gold: #f2a900;
+
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+  --font-mono: ui-monospace, 'Cascadia Code', 'SF Mono', Menlo, Consolas, monospace;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --sidebar-w: 264px;
+  --panel-w: 380px;
+
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-soft: #f5f7fb;
+  --surface: #ffffff;
+  --surface-2: #edf1f8;
+  --border: #dfe5ef;
+  --border-strong: #c5cfe0;
+  --text: #0c1a3a;
+  --text-2: #33415f;
+  --muted: #5f6b85;
+  --accent: var(--emory-blue);
+  --accent-hover: var(--emory-blue-2);
+  --accent-contrast: #ffffff;
+  --accent-soft: #e7ecf7;
+  --highlight: var(--emory-gold);
+  --highlight-ink: var(--emory-blue);
+  --highlight-soft: #fff5da;
+  --topbar-bg: var(--emory-blue);
+  --topbar-ink: #ffffff;
+  --topbar-rule: var(--emory-gold);
+  --user-bubble: var(--emory-blue);
+  --user-ink: #ffffff;
+  --heading: var(--emory-blue);
+  --focus: var(--emory-blue-2);
+  --danger: #b42318;
+  --danger-soft: #fdeceb;
+  --warn-ink: #7a4f00;
+  --warn-soft: #fff4d6;
+  --ok: #1d6f46;
+  --ok-soft: #e5f3eb;
+  --shadow-sm: 0 1px 2px rgba(1, 33, 105, 0.06);
+  --shadow: 0 1px 2px rgba(1, 33, 105, 0.06), 0 10px 28px rgba(1, 33, 105, 0.1);
+  --shadow-lg: 0 2px 6px rgba(1, 33, 105, 0.08), 0 18px 44px rgba(1, 33, 105, 0.18);
+  --backdrop: rgba(1, 17, 54, 0.45);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0a0a0a;
+  --bg-soft: #111111;
+  --surface: #161616;
+  --surface-2: #212121;
+  --border: #2a2a2a;
+  --border-strong: #3c3c3c;
+  --text: #f5f5f5;
+  --text-2: #d4d4d4;
+  --muted: #9b9b9b;
+  --accent: #ffffff;
+  --accent-hover: #dcdcdc;
+  --accent-contrast: #0a0a0a;
+  --accent-soft: #232323;
+  --highlight: #ffffff;
+  --highlight-ink: #0a0a0a;
+  --highlight-soft: #262626;
+  --topbar-bg: #000000;
+  --topbar-ink: #ffffff;
+  --topbar-rule: #ffffff;
+  --user-bubble: #f5f5f5;
+  --user-ink: #0a0a0a;
+  --heading: #ffffff;
+  --focus: #ffffff;
+  --danger: #ff8f87;
+  --danger-soft: #2a1716;
+  --warn-ink: #e8e8e8;
+  --warn-soft: #262626;
+  --ok: #cfcfcf;
+  --ok-soft: #222222;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.6), 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.6), 0 18px 44px rgba(0, 0, 0, 0.7);
+  --backdrop: rgba(0, 0, 0, 0.7);
+}

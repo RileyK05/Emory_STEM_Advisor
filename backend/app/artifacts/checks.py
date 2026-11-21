@@ -333,26 +333,12 @@ def leak_matches(text: str) -> list[str]:
     return leaks
 
 
-def evidence_chunk_ids(spec: dict) -> list[str]:
-    """Every chunk ID an artifact cites, as strings."""
-    refs: list[str] = []
-    for ref_list in (spec.get("evidence") or {}).values():
-        for ref in ref_list:
-            if isinstance(ref, dict):
-                refs.append(str(ref.get("chunk_id") or ref.get("chunkId") or ""))
-    return refs
-
-
 def missing_evidence_elements(spec, skip_ids: set[str] | None = None) -> set[str]:
     """Content elements without a source binding, excluding code-built structure."""
     skip_ids = skip_ids or set()
     evidence = set(spec.evidence)
     return {element for element in content_elements(spec)
             if element not in evidence and element not in skip_ids}
-
-
-def evidence_is_empty(spec: dict) -> bool:
-    return not spec.get("evidence")
 
 
 @dataclass(frozen=True)

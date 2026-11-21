@@ -37,15 +37,6 @@ class IsolatedLibreOfficeRunner(Protocol):
     def recalculate_xlsx(self, xlsx_bytes: bytes, *, timeout_seconds: int) -> bytes: ...
 
 
-def _rgb(color) -> str | None:
-    if color is None:
-        return None
-    if color.type == "rgb" and isinstance(color.rgb, str):
-        value = color.rgb[-6:]
-        return value.upper()
-    return None
-
-
 def _apply_style(cell, style: CellStyle) -> None:
     cell.font = Font(bold=style.bold, italic=style.italic, color=style.font_color)
     if style.fill_color:

@@ -1,0 +1,141 @@
+/* ---------- responsive ---------- */
+
+/* Mid widths: the artifact panel floats over the chat instead of squeezing it. */
+@media (max-width: 1199px) {
+  .shell.with-panel .shell-body,
+  .shell.with-canvas .shell-body {
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  }
+
+  .artifact-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    width: 100vw;
+    box-shadow: var(--shadow);
+    animation: rise 0.18s ease-out;
+  }
+
+  .artifact-panel-canvas {
+    width: 100vw;
+  }
+}
+
+/* Narrow: the sidebar becomes a drawer. */
+@media (max-width: 899px) {
+  .shell-body,
+  .shell.with-panel .shell-body,
+  .shell.with-canvas .shell-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .topbar {
+    padding: 0 12px;
+    gap: 8px;
+  }
+
+  .topbar-menu {
+    display: inline-grid;
+  }
+
+  .brand-mark {
+    display: none;
+  }
+
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 50;
+    width: min(300px, 86vw);
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+    box-shadow: var(--shadow);
+  }
+
+  .sidebar-open {
+    transform: none;
+  }
+
+  .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: var(--backdrop);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+
+  .scrim-on {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .chat-column {
+    padding: 0 16px;
+  }
+
+  .chat-header {
+    padding: 6px 16px;
+  }
+
+  .suggestions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .welcome {
+    padding-top: 3vh;
+  }
+
+  .canvas-body {
+    padding: 12px;
+  }
+}
+
+@media (max-width: 520px) {
+  /* Hidden visually only, so the heading still reads "Emory STEM Advisor". */
+  .brand-emory {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .brand-name {
+    font-size: 18px;
+  }
+
+  /* On a phone the account button is its icon; the name stays as its accessible label. */
+  .account-trigger {
+    padding: 0 6px 0 8px;
+    gap: 4px;
+  }
+
+  .account-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .mascot-toggle {
+    width: 36px;
+    height: 36px;
+  }
+
+  .topbar-actions {
+    gap: 8px;
+  }
+
+  .composer-hint {
+    display: none;
+  }
+}

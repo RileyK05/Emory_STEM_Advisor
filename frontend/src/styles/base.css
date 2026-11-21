@@ -1,0 +1,205 @@
+/* ---------- base ---------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0;
+  line-height: 1.25;
+}
+
+p {
+  margin: 0;
+}
+
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+}
+
+.icon {
+  flex: none;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 12.5px;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ---------- buttons ---------- */
+
+.primary-button,
+.secondary-button,
+.ghost-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+
+.primary-button {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  padding: 9px 16px;
+}
+
+.primary-button:not(:disabled):hover {
+  background: var(--accent-hover);
+}
+
+.secondary-button {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 8px 14px;
+}
+
+.secondary-button:not(:disabled):hover {
+  border-color: var(--accent);
+}
+
+.ghost-button {
+  color: var(--text-2);
+  padding: 6px 10px;
+  font-weight: 500;
+  font-size: 13.5px;
+}
+
+.ghost-button:not(:disabled):hover,
+.ghost-button[aria-pressed='true'] {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  flex: none;
+}
+
+.icon-button:not(:disabled):hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.icon-button.round {
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+}
+
+.link-button {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+:root[data-theme='dark'] .link-button {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.link-button:not(:disabled):hover {
+  text-decoration: underline;
+}
+
+/* ---------- form fields ---------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field > span {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+
+textarea.code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.form-error {
+  color: var(--danger);
+  font-size: 13.5px;
+}

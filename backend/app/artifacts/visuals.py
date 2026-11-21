@@ -341,12 +341,3 @@ def chart_html(block: ChartBlock) -> str:
             + table + "</figure>")
 
 
-def visual_text(block) -> list[str]:
-    """The words a visual shows, for checks and model-facing projections."""
-    if isinstance(block, DiagramBlock):
-        return [block.title, *(group.label for group in block.groups),
-                *(node.label for node in block.nodes), *([block.caption] if block.caption else [])]
-    if isinstance(block, ChartBlock):
-        return [block.title, *block.categories, *(series.name for series in block.series),
-                *([block.caption] if block.caption else [])]
-    return []

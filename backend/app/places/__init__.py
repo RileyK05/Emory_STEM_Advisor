@@ -184,6 +184,3 @@ def place_mentions(text: str, campus: str = "atlanta") -> list[tuple[str, list[s
             for name, places in index.mentions(text)]
 
 
-def place_titles(ids: list[str], campus: str = "atlanta") -> list[str]:
-    index = load_places(campus)
-    return [index.titles[i] for i in ids if i in index.titles] if index else []

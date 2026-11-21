@@ -1,0 +1,342 @@
+/* ---------- shell ---------- */
+
+.shell {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100dvh;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.shell-body {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.shell.with-panel .shell-body {
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr) var(--panel-w);
+}
+
+.shell.with-canvas .shell-body {
+  grid-template-columns: var(--sidebar-w) minmax(360px, 1fr) minmax(520px, 1.25fr);
+}
+
+/* ---------- top bar ---------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 60px;
+  min-width: 0;
+  padding: 0 16px 0 20px;
+  background: var(--topbar-bg);
+  color: var(--topbar-ink);
+  border-bottom: 3px solid var(--topbar-rule);
+}
+
+:root[data-theme='dark'] .topbar {
+  border-bottom-width: 1px;
+}
+
+.topbar :focus-visible {
+  outline-color: var(--topbar-rule);
+}
+
+.topbar-menu {
+  display: none;
+  color: var(--topbar-ink);
+}
+
+.topbar-menu:hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+  color: var(--topbar-ink) !important;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 36px;
+  border-radius: 4px 4px 16px 16px;
+  background: var(--emory-gold);
+  color: var(--emory-blue);
+  font-family: var(--font-serif);
+  font-weight: 700;
+  font-size: 20px;
+  flex: none;
+}
+
+:root[data-theme='dark'] .brand-mark {
+  background: #ffffff;
+  color: #000000;
+}
+
+.brand h1 {
+  min-width: 0;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.brand-emory {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--emory-gold);
+}
+
+:root[data-theme='dark'] .brand-emory {
+  color: #ffffff;
+}
+
+.brand-name {
+  font-family: var(--font-serif);
+  font-size: 20px;
+}
+
+.topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.topbar-button {
+  height: 34px;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: var(--radius-sm);
+  padding: 0 10px 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.topbar-button:hover,
+.topbar-button[aria-expanded='true'] {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.7);
+}
+
+.topbar-button[aria-expanded='true'] .icon {
+  transform: rotate(180deg);
+}
+
+.topbar-button .icon {
+  transition: transform 0.15s;
+}
+
+.account-menu {
+  position: relative;
+  min-width: 0;
+}
+
+.account-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 240px;
+  white-space: nowrap;
+}
+
+.account-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Doubled class: .popover comes later in this file and would otherwise win. */
+.popover.account-popover {
+  top: calc(100% + 8px);
+  right: 0;
+  left: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 260px;
+  padding: 6px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+
+.account-label {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.account-popover [role='menuitem'] {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+  font-size: 13.5px;
+}
+
+.account-popover [role='menuitem']:not(:disabled):hover {
+  background: var(--surface-2);
+}
+
+.account-popover .menuitem-danger {
+  color: var(--danger);
+}
+
+.account-popover .menuitem-danger:not(:disabled):hover {
+  background: var(--danger-soft);
+}
+
+.menu-rule {
+  margin: 6px 4px;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.account-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 2px 0;
+  padding: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+}
+
+.account-confirm p {
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+}
+
+.account-confirm .link-button {
+  align-self: center;
+  padding: 2px 6px;
+}
+
+.account-message {
+  margin: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.destructive-button {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--danger);
+  color: #ffffff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+:root[data-theme='dark'] .destructive-button {
+  color: #1a0605;
+}
+
+.destructive-button:not(:disabled):hover {
+  filter: brightness(1.08);
+}
+
+/* The mascot face is the theme switch, always in the top bar: Swoop on the front, Dooley on
+ * the back. Clicking flips the coin and the whole page turns with it. */
+.mascot-toggle {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  perspective: 500px;
+  flex: none;
+  transition: transform 0.2s;
+}
+
+.mascot-toggle:hover {
+  transform: scale(1.08) rotate(-5deg);
+}
+
+.mascot-toggle:active {
+  transform: scale(0.94);
+}
+
+.topbar .mascot-toggle:focus-visible {
+  outline-offset: 3px;
+}
+
+/* While the theme swaps, nothing eases between the two palettes except the coin's flip. */
+.theme-switching *:not(.mascot-toggle):not(.mascot-coin),
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
+}
+
+/* The theme change is a circle growing from the coin (MascotToggle), not the default cross-fade. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+.mascot-coin {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform 0.65s cubic-bezier(0.45, 1.6, 0.4, 0.9);
+}
+
+.mascot-toggle[data-face='dark'] .mascot-coin {
+  transform: rotateY(180deg);
+}
+
+.mascot-face {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  background: #ffffff;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  user-select: none;
+}
+
+.mascot-swoop {
+  object-position: 66% 25%;
+  box-shadow:
+    0 0 0 2px var(--emory-gold),
+    0 2px 8px rgba(0, 0, 0, 0.25);
+}
+
+.mascot-dooley {
+  object-position: 52% 10%;
+  transform: rotateY(180deg);
+  box-shadow:
+    0 0 0 2px #ffffff,
+    0 2px 8px rgba(0, 0, 0, 0.5);
+}

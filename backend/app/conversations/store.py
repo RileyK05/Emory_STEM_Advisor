@@ -12,11 +12,6 @@ from app.privacy.fence import require_live_workspace
 from app.quotas.service import QuotaService
 from app.util.digest import json_digest
 
-
-def _json_size(value) -> int:
-    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
-
-
 MAX_CONVERSATIONS_PER_WORKSPACE = 500
 
 

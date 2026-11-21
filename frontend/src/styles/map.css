@@ -1,0 +1,220 @@
+/* ---------- campus map (our own drawing; data © OpenStreetMap contributors) ---------- */
+
+:root {
+  --map-ground: #f4f6fa;
+  --map-campus: #fbfcfe;
+  --map-lawn: #e2eedb;
+  --map-woods: #cfe2c6;
+  --map-sport: #d6ebcd;
+  --map-water: #cadcf3;
+  --map-parking: #e9ecf2;
+  --map-plaza: #eef0f5;
+  --map-road: #ffffff;
+  --map-road-edge: #d3d9e4;
+  --map-path: #b9c3d6;
+  --map-building: #d5dcea;
+  --map-building-edge: #aeb9cf;
+  --map-building-context: #e6e9ef;
+  --map-highlight: var(--emory-gold);
+  --map-highlight-edge: var(--emory-blue);
+  --map-label: #1d2b4f;
+  --map-label-halo: rgba(255, 255, 255, 0.9);
+  --map-pin: var(--emory-blue);
+  --map-pin-edge: var(--emory-gold);
+}
+
+:root[data-theme='dark'] {
+  --map-ground: #0d0d0d;
+  --map-campus: #121212;
+  --map-lawn: #1b1b1b;
+  --map-woods: #202020;
+  --map-sport: #1e1e1e;
+  --map-water: #2a2a2a;
+  --map-parking: #181818;
+  --map-plaza: #191919;
+  --map-road: #262626;
+  --map-road-edge: #2e2e2e;
+  --map-path: #303030;
+  --map-building: #4b4b4b;
+  --map-building-edge: #6e6e6e;
+  --map-building-context: #262626;
+  --map-highlight: #ffffff;
+  --map-highlight-edge: #ffffff;
+  --map-label: #e8e8e8;
+  --map-label-halo: rgba(0, 0, 0, 0.85);
+  /* Black with a white rim: visible on the white highlight and on the dark ground. */
+  --map-pin: #0a0a0a;
+  --map-pin-edge: #ffffff;
+}
+
+.campus-map-card {
+  margin: 12px 0 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.campus-map-loading {
+  min-height: 120px;
+  background: var(--surface-2);
+}
+
+.campus-map-frame {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--map-ground);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.campus-map-frame:active {
+  cursor: grabbing;
+}
+
+.campus-map-frame:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.campus-map-frame svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.map-ground {
+  fill: var(--map-ground);
+}
+.map-campus {
+  fill: var(--map-campus);
+}
+.map-lawn {
+  fill: var(--map-lawn);
+}
+.map-woods {
+  fill: var(--map-woods);
+}
+.map-sport {
+  fill: var(--map-sport);
+}
+.map-water {
+  fill: var(--map-water);
+}
+.map-parking {
+  fill: var(--map-parking);
+}
+.map-plaza {
+  fill: var(--map-plaza);
+}
+
+.map-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.map-road-major,
+.map-road {
+  stroke: var(--map-road);
+  paint-order: stroke;
+  filter: drop-shadow(0 0 0.6px var(--map-road-edge));
+}
+.map-path {
+  stroke: var(--map-path);
+}
+.map-stream {
+  stroke: var(--map-water);
+}
+
+.map-building {
+  fill: var(--map-building);
+  stroke: var(--map-building-edge);
+  stroke-width: 0.6;
+}
+.map-building-context {
+  fill: var(--map-building-context);
+}
+.map-building-highlight {
+  fill: var(--map-highlight);
+  stroke: var(--map-highlight-edge);
+  stroke-width: 1.6;
+}
+
+.map-label {
+  fill: var(--map-label);
+  stroke: var(--map-label-halo);
+  paint-order: stroke;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  pointer-events: none;
+}
+.map-label-strong {
+  font-weight: 700;
+}
+
+.map-pin {
+  fill: var(--map-pin);
+  stroke: var(--map-pin-edge);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.campus-map-controls {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.campus-map-controls button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+}
+
+.campus-map-controls button:hover {
+  background: var(--surface-2);
+}
+
+.campus-map-credit {
+  margin: 6px 2px 0;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.campus-map-credit a {
+  color: inherit;
+}
+
+.campus-map-places {
+  list-style: none;
+  margin: 8px 0 6px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.campus-map-places li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  font-size: 14px;
+}
+
+.campus-map-places a {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}

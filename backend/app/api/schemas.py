@@ -398,7 +398,6 @@ class PrivacyDeletionResponse(_WireModel):
     message: str = "All workspace-owned conversations, artifacts, and private data have been deleted. Tombstones have been recorded to prevent replay or restore."
 
 
-
 class AdminAuditEntry(_WireModel):
     auditId: UUID
     actorUserId: UUID | None = None
@@ -850,49 +849,6 @@ class DebugExperimentResponse(_WireModel):
     sourceConversationId: UUID
     sourceRequestId: UUID
     state: Literal["recorded"]
-    createdAt: str
-
-
-class PromptVersionCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    name: str = Field(min_length=1, max_length=120)
-    templateText: str = Field(min_length=1, max_length=20000)
-    versionId: UUID | None = None
-
-
-class PromptVersionResponse(_WireModel):
-    versionId: UUID
-    name: str
-    templateText: str
-    contentDigest: str
-    reviewState: Literal["draft", "approved"]
-    createdAt: str
-
-
-class PromptFixtureCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    suiteName: str = Field(min_length=1, max_length=120)
-    fixtureText: str = Field(min_length=1, max_length=20000)
-
-
-class PromptFixtureResponse(_WireModel):
-    fixtureId: UUID
-    suiteName: str
-    fixtureDigest: str
-    present: bool
-
-
-class PromptPromotionRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    suiteName: str = Field(min_length=1, max_length=120)
-
-
-class PromptPromotionResponse(_WireModel):
-    promotionId: UUID
-    versionId: UUID
-    suiteName: str
-    fixtureDigest: str
-    status: Literal["published"]
     createdAt: str
 
 

@@ -109,14 +109,6 @@ class _StageProvider:
         return replace(result, tool_calls=tuple(calls))
 
 
-def _cell_type(value):
-    if isinstance(value, bool) or value is None:
-        return "text"
-    if isinstance(value, (int, float)):
-        return "number"
-    return "text"
-
-
 @dataclass
 class _Lane:
     """One connection and operation handle that model calls run on.

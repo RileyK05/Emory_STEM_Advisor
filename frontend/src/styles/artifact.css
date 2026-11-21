@@ -1,0 +1,377 @@
+/* ---------- artifact panel ---------- */
+
+.artifact-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+
+.panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px 16px 8px 20px;
+}
+
+.panel-header h2 {
+  font-family: var(--font-serif);
+  font-size: 20px;
+  font-weight: 400;
+  color: var(--heading);
+}
+
+.panel-header p {
+  font-size: 13px;
+}
+
+.panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 16px;
+}
+
+.artifact-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  text-align: left;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+button.artifact-card:not(:disabled):hover {
+  border-color: var(--highlight);
+  box-shadow: var(--shadow);
+}
+
+.artifact-card-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex: none;
+}
+
+.artifact-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+}
+
+.artifact-card-text strong {
+  font-size: 14.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-active {
+  border-style: dashed;
+}
+
+.progress {
+  position: relative;
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.progress::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 35%;
+  border-radius: 2px;
+  background: var(--highlight);
+  animation: slide 1.3s ease-in-out infinite;
+}
+
+/* ---------- canvas (open artifact) ---------- */
+
+.artifact-panel-canvas {
+  background: var(--surface);
+}
+
+.canvas {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.canvas-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.canvas-kind {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex: none;
+}
+
+.canvas-title {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  font-family: var(--font-serif);
+  font-size: 20px;
+  color: var(--heading);
+}
+
+.canvas-title:hover {
+  border-color: var(--border);
+}
+
+.canvas-title:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.canvas-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.artifact-version {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.artifact-version select {
+  max-width: 230px;
+  height: 32px;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    right 14px center,
+    right 9px center;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--text);
+  font-size: 13px;
+  appearance: none;
+  cursor: pointer;
+}
+
+.artifact-version select:not(:disabled):hover {
+  border-color: var(--accent);
+}
+
+.artifact-version select:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.toolbar-spacer {
+  flex: 1;
+}
+
+.canvas-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  font-size: 13.5px;
+  border-bottom: 1px solid var(--border);
+}
+
+.canvas-messages [role='alert'] {
+  color: var(--danger);
+}
+
+.canvas-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px;
+  background: var(--bg-soft);
+}
+
+.canvas-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.artifact-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.preview-note {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.artifact-preview iframe {
+  width: 100%;
+  min-height: 60vh;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.artifact-preview table {
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.artifact-preview th,
+.artifact-preview td {
+  border: 1px solid var(--border);
+  padding: 4px 10px;
+  text-align: left;
+}
+
+.artifact-preview pre {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  white-space: pre-wrap;
+}
+
+.tab {
+  padding: 8px 12px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.artifact-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.gap-review-heading h3 {
+  font-size: 16px;
+}
+
+.gap-review-heading p,
+.gap-review-metrics,
+.gap-review-help,
+.gap-review-counts {
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.gap-review-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.gap-review-item details {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+
+.gap-review-item summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.gap-review-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 14px;
+}
+
+.gap-state {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  background: var(--highlight-soft);
+}
+
+.gap-state-resolved {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.gap-source-option {
+  flex-direction: row !important;
+  align-items: center;
+}
+
+.connection-profile {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 14px;
+}
+
+.connection-profile h3 {
+  font-size: 15px;
+}
+
+.source-error {
+  color: var(--danger);
+}
+
+.source-empty {
+  color: var(--muted);
+}
+
+.recommendations {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
