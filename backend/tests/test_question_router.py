@@ -243,3 +243,99 @@ def test_a_check_in_turn_allows_no_general_advice_and_drops_search_obligations()
     check_in = combined(Route(frozenset({"study_and_wellbeing"}), "model", distress="support"))
     assert (calm.must_search, check_in.must_search) == (frozenset({"policy"}), frozenset())
     assert (calm.perspective_blocks, check_in.perspective_blocks) == (2, 0)
+
+
+@pytest.mark.parametrize(("persona", "categories", "distress", "source", "advice", "file_turn", "expected"), [
+    (None, {"choice"}, "calm", "model", True, False, "off"),
+    ("unknown", {"choice"}, "calm", "model", True, False, "off"),
+    ("swoop", {"choice"}, "check_in", "model", True, False, "off"),
+    ("dooley", {"study_and_wellbeing"}, "support", "model", False, False, "off"),
+    ("swoop", {"institutional"}, "crisis", "model", False, False, "off"),
+    ("dooley", {"out_of_scope"}, "calm", "model", False, False, "off"),
+    ("dooley", {"out_of_scope"}, "steady", "model", False, False, "off"),
+    ("swoop", {"study_and_wellbeing", "choice"}, "steady", "model", True, False, "steady"),
+    ("dooley", {"institutional"}, "steady", "model", False, True, "steady"),
+    ("swoop", {"choice"}, "calm", "model", True, True, "light"),
+    ("dooley", {"institutional"}, "calm", "model", False, False, "light"),
+    ("swoop", {"choice"}, "calm", "model", False, False, "full"),
+    ("dooley", {"career_outlook"}, "calm", "model", False, False, "full"),
+    ("swoop", {"study_and_wellbeing"}, "calm", "model", False, False, "full"),
+    ("dooley", {"smalltalk"}, "calm", "model", False, False, "full"),
+    ("swoop", {"institutional"}, "calm", "rules", True, False, "full"),
+])
+def test_voice_level_scales_automatically(
+        persona, categories, distress, source, advice, file_turn, expected):
+    from app.generation.question_router import Route
+    from app.generation.voice import voice_level
+
+    route = Route(frozenset(categories), source, distress=distress)
+    assert voice_level(persona, route, advice_question=advice, file_turn=file_turn) == expected
+
+
+def test_system_prompt_and_repair_hint_respect_voice_levels():
+    from types import SimpleNamespace
+
+    from app.generation.answer_checks.safety import answer_safety_problems
+    from app.generation.question_router import Route
+    from app.generation.research_controller import SYSTEM, _system_prompt
+    from app.generation.voice import VOICE_BASE, voice_repair_hint
+
+    def session(persona, route, *, question="Does CS 253 require CS 171?", file_turn=None):
+        return SimpleNamespace(persona=persona, route=route, question=question, file_turn=file_turn)
+
+    lookup = Route(frozenset({"institutional"}), "model")
+    choice = Route(frozenset({"choice"}), "model")
+    steady = Route(frozenset({"study_and_wellbeing"}), "model", distress="steady")
+
+    prompts = {}
+    for persona in ("swoop", "dooley"):
+        light = _system_prompt(session(persona, lookup))
+        full = _system_prompt(session(persona, choice, question="Which CS electives fit ML?"))
+        calm_steady = _system_prompt(session(persona, steady, question="I bombed my exam."))
+        prefix = SYSTEM + VOICE_BASE[persona]
+        assert light.startswith(prefix)
+        assert full.startswith(prefix)
+        assert calm_steady.startswith(prefix)
+        assert len({light, full, calm_steady}) == 3
+        assert len({voice_repair_hint(persona, lvl) for lvl in ("light", "full", "steady")}) == 3
+        prompts[persona] = full
+
+    assert prompts["swoop"] != prompts["dooley"]
+
+    for suppressed in (
+        session(None, choice),
+        session("swoop", Route(frozenset({"institutional"}), "model", distress="check_in")),
+        session("dooley", Route(frozenset({"study_and_wellbeing"}), "model", distress="support")),
+        session("swoop", Route(frozenset({"institutional"}), "model", distress="crisis")),
+        session("dooley", Route(frozenset({"out_of_scope"}), "model")),
+    ):
+        assert "VOICE:" not in _system_prompt(suppressed)
+
+    assert voice_repair_hint(None, "full") == ""
+    assert voice_repair_hint("swoop", "off") == ""
+    assert voice_repair_hint("dooley", "off") == ""
+
+    samples = [
+        ("swoop", FinalDecision(outcome="information", completeness="complete", blocks=(
+            DecisionBlock(kind="limitation", text=(
+                "Anytime! Let me know whenever you want to map out next semester's classes.")),))),
+        ("dooley", FinalDecision(outcome="information", completeness="complete", blocks=(
+            DecisionBlock(kind="limitation", text=(
+                "Glad that helped; the catalog will still be here whenever your next registration question strikes.")),))),
+        ("swoop", FinalDecision(outcome="recommendation", completeness="complete", blocks=(
+            DecisionBlock(kind="judgment", text=(
+                "If you want hands-on modeling right away, starting with machine learning is a strong, "
+                "doable step once you finish the introductory sequence.")),
+            DecisionBlock(kind="perspective", text=(
+                "You do not need to lock in every elective today; pick one core track that keeps your "
+                "fall balanced and leave room to adjust after midterms.")),))),
+        ("dooley", FinalDecision(outcome="recommendation", completeness="complete", blocks=(
+            DecisionBlock(kind="judgment", text=(
+                "Between the two tracks, the applied route gets you building faster while the theory "
+                "route trades early flexibility for mathematical depth later on.")),
+            DecisionBlock(kind="perspective", text=(
+                "Students routinely agonize over finding one perfect elective list, when taking one solid "
+                "anchor class and keeping your schedule survivable matters far more.")),))),
+    ]
+    for persona, decision in samples:
+        assert answer_safety_problems(decision, instructions=prompts[persona], evidence=[]) == []

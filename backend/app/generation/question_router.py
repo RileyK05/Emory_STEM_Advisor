@@ -293,18 +293,25 @@ POLICIES: dict[str, Policy] = {
 
 # One fixed line per kind for the research prompt, appended after the voice note.
 PROMPT_NOTES = {
-    "choice": "This question asks for a recommendation. You may add one perspective block of "
-              "general advice (a tradeoff or way to think about the choice): no numbers, course "
-              "codes or Emory rules in it, and no evidence_ids.",
+    "choice": "This question asks for a recommendation. Lead with what actually separates the "
+              "options, lay out honest tradeoffs (workload, prerequisites, flexibility, and who "
+              "each path suits), and commit to a concrete starting pick rather than hedging. You "
+              "may add one perspective block of general advice (broader framing or tradeoff): "
+              "no numbers, %, $, course codes or Emory rules in it, and no evidence_ids.",
     "career_outlook": "This question is about careers, pay or the job market. Search career data "
-                      "first (advisor_search with kind=career_reference) and give its numbers in "
-                      "fact blocks that cite it. Then you may add up to two perspective blocks of "
-                      "general advice: no numbers, course codes or Emory rules, no evidence_ids.",
+                      "first (advisor_search with kind=career_reference) and give its numbers, "
+                      "dates and geography in fact blocks that cite it. Meet career worry "
+                      "plainly and realistically—neither lecturing nor brushing it off. Then you "
+                      "may add up to two perspective blocks of practical career leverage "
+                      "(fundamentals, projects, internships, alumni networks) without inventing "
+                      "job odds: no numbers, %, $, course codes or Emory rules, and no evidence_ids.",
     "study_and_wellbeing": "This question is about stress, workload, motivation or study habits. "
                            "Search Emory support and policy sources first (advisor_search with "
-                           "kind=policy) and cite what you find in fact blocks. Then you may add "
-                           "up to two perspective blocks of general advice: no numbers, course "
-                           "codes or Emory rules, no evidence_ids.",
+                           "kind=policy). Meet the student warmly and plainly in the opening of "
+                           "your first block without sounding clinical or preachy, then cite "
+                           "concrete Emory options in fact blocks. Then you may add up to two "
+                           "perspective blocks of grounded, actionable ways to regain footing: "
+                           "no numbers, %, $, course codes or Emory rules, and no evidence_ids.",
 }
 TIER_NOTES = {
     "steady": "Distress: the student is upset about a school situation, not at risk. Research and "

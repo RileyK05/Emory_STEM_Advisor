@@ -226,3 +226,30 @@ eight answers, Dooley's asides were small ("the least agonizing path", "full
 but honest"), Swoop read almost plain, and both bio-and-coding answers gave
 picks. Dooley's electives answer asked the student's interest instead of
 grouping.
+
+## Automatic personality levels and stronger advising (2026-11-22, `research-61`)
+
+Because `research-56` left Swoop reading almost plain and Dooley inconsistent
+between lookups and open-ended advising, personality now scales automatically
+by question route and distress tier (`app/generation/voice.py`) with no new UI
+control:
+
+- **Base persona + automatic level (`VOICE_BASE` + `VOICE_LEVEL`):** Each
+  persona keeps a stable base card (`swoop` = warm, clear-eyed upperclassman
+  mentor without cheerleader hype or bird puns; `dooley` = dry, observant Emory
+  insider without theatrical openers or forced skeleton jokes) followed by a
+  level note (`light` for factual lookups and file intros; `full` for `choice`,
+  `career_outlook`, `study_and_wellbeing`, `smalltalk`, or `asks_for_advice`;
+  `steady` for acute school stress where pep and irony both drop; `off` for
+  `check_in`, `support`, `crisis`, and `out_of_scope` declines).
+- **Distress and repair-hint fixes:** `_system_prompt` and `ResearchController`
+  finishing repair hints now both consult `voice_level`, fixing earlier gaps
+  where `support` turns still carried `VOICE` and `check_in`/`support` repair
+  hints still told the model to keep its mascot voice.
+- **Stronger advising prompts:** `SYSTEM` (`HOW TO ANSWER`, `GIVING ADVICE`)
+  and `PROMPT_NOTES` (`choice`, `career_outlook`, `study_and_wellbeing`) now
+  direct the model to lead with practical takeaways, identify the real decision
+  hinge and tradeoffs in major/track comparisons, commit to a concrete starting
+  pick instead of hedging, and meet career or workload anxiety calmly without
+  sounding clinical or dismissive. All facts, citations, numbers, and
+  validation checks remain unchanged.

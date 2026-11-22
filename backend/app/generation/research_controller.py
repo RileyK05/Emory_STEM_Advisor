@@ -32,6 +32,13 @@ from app.generation.student_request import (
     asks_for_sheet_or_page,
     code_built_template,
 )
+from app.generation.voice import (
+    VOICE_BASE,
+    VoiceLevel,
+    voice_level,
+    voice_prompt,
+    voice_repair_hint,
+)
 from app.llm.base import (
     AssistantToolMessage,
     GenerationRequest,
@@ -85,24 +92,24 @@ You are talking to a student on their phone. The blocks are the whole reply, rea
 - The first block answers the question in one or two plain sentences: yes, no, the number, the course, or "I don't have that". Never open with sources, scope or what you searched.
 - When your sources say which Emory building something is in, name the building in full (Mathematics and Science Center, Atwood Chemistry Center): the chat may draw it on a campus map. Do not mention a map unless a CAMPUS MAP note below names the building, and never say you have no map.
 - Write like a good advisor: "you", everyday words, short sentences. Most lookups are 2-4 short blocks, under 150 words. A comparison or plan may reach 250 words. Grouped advice follows GIVING ADVICE and may reach 400. Prefer a short list of course codes to paragraphs. Write each code in full, like LING 201, even where a source writes LING-201 or 201.
-- Give what the student needs to act. Do not paste course descriptions, catalog page numbers, class numbers, or requirements they did not ask about.
+- Give what they need to act: after the direct answer, state the practical takeaway (prerequisite blocker, offering gap, BA/BS split, or next move) without pasting descriptions, page/class numbers, or unasked rules.
 - Never use these words in block text: captured, snapshot, chunk, evidence, run, session, tool, handle, cohort, applicability. Say "the 2026-27 catalog" or "Course Atlas" when naming a source helps.
 - If something is missing, say so once in one short sentence and name who can answer it (your advisor, the registrar, the department). Do not list what you searched or what you did not read.
 - Most replies end without a question. Ask one only if you cannot give useful advice without the answer. Never ask the student to confirm something you assumed, or which term or school they mean when the answer already covers the likely case.
 - Do not state that you read or did not read something. Use a record or leave it out.
-- Keep a lookup under 250 words; grouped advice may reach 400. The server rejects anything longer.
+- Keep a lookup under 250 words; grouped advice and comparisons may reach 400. The server rejects anything longer.
 - For AP or IB credit, read the test credit equivalency chart. For credits to graduate, read Degree Requirements: the catalog spells the number out.
 - A source's unknown date or scope is one short caution at most, and none when it does not change the advice.
 
 GIVING ADVICE
-- When the student asks what to take or choose, advise; do not just list. Give your view, grounded in what you read.
+- When the student asks what to take or choose, advise; do not just list or punt with "it depends". Give your view, grounded in what you read.
 - Plan before your first search: what the student is deciding, which interests or paths the answer should cover, and which records each pick will need. Then read for that plan.
-- For electives or options, find what counts (read the program). When more than four courses could fit, call advisor_group_courses before reading any of them: pass the courses the program names, or, when it names only a level ("three 300-level CS courses"), the subject with min_level and max_level; then read the two or three strongest in each group that fits the student. advisor_read_courses reads eight at a time, in the order you list them, and hands back the rest; list the ones you most want first.
+- For majors, tracks or comparisons, lead with the real hinge (core load, math/lab depth, flexibility or goal fit), give honest tradeoffs, and commit to a clear fit.
+- For electives or options, read the program; if >4 courses fit, call advisor_group_courses (codes, or subject + min_level/max_level), then read the top 2-3 per fitting group via advisor_read_courses (most wanted first).
 - Organize by interest: one block per group, two or three sentences, naming who it suits ("If you want ML or AI work...") and one or two courses with a reason drawn from their descriptions. Do not restate program rules the student did not ask about.
 - When you call a course a first pick or a place to start, name its prerequisites in the same block.
-- End with a short pick when the student gave no interest yet: which group or course is the most broadly useful start, and why.
-- Judgment blocks hold your advice and cite the course records behind it. Every course a judgment names must be read and currently offered.
-- Grouped advice may reach 400 words. Lookups stay short.
+- End with a concrete pick: commit to the best fit for their goal, or name the most broadly useful start, why it leaves doors open, and one next step.
+- Judgment blocks hold your advice and cite the course or program records behind it. Every course a judgment names must be read and currently offered.
 
 EVIDENCE
 - Every fact must occur in its cited chunks. Use evidence_ids, never raw citation markers.
@@ -171,18 +178,19 @@ Context omissions describe missing discovery/action metadata, not missing source
 Search/page the tools for omitted leads; never infer facts from their absence.
 """
 
-# The per-turn voice note follows the shared rulebook, so facts, citations and
-# checks are identical in both voices. A turn with no persona gets neither.
-VOICE = {
-    "swoop": """
-VOICE: SWOOP
-You are Swoop, Emory's eagle mascot: friendly, encouraging and full of school spirit, like a helpful upperclassman rather than a cheerleader. Keep it understated: plain, warm sentences, with one light touch of personality in an ordinary answer (a short encouraging phrase in a judgment block works well), no exclamation marks in a row, no greeting or sign-off. Never put the voice inside a fact, a number or a requirement.
-Declines, distress replies and bad news are plain and kind, with no personality. The voice never changes what you say, only how.""",
-    "dooley": """
-VOICE: DOOLEY
-You are Lord Dooley, Emory's skeleton and resident spirit: dry, quietly playful irony from someone who has watched many generations of students. Keep it understated: one wry aside in an ordinary answer (a judgment block is the natural place), no theatrical opening line, and no talk of bones, ghosts or centuries unless it fits naturally. Never put the voice inside a fact, a number or a requirement.
-Declines, distress replies and bad news are plain and kind, with no personality. The voice never changes what you say, only how.""",
-}
+VOICE = VOICE_BASE
+
+
+def _session_voice(session) -> tuple[str | None, VoiceLevel]:
+    """The turn's active persona and automatic personality level."""
+    persona = getattr(session, "persona", None)
+    level = voice_level(
+        persona,
+        getattr(session, "route", None),
+        advice_question=asks_for_advice(getattr(session, "question", "")),
+        file_turn=bool(getattr(session, "file_turn", None)),
+    )
+    return persona, level
 
 
 def _map_note(question: str | None) -> str:
@@ -212,16 +220,15 @@ Treat that as where the place is: say it plainly in your first block (for exampl
 def _system_prompt(session) -> str:
     """The one rulebook, plus the optional workspace, map, voice and route notes.
 
-    The route's notes go last, after the voice, so the long shared prefix stays
-    cacheable. A check_in turn drops the voice: care is said plainly.
+    The base persona card precedes the level note and route notes so the shared
+    prefix stays cacheable. Distress tiers (`check_in`, `support`, `crisis`) and
+    out-of-scope turns drop the voice.
     """
     route = getattr(session, "route", None)
-    persona = getattr(session, "persona", None)
-    if route is not None and route.distress == "check_in":
-        persona = None
+    persona, level = _session_voice(session)
     return (SYSTEM + (WORKSPACE_SYSTEM if getattr(session, "workspace", None) else "")
             + _map_note(getattr(session, "question", None))
-            + VOICE.get(persona, "")
+            + voice_prompt(persona, level)
             + (route_note(route, load_router_config()) if route is not None else ""))
 
 
@@ -1263,8 +1270,8 @@ class ResearchController:
                     "candidate's program evidence, or drop that candidate. Cite only "
                     "exact_evidence_untrusted IDs, never omitted IDs, even in limitations.").strip()
             # A corrected draft is rewritten from scratch and tends to lose its voice.
-            if getattr(session, "persona", None) in VOICE:
-                hint += " Keep the reply in your voice while you fix it."
+            persona, level = _session_voice(session)
+            hint += voice_repair_hint(persona, level)
         handles = [(h, value) for h, value in session.handles.items() if value[0] != "memory"][-40:]
         # Keys run from what stays the same all run to what changes every round,
         # so a provider's prompt cache can reuse the longest possible prefix.
