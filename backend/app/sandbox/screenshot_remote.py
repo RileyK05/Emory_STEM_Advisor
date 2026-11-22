@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
-import json
-import re
 import threading
-from uuid import uuid4
 
 from app.sandbox.remote import RemoteSandboxClient, RemoteSandboxConfig
-from app.sandbox.types import IsolationUnavailable, SandboxCancelled
+from app.sandbox.types import IsolationUnavailable
 
-_HEX = re.compile(r"^[0-9a-f]{64}$")
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 class RemoteHtmlScreenshotRunner:
@@ -60,52 +56,22 @@ class RemoteHtmlScreenshotRunner:
             raise ValueError("screenshot dimensions are outside the supported range")
         if not 1 <= timeout_seconds <= min(120, self.config.max_timeout_seconds):
             raise ValueError("screenshot timeout exceeds configured limit")
-        request_id = request_id or uuid4().hex
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id):
-            raise ValueError("invalid screenshot request ID")
-        if cancel_event is not None and cancel_event.is_set():
-            raise SandboxCancelled("Screenshot rendering was cancelled.")
-        self.client.require_image(
-            self.browser_image,
-            unavailable="Authenticated screenshot sandbox worker is unavailable.",
-            not_ready="Isolated screenshot browser image is not ready on the worker.",
-        )
-        if cancel_event is not None and cancel_event.is_set():
-            raise SandboxCancelled("Screenshot rendering was cancelled.")
         encoded = html.encode("utf-8")
-        payload = json.dumps({
-            "request_id": request_id,
-            "html_base64": base64.b64encode(encoded).decode("ascii"),
-            "html_sha256": hashlib.sha256(encoded).hexdigest(),
-            "width": width,
-            "height": height,
-            "timeout_seconds": timeout_seconds,
-        }, separators=(",", ":")).encode()
-        if len(payload) > min(self.max_input_bytes * 4 // 3 + 4096, self.config.max_request_bytes):
-            raise ValueError("screenshot request exceeds configured transport limit")
-        raw = self.client.post_cancellable(
-            "/v1/html/screenshot", request_id, payload,
-            timeout=min(self.config.request_timeout_seconds, timeout_seconds + 30),
-            cancel_event=cancel_event, cancelled="Screenshot rendering was cancelled.",
+        html_sha256 = hashlib.sha256(encoded).hexdigest()
+        response, output = self.client.run_job(
+            "/v1/html/screenshot",
+            {
+                "html_base64": base64.b64encode(encoded).decode("ascii"),
+                "html_sha256": html_sha256,
+                "width": width,
+                "height": height,
+                "timeout_seconds": timeout_seconds,
+            },
+            what="Screenshot rendering", image=self.browser_image,
+            max_input_bytes=self.max_input_bytes, max_output_bytes=self.max_output_bytes,
+            output_magic=_PNG_MAGIC, request_id=request_id, cancel_event=cancel_event,
         )
-        try:
-            response = json.loads(raw)
-            output = base64.b64decode(response["output_base64"], validate=True)
-            if (
-                response["html_sha256"] != hashlib.sha256(encoded).hexdigest()
-                or response["width"] != width
-                or response["height"] != height
-                or not hmac.compare_digest(
-                    hashlib.sha256(output).hexdigest(), response["output_sha256"]
-                )
-                or not _HEX.fullmatch(response["output_sha256"])
-                or not output
-                or len(output) > self.max_output_bytes
-                or not output.startswith(b"\x89PNG\r\n\x1a\n")
-            ):
-                raise ValueError
-        except Exception as exc:
-            raise IsolationUnavailable(
-                "Screenshot worker returned an invalid or oversized result."
-            ) from exc
+        if (response.get("html_sha256") != html_sha256 or response.get("width") != width
+                or response.get("height") != height):
+            raise IsolationUnavailable("Screenshot worker returned an invalid or oversized result.")
         return output

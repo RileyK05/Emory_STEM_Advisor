@@ -36,8 +36,6 @@ def _office_runner(settings: Settings):
             request_timeout_seconds=int(settings.office_timeout_seconds) + 30,
             max_timeout_seconds=int(settings.office_timeout_seconds),
             max_response_bytes=48 * 1024 * 1024,
-            max_output_bytes=settings.office_max_output_bytes,
-            max_input_bytes=settings.office_max_input_bytes,
         ),
         office_image=settings.sandbox_office_image,
         max_input_bytes=settings.office_max_input_bytes,

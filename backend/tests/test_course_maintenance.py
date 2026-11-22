@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from app.admin.course_maintenance import CourseMaintenanceService
 from app.atlas.course_writer import replace_course_requisites
-from app.atlas.importer import _write_course
+from app.atlas.importer import _write_courses
 from app.atlas.records import AtlasCourse
 from app.atlas.requisites import parse_requisites
 
@@ -287,13 +287,12 @@ def test_baseline_import_preserves_correction_and_queues_conflict(db, collection
     )
     CourseMaintenanceService.publish_change(db, change_id=change["change_id"], actor_user_id=None)
 
-    wrote = _write_course(
-        db, collection, source_id, locators["MATH 200"],
+    wrote = _write_courses(db, collection, source_id, [(
         AtlasCourse(code="MATH 200", title="New Baseline Title", requisites="MATH 112"),
-        "MATH 200",
-    )
+        locators["MATH 200"], "MATH 200",
+    )])
     db.commit()
-    assert wrote is False
+    assert wrote == []
     assert db.execute(
         "SELECT title, authority FROM courses WHERE course_id = %s", (course_id,)
     ).fetchone()["title"] == "Corrected Title"
@@ -301,13 +300,12 @@ def test_baseline_import_preserves_correction_and_queues_conflict(db, collection
     assert [row["code"] for row in conflicts] == ["MATH 200"]
 
     # A baseline identical to the correction's base is not a conflict.
-    wrote_again = _write_course(
-        db, collection, source_id, locators["MATH 200"],
+    wrote_again = _write_courses(db, collection, source_id, [(
         AtlasCourse(code="MATH 200", title="Calculus III", requisites="MATH 111"),
-        "MATH 200",
-    )
+        locators["MATH 200"], "MATH 200",
+    )])
     db.commit()
-    assert wrote_again is False
+    assert wrote_again == []
 
 
 def test_unparsed_requisites_never_invent_edges(db, collection, atlas):

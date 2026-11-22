@@ -21,8 +21,6 @@ _config = SandboxConfig(
     max_timeout_seconds=int(os.environ.get("SANDBOX_MAX_TIMEOUT_SECONDS", "120")),
     max_cpu_count=float(os.environ.get("SANDBOX_MAX_CPU_COUNT", "1")),
     max_memory_bytes=int(os.environ.get("SANDBOX_MAX_MEMORY_BYTES", str(512 * 1024 * 1024))),
-    max_output_bytes=int(os.environ.get("SANDBOX_MAX_OUTPUT_BYTES", str(4 * 1024 * 1024))),
-    max_input_bytes=int(os.environ.get("SANDBOX_MAX_INPUT_BYTES", str(16 * 1024 * 1024))),
     max_output_files=int(os.environ.get("SANDBOX_MAX_OUTPUT_FILES", "100")),
     max_pids=int(os.environ.get("SANDBOX_MAX_PIDS", "64")),
 )

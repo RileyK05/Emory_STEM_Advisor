@@ -110,17 +110,20 @@ def import_programs(conn: Connection, *, collection_id: UUID, path: Path) -> dic
             conn.execute(queries.get("clear_program_projection"), {"program_id": pid})
             conn.execute(queries.get("clear_program_field_evidence"), {"program_id": pid})
             subject = home_subject(record)
+            mentions = []
             for item in record["items"]:
-                conn.execute(queries.get("insert_program_item"), {
-                    "program_id": pid, "position": item["position"],
-                    "section": item["section"], "text": item["text"], "choose": item["choose"],
-                })
                 # Normalized again here so a subject rename applies without re-scraping.
                 named = dict.fromkeys(normalize_code(code) or code for code in item["courses"])
-                for code in (*named, *bare_course_mentions(item["text"], subject, known, set(named))):
-                    conn.execute(queries.get("insert_program_course_mention"), {
-                        "program_id": pid, "position": item["position"], "target_code": code,
-                    })
+                mentions.extend(
+                    {"program_id": pid, "position": item["position"], "target_code": code}
+                    for code in (*named, *bare_course_mentions(item["text"], subject, known,
+                                                               set(named)))
+                )
+            queries.execute_many(conn, "insert_program_item", ({
+                "program_id": pid, "position": item["position"],
+                "section": item["section"], "text": item["text"], "choose": item["choose"],
+            } for item in record["items"]))
+            queries.execute_many(conn, "insert_program_course_mention", mentions)
             _write_binding(conn, pid, record, binding)
         resolve_program_mentions(conn, collection_id)
         conn.execute(queries.get("archive_incompatible_program_releases"),
@@ -160,14 +163,16 @@ def _write_binding(conn: Connection, pid: UUID, record: dict, binding: Binding) 
     })
     common = {"program_id": pid, "source_id": source.source_id,
               "source_index_revision": source.index_revision}
-    for position, supports in binding.items.items():
-        for ordinal, support in enumerate(supports):
-            conn.execute(queries.get("insert_program_item_evidence"), {
-                **common, "position": position, "ordinal": ordinal, **_support(support)})
-    for field, supports in binding.fields.items():
-        for ordinal, support in enumerate(supports):
-            conn.execute(queries.get("insert_program_field_evidence"), {
-                **common, "field": field, "ordinal": ordinal, **_support(support)})
+    queries.execute_many(conn, "insert_program_item_evidence", (
+        {**common, "position": position, "ordinal": ordinal, **_support(support)}
+        for position, supports in binding.items.items()
+        for ordinal, support in enumerate(supports)
+    ))
+    queries.execute_many(conn, "insert_program_field_evidence", (
+        {**common, "field": field, "ordinal": ordinal, **_support(support)}
+        for field, supports in binding.fields.items()
+        for ordinal, support in enumerate(supports)
+    ))
 
 
 def _support(support) -> dict:

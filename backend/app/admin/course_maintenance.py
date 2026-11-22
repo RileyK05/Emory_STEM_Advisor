@@ -11,7 +11,11 @@ from fastapi import HTTPException
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
-from app.atlas.course_writer import course_uuid, replace_course_requisites
+from app.atlas.course_writer import (
+    course_uuid,
+    link_mention_targets,
+    replace_course_requisites,
+)
 from app.atlas.records import normalize_code
 from app.atlas.requisites import PARSER_VERSION, parse_requisites
 from app.db import queries
@@ -512,10 +516,7 @@ class CourseMaintenanceService:
             if inserted is None:
                 raise HTTPException(409, "a course identity with this code now exists")
             replace_course_requisites(conn, course_id, parsed)
-            conn.execute(
-                queries.get("resolve_mention_targets"),
-                {"course_id": course_id, "collection_id": collection_id},
-            )
+            link_mention_targets(conn, collection_id, [course_id])
             conn.execute(
                 queries.get("resolve_mentions_for_restored_course"),
                 {"course_id": course_id, "collection_id": collection_id},
@@ -552,10 +553,7 @@ class CourseMaintenanceService:
             if row is None:
                 raise HTTPException(409, "course changed during publication; reload and retry")
             replace_course_requisites(conn, state["course_id"], parsed)
-            conn.execute(
-                queries.get("resolve_mention_targets"),
-                {"course_id": state["course_id"], "collection_id": collection_id},
-            )
+            link_mention_targets(conn, collection_id, [state["course_id"]])
             return row["admin_revision"]
 
         if kind == "retire":

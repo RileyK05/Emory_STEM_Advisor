@@ -785,8 +785,11 @@ about half a millisecond per course.
   corequisite. Same-number codes alone never pair; `list_unpaired_labs` lists the
   remainder for parser or curator review.
 
-`_write_course` writes schools and topics with the course, so reparse and
-publication keep them in step.
+`_write_courses` writes schools and topics with the courses, so reparse and
+publication keep them in step. It writes in batches — one statement per table
+however many courses change — and the import then refreshes the graph tables'
+planner statistics, since a bulk rewrite outruns autovacuum and the
+prerequisite seams otherwise plan against stale row counts.
 
 `python -m scripts.import_atlas --collection NAME FILE` also prints every
 `ambiguous`/`unparsed` course with its raw text so a human can fix the parser.
@@ -1413,9 +1416,13 @@ Research answers every question, from `/api/query` and from saved turns
 one fails explicitly and `/ready` reports `no_advising_model_configured`. It
 settles token and cost quotas after publishing and records unanswered questions
 (`insufficient_evidence`) in the gap list. A turn may carry the active theme's
-voice in an optional `persona` (`swoop` or `dooley`); it appends a short style
-note after the one shared rulebook, never changes evidence, citations or checks,
-and an unset persona gives the plain advisor voice. Migrations 037–040 hold its
+voice in an optional `persona` (`swoop` or `dooley`); it appends a persona and
+level note (`app/generation/voice.py`) after the one shared rulebook, scaling
+automatically across `light` (factual lookups and file intros), `full`
+(choices, career outlook, study/wellbeing, smalltalk), `steady` (acute school
+stress), and `off` (`check_in`, `support`, `crisis`, and declines), while
+facts, citations, and checks stay identical and an unset persona gives the plain
+advisor voice. Migrations 037–040 hold its
 data; migration 039 adds
 private `research_steps.details` for discovery results, read/entity
 associations, executed preparation checks, provider-context evidence IDs/state

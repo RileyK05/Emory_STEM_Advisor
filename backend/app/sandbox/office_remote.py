@@ -4,16 +4,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
-import json
-import re
 import threading
-from uuid import uuid4
 
 from app.sandbox.remote import RemoteSandboxClient, RemoteSandboxConfig
-from app.sandbox.types import IsolationUnavailable, SandboxCancelled
+from app.sandbox.types import IsolationUnavailable
 
-_HEX = re.compile(r"^[0-9a-f]{64}$")
 _OPERATIONS = {"recalculate_xlsx", "render_docx_pdf", "render_xlsx_pdf"}
 
 
@@ -58,47 +53,21 @@ class RemoteLibreOfficeRunner:
             raise ValueError("Office input is empty or exceeds the configured limit")
         if not 1 <= timeout_seconds <= min(300, self.config.max_timeout_seconds):
             raise ValueError("Office timeout exceeds configured limit")
-        request_id = request_id or uuid4().hex
-        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id):
-            raise ValueError("invalid Office request ID")
-        if cancel_event is not None and cancel_event.is_set():
-            raise SandboxCancelled("Office conversion was cancelled.")
-        self.client.require_image(
-            self.office_image,
-            unavailable="Authenticated Office sandbox worker is unavailable.",
-            not_ready="Isolated LibreOffice image is not ready on the worker.",
+        input_sha256 = hashlib.sha256(content).hexdigest()
+        response, output = self.client.run_job(
+            "/v1/office/execute",
+            {
+                "operation": operation,
+                "input_base64": base64.b64encode(content).decode("ascii"),
+                "input_sha256": input_sha256,
+                "timeout_seconds": timeout_seconds,
+            },
+            what="Office conversion", image=self.office_image,
+            max_input_bytes=self.max_input_bytes, max_output_bytes=self.max_output_bytes,
+            request_id=request_id, cancel_event=cancel_event,
         )
-        if cancel_event is not None and cancel_event.is_set():
-            raise SandboxCancelled("Office conversion was cancelled.")
-        payload = json.dumps({
-            "request_id": request_id,
-            "operation": operation,
-            "input_base64": base64.b64encode(content).decode("ascii"),
-            "input_sha256": hashlib.sha256(content).hexdigest(),
-            "timeout_seconds": timeout_seconds,
-        }, separators=(",", ":")).encode()
-        request_limit = self.max_input_bytes * 4 // 3 + 4096
-        if len(payload) > min(request_limit, self.config.max_request_bytes):
-            raise ValueError("Office request exceeds configured transport limit")
-        raw = self.client.post_cancellable(
-            "/v1/office/execute", request_id, payload,
-            timeout=min(self.config.request_timeout_seconds, timeout_seconds + 30),
-            cancel_event=cancel_event, cancelled="Office conversion was cancelled.",
-        )
-        try:
-            response = json.loads(raw)
-            encoded = response["output_base64"]
-            output = base64.b64decode(encoded, validate=True)
-            if (
-                response["operation"] != operation
-                or response["input_sha256"] != hashlib.sha256(content).hexdigest()
-                or not hmac.compare_digest(hashlib.sha256(output).hexdigest(), response["output_sha256"])
-                or not _HEX.fullmatch(response["output_sha256"])
-                or not output or len(output) > self.max_output_bytes
-            ):
-                raise ValueError
-        except Exception as exc:
-            raise IsolationUnavailable("Office worker returned an invalid or oversized result.") from exc
+        if response.get("operation") != operation or response.get("input_sha256") != input_sha256:
+            raise IsolationUnavailable("Office worker returned an invalid or oversized result.")
         return output
 
     def recalculate_xlsx(self, xlsx_bytes: bytes, *, timeout_seconds: int) -> bytes:

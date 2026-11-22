@@ -10,6 +10,14 @@ import type { Attachment, ChatController, SendOptions, StreamPreview } from './m
 
 const NEW_DRAFT_KEY = '__new_conversation__';
 const CONVERSATION_PAGE_SIZE = 200;
+const RECONNECTING = 'Reconnecting to the answer in progress… Your question will not be sent twice.';
+
+/** `ids` without `id`, as a new set for React state. */
+function without(ids: Set<string>, id: string): Set<string> {
+  const next = new Set(ids);
+  next.delete(id);
+  return next;
+}
 
 /** The source scope the conversation's latest question used, if a loaded turn shows it. */
 function savedScope(record: ConversationRecord): SourceScope | undefined {
@@ -93,12 +101,20 @@ export function useSavedChat(): ChatController {
   const releaseBusy = (id: string, owner: symbol | undefined) => {
     if (!owner || busyRef.current.get(id) !== owner) return;
     busyRef.current.delete(id);
-    if (alive.current)
-      setBusyIds((current) => {
-        const next = new Set(current);
-        next.delete(id);
-        return next;
-      });
+    if (alive.current) setBusyIds((current) => without(current, id));
+  };
+
+  /** Marks `id` as stopping its pending turn for the duration of `stop`. */
+  const whileAbandoning = async (id: string, stop: () => Promise<void>) => {
+    abandoningRef.current.add(id);
+    setAbandoningIds((current) => new Set(current).add(id));
+    setError(null);
+    try {
+      await stop();
+    } finally {
+      abandoningRef.current.delete(id);
+      if (alive.current) setAbandoningIds((current) => without(current, id));
+    }
   };
 
   const draftKey = conversationId ?? NEW_DRAFT_KEY;
@@ -125,11 +141,7 @@ export function useSavedChat(): ChatController {
             const afterEventId = eventCursor.current[key] ?? 0;
             const page = await getClient().getConversationTurnEvents(id, requestId, afterEventId);
             if (!isCurrent(id, epoch) || !ownsPoll()) return;
-            setNotice((current) =>
-              current === 'Reconnecting to the answer in progress… Your question will not be sent twice.'
-                ? null
-                : current,
-            );
+            setNotice((current) => (current === RECONNECTING ? null : current));
             eventCursor.current[key] = Math.max(afterEventId, page.nextEventId);
             for (const event of page.events) {
               setStreamPreview((current) => applyStreamEvent(current, requestId, event));
@@ -141,11 +153,7 @@ export function useSavedChat(): ChatController {
                   'This answer stopped before it finished, and it will not be retried automatically. Stop it, then ask again.',
                 );
               } else {
-                setNotice((current) =>
-                  current === 'Reconnecting to the answer in progress… Your question will not be sent twice.'
-                    ? null
-                    : current,
-                );
+                setNotice((current) => (current === RECONNECTING ? null : current));
               }
               setStreamPreview((current) => (current?.requestId === requestId ? null : current));
               await loadConversationRef.current?.(id, epoch);
@@ -159,7 +167,7 @@ export function useSavedChat(): ChatController {
             }
           } catch {
             if (!isCurrent(id, epoch) || !ownsPoll()) return;
-            setNotice('Reconnecting to the answer in progress… Your question will not be sent twice.');
+            setNotice(RECONNECTING);
           }
           await new Promise((resolve) => window.setTimeout(resolve, pollDelay(Date.now() - startedPolling)));
         }
@@ -465,32 +473,23 @@ export function useSavedChat(): ChatController {
     const textToResend = pendingTurn?.text ?? draft;
     const epoch = viewEpoch.current;
     const pendingOwner = busyRef.current.get(id);
-    abandoningRef.current.add(id);
-    setAbandoningIds((current) => new Set(current).add(id));
-    setError(null);
     let shouldResend = false;
-    try {
-      await getClient().abandonConversationTurn(id, requestId);
-      if (!isCurrent(id, epoch)) return;
-      pollingRequests.current.delete(`${id}:${requestId}`);
-      pendingDrafts.current.delete(requestId);
-      releaseBusy(id, pendingOwner);
-      setStreamPreview(null);
-      await loadConversation(id, epoch);
-      shouldResend = isCurrent(id, epoch);
-    } catch (cause) {
-      if (!isCurrent(id, epoch)) return;
-      setError(errorMessage(cause));
-      await loadConversation(id, epoch);
-    } finally {
-      abandoningRef.current.delete(id);
-      if (alive.current)
-        setAbandoningIds((current) => {
-          const next = new Set(current);
-          next.delete(id);
-          return next;
-        });
-    }
+    await whileAbandoning(id, async () => {
+      try {
+        await getClient().abandonConversationTurn(id, requestId);
+        if (!isCurrent(id, epoch)) return;
+        pollingRequests.current.delete(`${id}:${requestId}`);
+        pendingDrafts.current.delete(requestId);
+        releaseBusy(id, pendingOwner);
+        setStreamPreview(null);
+        await loadConversation(id, epoch);
+        shouldResend = isCurrent(id, epoch);
+      } catch (cause) {
+        if (!isCurrent(id, epoch)) return;
+        setError(errorMessage(cause));
+        await loadConversation(id, epoch);
+      }
+    });
     if (shouldResend) {
       void send([], undefined, textToResend, { persona });
     }
@@ -503,37 +502,28 @@ export function useSavedChat(): ChatController {
     const requestId = currentRecord.pendingRequestId;
     const epoch = viewEpoch.current;
     const pendingOwner = busyRef.current.get(id);
-    abandoningRef.current.add(id);
-    setAbandoningIds((current) => new Set(current).add(id));
-    setError(null);
-    try {
-      await getClient().abandonConversationTurn(id, requestId);
-      if (!isCurrent(id, epoch)) return;
-      // Stop the old poll from publishing a late event after the terminal read.
-      pollingRequests.current.delete(`${id}:${requestId}`);
-      pendingDrafts.current.delete(requestId);
-      const terminalEpoch = ++viewEpoch.current;
-      releaseBusy(id, pendingOwner);
-      setStreamPreview(null);
-      setNotice('Stopped. If that answer finishes later, it will be discarded.');
-      // Students usually stop to reword, so the stopped question returns to the box.
-      const stopped = currentRecord.turns.find((turn) => turn.requestId === requestId && turn.role === 'user');
-      if (stopped) restoreDraft(id, stopped.text);
-      await loadConversation(id, terminalEpoch);
-      await refreshList();
-    } catch (cause) {
-      if (!isCurrent(id, epoch)) return;
-      setError(errorMessage(cause));
-      await loadConversation(id, epoch);
-    } finally {
-      abandoningRef.current.delete(id);
-      if (alive.current)
-        setAbandoningIds((current) => {
-          const next = new Set(current);
-          next.delete(id);
-          return next;
-        });
-    }
+    await whileAbandoning(id, async () => {
+      try {
+        await getClient().abandonConversationTurn(id, requestId);
+        if (!isCurrent(id, epoch)) return;
+        // Stop the old poll from publishing a late event after the terminal read.
+        pollingRequests.current.delete(`${id}:${requestId}`);
+        pendingDrafts.current.delete(requestId);
+        const terminalEpoch = ++viewEpoch.current;
+        releaseBusy(id, pendingOwner);
+        setStreamPreview(null);
+        setNotice('Stopped. If that answer finishes later, it will be discarded.');
+        // Students usually stop to reword, so the stopped question returns to the box.
+        const stopped = currentRecord.turns.find((turn) => turn.requestId === requestId && turn.role === 'user');
+        if (stopped) restoreDraft(id, stopped.text);
+        await loadConversation(id, terminalEpoch);
+        await refreshList();
+      } catch (cause) {
+        if (!isCurrent(id, epoch)) return;
+        setError(errorMessage(cause));
+        await loadConversation(id, epoch);
+      }
+    });
   };
 
   const archive = async (id: string) => {

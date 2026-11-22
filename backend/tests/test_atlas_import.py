@@ -530,8 +530,8 @@ def test_unchanged_atlas_refreshes_old_parser_without_reembedding(db, collection
     db.execute("UPDATE courses SET requisites_raw = NULL, parse_status = 'none', "
                "parser_version = '3', authority = 'atlas', lifecycle = 'retired' "
                "WHERE course_id = %(c)s", {"c": course["course_id"]})
-    db.execute(queries.get("delete_prereq_nodes_for_course"), {"course_id": course["course_id"]})
-    db.execute(queries.get("delete_prereq_mentions_for_course"), {"course_id": course["course_id"]})
+    db.execute(queries.get("delete_prereq_nodes_for_courses"), {"course_ids": [course["course_id"]]})
+    db.execute(queries.get("delete_prereq_mentions_for_courses"), {"course_ids": [course["course_id"]]})
     db.commit()
 
     class BrokenEmbedder:

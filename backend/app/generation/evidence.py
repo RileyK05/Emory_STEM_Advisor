@@ -54,22 +54,20 @@ def persist_response(conn, retrieved: Retrieved, *, status: str, prompt_version:
             "prompt_version": prompt_version,
             "context_snapshot": Jsonb(snapshots),
         })
-        for ordinal, citation in enumerate(answer.citations if answer and status == "answer" else ()):
-            chunk = by_id[citation.chunk_id]
-            conn.execute(queries.get("insert_response_citation"), {
+        if answer and status == "answer":
+            cited = [by_id[citation.chunk_id] for citation in answer.citations]
+            queries.execute_many(conn, "insert_response_citation", ({
                 "response_id": response_id, "ordinal": ordinal,
                 "chunk_id": chunk.chunk_id, "source_id": chunk.source_id,
                 "source_name": chunk.source_name, "locator_label": chunk.locator_label,
                 "text_snapshot": chunk.text,
-            })
-        if answer and status == "answer":
+            } for ordinal, chunk in enumerate(cited)))
             units = claim_units if claim_units is not None else [
                 {"text": u.text, "citation_numbers": list(u.citation_numbers)}
                 for u in review_units(answer.text, len(chunks))]
-            for ordinal, unit in enumerate(units):
-                conn.execute(queries.get("insert_claim"), {
-                    "claim_id": uuid4(), "response_id": response_id,
-                    "ordinal": ordinal, "text": unit["text"],
-                    "citation_numbers": Jsonb(unit["citation_numbers"]),
-                })
+            queries.execute_many(conn, "insert_claim", ({
+                "claim_id": uuid4(), "response_id": response_id,
+                "ordinal": ordinal, "text": unit["text"],
+                "citation_numbers": Jsonb(unit["citation_numbers"]),
+            } for ordinal, unit in enumerate(units)))
     return response_id

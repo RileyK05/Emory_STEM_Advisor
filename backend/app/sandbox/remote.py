@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import re
 import threading
@@ -9,10 +12,13 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from app.sandbox.types import IsolationUnavailable, SandboxCancelled
 
 _IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+_REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -26,9 +32,7 @@ class RemoteSandboxConfig:
     bearer_token: str = field(repr=False)
     request_timeout_seconds: int = 150
     max_response_bytes: int = 8 * 1024 * 1024
-    max_output_bytes: int = 4 * 1024 * 1024
     max_request_bytes: int = 24 * 1024 * 1024
-    max_input_bytes: int = 16 * 1024 * 1024
     max_timeout_seconds: int = 120
     max_output_files: int = 100
     production: bool = True
@@ -55,9 +59,7 @@ class RemoteSandboxConfig:
         if (
             not 1 <= self.request_timeout_seconds <= 660
             or not 1024 <= self.max_response_bytes <= 72 * 1024 * 1024
-            or not 1024 <= self.max_output_bytes <= 64 * 1024 * 1024
             or not 1024 <= self.max_request_bytes <= 400 * 1024 * 1024
-            or not 0 <= self.max_input_bytes <= 256 * 1024 * 1024
             or not 1 <= self.max_timeout_seconds <= 600
         ):
             raise ValueError("invalid remote sandbox transport bounds")
@@ -121,6 +123,68 @@ class RemoteSandboxClient:
         if cancel_event is not None and cancel_event.is_set():
             raise SandboxCancelled(cancelled)
         return raw
+
+    def run_job(
+        self,
+        path: str,
+        fields: dict,
+        *,
+        what: str,
+        image: str,
+        max_input_bytes: int,
+        max_output_bytes: int,
+        output_magic: bytes = b"",
+        request_id: str | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> tuple[dict, bytes]:
+        """Send one job and return the worker's response with its verified output.
+
+        `fields` is the job's own request body (its base64 input, digest and
+        timeout); this adds the request ID. The worker must be attested and hold
+        a pinned digest for `image`, and the output it returns must be non-empty,
+        within `max_output_bytes`, start with `output_magic` and match its digest.
+        Checks that the response echoes the job's own fields are the caller's.
+        """
+        request_id = request_id or uuid4().hex
+        if not _REQUEST_ID.fullmatch(request_id):
+            raise ValueError("invalid sandbox request ID")
+        cancelled = f"{what} was cancelled."
+        if cancel_event is not None and cancel_event.is_set():
+            raise SandboxCancelled(cancelled)
+        self.require_image(
+            image,
+            unavailable=f"{what} sandbox worker is unavailable.",
+            not_ready=f"{what} image is not ready on the worker.",
+        )
+        if cancel_event is not None and cancel_event.is_set():
+            raise SandboxCancelled(cancelled)
+        payload = json.dumps({"request_id": request_id, **fields},
+                             separators=(",", ":")).encode()
+        if len(payload) > min(max_input_bytes * 4 // 3 + 4096, self.config.max_request_bytes):
+            raise ValueError(f"{what} request exceeds configured transport limit")
+        raw = self.post_cancellable(
+            path, request_id, payload,
+            timeout=min(self.config.request_timeout_seconds, fields["timeout_seconds"] + 30),
+            cancel_event=cancel_event, cancelled=cancelled,
+        )
+        try:
+            response = json.loads(raw)
+            output = base64.b64decode(response["output_base64"], validate=True)
+            digest = response["output_sha256"]
+            if (
+                not isinstance(digest, str)
+                or not _SHA256_HEX.fullmatch(digest)
+                or not hmac.compare_digest(hashlib.sha256(output).hexdigest(), digest)
+                or not output
+                or len(output) > max_output_bytes
+                or not output.startswith(output_magic)
+            ):
+                raise ValueError
+        except Exception as exc:
+            raise IsolationUnavailable(
+                f"{what} worker returned an invalid or oversized result."
+            ) from exc
+        return response, output
 
     def cancel(self, request_id: str) -> None:
         self._request("DELETE", "/v1/jobs/" + request_id, request_id, b"", 5)

@@ -543,30 +543,29 @@ def publish_offerings(
             }).fetchone()
             if capture_row is None:
                 raise ValueError("stored Atlas capture path disagrees with immutable evidence hash")
-        for ordinal, item in enumerate(snapshot.records):
-            tx_conn.execute(queries.get("insert_atlas_offering_row"), {
-                "source_id": source_id,
-                "capture_set_hash": snapshot.capture_set_hash,
-                "row_ordinal": ordinal,
-                "result_cursor": item.result_cursor,
-                "raw_course_code": item.raw_course_code,
-                "title": item.title,
-                "class_number": item.class_number,
-                "group_identity": item.group_identity,
-                "is_grouped": item.is_grouped,
-                "matched_identity": item.matched_identity,
-                "srcdb": item.srcdb,
-                "credits": item.credits,
-                "description": item.description,
-                "restrictions": item.restrictions,
-                "notes": item.notes,
-                "notices": Jsonb([list(notice) for notice in item.notices]),
-                "raw_metadata": Jsonb(item.raw_metadata),
-                "evidence_hash": item.evidence_hash,
-                "review_status": item.review_status,
-                "observed_at": item.observed_at,
-                "capture_envelope_hash": item.capture_envelope_hash,
-            })
+        queries.execute_many(tx_conn, "insert_atlas_offering_row", ({
+            "source_id": source_id,
+            "capture_set_hash": snapshot.capture_set_hash,
+            "row_ordinal": ordinal,
+            "result_cursor": item.result_cursor,
+            "raw_course_code": item.raw_course_code,
+            "title": item.title,
+            "class_number": item.class_number,
+            "group_identity": item.group_identity,
+            "is_grouped": item.is_grouped,
+            "matched_identity": item.matched_identity,
+            "srcdb": item.srcdb,
+            "credits": item.credits,
+            "description": item.description,
+            "restrictions": item.restrictions,
+            "notes": item.notes,
+            "notices": Jsonb([list(notice) for notice in item.notices]),
+            "raw_metadata": Jsonb(item.raw_metadata),
+            "evidence_hash": item.evidence_hash,
+            "review_status": item.review_status,
+            "observed_at": item.observed_at,
+            "capture_envelope_hash": item.capture_envelope_hash,
+        } for ordinal, item in enumerate(snapshot.records)))
 
     existing_source = conn.execute(queries.get("get_source_by_hash"), {
         "collection_id": collection_id,

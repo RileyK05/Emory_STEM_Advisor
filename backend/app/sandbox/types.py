@@ -44,8 +44,6 @@ class SandboxConfig:
     max_timeout_seconds: int = 120
     max_cpu_count: float = 1.0
     max_memory_bytes: int = 512 * 1024 * 1024
-    max_output_bytes: int = 4 * 1024 * 1024
-    max_input_bytes: int = 16 * 1024 * 1024
     max_output_files: int = 100
     max_pids: int = 64
     create_timeout_seconds: int = 15
@@ -59,19 +57,14 @@ class SandboxConfig:
             raise ValueError("max_cpu_count must be between 0.1 and 8")
         if not 64 * 1024 * 1024 <= self.max_memory_bytes <= 8 * 1024 * 1024 * 1024:
             raise ValueError("max_memory_bytes must be between 64 MiB and 8 GiB")
-        if not 1024 <= self.max_output_bytes <= 64 * 1024 * 1024:
-            raise ValueError("max_output_bytes must be between 1 KiB and 64 MiB")
-        if not 0 <= self.max_input_bytes <= 256 * 1024 * 1024:
-            raise ValueError("max_input_bytes must be between 0 and 256 MiB")
         if not 1 <= self.max_output_files <= 1000:
             raise ValueError("max_output_files must be between 1 and 1000")
         if not 1 <= self.max_pids <= 512:
             raise ValueError("max_pids must be between 1 and 512")
         if not 1 <= self.create_timeout_seconds <= 60:
             raise ValueError("create_timeout_seconds must be between 1 and 60")
-        for image in (self.office_image, self.browser_image):
-            if not image and image == self.browser_image:
-                continue
+        # The browser image is optional (empty: no screenshots); the Office image is not.
+        for image in (self.office_image, *([self.browser_image] if self.browser_image else [])):
             if (
                 not image
                 or image.startswith("-")

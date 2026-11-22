@@ -59,25 +59,25 @@ ON CONFLICT (course_id) DO UPDATE SET
     lifecycle = EXCLUDED.lifecycle,
     authority = EXCLUDED.authority;
 
--- name: delete_course_schools_for_course
-DELETE FROM course_schools WHERE course_id = %(course_id)s;
+-- name: delete_course_schools_for_courses
+DELETE FROM course_schools WHERE course_id = ANY(%(course_ids)s::uuid[]);
 
 -- name: insert_course_school
 INSERT INTO course_schools (course_id, school, source, term)
 VALUES (%(course_id)s, %(school)s, %(source)s, %(term)s);
 
--- name: delete_course_topics_for_course
-DELETE FROM course_topic_offerings WHERE course_id = %(course_id)s;
+-- name: delete_course_topics_for_courses
+DELETE FROM course_topic_offerings WHERE course_id = ANY(%(course_ids)s::uuid[]);
 
 -- name: insert_course_topic
 INSERT INTO course_topic_offerings (course_id, term, topic, class_numbers)
 VALUES (%(course_id)s, %(term)s, %(topic)s, %(class_numbers)s);
 
--- name: delete_prereq_mentions_for_course
-DELETE FROM prereq_mentions WHERE course_id = %(course_id)s;
+-- name: delete_prereq_mentions_for_courses
+DELETE FROM prereq_mentions WHERE course_id = ANY(%(course_ids)s::uuid[]);
 
--- name: delete_prereq_nodes_for_course
-DELETE FROM prereq_nodes WHERE course_id = %(course_id)s;
+-- name: delete_prereq_nodes_for_courses
+DELETE FROM prereq_nodes WHERE course_id = ANY(%(course_ids)s::uuid[]);
 
 -- name: retire_courses_not_in_atlas
 -- A course that left the published catalog keeps its historical row, source,
@@ -113,9 +113,10 @@ VALUES (
 UPDATE prereq_mentions m
 SET target_course_id = c.course_id
 FROM courses c
-WHERE m.course_id = %(course_id)s
+WHERE m.course_id = ANY(%(course_ids)s::uuid[])
   AND c.collection_id = %(collection_id)s
-  AND c.code = m.target_code;
+  AND c.code = m.target_code
+  AND m.target_course_id IS DISTINCT FROM c.course_id;
 
 -- name: resolve_mentions_by_campus_equivalence
 -- A mention that names an Oxford course the master has no row for still
@@ -277,3 +278,10 @@ ORDER BY lab.code;
 SELECT course_id, code, title, requisites_raw, parse_status, lifecycle
 FROM courses
 WHERE collection_id = %(collection_id)s AND code = %(code)s;
+
+-- name: analyze_course_graph
+-- An import rewrites these tables in seconds, faster than autovacuum notices.
+-- Until their statistics are fresh the prerequisite seams plan against the old
+-- row counts: measured at 30-45 ms a question instead of under 1 ms.
+ANALYZE courses, prereq_nodes, prereq_mentions, course_schools,
+        course_topic_offerings, course_campus_equivalents;

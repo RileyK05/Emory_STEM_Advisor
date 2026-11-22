@@ -96,8 +96,6 @@ def render_screenshot(spec: HtmlArtifactSpec, settings: Settings) -> bytes:
             request_timeout_seconds=settings.screenshot_timeout_seconds + 30,
             max_timeout_seconds=settings.screenshot_timeout_seconds,
             max_response_bytes=32 * 1024 * 1024,
-            max_output_bytes=settings.screenshot_max_bytes,
-            max_input_bytes=4 * 1024 * 1024,
         )
         try:
             return RemoteHtmlScreenshotRunner(

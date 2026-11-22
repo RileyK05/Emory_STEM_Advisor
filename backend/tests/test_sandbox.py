@@ -27,7 +27,6 @@ def make_config(tmp_path, **changes):
     values = {
         "work_root": tmp_path / "sandbox-work",
         "max_timeout_seconds": 10,
-        "max_output_bytes": 4096,
     }
     values.update(changes)
     return SandboxConfig(**values)
@@ -278,8 +277,6 @@ def test_sandbox_request_limits_contract(
         assert res.status_code == expected_status
         with pytest.raises(ValueError, match="byte limit"):
             runner.run("recalculate_xlsx", b"PK" + b"x" * (MAX_OFFICE_INPUT_BYTES + 1))
-        with pytest.raises(ValueError):
-            SandboxConfig(work_root=tmp_path / "w", max_input_bytes=-1)
         return
 
     body = {
@@ -299,9 +296,6 @@ def test_sandbox_request_limits_contract(
     if limit_name == "bad_bearer_token":
         with pytest.raises(ValueError):
             create_worker_app(cfg, "too_short")
-    elif limit_name == "output_bytes":
-        with pytest.raises(ValueError):
-            SandboxConfig(work_root=tmp_path / "w", max_output_bytes=500)
     elif limit_name == "timeout":
         with pytest.raises(ValueError):
             SandboxConfig(work_root=tmp_path / "w", max_timeout_seconds=0)

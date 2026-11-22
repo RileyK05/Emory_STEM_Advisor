@@ -288,17 +288,6 @@ button.artifact-card:not(:disabled):hover {
   color: var(--text);
 }
 
-.artifact-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.gap-review-heading h3 {
-  font-size: 16px;
-}
-
-.gap-review-heading p,
 .gap-review-metrics,
 .gap-review-help,
 .gap-review-counts {

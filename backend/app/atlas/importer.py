@@ -2,7 +2,7 @@
 
 import hashlib
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,7 +11,12 @@ from uuid import UUID
 from psycopg import Connection
 
 from app.admin.course_changes import record_baseline_conflict
-from app.atlas.course_writer import course_uuid, replace_course_requisites
+from app.atlas.course_writer import (
+    course_uuid,
+    link_mention_targets,
+    refresh_graph_statistics,
+    replace_requisites,
+)
 from app.atlas.equivalence import derive_campus_equivalents
 from app.atlas.records import AtlasCourse, canonical_code_map, load_atlas_lines
 from app.atlas.requisites import (
@@ -86,50 +91,76 @@ def _queue_baseline_conflict(conn, collection_id, code, existing, incoming) -> N
     )
 
 
-def _write_course(conn, collection_id, source_id, locator_id, course, canonical_code) -> bool:
-    """Write one baseline course unless a reviewed correction owns the identity."""
-    existing = conn.execute(queries.get("get_course_admin_state"), {
-        "collection_id": collection_id, "code": course.code,
-    }).fetchone()
-    if existing is not None and existing["authority"] in _ADMIN_CONTROLLED:
-        _queue_baseline_conflict(conn, collection_id, course.code, existing, course)
-        return False
-    lifecycle = getattr(course, "lifecycle", "current")
-    authority = course.authority or "catalog"
-    course_id = course_uuid(collection_id, course.code)
-    raw = requisite_text(course.requisites, course.description)
-    parsed = parse_requisites(raw, course_code=course.code)
-    conn.execute(queries.get("insert_course"), {
-        "course_id": course_id, "collection_id": collection_id,
-        "source_id": source_id, "locator_id": locator_id,
-        "code": course.code, "subject": course.code.split(" ", 1)[0], "title": course.title,
-        "requisites_raw": raw, "parse_status": parsed.status, "parser_version": PARSER_VERSION,
-        "canonical_code": canonical_code, "lifecycle": lifecycle, "authority": authority,
-    })
-    replace_course_requisites(conn, course_id, parsed)
-    _replace_course_schools_and_topics(conn, course_id, course)
-    return True
+def _write_courses(
+    conn: Connection,
+    collection_id: UUID,
+    source_id: UUID,
+    items: list[tuple[AtlasCourse, UUID, str]],
+    controlled: Mapping[str, Mapping] | None = None,
+) -> list[str]:
+    """Write baseline courses `(course, locator_id, canonical_code)` in one batch.
+
+    A course whose identity a reviewed correction owns is not written; a
+    disagreeing baseline becomes a conflict for review instead. `controlled` is
+    those corrections by code, read here when the caller has not. Returns the
+    codes written.
+    """
+    if controlled is None:
+        controlled = {
+            row["code"]: row
+            for row in conn.execute(queries.get("list_admin_controlled_courses"),
+                                    {"collection_id": collection_id}).fetchall()
+        }
+    courses: list[dict] = []
+    parsed_by_course = {}
+    schools: list[dict] = []
+    topics: list[dict] = []
+    for course, locator_id, canonical_code in items:
+        existing = controlled.get(course.code)
+        if existing is not None:
+            _queue_baseline_conflict(conn, collection_id, course.code, existing, course)
+            continue
+        course_id = course_uuid(collection_id, course.code)
+        raw = requisite_text(course.requisites, course.description)
+        parsed = parse_requisites(raw, course_code=course.code)
+        parsed_by_course[course_id] = parsed
+        courses.append({
+            "course_id": course_id, "collection_id": collection_id,
+            "source_id": source_id, "locator_id": locator_id,
+            "code": course.code, "subject": course.code.split(" ", 1)[0],
+            "title": course.title, "requisites_raw": raw, "parse_status": parsed.status,
+            "parser_version": PARSER_VERSION, "canonical_code": canonical_code,
+            "lifecycle": getattr(course, "lifecycle", "current"),
+            "authority": course.authority or "catalog",
+        })
+        schools.extend(
+            {"course_id": course_id, "school": school, "source": source, "term": term}
+            for school, source, term in _course_schools(course)
+        )
+        topics.extend(
+            {"course_id": course_id, "term": course.term, "topic": topic["topic"],
+             "class_numbers": topic["class_numbers"]}
+            for topic in course.topics
+        )
+    if not courses:
+        return []
+    queries.execute_many(conn, "insert_course", courses)
+    course_ids = list(parsed_by_course)
+    conn.execute(queries.get("delete_course_schools_for_courses"), {"course_ids": course_ids})
+    conn.execute(queries.get("delete_course_topics_for_courses"), {"course_ids": course_ids})
+    queries.execute_many(conn, "insert_course_school", schools)
+    queries.execute_many(conn, "insert_course_topic", topics)
+    replace_requisites(conn, parsed_by_course)
+    return [row["code"] for row in courses]
 
 
-def _replace_course_schools_and_topics(conn, course_id: UUID, course: AtlasCourse) -> None:
+def _course_schools(course: AtlasCourse) -> list[tuple[str, str, str | None]]:
     """Atlas careers are the schools; a reconciled catalog fallback is the College's."""
-    conn.execute(queries.get("delete_course_schools_for_course"), {"course_id": course_id})
-    conn.execute(queries.get("delete_course_topics_for_course"), {"course_id": course_id})
     if course.authority == "atlas":
-        schools = [(career, "atlas_offering", course.term) for career in course.careers]
-    elif course.authority == "catalog":
-        schools = [("Emory College", "college_catalog", None)]
-    else:
-        schools = []
-    for school, source, term in schools:
-        conn.execute(queries.get("insert_course_school"), {
-            "course_id": course_id, "school": school, "source": source, "term": term,
-        })
-    for topic in course.topics:
-        conn.execute(queries.get("insert_course_topic"), {
-            "course_id": course_id, "term": course.term, "topic": topic["topic"],
-            "class_numbers": topic["class_numbers"],
-        })
+        return [(career, "atlas_offering", course.term) for career in course.careers]
+    if course.authority == "catalog":
+        return [("Emory College", "college_catalog", None)]
+    return []
 
 
 def write_campus_equivalents(
@@ -151,13 +182,12 @@ def write_campus_equivalents(
         [requisite_text(course.requisites, course.description) for course in courses],
     )
     conn.execute(queries.get("delete_campus_equivalents"), {"collection_id": collection_id})
-    for pair in pairs:
-        conn.execute(queries.get("insert_campus_equivalent"), {
-            "collection_id": collection_id,
-            "oxford_code": pair.oxford_code,
-            "atlanta_code": pair.atlanta_code,
-            "basis": pair.basis,
-        })
+    queries.execute_many(conn, "insert_campus_equivalent", [{
+        "collection_id": collection_id,
+        "oxford_code": pair.oxford_code,
+        "atlanta_code": pair.atlanta_code,
+        "basis": pair.basis,
+    } for pair in pairs])
     conn.execute(queries.get("resolve_mentions_by_campus_equivalence"),
                  {"collection_id": collection_id})
     conn.execute(queries.get("resolve_program_mentions_by_suffix_variant"),
@@ -212,8 +242,9 @@ def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Pat
             if (row["requisites_raw"] not in allowed_raw or row["title"] != course.title
                     or not str(row["parser_version"]).isdigit()):
                 raise ValueError("stored atlas has manual changes; review before reparsing")
-        changed = []
         canonical = canonical_code_map(courses)
+        reparse: list[tuple[AtlasCourse, UUID, str]] = []
+        identity_changes: list[dict] = []
         for course in courses:
             row = stored[course.code]
             if course.code in controlled:
@@ -224,20 +255,20 @@ def refresh_atlas_requisites(conn: Connection, *, collection_id: UUID, path: Pat
                 # authority or lifecycle. Those are controlled by publication.
                 course = course.model_copy(update={"authority": row["authority"],
                                                    "lifecycle": row["lifecycle"]})
-                _write_course(conn, collection_id, source["source_id"], row["locator_id"],
-                              course, canonical[course.code])
-                changed.append(course.code)
+                reparse.append((course, row["locator_id"], canonical[course.code]))
             elif row["canonical_code"] != canonical[course.code]:
                 # Cross-list identity is not a parser fact; update it without
                 # advancing the parser revision or forcing a topic rebuild.
-                conn.execute(queries.get("set_course_canonical_code"), {
+                identity_changes.append({
                     "course_id": row["course_id"],
                     "canonical_code": canonical[course.code],
                 })
-        for code in changed:
-            conn.execute(queries.get("resolve_mention_targets"), {
-                "course_id": course_uuid(collection_id, code), "collection_id": collection_id,
-            })
+        # Reviewed corrections were set aside above, so none is among `reparse`.
+        changed = _write_courses(conn, collection_id, source["source_id"], reparse,
+                                 controlled={})
+        queries.execute_many(conn, "set_course_canonical_code", identity_changes)
+        link_mention_targets(conn, collection_id,
+                             (course_uuid(collection_id, code) for code in changed))
         # The campus equivalences are not a parser fact either, so they are
         # refreshed on every reparse of the indexed atlas.
         write_campus_equivalents(conn, collection_id, courses)
@@ -323,14 +354,20 @@ def import_atlas(
                 queries.get("list_locators_for_source"), {"source_id": source_id}
             ).fetchall()
         }
-        for course in courses:
-            _write_course(tx_conn, collection_id, source_id, locators[course.code],
-                          course, canonical[course.code])
+        controlled = {
+            row["code"]: row
+            for row in tx_conn.execute(queries.get("list_admin_controlled_courses"), {
+                "collection_id": collection_id,
+            }).fetchall()
+        }
+        _write_courses(
+            tx_conn, collection_id, source_id,
+            [(course, locators[course.code], canonical[course.code]) for course in courses],
+            controlled,
+        )
         # A reviewed correction whose underlying baseline row disappeared stays
         # active and becomes a conflict for review; it is never auto-retired.
-        for row in tx_conn.execute(queries.get("list_admin_controlled_courses"), {
-            "collection_id": collection_id,
-        }).fetchall():
+        for row in controlled.values():
             if row["code"] not in code_set and row["authority"] == "admin_correction":
                 record_baseline_conflict(
                     tx_conn,
@@ -354,14 +391,8 @@ def import_atlas(
             queries.get("retire_courses_not_in_atlas"),
             {"collection_id": collection_id, "codes": codes},
         )
-        for course in courses:
-            tx_conn.execute(
-                queries.get("resolve_mention_targets"),
-                {
-                    "course_id": course_uuid(collection_id, course.code),
-                    "collection_id": collection_id,
-                },
-            )
+        link_mention_targets(tx_conn, collection_id,
+                             (course_uuid(collection_id, code) for code in codes))
         # The campus equivalences the Atlas states, so a mention that names an
         # Oxford course the master has no row for still identifies a course.
         write_campus_equivalents(tx_conn, collection_id, courses)
@@ -400,6 +431,7 @@ def import_atlas(
 
     refresh_term_card_search(conn, collection_id=collection_id)
     conn.commit()
+    refresh_graph_statistics(conn)
 
     counts = Counter(
         row["parse_status"]

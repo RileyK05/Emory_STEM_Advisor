@@ -89,26 +89,9 @@ export const CheckIcon = (p: P) => (
     <path d="M5 12l5 5L20 7" />
   </Icon>
 );
-export const BookIcon = (p: P) => (
-  <Icon {...p}>
-    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z" />
-    <path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5" />
-  </Icon>
-);
-export const CompassIcon = (p: P) => (
-  <Icon {...p}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M15.5 8.5l-2 5-5 2 2-5z" />
-  </Icon>
-);
 export const FolderIcon = (p: P) => (
   <Icon {...p}>
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-  </Icon>
-);
-export const ToolsIcon = (p: P) => (
-  <Icon {...p}>
-    <path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
   </Icon>
 );
 export const MenuIcon = (p: P) => (
@@ -119,16 +102,6 @@ export const MenuIcon = (p: P) => (
 export const CloseIcon = (p: P) => (
   <Icon {...p}>
     <path d="M6 6l12 12M18 6L6 18" />
-  </Icon>
-);
-export const ChevronIcon = (p: P) => (
-  <Icon {...p}>
-    <path d="M6 9l6 6 6-6" />
-  </Icon>
-);
-export const BackIcon = (p: P) => (
-  <Icon {...p}>
-    <path d="M15 18l-6-6 6-6" />
   </Icon>
 );
 export const RefreshIcon = (p: P) => (
@@ -145,23 +118,6 @@ export const UploadIcon = (p: P) => (
 export const DownloadIcon = (p: P) => (
   <Icon {...p}>
     <path d="M12 4v12M6 10l6 6 6-6M4 20h16" />
-  </Icon>
-);
-export const SparkIcon = (p: P) => (
-  <Icon {...p}>
-    <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" />
-    <path d="M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z" />
-  </Icon>
-);
-export const ChatIcon = (p: P) => (
-  <Icon {...p}>
-    <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 21 12z" />
-  </Icon>
-);
-export const AlertIcon = (p: P) => (
-  <Icon {...p}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M12 8v4M12 16h.01" />
   </Icon>
 );
 

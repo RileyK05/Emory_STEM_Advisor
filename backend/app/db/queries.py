@@ -6,6 +6,7 @@ must be written ``%%``, including inside comments.
 """
 
 import re
+from collections.abc import Iterable, Mapping
 from functools import lru_cache
 from pathlib import Path
 
@@ -71,3 +72,15 @@ def get(name: str) -> str:
         return _load()[name]
     except KeyError:
         raise KeyError(f"unknown query name: {name!r}") from None
+
+
+def execute_many(conn, name: str, rows: Iterable[Mapping]) -> None:
+    """Run one named statement for every row as a single pipelined batch.
+
+    Writers that produce many rows (an Atlas import writes tens of thousands)
+    use this instead of one round trip per row. Nothing is sent for no rows.
+    """
+    batch = list(rows)
+    if batch:
+        with conn.cursor() as cursor:
+            cursor.executemany(get(name), batch)

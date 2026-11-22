@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.sandbox.container_job import JobResult
 from app.sandbox.office import (
     MAX_OFFICE_INPUT_BYTES,
-    OfficeJobResult,
     OfficeRunner,
     build_office_create_argv,
 )
@@ -33,7 +33,7 @@ def config(tmp_path, **changes):
     values = {
         "work_root": tmp_path / "jobs", "production": True,
         "separate_sandbox_host": True, "runtime": "runsc",
-        "max_timeout_seconds": 10, "max_output_bytes": 4096,
+        "max_timeout_seconds": 10,
     }
     values.update(changes)
     return SandboxConfig(**values)
@@ -257,8 +257,8 @@ def test_worker_office_endpoint_auth_checksum_and_cancel(tmp_path):
         def run(self, operation, content, *, timeout_seconds, cancel_event):
             assert content == raw
             output = b"%PDF-1.7\nworker"
-            return OfficeJobResult(operation, output, hashlib.sha256(content).hexdigest(),
-                                   hashlib.sha256(output).hexdigest(), 0.01)
+            return JobResult(output, hashlib.sha256(content).hexdigest(),
+                             hashlib.sha256(output).hexdigest(), 0.01)
     raw = zip_bytes()
     app = create_worker_app(config(tmp_path, production=True, runtime="runsc", separate_sandbox_host=True),
                             TOKEN, office_runner=FakeOffice())

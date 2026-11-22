@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 from uuid import uuid4
 
+from app.atlas.course_writer import refresh_graph_statistics
 from app.atlas.importer import import_atlas, refresh_atlas_requisites, unresolved_courses
 from app.atlas.records import load_atlas
 from app.config import load_settings
@@ -52,6 +53,7 @@ def main() -> None:
             changed = refresh_atlas_requisites(conn, collection_id=row["collection_id"],
                                               path=args.file)
             conn.commit()
+            refresh_graph_statistics(conn)
             print(f"refreshed prerequisite metadata for {changed} courses")
         return
     config = load_retrieval_config(settings=settings)

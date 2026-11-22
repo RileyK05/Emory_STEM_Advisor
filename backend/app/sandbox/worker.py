@@ -14,8 +14,13 @@ from typing import Literal
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.sandbox.office import MAX_OFFICE_INPUT_BYTES, OfficeRunner
-from app.sandbox.screenshot import MAX_HTML_INPUT_BYTES, HtmlScreenshotRunner
+from app.sandbox.office import MAX_OFFICE_INPUT_BYTES, MAX_OFFICE_OUTPUT_BYTES, OfficeRunner
+from app.sandbox.screenshot import (
+    MAX_HTML_INPUT_BYTES,
+    MAX_SCREENSHOT_OUTPUT_BYTES,
+    PNG_MAGIC,
+    HtmlScreenshotRunner,
+)
 from app.sandbox.types import (
     IsolationUnavailable,
     SandboxCancelled,
@@ -35,6 +40,9 @@ class OfficeExecuteBody(BaseModel):
     input_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     timeout_seconds: int = Field(default=60, ge=1, le=300)
 
+    def job_input(self) -> tuple[str, str]:
+        return self.input_base64, self.input_sha256
+
 
 class HtmlScreenshotBody(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -44,6 +52,9 @@ class HtmlScreenshotBody(BaseModel):
     width: int = Field(ge=320, le=3840)
     height: int = Field(ge=240, le=2160)
     timeout_seconds: int = Field(default=30, ge=1, le=120)
+
+    def job_input(self) -> tuple[str, str]:
+        return self.html_base64, self.html_sha256
 
 
 async def _bounded_json(request: Request, limit: int):
@@ -112,43 +123,6 @@ def _execution_error(exc: Exception, what: str) -> HTTPException:
     return HTTPException(500, f"{what} failed")
 
 
-def _office_response(result, body: OfficeExecuteBody) -> dict:
-    if (
-        result.operation != body.operation
-        or not result.content
-        or len(result.content) > 32 * 1024 * 1024
-        or not hmac.compare_digest(result.input_sha256, body.input_sha256)
-        or not hmac.compare_digest(hashlib.sha256(result.content).hexdigest(), result.output_sha256)
-    ):
-        raise HTTPException(503, "Office output failed validation")
-    return {
-        "operation": result.operation,
-        "input_sha256": result.input_sha256,
-        "output_sha256": result.output_sha256,
-        "output_base64": base64.b64encode(result.content).decode("ascii"),
-        "runtime_seconds": result.runtime_seconds,
-    }
-
-
-def _screenshot_response(result, body: HtmlScreenshotBody) -> dict:
-    if (
-        not result.content
-        or len(result.content) > 8 * 1024 * 1024
-        or not hmac.compare_digest(result.input_sha256, body.html_sha256)
-        or not hmac.compare_digest(hashlib.sha256(result.content).hexdigest(), result.output_sha256)
-        or not result.content.startswith(b"\x89PNG\r\n\x1a\n")
-    ):
-        raise HTTPException(503, "Screenshot output failed validation")
-    return {
-        "html_sha256": result.input_sha256,
-        "width": body.width,
-        "height": body.height,
-        "output_sha256": result.output_sha256,
-        "output_base64": base64.b64encode(result.content).decode("ascii"),
-        "runtime_seconds": result.runtime_seconds,
-    }
-
-
 def create_worker_app(
     config: SandboxConfig, bearer_secret: str,
     office_runner: OfficeRunner | None = None,
@@ -183,58 +157,73 @@ def create_worker_app(
             "image_ids": image_ids,
         }
 
-    @app.post("/v1/office/execute")
-    async def execute_office(request: Request, authorization: str | None = Header(default=None)):
+    async def run_job(request: Request, authorization: str | None, body_type: type[BaseModel],
+                      *, what: str, max_input_bytes: int, max_output_bytes: int, run,
+                      output_magic: bytes = b""):
+        """Authenticate, decode and verify one job body, run it, and check its result.
+
+        `body_type.job_input()` gives the base64 input and its declared digest;
+        `run(body, content, cancel_event)` executes it and returns a JobResult.
+        """
         auth(authorization)
-        raw = await _bounded_json(request, (MAX_OFFICE_INPUT_BYTES * 4 // 3) + 4096)
+        raw = await _bounded_json(request, max_input_bytes * 4 // 3 + 4096)
         try:
-            body = OfficeExecuteBody.model_validate_json(raw)
-            content = base64.b64decode(body.input_base64, validate=True)
-            if not hmac.compare_digest(hashlib.sha256(content).hexdigest(), body.input_sha256):
+            body = body_type.model_validate_json(raw)
+            encoded, expected = body.job_input()
+            content = base64.b64decode(encoded, validate=True)
+            if not hmac.compare_digest(hashlib.sha256(content).hexdigest(), expected):
                 raise ValueError
         except Exception as exc:
-            raise HTTPException(422, "invalid Office request") from exc
-        if not content or len(content) > MAX_OFFICE_INPUT_BYTES:
-            raise HTTPException(413, "Office input too large")
+            raise HTTPException(422, f"invalid {what} request") from exc
+        if not content or len(content) > max_input_bytes:
+            raise HTTPException(413, f"{what} input too large")
         event = requests.start(body.request_id)
         try:
-            result = await asyncio.to_thread(
-                office.run, body.operation, content,
-                timeout_seconds=body.timeout_seconds, cancel_event=event,
-            )
+            result = await asyncio.to_thread(run, body, content, event)
         except Exception as exc:
-            raise _execution_error(exc, "Office execution") from exc
+            raise _execution_error(exc, what) from exc
         finally:
             requests.finish(body.request_id)
-        return _office_response(result, body)
+        if (
+            not result.content
+            or len(result.content) > max_output_bytes
+            or not result.content.startswith(output_magic)
+            or not hmac.compare_digest(result.input_sha256, expected)
+            or not hmac.compare_digest(
+                hashlib.sha256(result.content).hexdigest(), result.output_sha256)
+        ):
+            raise HTTPException(503, f"{what} output failed validation")
+        return body, result, {
+            "output_sha256": result.output_sha256,
+            "output_base64": base64.b64encode(result.content).decode("ascii"),
+            "runtime_seconds": result.runtime_seconds,
+        }
+
+    @app.post("/v1/office/execute")
+    async def execute_office(request: Request, authorization: str | None = Header(default=None)):
+        body, result, output = await run_job(
+            request, authorization, OfficeExecuteBody, what="Office execution",
+            max_input_bytes=MAX_OFFICE_INPUT_BYTES, max_output_bytes=MAX_OFFICE_OUTPUT_BYTES,
+            run=lambda body, content, event: office.run(
+                body.operation, content, timeout_seconds=body.timeout_seconds,
+                cancel_event=event),
+        )
+        return {"operation": body.operation, "input_sha256": result.input_sha256, **output}
 
     @app.post("/v1/html/screenshot")
     async def execute_screenshot(
         request: Request, authorization: str | None = Header(default=None)
     ):
-        auth(authorization)
-        raw = await _bounded_json(request, (MAX_HTML_INPUT_BYTES * 4 // 3) + 4096)
-        try:
-            body = HtmlScreenshotBody.model_validate_json(raw)
-            content = base64.b64decode(body.html_base64, validate=True)
-            if not hmac.compare_digest(hashlib.sha256(content).hexdigest(), body.html_sha256):
-                raise ValueError
-        except Exception as exc:
-            raise HTTPException(422, "invalid screenshot request") from exc
-        if not content or len(content) > MAX_HTML_INPUT_BYTES:
-            raise HTTPException(413, "screenshot input too large")
-        event = requests.start(body.request_id)
-        try:
-            result = await asyncio.to_thread(
-                screenshot.run, content.decode("utf-8"),
-                width=body.width, height=body.height,
-                timeout_seconds=body.timeout_seconds, cancel_event=event,
-            )
-        except Exception as exc:
-            raise _execution_error(exc, "screenshot rendering") from exc
-        finally:
-            requests.finish(body.request_id)
-        return _screenshot_response(result, body)
+        body, result, output = await run_job(
+            request, authorization, HtmlScreenshotBody, what="screenshot rendering",
+            max_input_bytes=MAX_HTML_INPUT_BYTES, max_output_bytes=MAX_SCREENSHOT_OUTPUT_BYTES,
+            output_magic=PNG_MAGIC,
+            run=lambda body, content, event: screenshot.run(
+                content.decode("utf-8"), width=body.width, height=body.height,
+                timeout_seconds=body.timeout_seconds, cancel_event=event),
+        )
+        return {"html_sha256": result.input_sha256, "width": body.width,
+                "height": body.height, **output}
 
     @app.delete("/v1/jobs/{request_id}")
     async def cancel(request_id: str, authorization: str | None = Header(default=None)):
