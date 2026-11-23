@@ -11,10 +11,49 @@ map $uri $cache_control {
     default                        "";
 }
 
+# The client's address. Container Apps' ingress appends it to X-Forwarded-For;
+# only private-range hops (the ingress itself) are trusted to have written the
+# header, so a client cannot pick its own address by sending one. Recursive
+# resolution takes the rightmost address that is not one of those hops.
+set_real_ip_from 10.0.0.0/8;
+set_real_ip_from 172.16.0.0/12;
+set_real_ip_from 192.168.0.0/16;
+set_real_ip_from 100.64.0.0/10;
+set_real_ip_from 127.0.0.1;
+real_ip_header X-Forwarded-For;
+real_ip_recursive on;
+
+# Per-address limits, the first line against floods. They are generous because a
+# campus network can put many students behind one address; the per-student
+# quotas in the API (QUOTA_*) are what bound model work. Each web replica keeps
+# its own counters.
+limit_req_zone $binary_remote_addr zone=api_per_ip:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=auth_per_ip:10m rate=30r/m;
+limit_conn_zone $binary_remote_addr zone=conn_per_ip:10m;
+limit_req_status 429;
+limit_conn_status 429;
+
+# The app's own pages. Scripts and data come only from this origin; inline style
+# is allowed because the isolated artifact preview inherits this policy and
+# carries its own stricter one. Images load only from here or data: URLs, so a
+# model-written image link cannot carry data to another host.
+map $uri $content_security_policy {
+    ~^/api/  "";
+    default  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; frame-src 'self'; worker-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
+}
+
 server {
     listen 8080;
     server_name _;
     server_tokens off;
+
+    # Slow clients (slowloris) cannot hold a connection open indefinitely.
+    client_header_timeout 10s;
+    client_body_timeout 30s;
+    send_timeout 60s;
+    keepalive_timeout 30s;
+    large_client_header_buffers 4 16k;
+    limit_conn conn_per_ip 100;
 
     root /usr/share/nginx/html;
     index index.html;
@@ -35,10 +74,30 @@ server {
     add_header Cache-Control $cache_control;
     add_header X-Content-Type-Options nosniff always;
     add_header Referrer-Policy strict-origin-when-cross-origin always;
+    add_header Content-Security-Policy $content_security_policy always;
+    add_header X-Frame-Options DENY always;
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
+    add_header Cross-Origin-Opener-Policy same-origin always;
 
     # Proxy the API so the browser sees one origin. Container Apps terminates
     # TLS at the ingress, so the public scheme is always HTTPS.
+    # Sign-in starts write a short-lived login record, so they get a tight limit.
+    location /api/auth/ {
+        limit_req zone=auth_per_ip burst=20 nodelay;
+        proxy_pass ${API_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Host $proxy_host;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Connection "";
+        proxy_ssl_server_name on;
+        proxy_read_timeout 30s;
+    }
+
     location /api/ {
+        limit_req zone=api_per_ip burst=120 nodelay;
         proxy_pass ${API_UPSTREAM};
         proxy_http_version 1.1;
         proxy_set_header Host $proxy_host;

@@ -91,3 +91,11 @@ jobs:
             expect "$path" "cache-control: no-store"
           done
           expect "$asset" "cache-control: public, max-age=31536000, immutable"
+          for path in / /admin /some/app/route; do
+            expect "$path" "x-frame-options: DENY"
+            if ! curl -fsSI "http://127.0.0.1:8080$path" | tr -d '\r' \
+                | grep -qi "^content-security-policy: default-src 'self'; script-src 'self';"; then
+              echo "::error::$path should send the page Content-Security-Policy"
+              exit 1
+            fi
+          done

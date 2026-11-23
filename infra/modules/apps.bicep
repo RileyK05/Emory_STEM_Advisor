@@ -49,6 +49,10 @@ param dbPoolMaxSize int
 param httpThreadpoolTokens int
 param admissionMaxPendingWorkspace int
 param admissionMaxPendingGlobal int
+param quotaQueriesPerMinute int
+param quotaQueriesPerDay int
+param quotaSpendUsdPerDay string
+param quotaMaxActiveJobs int
 param workspaceStorageMaxBytes int
 
 var apiPort = 8000
@@ -134,6 +138,10 @@ var appSettings = {
   HTTP_THREADPOOL_TOKENS: string(httpThreadpoolTokens)
   ADMISSION_MAX_PENDING_WORKSPACE: string(admissionMaxPendingWorkspace)
   ADMISSION_MAX_PENDING_GLOBAL: string(admissionMaxPendingGlobal)
+  QUOTA_QUERIES_PER_MINUTE: string(quotaQueriesPerMinute)
+  QUOTA_QUERIES_PER_DAY: string(quotaQueriesPerDay)
+  QUOTA_SPEND_USD_PER_DAY: quotaSpendUsdPerDay
+  QUOTA_MAX_ACTIVE_JOBS: string(quotaMaxActiveJobs)
   WORKSPACE_STORAGE_MAX_BYTES: string(workspaceStorageMaxBytes)
 }
 

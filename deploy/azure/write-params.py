@@ -80,6 +80,11 @@ SETTINGS: dict[str, tuple[str, Callable[[str], object]]] = {
     "HTTP_THREADPOOL_TOKENS": ("httpThreadpoolTokens", int),
     "ADMISSION_MAX_PENDING_WORKSPACE": ("admissionMaxPendingWorkspace", int),
     "ADMISSION_MAX_PENDING_GLOBAL": ("admissionMaxPendingGlobal", int),
+    # Per-student model-work caps
+    "QUOTA_QUERIES_PER_MINUTE": ("quotaQueriesPerMinute", int),
+    "QUOTA_QUERIES_PER_DAY": ("quotaQueriesPerDay", int),
+    "QUOTA_SPEND_USD_PER_DAY": ("quotaSpendUsdPerDay", str),
+    "QUOTA_MAX_ACTIVE_JOBS": ("quotaMaxActiveJobs", int),
     # Images (apps phase only); an empty WORKER_IMAGE reuses API_IMAGE.
     "API_IMAGE": ("apiImage", str),
     "WEB_IMAGE": ("webImage", str),

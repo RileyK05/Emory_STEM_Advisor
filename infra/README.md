@@ -146,6 +146,9 @@ defaults below. The important ones:
 | `HTTP_THREADPOOL_TOKENS` | `80` | Sync dependency/handler pool |
 | `ADMISSION_MAX_PENDING_WORKSPACE` | `4` | Outstanding turns per workspace |
 | `ADMISSION_MAX_PENDING_GLOBAL` | `600` | Outstanding turns per instance; keep above max workers x concurrency |
+| `QUOTA_QUERIES_PER_MINUTE` / `QUOTA_QUERIES_PER_DAY` | `10` / `200` | Questions per student; the bound on model spend |
+| `QUOTA_SPEND_USD_PER_DAY` | `0` (off) | Dollar cap per student per UTC day; needs a price schedule for the model |
+| `QUOTA_MAX_ACTIVE_JOBS` | `6` | Queued plus running jobs per student |
 | `POSTGRES_SKU_NAME` | `Standard_D2ds_v5` | Size for expected student load |
 | `POSTGRES_TIER` | `GeneralPurpose` | Burstable for a smoke deploy |
 | `POSTGRES_STORAGE_GB` | `128` | Auto-grow is enabled by the service |
@@ -169,6 +172,24 @@ The apps receive `DATABASE_URL`, `DATABASE_DIRECT_URL`, `LLM_*`, `AUTH_*`,
 counts) and only matters without the pooler. `ADMIN_API_ENABLED` stays false,
 so `/metrics` remains loopback-only. `modules/apps.bicep` lists every variable
 in two tables, `appSettings` and `appSecretEnv`.
+
+### Abuse and flood protection
+
+- **Per address, at the web app.** nginx (`deploy/docker/nginx.conf.template`)
+  limits each client address: 30 API requests a second (burst 120), 30 sign-in
+  starts a minute (burst 20), and 100 open connections. Over the limit is a 429.
+  The address comes from `X-Forwarded-For`, trusting only private-range hops (the
+  ingress), so a client cannot choose its own. The limits are generous because a
+  campus network may put many students behind one address, and each web replica
+  counts separately. The API app has no public ingress, so all traffic passes here.
+- **Per student, in the API.** `QUOTA_*` bounds the model work one signed-in
+  student can cause; `ADMISSION_*` bounds the queue. Anonymous callers can reach
+  only sign-in, the session check and static files.
+- **Volumetric attacks** are outside what an app can stop. Azure's platform DDoS
+  protection covers the network layer for free. For request floods from many
+  addresses, put Azure Front Door with a WAF policy (rate-limit and managed rules)
+  in front of the web app and restrict the web ingress to Front Door's service
+  tag. It is not deployed here because it is a paid, school-account decision.
 
 ### Scaling
 

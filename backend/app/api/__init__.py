@@ -191,6 +191,11 @@ def create_app(
             response.headers["Cache-Control"] = "private, no-store"
             response.headers["X-Content-Type-Options"] = "nosniff"
             response.headers["Referrer-Policy"] = "no-referrer"
+            # An API response is data, never a page: if a browser is ever made
+            # to render one (a JSON error opened directly, an export), it runs
+            # nothing, loads nothing and cannot be framed.
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'none'; sandbox")
         return response
 
     _include_routers(app)

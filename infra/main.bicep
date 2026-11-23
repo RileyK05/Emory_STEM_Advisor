@@ -193,6 +193,27 @@ param admissionMaxPendingWorkspace int = 4
 @maxValue(1000000)
 param admissionMaxPendingGlobal int = 600
 
+// Per-student caps on model work. A signed-in student is the only caller who can
+// spend model budget, so these are the cost-abuse bound; 0 disables each one.
+// Admins can still set a stricter or looser policy per workspace.
+@description('Questions one student may ask per minute (0 disables).')
+@minValue(0)
+@maxValue(100000)
+param quotaQueriesPerMinute int = 10
+
+@description('Questions one student may ask per UTC day (0 disables).')
+@minValue(0)
+@maxValue(1000000)
+param quotaQueriesPerDay int = 200
+
+@description('Model spend one student may incur per UTC day, in US dollars, as a decimal string (0 disables). Needs a price schedule for the model.')
+param quotaSpendUsdPerDay string = '0'
+
+@description('Queued plus running jobs (turns and artifact runs) one student may have (0 disables).')
+@minValue(0)
+@maxValue(1000)
+param quotaMaxActiveJobs int = 6
+
 @description('Optional Azure Files share size in GiB for DATA_DIR.')
 @minValue(1)
 @maxValue(5120)
@@ -698,6 +719,10 @@ module apps 'modules/apps.bicep' = if (deployApps) {
     httpThreadpoolTokens: httpThreadpoolTokens
     admissionMaxPendingWorkspace: admissionMaxPendingWorkspace
     admissionMaxPendingGlobal: admissionMaxPendingGlobal
+    quotaQueriesPerMinute: quotaQueriesPerMinute
+    quotaQueriesPerDay: quotaQueriesPerDay
+    quotaSpendUsdPerDay: quotaSpendUsdPerDay
+    quotaMaxActiveJobs: quotaMaxActiveJobs
     workspaceStorageMaxBytes: workspaceStorageMaxBytes
   }
 }

