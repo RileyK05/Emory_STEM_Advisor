@@ -175,7 +175,7 @@ def test_a_retired_course_gets_its_full_label_once_per_answer():
     ]), frozenset({"CS 171"}))
     assert [block.text for block in decision.blocks] == [
         "CS 253 needs CS 171 or CS 170 (CS 171 isn't on any recent Course Atlas schedule).",
-        "Finish CS 171 first (not on recent schedules). Then take CS 253.",
+        "Finish CS 171 first (CS 171: not on recent schedules). Then take CS 253.",
     ]
     validate_final(decision, None, _evidence(), {"e1"}, {},
                    known_course_codes=frozenset({"CS 170", "CS 171", "CS 253"}),
@@ -205,10 +205,12 @@ def test_a_retired_course_gets_its_full_label_once_per_answer():
     ("International Trade", None),
 ])
 def test_an_atlas_title_names_a_course_with_its_own_rules(title, kind):
-    from app.atlas.designations import course_designation
+    from app.atlas.designations import caveat_sentence, course_designation
 
     designation = course_designation(title)
     assert (designation.kind if designation else None) == kind
+    if kind == "honors":
+        assert caveat_sentence("MATH 276", designation).startswith("MATH 276 is an honors course")
 
 
 @pytest.mark.parametrize(("blocks", "caveated"), [

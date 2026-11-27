@@ -1073,6 +1073,10 @@ def test_the_longest_prerequisite_chain_explains_extra_terms(prerequisites, cour
     ("I took ECON 101 and will take ECON 201 next fall.", ["ECON 101"]),
     ("I've taken MATH 111 and want ECON 201 next semester.", ["MATH 111"]),
     ("I already took ECON 101 and I'm currently in MATH 111.", ["ECON 101"]),
+    # A question to the advisor ends the report of what was finished.
+    ("I took ECON 101, can i take ECON 201 next?", ["ECON 101"]),
+    # Students skip apostrophes, and what they are in now is not finished.
+    ("ive done ECON 101 and MATH 111, and im in ECON 201 now", ["ECON 101", "MATH 111"]),
 ])
 def test_only_courses_the_student_finished_count_as_completed(text, completed):
     from app.generation.student_request import completed_from_text

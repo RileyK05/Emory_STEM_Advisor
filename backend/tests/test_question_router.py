@@ -186,6 +186,27 @@ def test_general_advice_policy(kinds, decision, searched, found, problem):
     assert (problem is None and not problems) or any(problem in p for p in problems), problems
 
 
+PLACE = ("perspective", "White Hall is Goodrich C. White Hall, pinned on the map below.", ())
+
+
+@pytest.mark.parametrize(("distress", "pins_place", "problem"), [
+    # The map pins a named building; saying where it is needs no record to cite.
+    ("calm", True, None),
+    ("calm", False, "needs records, not general advice"),
+    # A check-in still allows no general advice, map or not.
+    ("check_in", True, "needs records, not general advice"),
+])
+def test_a_pinned_place_may_be_said_on_a_records_route(distress, pins_place, problem):
+    from app.generation.question_router import Route
+
+    policy = combined(Route(frozenset({"institutional"}), "model", distress=distress),
+                      pins_place=pins_place)
+    problems = perspective_problems(_decision(PLACE), allowed=policy.perspective_blocks,
+                                    must_search=policy.must_search, searched=set(),
+                                    must_cite=policy.must_cite_kinds, found={})
+    assert (problem is None and not problems) or any(problem in p for p in problems), problems
+
+
 ASKED = "what do people in this field earn?"
 JOBS = [o.soc for o in CONFIG.occupations[:3]]
 TITLES = [o.title for o in CONFIG.occupations[:2]]

@@ -117,6 +117,16 @@ function AssistantMessage({ entry, onRetry }: AssistantProps) {
           )}
         </div>
       )}
+      {entry.kind === 'stopped' && (
+        <div className="callout" role="note">
+          <p>You stopped this answer.</p>
+          {onRetry && entry.question && (
+            <button type="button" className="ghost-button" onClick={() => onRetry(entry.question!)}>
+              Ask again
+            </button>
+          )}
+        </div>
+      )}
       {entry.kind === 'refusal' && (
         <div className="callout callout-refusal">
           <strong>I couldn’t answer that from your sources.</strong>

@@ -49,7 +49,12 @@ from app.generation.question_router import (
     prefetch_searches,
     route_question,
 )
-from app.generation.research_controller import ResearchController, asks_for_advice, file_turn
+from app.generation.research_controller import (
+    CONTEXT_TOO_LONG,
+    ResearchController,
+    asks_for_advice,
+    file_turn,
+)
 from app.generation.research_final import (
     RESEARCH_PROMPT_VERSION,
     RESEARCH_RENDER_VERSION,
@@ -314,7 +319,8 @@ def _enriched_artifact_references(conn, settings, workspace_key: str, body) -> l
 
 def _apply_route(session, route, router_config, body, scope, file, replies) -> None:
     """Give the session its route: the policy, the prefetched calls, the distress handling."""
-    session.route, session.route_policy = route, combined(route)
+    session.route = route
+    session.route_policy = combined(route, pins_place=bool(places_in(body.query)))
     session.prefetch = [("advisor_search", arguments) for arguments in
                         prefetch_searches(route, session.route_policy, router_config, body.query)]
     if file is not None:
@@ -539,7 +545,7 @@ def query_response(
             message = str(exc)
             if isinstance(exc, OperationBudgetError) and exc.code == "deadline_exceeded":
                 detail = "The question took too long to answer. Try a shorter version."
-            elif message in {FAILED_ANSWER,
+            elif message in {FAILED_ANSWER, CONTEXT_TOO_LONG,
                              "The question took too long to answer. Try a shorter version."}:
                 detail = message
             else:

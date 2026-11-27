@@ -156,7 +156,7 @@ class ConversationStore:
         if prior:
             return prior
         if row["last_sequence"] != expected_sequence or row["pending_request_id"] is not None:
-            raise HTTPException(409, "conversation changed or has a pending request; refresh before sending")
+            raise HTTPException(409, "This chat is still answering or changed in another tab. Refresh to see where it stands, then send again.")
         return None
 
     def _append_user_turn(self, conversation_id, request_id, expected_sequence, snapshot):
@@ -302,7 +302,7 @@ class ConversationStore:
         if prior and prior["state"] == "abandoned":
             return prior["result"]
         return self.finish(conversation_id, request_id, {
-            "type": "abandoned", "reason": "Request abandoned. Any already-started provider call may still incur usage; its result cannot replace this turn.",
+            "type": "abandoned", "reason": "You stopped this answer.",
         }, state="abandoned")
 
 

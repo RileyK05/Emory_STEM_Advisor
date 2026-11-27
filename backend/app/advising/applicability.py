@@ -205,13 +205,16 @@ def build_applicability_notice(
     ]
 
     conflicts: list[str] = []
-    # Editions conflict only within one kind of source: two catalog years do,
-    # a catalog and a career reference do not. Each Atlas term listing carries
-    # its own term as its edition, so term listings never conflict.
-    editions_by_kind: dict[str, set[str]] = {}
+    # Editions conflict only within one publication: two catalog years do, a
+    # catalog and a career reference do not, and neither do two publishers' data
+    # sets (BLS wages from May 2025 and the October 2026 College Scorecard). Each
+    # Atlas term listing carries its own term as its edition, so term listings
+    # never conflict.
+    editions_by_kind: dict[tuple[str, str], set[str]] = {}
     for row, item in zip(source_rows, items):
         if item.edition and "course_offerings" not in (row.get("document_roles") or ()):
-            editions_by_kind.setdefault(item.sourceCategory, set()).add(item.edition)
+            publication = (item.sourceCategory, row.get("publisher") or "")
+            editions_by_kind.setdefault(publication, set()).add(item.edition)
     for editions in editions_by_kind.values():
         if len(editions) > 1:
             conflicts.append(f"Multiple conflicting editions cited: {', '.join(sorted(editions))}")

@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// In dev, /api and /health proxy to the FastAPI backend so the frontend and
+// In dev, /api, /health and /ready proxy to the FastAPI backend so the frontend and
 // backend share an origin (no CORS). Set VITE_API_BASE_URL to bypass the proxy.
 export default defineConfig({
   plugins: [react()],
@@ -18,6 +18,7 @@ export default defineConfig({
       // Preserve the browser's Host so backend same-origin checks match Origin.
       '/api': { target: 'http://127.0.0.1:8000', changeOrigin: false },
       '/health': { target: 'http://127.0.0.1:8000', changeOrigin: false },
+      '/ready': { target: 'http://127.0.0.1:8000', changeOrigin: false },
     },
   },
 });

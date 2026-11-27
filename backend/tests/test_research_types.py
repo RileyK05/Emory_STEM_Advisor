@@ -1018,6 +1018,16 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
 
     session.rejected_decision = _decision(blocks=(unsupported,))
     assert session.salvage() is None  # No supported fact means no reply to keep.
+    # A greeting or a check-in needs no record: what passed alone is the reply.
+    from app.generation.question_router import Route
+    ask = DecisionBlock(kind="question", text="How are you doing beyond classes right now?")
+    session.rejected_decision = _decision(blocks=(ask, unsupported))
+    assert session.salvage() is None  # An Emory question still needs a fact.
+    for route in (Route(frozenset({"institutional"}), "model", distress="check_in"),
+                  Route(frozenset({"smalltalk"}), "model")):
+        session.route = route
+        assert session.salvage().blocks == (ask,)
+    session.route = None
 
     # The kept reply stays phone-length: a block that would pass 450 words is left out.
     first = DecisionBlock(kind="limitation", text="Confirm this with your advisor. " * 60)

@@ -143,9 +143,10 @@ def test_conflicting_editions_and_cohort_scopes_detected():
     assert any("conflicting cohort applicability" in c for c in notice.conflicts)
 
 
-def _edition(category, edition, roles=()):
+def _edition(category, edition, roles=(), publisher=None):
     return {"source_id": uuid4(), "title": edition, "source_category": category,
-            "edition": edition, "document_roles": list(roles), "is_current": True}
+            "edition": edition, "document_roles": list(roles), "is_current": True,
+            "publisher": publisher}
 
 
 _CATALOG = _edition("institutional_catalog", "Catalog 2026-2027")
@@ -158,6 +159,13 @@ _CATALOG = _edition("institutional_catalog", "Catalog 2026-2027")
      False),
     ([_CATALOG, _edition("institutional_catalog", "Catalog 2025-2026")], True),
     ([_CATALOG, _edition("career_reference", "May 2025")], False),
+    # Two publishers' data sets are not two editions of one.
+    ([_edition("career_reference", "May 2025", publisher="U.S. Bureau of Labor Statistics"),
+      _edition("career_reference", "October 2026", publisher="U.S. Department of Education")],
+     False),
+    ([_edition("career_reference", "May 2025", publisher="U.S. Bureau of Labor Statistics"),
+      _edition("career_reference", "May 2024", publisher="U.S. Bureau of Labor Statistics")],
+     True),
 ])
 def test_only_editions_of_one_kind_of_source_conflict(rows, conflict):
     notice = build_applicability_notice(rows, as_of=date(2026, 10, 1))

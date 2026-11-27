@@ -1074,7 +1074,7 @@ def _research_provider(monkeypatch, script):
     return provider
 
 
-@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_format_slips_spare_corrections", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry", "program_paging", "program_paging_budget", "factual_evidence_retention", "program_audit", "course_suggestions", "which_majors"])
+@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_format_slips_spare_corrections", "finish_names_unoffered_call", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry", "program_paging", "program_paging_budget", "factual_evidence_retention", "program_audit", "course_suggestions", "which_majors"])
 def test_research_answers_progressively_and_persists_its_decision(
         db, collection, tmp_path, monkeypatch, scenario):
     from app.api.query_service import query_response
@@ -1368,7 +1368,7 @@ def test_research_answers_progressively_and_persists_its_decision(
                     "text": "The policy describes letter grades.", "evidence_ids": ids}]}})
         if scenario in {"free_json_finish", "finish_repair_extra_field",
                         "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references",
-                        "finish_format_slips_spare_corrections"}:
+                        "finish_format_slips_spare_corrections", "finish_names_unoffered_call"}:
             if index == 0:
                 return call("read_courses", {"course_codes": ["ECON 201"]})
             ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
@@ -1416,7 +1416,13 @@ def test_research_answers_progressively_and_persists_its_decision(
                     "outcome": "information", "completeness": "complete", "blocks": [{
                         "kind": "fact", "text": "Still unsupported.", "evidence_ids": ["e999"]}]}}),
                     finish_reason="stop", usage=provider.result.usage)
-            if index > 1:
+            if scenario == "finish_names_unoffered_call":
+                # A model that invents a tool is told which call was wrong, not only to
+                # "use the advertised tools", which it answered with the same call again.
+                if index == 1:
+                    return [ToolCall("ghost", "advisor_program", {})]
+                assert "called advisor_program, which that round did not offer" in context["instruction"]
+            elif index > 1:
                 assert context["finish_required"]
                 assert "advisor_finish" in context["instruction"]
                 assert "advisor_read_courses" not in context["instruction"]
@@ -2042,6 +2048,12 @@ def test_the_prerequisite_graph_can_hold_the_whole_answer(db, collection, tmp_pa
     session.question = "is PHYS 413 a good class"
     with pytest.raises(DecisionRejected, match="PHYS 413"):
         session.finish(FinishInput.model_construct(decision=decision), None)
+    # A course the student reports finishing is on their record, not made up: the reply
+    # says the Atlas does not list it, and is not told to call it nonexistent.
+    session.question = "I've done ECON 101 and ECON 999, what should I take next"
+    with pytest.raises(DecisionRejected, match="reports finishing.*ECON 999") as reported:
+        session.finish(FinishInput.model_construct(decision=decision), None)
+    assert "asked about a course" not in str(reported.value)
     # The other degree is a database fact, so the server says it rather than refuse.
     session.question = "what classes do i need for the economics major"
     session.must_name_degrees = {"BA"}

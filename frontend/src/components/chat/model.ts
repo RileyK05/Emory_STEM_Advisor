@@ -34,7 +34,7 @@ export interface AssistantEntry {
   /** The saved turn's sequence; absent for demo and in-progress entries. */
   sequence?: number;
   role: 'assistant';
-  kind: 'answer' | 'refusal' | 'error' | 'thinking';
+  kind: 'answer' | 'refusal' | 'error' | 'stopped' | 'thinking';
   text: string;
   citations: Citation[];
   /** The numbered passages the answer was written from; `[n]` in the text is `context[n - 1]`. */
@@ -171,15 +171,21 @@ export function entriesFromTurns(turns: ConversationTurn[]): ChatEntry[] {
     const kind =
       turn.status === 'refusal'
         ? 'refusal'
-        : turn.status === 'failed' || turn.status === 'abandoned'
+        : turn.status === 'failed'
           ? 'error'
-          : 'answer';
+          : turn.status === 'abandoned'
+            ? 'stopped'
+            : 'answer';
     return {
       key,
       sequence: turn.sequence,
       role: 'assistant',
       kind,
-      text: turn.text || (turn.status === 'failed' ? "The advisor couldn't answer that. Try again." : ''),
+      // A stop is the student's choice; its stored reason is for operators, not them.
+      text:
+        turn.status === 'abandoned'
+          ? ''
+          : turn.text || (turn.status === 'failed' ? "The advisor couldn't answer that. Try again." : ''),
       citations: assistantEvidence?.citations ?? [],
       context: assistantEvidence?.contextBlock ?? [],
       responseId: assistantEvidence?.traceId,

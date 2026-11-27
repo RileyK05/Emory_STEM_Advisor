@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import hashlib
 import json
+import re
 import threading
 from collections.abc import Mapping
 from dataclasses import replace
@@ -496,11 +498,58 @@ class OpenAICompatibleProvider(OpenAIProvider):
         calls = tuple(ToolCall(_get(c, "id", ""), _get(_get(c, "function"), "name", ""),
                                _parse_args(_get(_get(c, "function"), "arguments", "{}")))
                       for c in (_get(msg, "tool_calls", ()) or ()))
+        content = _get(msg, "content", "") or ""
+        finish_reason = _get(choice, "finish_reason", "unknown")
+        if not calls and request.tools and finish_reason not in {"length", "max_tokens"}:
+            leaked = _leaked_tool_call(content, {t.name for t in request.tools})
+            if leaked is not None:
+                calls, content, finish_reason = (leaked,), "", "tool_calls"
         usage = getattr(response, "usage", None)
-        return GenerationResult(_get(msg, "content", "") or "", calls,
-            _get(choice, "finish_reason", "unknown"),
+        return GenerationResult(content, calls,
+            finish_reason,
             _chat_usage(usage), _get(msg, "refusal"), _get(response, "_request_id"),
             _get(response, "model"), response)
+
+
+# Ollama serves some models' tool calls back as message text when its parser
+# misses the model's call syntax: `{"name": ..., "args": {...}}`, sometimes after a
+# leaked `name<|...|>` template marker and short of its final closing braces
+# (inkling-2-small did this in 8 of 10 nested calls). The model did make the call,
+# so the transport is restored here; only a whole envelope naming an advertised
+# tool qualifies, and the registry and validators still check every argument.
+_LEAKED_MARKER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*<\|[a-z_]+\|>")
+_LEAKED_ARG_KEYS = ("arguments", "args", "parameters")
+
+
+def _leaked_tool_call(text: str, advertised: set[str]) -> ToolCall | None:
+    payload = _LEAKED_MARKER.sub("", text.strip(), count=1).strip()
+    if payload.startswith("```") and payload.endswith("```"):
+        payload = payload.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    if not payload.startswith('{"name"'):
+        return None
+    value = None
+    for closers in ("", "}", "}}"):
+        try:
+            value = json.loads(payload + closers)
+            break
+        except json.JSONDecodeError as exc:
+            if exc.pos < len(payload):
+                return None  # malformed inside the text, not merely unclosed
+        except RecursionError:
+            return None
+    if not isinstance(value, dict) or len(value) != 2 or value.get("name") not in advertised:
+        return None
+    key = next((k for k in _LEAKED_ARG_KEYS if k in value), None)
+    arguments = value.get(key) if key else None
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(arguments, dict):
+        return None
+    digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:24]
+    return ToolCall("text_call_" + digest, value["name"], arguments)
 
 
 def _reject_reasoning_effort(request: GenerationRequest, provider: str) -> None:

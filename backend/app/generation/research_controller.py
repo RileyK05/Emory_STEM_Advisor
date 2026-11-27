@@ -1,6 +1,7 @@
 """Bounded research rounds with rebuilt context and one shared operation."""
 
 import json
+import logging
 import math
 import re
 from collections import Counter
@@ -864,6 +865,10 @@ def _run_prefetch(session, executor, registry, ledger, operation, fingerprint, c
     return [AssistantToolMessage(tuple(call for call, _ in prefetched)),
             *(message for _, message in prefetched)], tools_used
 
+logger = logging.getLogger(__name__)
+CONTEXT_TOO_LONG = "This chat has gotten too long for me to answer in. Start a new chat and ask again."
+
+
 class ResearchController:
     def run(self, session, provider, operation, **kwargs):
         usages: list = []
@@ -876,6 +881,9 @@ class ResearchController:
                 raise
             decision = session.salvage()
             if decision is None:
+                # The student sees one generic line; keep the real cause for operators.
+                logger.warning("research run could not finish: %s: %s",
+                               type(exc).__name__, exc, exc_info=exc)
                 if isinstance(exc, OperationBudgetError) and getattr(exc, "code", "") == "deadline_exceeded":
                     raise ToolConversationError(
                         "The question took too long to answer. Try a shorter version.") from exc
@@ -1113,10 +1121,20 @@ class ResearchController:
                 if not spend_correction(format_slip=True):
                     raise ToolConversationError("research must finish with one valid advisor_finish call")
                 repairing = (finishing or terminal or not result.tool_calls) and not continuation_required
-                reason = ("The previous response was truncated. Discard it; do not continue its text or "
-                          "repeat deliberation. Return one concise advisor_finish with only necessary, "
-                          "supported answer blocks. " if incomplete else
-                          "Use only the currently advertised tools; advisor_finish must be the sole call. ")
+                # Name the slip: told only "use the advertised tools", a model resent the same
+                # unoffered call on every correction (0/10 replays of a captured round); told
+                # which call was wrong and what the round offers, it finished (10/10).
+                unoffered = sorted({c.name for c in result.tool_calls if c.name not in advertised})
+                if incomplete:
+                    reason = ("The previous response was truncated. Discard it; do not continue its text "
+                              "or repeat deliberation. Return one concise advisor_finish with only "
+                              "necessary, supported answer blocks. ")
+                elif unoffered:
+                    reason = (f"Your last reply called {', '.join(unoffered)}, which that round did not "
+                              + ("offer. Call only advisor_finish now. " if repairing else
+                                 f"offer (it offered {', '.join(sorted(advertised))}). "))
+                else:
+                    reason = "Use only the currently advertised tools; advisor_finish must be the sole call. "
                 hint = (_finish_repair_hint(reason + "Free prose or mixed/malformed JSON cannot be published.",
                                            session.state)
                         if repairing else reason)
@@ -1469,6 +1487,8 @@ class ResearchController:
             base["omitted_evidence_ids"].append(dropped)
             current, user = build(last_round)
         if estimate_prompt_bytes(current) > settings.research_max_prompt_bytes:
-            raise ToolConversationError("research context exceeds the configured prompt bound")
+            # What cannot be dropped (the rules, the history, the referenced files) already
+            # fills the bound: only a shorter conversation can be answered.
+            raise ToolConversationError(CONTEXT_TOO_LONG)
         session.supplied = supplied
         return current, user

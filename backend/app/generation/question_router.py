@@ -333,12 +333,16 @@ TIER_NOTES = {
 }
 
 
-def combined(route: Route) -> Policy:
+def combined(route: Route, *, pins_place: bool = False) -> Policy:
     """Permissions and obligations add up across the route's kinds.
 
     A check_in or support turn allows no general advice and drops the search and
     citation obligations: there the person comes first, and a refused answer
     would leave them with nothing.
+
+    When the map under the reply pins a building the question names, the prompt
+    tells the model to say where it is; no record cites a map pin, so that one
+    sentence is general advice, which a records-only route would always refuse.
     """
     kinds = [k for k in route.categories if k in POLICIES]
     lenient = route.distress in {"check_in", "support"}
@@ -348,7 +352,7 @@ def combined(route: Route) -> Policy:
     return Policy(
         search_kind=next(iter(scopes)) if len(scopes) == 1 else None,
         perspective_blocks=0 if lenient else
-        max((POLICIES[k].perspective_blocks for k in kinds), default=0),
+        max([int(pins_place), *(POLICIES[k].perspective_blocks for k in kinds)]),
         must_search=frozenset() if lenient else
         frozenset().union(*(POLICIES[k].must_search for k in kinds)),
         must_cite_kinds=frozenset() if lenient else

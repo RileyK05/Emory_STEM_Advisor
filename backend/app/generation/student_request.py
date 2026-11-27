@@ -209,11 +209,12 @@ _PREMED_SPINE = (
 
 
 _COMPLETED_CUE_RE = re.compile(
-    r"(?:(?:already|i(?:'ve| have)?|we(?:'ve| have)?|student(?:\s+has)?)\s+)?"
+    r"(?:(?:already|i(?:['’]?ve| have)?|we(?:['’]?ve| have)?|student(?:\s+has)?)\s+)?"
     r"(?:completed|took|taken|finished|passed|did|earned\s+(?:ap|ib|transfer)?\s*credit\s+(?:for|in)|"
     r"have\s+(?:ap\s+|ib\s+|transfer\s+)?credit\s+(?:for|in)|"
     r"have\s+(?:already\s+)?(?:completed|taken|finished|passed|done)|"
-    r"(?:already|i(?:'ve| have)|we(?:'ve| have))\s+done(?:\s+with)?|"
+    # Students skip the apostrophe: "ive done CHEM 150".
+    r"(?:already|i(?:['’]?ve| have)|we(?:['’]?ve| have))\s+done(?:\s+with)?|"
     r"done\s+with|ap\s+(?:credit\s+)?(?:for|in)|exempt(?:ed)?\s+from|placed\s+out\s+of|"
     r"completed\s+equivalent\s+of)\b(?P<span>[^.!?\n]+)",
     re.IGNORECASE,
@@ -234,7 +235,9 @@ _HAVE_AP_RE = re.compile(
 
 _PLAN_STOP_RE = re.compile(
     r"\b(?:plan|build|make|create|design|schedule|what\s+should|which|how|"
-    r"need\s+to\s+take|remaining)\b",
+    r"need\s+to\s+take|remaining|"
+    # A question to the advisor ends the report: "took CHEM 150, can i take CHEM 202".
+    r"(?:can|could|may|should|do|am)\s+i|is\s+there|are\s+there|what|when|where|why|whether)\b",
     re.IGNORECASE,
 )
 
@@ -250,7 +253,9 @@ _NEG_STOP_RE = re.compile(
     r"\b(?:not|never|haven['’]?t|hasn['’]?t|didn['’]?t|need(?:s)?|still|"
     r"plan(?:s|ning)?\s+(?:to|on)|without|will|won['’]?t|['’]ll|want(?:s|ed)?|"
     r"would\s+like|hope|going\s+to|gonna|intend(?:s|ing)?|next|later|then|"
-    r"upcoming|future|currently|enrolled|registered|signed\s+up)\b",
+    r"upcoming|future|currently|enrolled|registered|signed\s+up|"
+    # What the student is in now is not finished: "and im in CHEM 203 now".
+    r"i['’]?m\s+(?:in|taking)|taking|right\s+now|rn|this\s+(?:semester|term))\b",
     re.IGNORECASE,
 )
 
@@ -295,11 +300,8 @@ def premed_courses(course_exists, campus_equivalents) -> list[str]:
     return out
 
 
-def completed_from_text(
-    text: str,
-    known_courses: set[str],
-    campus_equivalents: dict[str, frozenset[str]],
-) -> list[str]:
+def _completed_spans(text: str) -> list[str]:
+    """The parts of a message where the student says what they finished."""
     spans: list[str] = []
     source_text = text or ""
     for regex in (_COMPLETED_CUE_RE, _WITH_DONE_RE, _HAVE_AP_RE):
@@ -320,8 +322,28 @@ def completed_from_text(
                     r"\b(?:not|never|no|without|yet)\s*$", span, re.IGNORECASE):
                 continue
             spans.append(span)
+    return spans
+
+
+def completed_codes_written(text: str) -> list[str]:
+    """Every course code the student says they finished, whether or not it is a current
+    course: a retired code on a transcript is a report, not a question about it."""
     found: list[str] = []
-    for span in spans:
+    for span in _completed_spans(text):
+        for code in canonical_codes_in(span):
+            canonical = normalize_code(code) or code
+            if canonical not in found:
+                found.append(canonical)
+    return found
+
+
+def completed_from_text(
+    text: str,
+    known_courses: set[str],
+    campus_equivalents: dict[str, frozenset[str]],
+) -> list[str]:
+    found: list[str] = []
+    for span in _completed_spans(text):
         for code in canonical_codes_in(span):
             canonical = normalize_code(code) or code
             if canonical in known_courses and canonical not in found:
