@@ -29,8 +29,9 @@ SUPPORT_PATH = CONFIGS / "support_replies.toml"
 
 Category = Literal["institutional", "choice", "career_outlook", "study_and_wellbeing",
                    "smalltalk", "out_of_scope"]
-# Ordered. `support` is only reached by escalation: possible risk again on the
-# turn after a check_in (or worse). Nothing before it mentions counseling.
+# Ordered. `support` is reached by escalation (possible risk again on the turn after
+# a check_in) or by strong risk on a first message (support_at). Nothing before it
+# mentions counseling.
 Tier = Literal["calm", "steady", "check_in", "support", "crisis"]
 CATEGORIES: tuple[str, ...] = get_args(Category)
 TIERS: tuple[str, ...] = get_args(Tier)
@@ -51,6 +52,7 @@ class RouterConfig:
     crisis_at: float
     check_in_at: float
     steady_at: float
+    support_at: float = 1.01
     state_max_chars: int = 600
     min_probability: float = 0.2
     max_picks: int = 3
@@ -117,15 +119,16 @@ def _load_router_config(path: Path, _mtime: int, occupations_path: Path, _omtime
         criteria[o["soc"]] = f"{o['title']}: {', '.join(o['paths'])}"
     questions.append(DecisionQuestion("career_field", "choice", field_cfg["instructions"], criteria))
     distress = data["distress"]
-    _check_keys(distress, {"instructions", "crisis_at", "check_in_at", "steady_at", "levels"},
-                "[distress]")
+    _check_keys(distress, {"instructions", "crisis_at", "support_at", "check_in_at", "steady_at",
+                           "levels"}, "[distress]")
     if tuple(distress["levels"]) != LEVELS:
         raise ConfigError(f"[distress.levels] must be exactly {list(LEVELS)}, in that order")
     questions.append(DecisionQuestion("distress", "choice", distress["instructions"],
                                       dict(distress["levels"])))
     return RouterConfig(
         questions=tuple(questions), thresholds=thresholds, occupations=occupations,
-        crisis_at=float(distress["crisis_at"]), check_in_at=float(distress["check_in_at"]),
+        crisis_at=float(distress["crisis_at"]), support_at=float(distress["support_at"]),
+        check_in_at=float(distress["check_in_at"]),
         steady_at=float(distress["steady_at"]), state_max_chars=int(data.get("state_max_chars", 600)),
         min_probability=float(field_cfg["min_probability"]), max_picks=int(field_cfg["max_picks"]))
 
@@ -135,6 +138,8 @@ class SupportReplies:
     crisis: str
     support: str
     reviewed: bool
+    immigration: str = ""
+    support_once: str = ""
 
 
 def load_support_replies(path: Path | None = None) -> SupportReplies:
@@ -145,9 +150,11 @@ def load_support_replies(path: Path | None = None) -> SupportReplies:
 @lru_cache(maxsize=2)
 def _load_support(path: Path, _mtime: int) -> SupportReplies:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
-    _check_keys(data, {"schema_version", "reviewed", "crisis", "support"}, path.name)
+    _check_keys(data, {"schema_version", "reviewed", "crisis", "support", "support_once",
+                       "immigration"}, path.name)
     return SupportReplies(data["crisis"].strip(), data["support"].strip(),
-                          bool(data.get("reviewed", False)))
+                          bool(data.get("reviewed", False)), data["immigration"].strip(),
+                          data["support_once"].strip())
 
 
 # --- rules ---------------------------------------------------------------------
@@ -161,6 +168,16 @@ SELF_HARM = re.compile(
     r"\b(suicid\w*|kill(?:ing)? myself|end(?:ing)? my life|self[- ]?harm\w*|"
     r"cutting myself|cut myself|overdos\w*|want to die|wanna die)\b", re.IGNORECASE)
 
+# Immigration and work-authorization asks belong to ISSS, not to an academic advisor:
+# their rules change faster than any source here (the 2026 CPT guidance was stayed by
+# a court ten days before testing found the advisor still calling it in effect). A
+# student merely saying they are on an F-1 is not an ask; "opt out" is not OPT.
+IMMIGRATION = re.compile(
+    r"\b(cpt|(?:stem\s+)?opt(?!\s+(?:out|in|into|for)\b)|i-?20s?|sevis|sevp|visas?|h-?1b|"
+    r"green\s+cards?|(?:work|employment)\s+authori[sz]ation|immigration|"
+    r"(?:maintain|keep|lose|losing)\w*\s+(?:my\s+)?(?:f-?1\s+|j-?1\s+|visa\s+)?status|"
+    r"reduced\s+course\s+load|dso)\b", re.IGNORECASE)
+
 
 def rule_hits(question: str) -> tuple[str, ...]:
     hits = []
@@ -170,6 +187,8 @@ def rule_hits(question: str) -> tuple[str, ...]:
         hits.append("policy_word")
     if SELF_HARM.search(question):
         hits.append("self_harm")
+    if IMMIGRATION.search(question):
+        hits.append("immigration")
     return tuple(hits)
 
 
@@ -181,10 +200,16 @@ def _rank(tier: str) -> int:
 
 def distress_tier(levels: dict[str, float], config: RouterConfig) -> str:
     """Probabilities added from the most severe level down; the highest tier whose
-    share reaches its threshold. Doubt lands on check_in, not on crisis."""
+    share reaches its threshold. Doubt lands on check_in, not on crisis; but when
+    nearly all the weight is risk ("they'd be better off without me" scored 0.95,
+    with clear risk 0.15 to 0.41 from run to run), the student gets CAPS and 988 on
+    the first message instead of a check-in that names no one."""
+    risk = levels.get("possible_risk", 0.0) + levels.get("clear_risk", 0.0)
     if levels.get("clear_risk", 0.0) >= config.crisis_at:
         return "crisis"
-    if levels.get("possible_risk", 0.0) + levels.get("clear_risk", 0.0) >= config.check_in_at:
+    if risk >= config.support_at:
+        return "support"
+    if risk >= config.check_in_at:
         return "check_in"
     if sum(levels.get(level, 0.0) for level in LEVELS[2:]) >= config.steady_at:
         return "steady"
@@ -313,6 +338,12 @@ PROMPT_NOTES = {
                            "perspective blocks of grounded, actionable ways to regain footing: "
                            "no numbers, %, $, course codes or Emory rules, and no evidence_ids.",
 }
+IMMIGRATION_NOTE = (
+    "Part of this question is about visas, CPT/OPT, I-20s or other immigration or "
+    "work-authorization rules. Those are outside an academic advisor's scope: code adds "
+    "a fixed note sending the student to ISSS. Do not state, cite or guess any "
+    "immigration rule, its status or its eligibility; answer only the Emory academic part "
+    "(courses, requirements, registration).")
 TIER_NOTES = {
     "steady": "Distress: the student is upset about a school situation, not at risk. Research and "
               "answer as usual. Open your first block with one calm, human sentence that names "
@@ -388,6 +419,15 @@ def only_out_of_scope(route: Route) -> bool:
     return route.categories == {"out_of_scope"}
 
 
+def asks_immigration(route: Route) -> bool:
+    return "immigration" in route.rule_hits
+
+
+def only_immigration(route: Route) -> bool:
+    """An immigration ask that names no course: ISSS's fixed reply, no research."""
+    return asks_immigration(route) and "course_code" not in route.rule_hits
+
+
 def route_note(route: Route, config: RouterConfig) -> str:
     """The route's prompt notes: one fixed line per kind, the career records, the tier."""
     lines = [PROMPT_NOTES[k] for k in CATEGORIES if k in route.categories and k in PROMPT_NOTES]
@@ -396,6 +436,8 @@ def route_note(route: Route, config: RouterConfig) -> str:
         named = ", ".join(f"{titles.get(soc, soc)} ({soc})" for soc in route.career_soc)
         lines.append(f"Career records on file for this question: {named}. Search for each by title "
                      "with kind=career_reference and read its record.")
+    if asks_immigration(route):
+        lines.append(IMMIGRATION_NOTE)
     if route.distress in TIER_NOTES:
         lines.append(TIER_NOTES[route.distress])
     return ("\nQUESTION ROUTE\n" + "\n".join(f"- {line}" for line in lines)) if lines else ""

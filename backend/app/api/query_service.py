@@ -42,9 +42,12 @@ from app.generation.operation import GenerationOperation
 from app.generation.question_router import (
     TIERS,
     Route,
+    asks_immigration,
     combined,
+    distress_tier,
     load_router_config,
     load_support_replies,
+    only_immigration,
     only_out_of_scope,
     prefetch_searches,
     route_question,
@@ -330,7 +333,12 @@ def _apply_route(session, route, router_config, body, scope, file, replies) -> N
                              {"handle": session.handle("program", pins[title].program_id)})
                             for title in file[1]]
     if route.distress == "support":
-        session.support_first = replies.support
+        # Strong risk on its own reaches support without a check-in before it; the
+        # escalation wording ("you've said more than once") would be untrue there.
+        strong = distress_tier(route.distress_levels, router_config) == "support"
+        session.support_first = replies.support_once if strong else replies.support
+    if asks_immigration(route):
+        session.support_last = replies.immigration
     # Before support, nothing in the reply points to counseling, even if the model
     # writes it: venting is answered, not referred.
     session.strip_contacts = route.distress in {"steady", "check_in", "support"}
@@ -442,12 +450,15 @@ def query_response(
     try:
         guard()
         session.open_workspace(conversation_id)
-        if route.distress == "crisis" or only_out_of_scope(route):
-            # Written by code: clear risk gets the support reply, a request with no
-            # advising in it gets the decline. No research runs for either.
+        if route.distress == "crisis" or only_out_of_scope(route) or only_immigration(route):
+            # Written by code: clear risk gets the support reply, an immigration ask
+            # goes to ISSS, a request with no advising in it gets the decline. No
+            # research runs for any of them.
+            fixed = (replies.crisis if route.distress == "crisis"
+                     else replies.immigration if only_immigration(route) else None)
             decision = (FinalDecision(outcome="information", completeness="complete", blocks=(
-                            DecisionBlock(kind="limitation", text=replies.crisis),))
-                        if route.distress == "crisis" else
+                            DecisionBlock(kind="limitation", text=fixed),))
+                        if fixed else
                         declined_decision(FinalDecision(outcome="declined", completeness="complete")))
             session.decision = decision
             usage, system, user, model = Usage(), "", "", None

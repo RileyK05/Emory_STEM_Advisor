@@ -66,7 +66,10 @@ def test_career_picks_only_with_career_outlook_and_never_none():
     ({"none": 0.5, "acute_distress": 0.5}, "steady"),
     ({"acute_distress": 0.81, "possible_risk": 0.19}, "steady"),
     ({"acute_distress": 0.8, "possible_risk": 0.2}, "check_in"),
-    ({"possible_risk": 0.61, "clear_risk": 0.39}, "check_in"),
+    ({"acute_distress": 0.21, "possible_risk": 0.79}, "check_in"),
+    # Nearly all risk, but not clear risk: CAPS and 988 now, the answer still follows.
+    ({"acute_distress": 0.2, "possible_risk": 0.8}, "support"),
+    ({"possible_risk": 0.61, "clear_risk": 0.39}, "support"),
     ({"possible_risk": 0.6, "clear_risk": 0.4}, "crisis"),
 ])
 def test_distress_tier_edges(levels, tier):
@@ -84,14 +87,17 @@ def test_distress_tier_edges(levels, tier):
     ("does CS 170 fill up", FakeDecisionProvider(error=ProviderError("x", provider="t")),
      "calm", "calm"),
     # Escalation, not carry-over: a calm message after a check_in is just calm, the
-    # same worry again steps in with support, and a first sign is only a check_in.
+    # same worry again steps in with support, and a first sign is only a check_in
+    # unless nearly all its weight is risk.
     ("ok thanks", FakeDecisionProvider(choices=_levels(none=1.0)), "check_in", "calm"),
     ("still pointless", FakeDecisionProvider(choices=_levels(possible_risk=0.9)), "check_in",
      "support"),
     ("still pointless", FakeDecisionProvider(choices=_levels(possible_risk=0.9)), "support",
      "support"),
+    ("what's the point", FakeDecisionProvider(choices=_levels(none=0.5, possible_risk=0.5)),
+     "steady", "check_in"),
     ("what's the point", FakeDecisionProvider(choices=_levels(possible_risk=0.9)), "steady",
-     "check_in"),
+     "support"),
     ("I want to end my life", FakeDecisionProvider(choices=_levels(clear_risk=0.9)), "check_in",
      "crisis"),
     # Figures of speech are not the rule's business.
@@ -187,6 +193,23 @@ def test_general_advice_policy(kinds, decision, searched, found, problem):
 
 
 PLACE = ("perspective", "White Hall is Goodrich C. White Hall, pinned on the map below.", ())
+
+
+@pytest.mark.parametrize(("question", "immigration"), [
+    ("can I do CPT for my internship", True),
+    ("how long is STEM OPT", True),
+    ("my I-20 expires in May", True),
+    ("will I lose my F-1 status if I drop to 9 credits", True),
+    ("do I need a visa to study abroad in Spain", True),
+    # Saying who you are is not an ask, and "opt out" is not OPT.
+    ("I'm an international student on an F-1, what does the CS BS require?", False),
+    ("can I opt out of the meal plan", False),
+    ("what's the prereq for CS 326", False),
+])
+def test_an_immigration_ask_goes_to_isss(question, immigration):
+    from app.generation.question_router import rule_hits
+
+    assert ("immigration" in rule_hits(question)) is immigration
 
 
 @pytest.mark.parametrize(("distress", "pins_place", "problem"), [

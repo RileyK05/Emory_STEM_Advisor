@@ -2110,20 +2110,30 @@ def test_a_program_question_gets_citable_requirement_lines(db, collection, tmp_p
     assert all(line["evidence_ids"] and set(line["evidence_ids"]) <= held for line in lines)
 
 
-@pytest.mark.parametrize(("question", "scores", "levels", "researched", "outcome", "first"), [
+@pytest.mark.parametrize(("question", "scores", "levels", "researched", "outcome", "first", "last"), [
     # Clear risk: the fixed support reply, written by code; research never runs.
     ("I want to end my life", {"institutional": 0.1}, {"clear_risk": 0.9}, False, "information",
-     "crisis"),
+     "crisis", None),
     # Nothing but a request outside advising: the fixed decline, no research.
     ("write my essay on the french revolution", {"out_of_scope": 0.95}, {"none": 1.0}, False,
-     "declined", None),
+     "declined", None, None),
     # A first sign of possible risk: research answers, and nothing code-written
     # sends the student to counseling.
     ("I failed again, what's the point. Can I retake a course?", {"institutional": 0.9},
-     {"possible_risk": 0.8}, True, "clarification", None),
+     {"none": 0.5, "possible_risk": 0.5}, True, "clarification", None, None),
+    # Nearly all risk on a first message: CAPS and 988 first, and the answer still runs.
+    ("everyone would be better off without me. can I retake a course?", {"institutional": 0.9},
+     {"possible_risk": 0.85, "clear_risk": 0.15}, True, "clarification", "support_once", None),
+    # Immigration belongs to ISSS: alone, the fixed note and no research; beside a
+    # course question, the answer and then the note.
+    ("can I do CPT for a summer internship?", {"institutional": 0.9}, {"none": 1.0}, False,
+     "information", "immigration", None),
+    # (This corpus has no course records, so the answer also says ECON 101 is unknown.)
+    ("does ECON 101 count for my OPT?", {"institutional": 0.9}, {"none": 1.0}, True,
+     "information", None, "immigration"),
 ])
 def test_the_router_decides_what_runs_and_what_code_writes(
-        db, collection, monkeypatch, question, scores, levels, researched, outcome, first):
+        db, collection, monkeypatch, question, scores, levels, researched, outcome, first, last):
     from app.api.query_service import query_response
     from app.api.schemas import QueryRequest
     from app.config import load_settings
@@ -2153,10 +2163,12 @@ def test_the_router_decides_what_runs_and_what_code_writes(
     if first:
         assert texts[0] == getattr(replies, first)
     else:
-        assert replies.support not in texts and replies.crisis not in texts
+        assert not {replies.support, replies.support_once, replies.crisis} & set(texts)
+    assert (texts[-1] == replies.immigration) is (last == "immigration" or first == "immigration")
     steps = ResearchStore(db, "development").steps(UUID(response.research.runId))
     route, = [s["details"] for s in steps if s["action_kind"] == "route"]
-    expected = {"crisis": "crisis"}.get(first, "check_in" if levels.get("possible_risk") else "calm")
+    expected = {"crisis": "crisis", "support_once": "support"}.get(
+        first, "check_in" if levels.get("possible_risk") else "calm")
     assert route["distress"] == expected
 
 
@@ -2175,7 +2187,7 @@ def test_the_router_reads_the_turn_before_and_steps_in_when_it_comes_up_again(
     client = api_client(db, collection, provider=_research_provider(monkeypatch, script))
     client.app.state.settings = replace(client.app.state.settings, llm_provider="openai",
         llm_model_id="fake", tools_enabled=True, routing_enabled=False, db_pool_max_size=0)
-    risk = {level: 0.0 for level in LEVELS} | {"possible_risk": 0.9, "none": 0.1}
+    risk = {level: 0.0 for level in LEVELS} | {"possible_risk": 0.5, "none": 0.5}
     decider = FakeDecisionProvider({"institutional": 0.9}, {"distress": risk})
     client.app.state.decision_provider = decider
     conversation = client.post("/api/conversations", json={"title": "t"}).json()["conversationId"]
