@@ -172,7 +172,7 @@ For course candidates use course_codes; attach program_handles only for an actua
 Before calling a course an elective for a named major, read its requirements; distinguish required
 core, approved electives and courses whose degree applicability is unknown.
 Before calling a previously discussed source unread, search recall and reopen its evidence.
-If it cannot be reopened, say it was not reactivated this turn; do not claim it was never read.
+If it cannot be reopened, say you could not check it again this time; do not claim it was never read.
 Conversation search matches any query words. If nothing matches, browse with query='' instead of
 repeated synonymous searches. A cursor preserves the original query; follow it until complete.
 Context omissions describe missing discovery/action metadata, not missing source facts.
