@@ -54,7 +54,15 @@ QUERY_SCAFFOLD = frozenset(
 ENGLISH_STOPS = frozenset(
     ["a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "did", "do", "does", "doing", "down", "during", "each", "few", "for", "from", "further", "had", "has", "have", "having", "he", "her", "here", "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "just", "me", "more", "most", "my", "myself", "no", "nor", "not", "now", "of", "off", "on", "once", "only", "or", "other", "our", "ours", "ourselves", "out", "over", "own", "same", "she", "so", "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they", "this", "those", "through", "to", "too", "under", "until", "up", "very", "was", "we", "were", "what", "when", "where", "which", "while", "who", "whom", "why", "with", "you", "your", "yours", "yourself", "yourselves"]
 )
+# "Emory College" names the default school, like "Emory" alone, which is scaffold.
+# Its "college" would otherwise match every title naming the school ("Emory
+# College and Georgia Tech Dual Degree Handbook") above the subject asked about.
+# "Oxford College" names a campus and stays searchable.
+_HOME_SCHOOL_RE = re.compile(r"\bemory\s+college\b", re.IGNORECASE)
+
+
 def _tokens(query: str, min_token_len: int) -> list[str]:
+    query = _HOME_SCHOOL_RE.sub("emory", query)
     grading_basis = bool(re.search(r"\b(?:s\s*/\s*u|satisfactory\s*/?\s*unsatisfactory)\b",
                                   query, re.IGNORECASE))
     query = re.sub(r"\bs\s*/\s*u\b", "satisfactory unsatisfactory", query, flags=re.IGNORECASE)

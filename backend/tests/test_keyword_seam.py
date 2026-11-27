@@ -239,23 +239,30 @@ def test_exact_course_code_outranks_repeated_term_boilerplate(db, collection, tm
     assert top["source_name"] == "offering.md"
 
 
-@pytest.mark.parametrize(("query", "target", "noise", "name"), [
+@pytest.mark.parametrize(("query", "target", "noise", "name", "noise_name"), [
     ("I want to explore biotechnology. Recommend current catalog courses.",
-     "Biotechnology: gene cloning and cell culture.", "catalog courses current " * 30, "lab.txt"),
+     "Biotechnology: gene cloning and cell culture.", "catalog courses current " * 30, "lab.txt",
+     "policy.txt"),
     ("What is the S/U credit cap? Do ARCHE credits count?",
      "ARCHE counts toward the limit of 20 credit hours of satisfactory/unsatisfactory courses.",
-     "Credit is required for this degree. " * 30, "grading.txt"),
+     "Credit is required for this degree. " * 30, "grading.txt", "policy.txt"),
     ("My friend promised 12 credits always count in a 4+1 program automatically. Is that true?",
      "4+1 programs ordinarily permit no more than 6 credit hours to be double counted.",
-     "Approved courses automatically count for this opportunity. " * 30, "programs.txt"),
+     "Approved courses automatically count for this opportunity. " * 30, "programs.txt",
+     "policy.txt"),
     ("Which economics electives count for the Artificial Intelligence minor?",
      "ECON 315 and ECON 320 are approved electives for Artificial Intelligence.",
      "Economics of Artificial Intelligence describes market decisions. " * 30,
-     "artificial-intelligence-minor.md"),
+     "artificial-intelligence-minor.md", "policy.txt"),
+    # "Emory College" names the school, so a handbook titled with it is not the subject.
+    ("What is the S/U credit cap for an Emory College degree?",
+     "Students may take up to twenty credit hours on a satisfactory/unsatisfactory basis.",
+     "Dual degree students earn credit at both schools. " * 30,
+     "satisfactory-unsatisfactory-option.md", "emory-college-dual-degree-handbook.md"),
 ])
 def test_topical_course_not_crowded_out_by_generic_policy(db, collection, tmp_path,
-                                                       query, target, noise, name):
-    ingest_text(db, collection, tmp_path, "policy.txt", noise)
+                                                       query, target, noise, name, noise_name):
+    ingest_text(db, collection, tmp_path, noise_name, noise)
     ingest_text(db, collection, tmp_path, name, target)
     config = replace(load_retrieval_config().seams.keyword, limit=1)
     result = keyword_seam(db, collection, query, config)

@@ -607,6 +607,11 @@ def _term_offerings(pin) -> bool:
     return "course_offerings" in pin.document_roles
 
 
+def _course_records(pin) -> bool:
+    """The course master: thousands of course descriptions, read through course search."""
+    return "course_catalog" in pin.document_roles
+
+
 def _opened_chunks(reads):
     """A course opened in bulk is its record: cards would crowd out the other courses."""
     return [c for r in reads for c in r.chunks[:1]]
@@ -925,10 +930,14 @@ class ResearchSession:
             value = value.model_copy(update={"kind": self.route_policy.search_kind})
         policy_kinds = {"institutional_policy", "institutional_catalog",
                         "institutional_department", "institutional_publication"}
+        # A policy search reads rules and guidance. Course descriptions share the
+        # catalog category but would crowd them out ("ATTENTION!: Reading,
+        # Focusing" above academic coaching); courses have their own search kind.
         sources = [s.source_id for s in self.scope.sources.values() if
                    (value.kind != "policy" or s.source_kind in policy_kinds)
                    and (value.kind != "career_reference" or s.source_kind == "career_reference")
-                   and not (value.kind in {"policy", "document"} and _term_offerings(s))]
+                   and not (value.kind in {"policy", "document"} and _term_offerings(s))
+                   and not (value.kind == "policy" and _course_records(s))]
         verify_sources(self.conn, self.scope, sources)
         self.conn.commit()
         outcome = retrieve(self.conn, collection_id=self.scope.collection_id, query=value.query,

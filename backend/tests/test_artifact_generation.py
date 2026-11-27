@@ -448,8 +448,8 @@ def _econ(db, collection, tmp_path, extra="", program=ECON_MINOR):
     # The grounding never retrieved the record: the planner appends it mid-run.
     ("Plan my semester after Calculus I limits; I've taken ECON 101", True, [], ["ECON 201"]),
     ("Make an Economics minor checklist covering ECON 201 this semester", False, [], []),
-    ("Make an Economics minor checklist covering ECON 201\n\nPublished answer:\n"
-     "Plan ECON 201 for next semester.", False, [], ["ECON 201"]),
+    (("Make an Economics minor checklist covering ECON 201\n\nPublished answer:\n"
+      "Plan ECON 201 for next semester."), False, [], ["ECON 201"]),
 ])
 def test_the_artifact_outline_uses_the_planner_for_term_plans(
         db, collection, tmp_path, prompt, planned, draft_courses, selected):

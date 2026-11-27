@@ -317,6 +317,28 @@ def test_curated_reference_is_classified_readable_and_scoped(
         read_document(db, institutional, career)
 
 
+def test_a_policy_search_skips_the_course_records(db, collection, tmp_path):
+    from app.config import load_settings
+    from app.generation.research_tools import ResearchSession, SearchInput
+    from tests.fakes import FakeEmbedder
+    from tests.helpers import lenient_config
+
+    _corpus(db, collection, tmp_path)
+    scope, store = _scope(db, collection), ResearchStore(db, "development")
+    run, _ = store.start(scope, run_id=uuid4(), prompt_version="test", config_version="6")
+    session = ResearchSession(db, scope, store, run, settings=load_settings(),
+                              config=lenient_config(), embedder=FakeEmbedder(8))
+
+    def files(kind):
+        leads = session.search(SearchInput(query="Calculus limits series", kind=kind), None)
+        return {lead.get("filename") for lead in leads.data["leads"]}
+
+    # The course master matches, so an open search finds it; a policy search
+    # (rules and guidance) never spends its passages on course descriptions.
+    assert "atlas.jsonl" in files("any")
+    assert "atlas.jsonl" not in files("policy")
+
+
 def test_program_read_cites_only_lines_whose_evidence_still_matches(db, collection, tmp_path):
     corpus = _corpus(db, collection, tmp_path)
     scope = _scope(db, collection)

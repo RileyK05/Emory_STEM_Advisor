@@ -37,7 +37,7 @@ ATLAS_ORIGIN_KEY = "emory:course-atlas"
 # is the official catalog's course records, scraped from the catalog site.
 ATLAS_PROVENANCE = SourceProvenance(
     "institutional_catalog", publisher="Emory College of Arts and Sciences",
-    source_url="https://college.catalog.emory.edu/")
+    source_url="https://college.catalog.emory.edu/", document_roles=("course_catalog",))
 
 def _primary_atlas_provenance(terms: list[str]) -> SourceProvenance:
     span = terms[0] if len(terms) == 1 else f"{terms[0]} to {terms[-1]}"
