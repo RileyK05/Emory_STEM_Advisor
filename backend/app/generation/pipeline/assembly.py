@@ -153,6 +153,8 @@ class AssemblyStages:
                                self.job.job_id, section_id, section_findings[0].check,
                                section_findings[0].message)
                 raise SafeJobError("invalid_output", section_findings[0].student_message)
+            logger.warning("artifact job %s repairing section %s: %s", self.job.job_id, section_id,
+                           "; ".join(f"{f.check}: {f.message}" for f in section_findings[:5]))
             items.append((section,
                           " ".join(finding.message for finding in section_findings[:5]),
                           getattr(section, "heading", getattr(section, "name", ""))))

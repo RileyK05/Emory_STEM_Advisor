@@ -286,13 +286,19 @@ class OutlineStages:
             self._apply_whatif(value)
             return
         if self.builder:
-            names = [name for name in dict.fromkeys([value.program, *value.programs]) if name]
-            names = names or programs_named_in(self.request_text, self.program_titles)
+            # Build only from a program the student or the brief names. Asked for "a
+            # checklist of the med school prerequisite classes", an outline picked the
+            # Human Health BA, and the file became that program's checklist.
+            asked = programs_named_in(self.request_text + "\n" + self.brief, self.program_titles)
+            folded = {title.casefold() for title in asked}
+            names = [name for name in dict.fromkeys([value.program, *value.programs])
+                     if name and name.casefold() in folded] or asked
             if names:
                 self._apply_builder(value, names)
                 return
             # No program to build from: the model's own outline is written instead.
             self.builder = None
+            value.program, value.programs = None, []
         value.selected_courses = []
         value.completed_courses = []
         if self.kind == "workbook":

@@ -258,9 +258,14 @@ class RevisionStages:
                         spec.get("evidence", {}), [block.get("id") for block in blocks]),
                     text="\n".join(_block_text(block) for block in blocks),
                     # Kept content already passed the checks when it was made.
-                    # Its headings are structure, not claims that need a citation.
+                    # Its headings are structure, not claims that need a citation, and
+                    # an element saved with no evidence passed as code-written (a
+                    # template's "next steps" list): it keeps that exemption, or a kept
+                    # section fails a citation check and is sent to a writer that has
+                    # no slots for it.
                     skip_elements={block["id"] for block in blocks
-                                   if block.get("type") == "heading"},
+                                   if block.get("type") == "heading"
+                                   or not (spec.get("evidence") or {}).get(block.get("id"))},
                 )
         elif kind == "workbook":
             for sheet in spec.get("sheets", []):
