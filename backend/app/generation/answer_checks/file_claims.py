@@ -10,9 +10,13 @@ _ARTIFACT_READY = re.compile(
     r"|\b(?:the|your) (?:[a-z]+\s+){0,3}"
     r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\s+"
     r"(?:is|are) (?:now )?(?:ready|attached)\b"
-    r"|\bI(?:['’]ve| have) (?:made|created|built|attached|prepared|put together) "
+    # Past tense too: "I made you a spreadsheet", "I've corrected the tracker" were
+    # published before an edit that then failed, and the file never changed.
+    r"|\bI(?:['’]ve| have)? (?:just )?(?:made|created|built|attached|prepared|put together|"
+    r"corrected|updated|changed|fixed|revised|edited) "
     r"(?:your |the )?(?:[a-z]+\s+){0,3}"
-    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\b",
+    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|tracker|page|report|comparison|"
+    r"handout)\b",
     re.IGNORECASE)
 
 

@@ -1504,6 +1504,12 @@ def test_an_attached_artifact_in_another_format_makes_no_new_run(question, kept)
     ("I've created a plan covering the core courses.", True),
     ("I have prepared the checklist of core courses.", True),
     ("Your plan is ready.", True),
+    # An edit is published before it runs, and it can fail.
+    ("I made you a spreadsheet checklist of the Biology BA requirements.", True),
+    ("I've corrected the tracker so CHEM 150 shows as in progress.", True),
+    ("I updated your plan to drop CHEM 150.", True),
+    ("I'm updating the tracker so CHEM 150 shows as in progress.", False),
+    ("I made a mistake about CHEM 150L.", False),
     ("Here is your answer: take MATH 111.", False),
     ("Your registration is ready to submit.", False),
     ("Your plan is being written as a document.", False),
