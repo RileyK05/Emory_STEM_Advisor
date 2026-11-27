@@ -200,11 +200,15 @@ class RevisionStages:
         }
         self.kept = {section.id: payloads[section.id] for section in sections
                      if section.id in payloads}
+        self.replaced_text = {}
         messages = _stage_messages(
             "You revise an existing artifact by targeted edits only. Do not rewrite kept "
             "sections. Call advisor_stage_edits alone with keep, replace, insert_after or "
             "delete operations; every current section must have exactly one keep, replace or "
-            "delete. A replacement keeps its section id. Use the numbered source slots.",
+            "delete. A replacement keeps its section id. Use the numbered source slots. "
+            "Replace only the sections the change touches; keep the rest. A replacement's "
+            "purpose says what the section holds after the edit, never what changed: the "
+            "file is for the student, not a record of the edit.",
             payload,
         )
         self._run_stage(
@@ -257,9 +261,14 @@ class RevisionStages:
                         spec.get("evidence", {}), [block.get("id") for block in blocks]),
                     text="\n".join(_block_text(block) for block in blocks),
                     # Kept content already passed the checks when it was made.
-                    # Its headings are structure, not claims that need a citation.
+                    # Its headings are structure, not claims that need a citation, and
+                    # an element saved with no evidence passed as code-written (a
+                    # template's "next steps" list): it keeps that exemption, or a kept
+                    # section fails a citation check and is sent to a writer that has
+                    # no slots for it.
                     skip_elements={block["id"] for block in blocks
-                                   if block.get("type") == "heading"},
+                                   if block.get("type") == "heading"
+                                   or not (spec.get("evidence") or {}).get(block.get("id"))},
                 )
         elif kind == "workbook":
             for sheet in spec.get("sheets", []):
@@ -338,7 +347,12 @@ class RevisionStages:
                 if (self.plan is not None and getattr(section, "courses", [])
                         and list(getattr(replacement, "courses", [])) != list(section.courses)):
                     raise ValueError("a plan section's replacement cannot add, drop or move a course")
-                self.kept.pop(section_id, None)
+                # The writer rewrites from the section as it is now; given only the new
+                # purpose ("the BIOL 336 line has been removed; the rest is unchanged") it
+                # wrote a note about the edit in place of the checklist.
+                prior = self.kept.pop(section_id, None)
+                if prior is not None and prior.text:
+                    self.replaced_text[section_id] = prior.text
                 new_sections.append(replacement)
                 write.add(section_id)
             for insert in sorted(inserts.get(section_id, []), key=lambda item: item.section.id):
@@ -353,6 +367,15 @@ class RevisionStages:
                 write.add(inserted.id)
         if not new_sections:
             raise ValueError("edits would remove every section")
+        if self.inputs.mode == "grounded":
+            # A rewritten or new section is written from scratch and binds every block to
+            # its own slots; with none it can never be written (an edit failed that way).
+            for section in new_sections:
+                section_id = self._section_id(section)
+                if section_id in write and not section.source_slots:
+                    raise ValueError(
+                        f"section {section_id} is rewritten but has no source slots; give it "
+                        "the numbered slots its content comes from")
         if self.kind == "workbook":
             self.outline.sheets = [section for section in new_sections
                                    if isinstance(section, OutlineSheet)]

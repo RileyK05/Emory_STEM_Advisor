@@ -118,6 +118,7 @@ max_picks = 3
 # router adds up the probabilities from the top level down and picks the
 # highest response tier whose share reaches its threshold:
 #   crisis    P(clear_risk)                                  >= crisis_at
+#   support   P(possible_risk) + P(clear_risk)               >= support_at
 #   check_in  P(possible_risk) + P(clear_risk)               >= check_in_at
 #   steady    P(acute_distress) + P(possible_risk) + ...     >= steady_at
 #   calm      otherwise
@@ -129,6 +130,10 @@ max_picks = 3
 [distress]
 instructions = """Judge latest_message, the only message you see. A calm or reassuring message ("I'm ok, just a rough week") is calm. How distressed does the student sound, and is there any sign of risk to their life or safety? Panic, crying or dread about a class, exam, grade or deadline is distress about a situation, not a risk. Look for risk beyond the situation: hopelessness about life itself, wanting to disappear or not exist, feeling like a burden, goodbyes that sound final, self-harm, danger from someone, or having no food or place to sleep."""
 crisis_at = 0.4
+# Measured 2026-11-27 with clef: stress and sleeplessness scored at most 0.28 here;
+# "better off without me", "a burden", "not wake up" scored 0.94 to 0.98. Riley:
+# that strong a signal gets CAPS on the first message, still with the answer.
+support_at = 0.8
 check_in_at = 0.2
 steady_at = 0.5
 

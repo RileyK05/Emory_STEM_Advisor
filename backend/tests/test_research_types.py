@@ -600,7 +600,7 @@ def test_entry_point_claims_need_a_read_course_without_prerequisites():
 
 
 # The system prompt counts toward the bound; these fixture budgets track its size.
-@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(17900, False), (18900, False), (51900, True)])
+@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(18200, False), (19200, False), (52200, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
     ("unknown", None, "edition_not_recorded"),
@@ -949,7 +949,7 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
                               program_handles=("h_a",)),))
     session = SimpleNamespace(
         settings=replace(load_settings(), research_max_prompt_bytes=(
-            22600 if support == "preparation" else 15700 if support == "oversized_preparation" else 18600)),
+            22900 if support == "preparation" else 16000 if support == "oversized_preparation" else 18900)),
         store=SimpleNamespace(evidence=lambda _run: records), run=SimpleNamespace(run_id=uuid4()),
         active=[r.evidence_id for r in records], state=state, entity_evidence={"h_a": {"e20"}},
         scope=SimpleNamespace(sources={}, programs={}),
@@ -990,6 +990,34 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
         assert json.loads(user)["executed_preparation_checks"][0]["check_id"] == "p_test"
 
 
+def test_a_long_chat_drops_older_file_revisions_before_it_fails():
+    """Devin's long chat failed outright: its referenced file revisions alone filled the
+    prompt bound. The older revisions go first; the newest one, being edited, stays."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.config import load_settings
+    from app.generation.research_controller import ResearchController
+
+    session = SimpleNamespace(
+        settings=replace(load_settings(), research_max_prompt_bytes=26000),
+        store=SimpleNamespace(evidence=lambda _run: []), run=SimpleNamespace(run_id=uuid4()),
+        active=[], state=None, entity_evidence={}, scope=SimpleNamespace(sources={}, programs={}),
+        handles={}, checks={}, actions=[], program_reads={}, supplied=set(), remaining_limits={})
+    separator = "\nExact referenced artifact revisions:\n"
+    references = [{"artifactId": "old", "spec": "Old plan. " * 900},
+                  {"artifactId": "new", "spec": "New plan. " * 200}]
+    history = json.dumps({"kind": "selected_conversation_history", "total_turns": 0,
+                          "omitted_turns": 0, "turns": []}) + separator + json.dumps(references)
+    _request, user = ResearchController().request(
+        session, SimpleNamespace(definitions=()), "Edit the plan", history, [], "", True)
+    context = json.loads(user)
+    kept = json.loads(context["history_untrusted"].partition(separator)[2])
+    assert [reference["artifactId"] for reference in kept] == ["new"]
+    assert context["context_omissions"]["referenced_artifacts"] == 1
+
+
 def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch):
     from types import SimpleNamespace
 
@@ -1018,6 +1046,16 @@ def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch)
 
     session.rejected_decision = _decision(blocks=(unsupported,))
     assert session.salvage() is None  # No supported fact means no reply to keep.
+    # A greeting or a check-in needs no record: what passed alone is the reply.
+    from app.generation.question_router import Route
+    ask = DecisionBlock(kind="question", text="How are you doing beyond classes right now?")
+    session.rejected_decision = _decision(blocks=(ask, unsupported))
+    assert session.salvage() is None  # An Emory question still needs a fact.
+    for route in (Route(frozenset({"institutional"}), "model", distress="check_in"),
+                  Route(frozenset({"smalltalk"}), "model")):
+        session.route = route
+        assert session.salvage().blocks == (ask,)
+    session.route = None
 
     # The kept reply stays phone-length: a block that would pass 450 words is left out.
     first = DecisionBlock(kind="limitation", text="Confirm this with your advisor. " * 60)
@@ -1494,6 +1532,18 @@ def test_an_attached_artifact_in_another_format_makes_no_new_run(question, kept)
     ("I've created a plan covering the core courses.", True),
     ("I have prepared the checklist of core courses.", True),
     ("Your plan is ready.", True),
+    # An edit is published before it runs, and it can fail.
+    ("I made you a spreadsheet checklist of the Biology BA requirements.", True),
+    ("I've corrected the tracker so CHEM 150 shows as in progress.", True),
+    ("I updated your plan to drop CHEM 150.", True),
+    ("Done — the physiology line is out.", True),
+    ("The checklist no longer has BIOL 336 in the core list.", True),
+    ("The BIOL 336 line has been removed.", True),
+    ("I'm updating the tracker so CHEM 150 shows as in progress.", False),
+    ("I'm removing the physiology line from the checklist now.", False),
+    ("Once you're done with CHEM 150, take CHEM 202.", False),
+    ("This course is in Spring 2027, and the CHEM 202 section is out of seats.", False),
+    ("I made a mistake about CHEM 150L.", False),
     ("Here is your answer: take MATH 111.", False),
     ("Your registration is ready to submit.", False),
     ("Your plan is being written as a document.", False),

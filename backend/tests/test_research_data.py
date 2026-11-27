@@ -1074,7 +1074,7 @@ def _research_provider(monkeypatch, script):
     return provider
 
 
-@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_format_slips_spare_corrections", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry", "program_paging", "program_paging_budget", "factual_evidence_retention", "program_audit", "course_suggestions", "which_majors"])
+@pytest.mark.parametrize("scenario", ["clarification", "course", "program_comparison", "program_read_before_preparation", "preparation", "preparation_after_state_rejection", "preparation_or_selected", "preparation_or_completed", "preparation_or_completed_long_unselected_branch", "preparation_missing_or_choice", "preparation_missing_prerequisite", "search_document", "saved_clarification", "schema_repair", "document_state_repair", "discovery_read_cadence", "repeated_read_no_progress", "cached_read_priority", "free_json_finish", "finish_repair_extra_field", "finish_repair_malformed_then_validation", "finish_format_slips_spare_corrections", "finish_names_unoffered_call", "finish_rejects_unsupported_references", "finish_feedback_roundtrip", "truncated_research_repair", "truncated_research_exhausted", "rate_limited_research_retry", "program_paging", "program_paging_budget", "factual_evidence_retention", "program_audit", "course_suggestions", "which_majors"])
 def test_research_answers_progressively_and_persists_its_decision(
         db, collection, tmp_path, monkeypatch, scenario):
     from app.api.query_service import query_response
@@ -1368,7 +1368,7 @@ def test_research_answers_progressively_and_persists_its_decision(
                     "text": "The policy describes letter grades.", "evidence_ids": ids}]}})
         if scenario in {"free_json_finish", "finish_repair_extra_field",
                         "finish_repair_malformed_then_validation", "finish_rejects_unsupported_references",
-                        "finish_format_slips_spare_corrections"}:
+                        "finish_format_slips_spare_corrections", "finish_names_unoffered_call"}:
             if index == 0:
                 return call("read_courses", {"course_codes": ["ECON 201"]})
             ids = [e["evidence_id"] for e in context["exact_evidence_untrusted"]]
@@ -1416,7 +1416,15 @@ def test_research_answers_progressively_and_persists_its_decision(
                     "outcome": "information", "completeness": "complete", "blocks": [{
                         "kind": "fact", "text": "Still unsupported.", "evidence_ids": ["e999"]}]}}),
                     finish_reason="stop", usage=provider.result.usage)
-            if index > 1:
+            if scenario == "finish_names_unoffered_call":
+                # The model knows the date, so it can say whether a deadline has passed.
+                assert context["today"] and context["current_term"]
+                # A model that invents a tool is told which call was wrong, not only to
+                # "use the advertised tools", which it answered with the same call again.
+                if index == 1:
+                    return [ToolCall("ghost", "advisor_program", {})]
+                assert "called advisor_program, which that round did not offer" in context["instruction"]
+            elif index > 1:
                 assert context["finish_required"]
                 assert "advisor_finish" in context["instruction"]
                 assert "advisor_read_courses" not in context["instruction"]
@@ -2042,6 +2050,17 @@ def test_the_prerequisite_graph_can_hold_the_whole_answer(db, collection, tmp_pa
     session.question = "is PHYS 413 a good class"
     with pytest.raises(DecisionRejected, match="PHYS 413"):
         session.finish(FinishInput.model_construct(decision=decision), None)
+    # A course the student reports finishing is on their record, not made up: the reply
+    # says the Atlas does not list it, and is not told to call it nonexistent.
+    session.question = "I've done ECON 101 and ECON 999, what should I take next"
+    with pytest.raises(DecisionRejected, match="reports finishing.*ECON 999") as reported:
+        session.finish(FinishInput.model_construct(decision=decision), None)
+    assert "asked about a course" not in str(reported.value)
+    # Another school's code is not an Emory course that "does not exist".
+    session.question = "I took CHEM 1212 at Georgia State, does it count here?"
+    with pytest.raises(DecisionRejected, match="another school.*CHEM 1212") as external:
+        session.finish(FinishInput.model_construct(decision=decision), None)
+    assert "does not exist; say so" not in str(external.value)
     # The other degree is a database fact, so the server says it rather than refuse.
     session.question = "what classes do i need for the economics major"
     session.must_name_degrees = {"BA"}
@@ -2098,20 +2117,33 @@ def test_a_program_question_gets_citable_requirement_lines(db, collection, tmp_p
     assert all(line["evidence_ids"] and set(line["evidence_ids"]) <= held for line in lines)
 
 
-@pytest.mark.parametrize(("question", "scores", "levels", "researched", "outcome", "first"), [
+@pytest.mark.parametrize(("question", "scores", "levels", "researched", "outcome", "first", "last"), [
     # Clear risk: the fixed support reply, written by code; research never runs.
     ("I want to end my life", {"institutional": 0.1}, {"clear_risk": 0.9}, False, "information",
-     "crisis"),
+     "crisis", None),
     # Nothing but a request outside advising: the fixed decline, no research.
     ("write my essay on the french revolution", {"out_of_scope": 0.95}, {"none": 1.0}, False,
-     "declined", None),
+     "declined", None, None),
     # A first sign of possible risk: research answers, and nothing code-written
     # sends the student to counseling.
     ("I failed again, what's the point. Can I retake a course?", {"institutional": 0.9},
-     {"possible_risk": 0.8}, True, "clarification", None),
+     {"none": 0.5, "possible_risk": 0.5}, True, "clarification", None, None),
+    # Nearly all risk on a first message: CAPS and 988 first, and the answer still runs.
+    ("everyone would be better off without me. can I retake a course?", {"institutional": 0.9},
+     {"possible_risk": 0.85, "clear_risk": 0.15}, True, "clarification", "support_once", None),
+    # Immigration belongs to ISSS: alone, the fixed note and no research; beside a
+    # course question, the answer and then the note.
+    ("can I do CPT for a summer internship?", {"institutional": 0.9}, {"none": 1.0}, False,
+     "information", "immigration", None),
+    # (This corpus has no course records, so the answer also says ECON 101 is unknown.)
+    ("does ECON 101 count for my OPT?", {"institutional": 0.9}, {"none": 1.0}, True,
+     "information", None, "immigration"),
+    # A question about the app gets what the app does, even when the router calls it Emory.
+    ("ok thanks. will you remember all this if i come back tomorrow?", {"institutional": 0.6},
+     {"none": 1.0}, False, "information", "about_memory", None),
 ])
 def test_the_router_decides_what_runs_and_what_code_writes(
-        db, collection, monkeypatch, question, scores, levels, researched, outcome, first):
+        db, collection, monkeypatch, question, scores, levels, researched, outcome, first, last):
     from app.api.query_service import query_response
     from app.api.schemas import QueryRequest
     from app.config import load_settings
@@ -2141,10 +2173,12 @@ def test_the_router_decides_what_runs_and_what_code_writes(
     if first:
         assert texts[0] == getattr(replies, first)
     else:
-        assert replies.support not in texts and replies.crisis not in texts
+        assert not {replies.support, replies.support_once, replies.crisis} & set(texts)
+    assert (texts[-1] == replies.immigration) is (last == "immigration" or first == "immigration")
     steps = ResearchStore(db, "development").steps(UUID(response.research.runId))
     route, = [s["details"] for s in steps if s["action_kind"] == "route"]
-    expected = {"crisis": "crisis"}.get(first, "check_in" if levels.get("possible_risk") else "calm")
+    expected = {"crisis": "crisis", "support_once": "support"}.get(
+        first, "check_in" if levels.get("possible_risk") else "calm")
     assert route["distress"] == expected
 
 
@@ -2163,7 +2197,7 @@ def test_the_router_reads_the_turn_before_and_steps_in_when_it_comes_up_again(
     client = api_client(db, collection, provider=_research_provider(monkeypatch, script))
     client.app.state.settings = replace(client.app.state.settings, llm_provider="openai",
         llm_model_id="fake", tools_enabled=True, routing_enabled=False, db_pool_max_size=0)
-    risk = {level: 0.0 for level in LEVELS} | {"possible_risk": 0.9, "none": 0.1}
+    risk = {level: 0.0 for level in LEVELS} | {"possible_risk": 0.5, "none": 0.5}
     decider = FakeDecisionProvider({"institutional": 0.9}, {"distress": risk})
     client.app.state.decision_provider = decider
     conversation = client.post("/api/conversations", json={"title": "t"}).json()["conversationId"]

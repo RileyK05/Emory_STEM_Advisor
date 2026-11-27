@@ -10,10 +10,20 @@ _ARTIFACT_READY = re.compile(
     r"|\b(?:the|your) (?:[a-z]+\s+){0,3}"
     r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\s+"
     r"(?:is|are) (?:now )?(?:ready|attached)\b"
-    r"|\bI(?:['’]ve| have) (?:made|created|built|attached|prepared|put together) "
+    # Past tense too: "I made you a spreadsheet", "I've corrected the tracker" were
+    # published before an edit that then failed, and the file never changed.
+    r"|\bI(?:['’]ve| have)? (?:just )?(?:made|created|built|attached|prepared|put together|"
+    r"corrected|updated|changed|fixed|revised|edited) "
     r"(?:your |the )?(?:[a-z]+\s+){0,3}"
-    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|page|report|comparison|handout)\b",
-    re.IGNORECASE)
+    r"(?:plan|checklist|document|spreadsheet|workbook|sheet|tracker|page|report|comparison|"
+    r"handout)\b"
+    # "Done — the physiology line is out" was published before the edit failed.
+    r"|^\s*done\b\s*[—–:!,.-]"
+    r"|\b(?:line|row|item|entry)s?\s+(?:is|are|has\s+been|have\s+been)\s+"
+    r"(?:now\s+)?(?:out|gone|removed|deleted|added|updated)\b"
+    r"|\b(?:course|section|column)s?\s+(?:has|have)\s+been\s+(?:removed|deleted|added)\b"
+    r"|\bno\s+longer\s+(?:has|lists|includes|shows)\b",
+    re.IGNORECASE | re.MULTILINE)
 
 
 _DONE_CLAIM = re.compile(

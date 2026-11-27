@@ -9,6 +9,20 @@ interface Props {
   onToggle: (passageNumber: number | null) => void;
 }
 
+/**
+ * What a student sees for a source: its reviewed title, never a file name
+ * ("atlas-primary.jsonl", "mathematics-bs.md"). A source with no title shows only
+ * its locator; a locator that is just line numbers adds nothing a student can use.
+ */
+function sourceLabel(item: { sourceName: string; sourceTitle?: string | null }): string {
+  if (item.sourceTitle) return item.sourceTitle;
+  return /\.[a-z0-9]{2,5}$/i.test(item.sourceName) ? '' : item.sourceName;
+}
+
+function locatorLabel(label: string): string {
+  return /^lines? \d+(?:\s*[-–]\s*\d+)?$/i.test(label.trim()) ? '' : label;
+}
+
 /** The sources an answer cites, as numbered chips that expand to the exact passage. */
 export function SourceList({ citations, context, openNumber, onToggle }: Props) {
   const seen = new Set<string>();
@@ -33,14 +47,21 @@ export function SourceList({ citations, context, openNumber, onToggle }: Props) 
               key={citation.chunkId}
               className="source-chip"
               aria-expanded={number > 0 && openNumber === number}
-              aria-label={`${citation.sourceName} ${citation.locatorLabel}`}
+              aria-label={
+                [sourceLabel(citation), locatorLabel(citation.locatorLabel)].filter(Boolean).join(' ') || 'Source'
+              }
               disabled={number === 0}
               title={number === 0 ? 'This passage was not saved with the answer.' : 'Show the passage'}
               onClick={() => onToggle(openNumber === number ? null : number)}
             >
               {number > 0 && <span className="source-chip-num">{number}</span>}
-              <span className="source-chip-name">{citation.sourceName}</span>
-              <span className="source-chip-loc">{citation.locatorLabel}</span>
+              {sourceLabel(citation) && <span className="source-chip-name">{sourceLabel(citation)}</span>}
+              {locatorLabel(citation.locatorLabel) && (
+                <span className="source-chip-loc">{locatorLabel(citation.locatorLabel)}</span>
+              )}
+              {!sourceLabel(citation) && !locatorLabel(citation.locatorLabel) && (
+                <span className="source-chip-name">Source</span>
+              )}
             </button>
           ))}
         </div>
@@ -49,8 +70,8 @@ export function SourceList({ citations, context, openNumber, onToggle }: Props) 
         <figure className="passage" aria-label="Cited passage">
           <figcaption>
             <span className="source-chip-num">{openNumber}</span>
-            <strong>{passage.sourceName}</strong>
-            <span className="muted">{passage.locatorLabel}</span>
+            <strong>{sourceLabel(passage) || 'Source'}</strong>
+            <span className="muted">{locatorLabel(passage.locatorLabel)}</span>
             <button type="button" className="icon-button" aria-label="Close passage" onClick={() => onToggle(null)}>
               <CloseIcon size={16} />
             </button>

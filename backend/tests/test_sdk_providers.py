@@ -72,6 +72,44 @@ def test_compatible_empty_choices_are_a_provider_failure_with_usage(choices):
         sdk.close()
 
 
+_FINISH = '{"name":"advisor_finish","args":{"decision":{"blocks":[{"kind":"fact","text":"a}"}]}}'
+
+
+@pytest.mark.parametrize("content, finish, recovered", [
+    # Ollama returned the call as text, one closing brace short (inkling-2-small).
+    (_FINISH, "stop", True),
+    (_FINISH + "}", "stop", True),
+    ("advisor_finish<|content_invoke_tool_json|>" + _FINISH, "stop", True),
+    ('{"name":"advisor_finish","arguments":"{\\"decision\\": {}}"}', "stop", True),
+    # Not a whole envelope for an advertised tool: left as text for the caller.
+    (_FINISH.replace("advisor_finish", "delete_everything"), "stop", False),
+    ('{"name":"advisor_finish","args":{"decision":{"blocks":[{"kind":"fa', "stop", False),
+    (_FINISH, "length", False),
+    ("Here is my answer: " + _FINISH, "stop", False),
+    ("CHEM 150 comes before CHEM 202.", "stop", False),
+])
+def test_compatible_recovers_a_tool_call_served_as_text(content, finish, recovered):
+    body = {"id": "chat-leak", "object": "chat.completion", "created": 1, "model": "m",
+            "choices": [{"index": 0, "finish_reason": finish,
+                         "message": {"role": "assistant", "content": content}}],
+            "usage": {"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6}}
+    sdk = OpenAI(api_key="test", base_url="https://mock/v1",
+                 http_client=httpx2.Client(transport=httpx2.MockTransport(
+                     lambda request: _openai_response(body, request=request))))
+    tool = ToolDefinition("advisor_finish", "Finish.", {"type": "object"})
+    try:
+        result = OpenAICompatibleProvider(sdk, "m").generate(
+            GenerationRequest([{"role": "user", "content": "q"}], tools=(tool,)))
+    finally:
+        sdk.close()
+    if recovered:
+        assert [c.name for c in result.tool_calls] == ["advisor_finish"]
+        assert "decision" in result.tool_calls[0].arguments
+        assert result.text == "" and result.finish_reason == "tool_calls"
+    else:
+        assert result.tool_calls == () and result.text == content
+
+
 def _response(body, *, headers=None, request=None):
     return httpx.Response(200, json=body, headers=headers or {}, request=request or httpx.Request("POST", "https://mock"))
 

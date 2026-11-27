@@ -1,12 +1,15 @@
 """Bounded research rounds with rebuilt context and one shared operation."""
 
 import json
+import logging
 import math
 import re
 from collections import Counter
 from copy import deepcopy
 from dataclasses import asdict, replace
+from datetime import datetime
 from uuid import uuid5
+from zoneinfo import ZoneInfo
 
 from app.advising.research_repository import verify_sources
 from app.advising.research_types import FinalDecision
@@ -115,6 +118,7 @@ EVIDENCE
 - Every fact must occur in its cited chunks. Use evidence_ids, never raw citation markers.
 - Use fact/limitation for facts and scope. Use judgment for your advice or a candidate preference; every judgment needs supporting evidence_ids, and candidate_ids only when it prefers a registered candidate.
 - Factual lookups need no candidates. Clarification or insufficient evidence may have no facts or citations.
+- unresolved_questions are shown to the student: write each as a short question to them ("Which term are you in now?"), never a research note about them or about a source.
 - Match institution, rule target, program/track, edition/cohort, and admissions cycle. Unknown or historical applicability stays scoped; reviewed_default and acquisition time prove neither eligibility nor currency. source_scope_notices are limits, not ineligibility.
 - Catalog precedence requires the same target and edition. Captured Course Atlas registration restrictions override catalog conflicts within that term.
 - Follow each record's authority annotation: catalog fallback means Atlas requirements were not verified; unparsed means parser limits, never no prerequisites, eligibility, or discontinuation.
@@ -133,6 +137,7 @@ PROGRAMS AND COURSES
 - named_by_programs lists programs naming a course, program_lines each line with evidence_ids. For "which majors need X", answer and cite from those without reading programs.
 - renamed_subjects gives Emory's subject renames: QTM 100 is DATASCI 100. Search both; use the new code.
 - course_facts keeps what you read about each course across rounds, with its evidence_ids. Never reread a course it lists.
+- today is the real date in Atlanta and current_term the term it falls in. Use them to say whether a deadline, a term or an offering is past, current or upcoming, when a source gives its date; never invent a date no source gives.
 - Do not expand an acronym unless the source spells it out.
 - other_degrees lists the same major under another degree. When the student named no degree, read it too, say in the first block that both exist with their hours, then give what they share and what differs.
 - special_course is a caveat the course needs: give it when you recommend or plan it.
@@ -171,7 +176,7 @@ For course candidates use course_codes; attach program_handles only for an actua
 Before calling a course an elective for a named major, read its requirements; distinguish required
 core, approved electives and courses whose degree applicability is unknown.
 Before calling a previously discussed source unread, search recall and reopen its evidence.
-If it cannot be reopened, say it was not reactivated this turn; do not claim it was never read.
+If it cannot be reopened, say you could not check it again this time; do not claim it was never read.
 Conversation search matches any query words. If nothing matches, browse with query='' instead of
 repeated synonymous searches. A cursor preserves the original query; follow it until complete.
 Context omissions describe missing discovery/action metadata, not missing source facts.
@@ -864,6 +869,21 @@ def _run_prefetch(session, executor, registry, ledger, operation, fingerprint, c
     return [AssistantToolMessage(tuple(call for call, _ in prefetched)),
             *(message for _, message in prefetched)], tools_used
 
+logger = logging.getLogger(__name__)
+
+
+def _today_context(now: datetime | None = None) -> dict[str, str]:
+    """The date in Atlanta and its term. Students ask whether a deadline has passed;
+    without the date the model could only answer "I don't have today's date"."""
+    day = (now or datetime.now(_ATLANTA)).astimezone(_ATLANTA).date()
+    term = "Spring" if day.month <= 4 else "Summer" if day.month <= 7 else "Fall"
+    return {"today": day.isoformat(), "current_term": f"{term} {day.year}"}
+
+
+_ATLANTA = ZoneInfo("America/New_York")
+CONTEXT_TOO_LONG = "This chat has gotten too long for me to answer in. Start a new chat and ask again."
+
+
 class ResearchController:
     def run(self, session, provider, operation, **kwargs):
         usages: list = []
@@ -876,6 +896,9 @@ class ResearchController:
                 raise
             decision = session.salvage()
             if decision is None:
+                # The student sees one generic line; keep the real cause for operators.
+                logger.warning("research run could not finish: %s: %s",
+                               type(exc).__name__, exc, exc_info=exc)
                 if isinstance(exc, OperationBudgetError) and getattr(exc, "code", "") == "deadline_exceeded":
                     raise ToolConversationError(
                         "The question took too long to answer. Try a shorter version.") from exc
@@ -1113,10 +1136,20 @@ class ResearchController:
                 if not spend_correction(format_slip=True):
                     raise ToolConversationError("research must finish with one valid advisor_finish call")
                 repairing = (finishing or terminal or not result.tool_calls) and not continuation_required
-                reason = ("The previous response was truncated. Discard it; do not continue its text or "
-                          "repeat deliberation. Return one concise advisor_finish with only necessary, "
-                          "supported answer blocks. " if incomplete else
-                          "Use only the currently advertised tools; advisor_finish must be the sole call. ")
+                # Name the slip: told only "use the advertised tools", a model resent the same
+                # unoffered call on every correction (0/10 replays of a captured round); told
+                # which call was wrong and what the round offers, it finished (10/10).
+                unoffered = sorted({c.name for c in result.tool_calls if c.name not in advertised})
+                if incomplete:
+                    reason = ("The previous response was truncated. Discard it; do not continue its text "
+                              "or repeat deliberation. Return one concise advisor_finish with only "
+                              "necessary, supported answer blocks. ")
+                elif unoffered:
+                    reason = (f"Your last reply called {', '.join(unoffered)}, which that round did not "
+                              + ("offer. Call only advisor_finish now. " if repairing else
+                                 f"offer (it offered {', '.join(sorted(advertised))}). "))
+                else:
+                    reason = "Use only the currently advertised tools; advisor_finish must be the sole call. "
                 hint = (_finish_repair_hint(reason + "Free prose or mixed/malformed JSON cannot be published.",
                                            session.state)
                         if repairing else reason)
@@ -1275,7 +1308,7 @@ class ResearchController:
         handles = [(h, value) for h, value in session.handles.items() if value[0] != "memory"][-40:]
         # Keys run from what stays the same all run to what changes every round,
         # so a provider's prompt cache can reuse the longest possible prefix.
-        base = {"question": question, "history_untrusted": history or "",
+        base = {"question": question, **_today_context(), "history_untrusted": history or "",
                 "available_source_kinds": sorted({p.source_kind for p in session.scope.sources.values()}),
                 "program_count": len(session.scope.programs),
                 "exact_evidence_untrusted": [],
@@ -1415,6 +1448,22 @@ class ResearchController:
             base["history_untrusted"] = json.dumps(selected, ensure_ascii=False, separators=(",", ":")) + separator + artifacts
             omissions = base.setdefault("context_omissions", {})
             omissions["history_turns"] = omissions.get("history_turns", 0) + 1
+        while not fits():
+            # A long chat that kept editing files carries every referenced revision; the
+            # older ones go first and the newest, usually the one being edited, stays.
+            history, separator, artifacts = base["history_untrusted"].partition(
+                "\nExact referenced artifact revisions:\n")
+            try:
+                references = json.loads(artifacts) if separator else None
+            except (TypeError, ValueError):
+                break
+            if not isinstance(references, list) or len(references) <= 1:
+                break
+            references.pop(0)
+            base["history_untrusted"] = history + separator + json.dumps(
+                references, ensure_ascii=False, separators=(",", ":"))
+            omissions = base.setdefault("context_omissions", {})
+            omissions["referenced_artifacts"] = omissions.get("referenced_artifacts", 0) + 1
         if last_round and not fits():
             # Keep the rejected proposal and its matching feedback together when
             # possible. If even that pair plus one passage cannot fit, drop the
@@ -1469,6 +1518,8 @@ class ResearchController:
             base["omitted_evidence_ids"].append(dropped)
             current, user = build(last_round)
         if estimate_prompt_bytes(current) > settings.research_max_prompt_bytes:
-            raise ToolConversationError("research context exceeds the configured prompt bound")
+            # What cannot be dropped (the rules, the history, the referenced files) already
+            # fills the bound: only a shorter conversation can be answered.
+            raise ToolConversationError(CONTEXT_TOO_LONG)
         session.supplied = supplied
         return current, user

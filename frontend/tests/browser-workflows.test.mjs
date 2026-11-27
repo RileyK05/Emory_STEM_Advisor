@@ -2072,7 +2072,7 @@ test('saved research answers retain partial notices and exact citation navigatio
             outcome: 'recommendation',
             completeness: 'partial',
             blocks: [],
-            unresolvedQuestions: ['The double-counting policy remains unknown.'],
+            unresolvedQuestions: ['Which catalog year did you start under?', 'Does the student prefer the BA?'],
           },
         },
         createdAt,
@@ -2086,15 +2086,17 @@ test('saved research answers retain partial notices and exact citation navigatio
     effectiveFlags,
   });
   try {
-    await page.getByRole('note').getByText('Some questions remain open.').waitFor();
-    await page.getByText('The double-counting policy remains unknown.', { exact: true }).waitFor();
+    await page.getByRole('note').getByText('Parts of this answer couldn’t be fully checked.').waitFor();
+    await page.getByText('Which catalog year did you start under?', { exact: true }).waitFor();
+    // A research note about the student is not shown to them.
+    assert.equal(await page.getByText('Does the student prefer the BA?').count(), 0);
     await page.getByRole('button', { name: 'Linear Algebra Primer section 2.1', exact: true }).click();
     assert.equal(
       await page.getByRole('figure', { name: 'Cited passage' }).locator('blockquote').innerText(),
       trace().contextBlock[0].text,
     );
     await page.reload();
-    await page.getByRole('note').getByText('Some questions remain open.').waitFor();
+    await page.getByRole('note').getByText('Parts of this answer couldn’t be fully checked.').waitFor();
   } finally {
     await context.close();
   }

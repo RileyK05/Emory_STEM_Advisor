@@ -48,7 +48,9 @@ def disclose_retired_courses(decision: FinalDecision, retired: frozenset[str]) -
             # The full label once per answer; a later sentence gets the short form.
             fresh = [code for code in named if code not in labeled]
             labeled.update(named)
-            note = (" (not on recent schedules)" if not fresh
+            # The short form names its course too: a sentence naming several courses
+            # otherwise reads as if the last one named were the retired one.
+            note = (f" ({', '.join(named)}: not on recent schedules)" if not fresh
                     else f" ({fresh[0]} isn't on any recent Course Atlas schedule)" if len(fresh) == 1
                     else f" ({', '.join(fresh[:-1])} and {fresh[-1]} aren't on any recent "
                          "Course Atlas schedule)")

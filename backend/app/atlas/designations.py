@@ -83,7 +83,8 @@ def caveat_sentence(codes: str | Sequence[str], designation: Designation) -> str
     a special topics course: ...".
     """
     codes = [codes] if isinstance(codes, str) else list(codes)
-    article = "an" if designation.label[0] in "aeiou" else "a"
+    # "an honors course": the h is silent.
+    article = "an" if designation.label[0] in "aeiou" or designation.label.startswith("hon") else "a"
     named = codes[0] if len(codes) == 1 else f"{', '.join(codes[:-1])} and {codes[-1]}"
     verb = "is" if len(codes) == 1 else "are each"
     return f"{named} {verb} {article} {designation.label}: {designation.caveat}."

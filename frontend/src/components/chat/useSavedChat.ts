@@ -512,7 +512,7 @@ export function useSavedChat(): ChatController {
         const terminalEpoch = ++viewEpoch.current;
         releaseBusy(id, pendingOwner);
         setStreamPreview(null);
-        setNotice('Stopped. If that answer finishes later, it will be discarded.');
+        setNotice('Stopped. Your question is back in the box if you want to reword it.');
         // Students usually stop to reword, so the stopped question returns to the box.
         const stopped = currentRecord.turns.find((turn) => turn.requestId === requestId && turn.role === 'user');
         if (stopped) restoreDraft(id, stopped.text);

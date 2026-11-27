@@ -55,6 +55,8 @@ class ContextItem(BaseModel):
     chunkId: str
     sourceId: str
     sourceName: str
+    # The source's reviewed title, when it has one; sourceName is its file name.
+    sourceTitle: str | None = None
     locatorLabel: str
     text: str
 
@@ -90,6 +92,7 @@ class RetrievalTrace(BaseModel):
 class Citation(BaseModel):
     sourceId: str
     sourceName: str
+    sourceTitle: str | None = None
     locatorLabel: str
     chunkId: str
 

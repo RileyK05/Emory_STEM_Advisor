@@ -1,6 +1,6 @@
 import type { ArtifactPreview } from '../../api/types';
 import { sandboxDocument } from './previewHtml';
-import { address } from './workbook';
+import { address, sheetGrid } from './workbook';
 
 interface Props {
   preview: ArtifactPreview;
@@ -15,7 +15,7 @@ export function PreviewPane({ preview, recordTitle }: Props) {
   return (
     <section className="artifact-preview" aria-label="Artifact preview">
       {heading && <h3>{heading}</h3>}
-      {preview.status === 'needs_recalculation' && (
+      {preview.status === 'needs_recalculation' && !preview.sheets && (
         <p className="preview-note" role="status">
           Some totals haven’t been worked out yet, so the preview shows the formulas instead of guessing.
         </p>
@@ -33,21 +33,44 @@ export function PreviewPane({ preview, recordTitle }: Props) {
           />
         </>
       ) : preview.sheets ? (
-        preview.sheets.map((sheet) => (
-          <div key={sheet.id}>
-            <h4>{sheet.name}</h4>
-            <table>
-              <tbody>
-                {sheet.cells.map((cell) => (
-                  <tr key={cell.id}>
-                    <th>{address(cell.row, cell.column)}</th>
-                    <td>{cell.formula || String(cell.calculatedValue ?? cell.value ?? '')}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))
+        preview.sheets.map((sheet) => {
+          const grid = sheetGrid(sheet.cells);
+          return (
+            <div key={sheet.id} className="sheet-preview">
+              <h4>{sheet.name}</h4>
+              {grid.unresolved > 0 && (
+                <p className="preview-note" role="status">
+                  Some cells use formulas the preview can’t work out; they show as formulas here and calculate when you
+                  open the downloaded file.
+                </p>
+              )}
+              <div className="sheet-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th aria-hidden="true" />
+                      {Array.from({ length: grid.columns }, (_, index) => (
+                        <th key={index} scope="col">
+                          {address(1, index + 1).replace(/\d+$/, '')}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {grid.rows.map(({ row, shown }) => (
+                      <tr key={row}>
+                        <th scope="row">{row}</th>
+                        {shown.map((text, index) => (
+                          <td key={index}>{text}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })
       ) : (
         <pre>{JSON.stringify(preview.formulas ?? preview, null, 2)}</pre>
       )}

@@ -447,9 +447,9 @@ def _econ(db, collection, tmp_path, extra="", program=ECON_MINOR):
     ("Plan ECON 201 with ECON 101 done", True, ["ECON 101"] * 23, ["ECON 201"]),
     # The grounding never retrieved the record: the planner appends it mid-run.
     ("Plan my semester after Calculus I limits; I've taken ECON 101", True, [], ["ECON 201"]),
-    ("Make a checklist covering ECON 201 this semester", False, [], []),
-    ("Make a checklist covering ECON 201\n\nPublished answer:\nPlan ECON 201 for next semester.",
-     False, [], ["ECON 201"]),
+    ("Make an Economics minor checklist covering ECON 201 this semester", False, [], []),
+    ("Make an Economics minor checklist covering ECON 201\n\nPublished answer:\n"
+     "Plan ECON 201 for next semester.", False, [], ["ECON 201"]),
 ])
 def test_the_artifact_outline_uses_the_planner_for_term_plans(
         db, collection, tmp_path, prompt, planned, draft_courses, selected):
@@ -499,6 +499,25 @@ def test_the_artifact_outline_uses_the_planner_for_term_plans(
     # The schedule is code-built: no term spends a model call on a note.
     assert not any(block.get("text") == "Macro theory." for block in spec["blocks"])
     assert not any(request.tools[0].name == SECTION_TOOL for request in provider.requests)
+
+
+def test_a_file_is_not_built_from_a_program_nobody_named(db, collection, tmp_path):
+    """Asked for "a checklist of the med school prerequisite classes", an outline picked
+    the Human Health BA and the file became that program's checklist. Code builds from
+    a program only when the student or the brief names it."""
+    source = _econ(db, collection, tmp_path)
+    draft = _plan_outline([])
+    draft["sections"] = outline()["sections"]
+    provider = ArtifactStageProvider(outline=draft, sections={"s1": [section()]})
+    client, store, executor = setup_runtime(db, collection, provider, tmp_path)
+    run_id = start_run(client, "document", {"prompt": "Make a checklist covering ECON 201",
+                                            "sourceIds": [str(source)]}, "unnamed-program")
+    finished = run_once(store, "unnamed", executor)
+    assert finished.status.value == "succeeded", finished.error
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    spec = client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    assert [b.get("text") for b in spec["blocks"] if b.get("type") == "heading"] == ["Facts"]
+    assert "Economics (Minor)" not in spec["title"]
 
 
 @pytest.mark.parametrize(("student_text", "shown"), [
@@ -775,8 +794,8 @@ def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, t
 
     # The revising model sees headings, not the column schema, and calls every
     # column text. The prior sheet's types are the student's data.
-    revise_provider = ArtifactStageProvider(
-        edits=[{
+    def replace_sheet(slots):
+        return {
             "title": "Credits",
             "operations": [{
                 "action": "replace", "section_id": "s1",
@@ -787,10 +806,14 @@ def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, t
                         {"key": "c2", "header": "Credits", "type": "text"},
                         {"key": "c3", "header": "Total", "type": "text"},
                     ],
-                    "source_slots": [1],
+                    "source_slots": slots,
                 },
             }],
-        }],
+        }
+
+    # A rewritten sheet with no slots could never be written: the edit is sent back.
+    revise_provider = ArtifactStageProvider(
+        edits=[replace_sheet([]), replace_sheet([1])],
         sections={"s1": [{"rows": [
             {"values": ["Alpha 101", 4, None], "source_slots": [1]},
             {"values": ["Alpha 102", 3, None], "source_slots": [1]},
@@ -805,6 +828,8 @@ def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, t
     }, "workbook-revision")
     finished = run_once(revise_store, "workbook-revision", revise_executor)
     assert finished.status.value == "succeeded", finished.error
+    assert any("has no source slots" in repr(request.messages)
+               for request in revise_provider.requests)
     revised = revise_client.get(f"/api/artifacts/{artifact_id}").json()
     spec = revised["spec"]
     cells = {(cell["row"], cell["column"]): cell for cell in spec["sheets"][0]["cells"]}
@@ -1052,6 +1077,20 @@ def test_the_student_term_limits_are_read(text, credits, courses, terms):
     assert requested_terms(text) == terms
 
 
+@pytest.mark.parametrize(("text", "strict"), [
+    ("finish the CS BS in four semesters", True),
+    ("plan for my last 3 semesters", True),
+    ("my final two terms", True),
+    # A described plan length is not a hard limit.
+    ("make a four-semester plan for the CS BS", False),
+    ("plan my next three semesters", False),
+])
+def test_a_term_count_is_a_hard_limit_only_when_the_student_has_no_more(text, strict):
+    from app.generation.student_request import strict_term_limit
+
+    assert strict_term_limit(text) is strict
+
+
 @pytest.mark.parametrize(("prerequisites", "courses", "chain"), [
     # The Computer Science BS: why a "four-semester plan" came back with a Term 5.
     ((("CS 171", "CS 170"), ("CS 253", "CS 171"), ("CS 326", "CS 253"),
@@ -1073,6 +1112,10 @@ def test_the_longest_prerequisite_chain_explains_extra_terms(prerequisites, cour
     ("I took ECON 101 and will take ECON 201 next fall.", ["ECON 101"]),
     ("I've taken MATH 111 and want ECON 201 next semester.", ["MATH 111"]),
     ("I already took ECON 101 and I'm currently in MATH 111.", ["ECON 101"]),
+    # A question to the advisor ends the report of what was finished.
+    ("I took ECON 101, can i take ECON 201 next?", ["ECON 101"]),
+    # Students skip apostrophes, and what they are in now is not finished.
+    ("ive done ECON 101 and MATH 111, and im in ECON 201 now", ["ECON 101", "MATH 111"]),
 ])
 def test_only_courses_the_student_finished_count_as_completed(text, completed):
     from app.generation.student_request import completed_from_text
@@ -1372,6 +1415,61 @@ def test_a_revision_replaces_one_section_and_keeps_the_rest_byte_identical(db, c
     assert any(block.get("text") == "Alpha facts revised." for block in changed)
     assert any(block.get("text") == "Changed" for block in changed)
     assert revised["parentRevisionId"] == prior["revisionId"]
+    # The replaced section is rewritten from its current text, not from the new purpose
+    # alone (which once produced a note about the edit in place of the content).
+    section_request = next(json.loads(request.messages[-1]["content"])
+                           for request in revise_provider.requests
+                           if {tool.name for tool in request.tools} == {"advisor_stage_section"})
+    assert "Alpha facts too." in section_request["current_section_untrusted"]
+    assert "Do not describe the change" in section_request["revision_rule"]
+
+
+def test_a_revision_keeps_a_code_written_section_without_rewriting_it(db, collection, tmp_path):
+    """A template's "next steps" list carries no citation. Kept in a revision, it once
+    failed the citation check and was sent to a writer with no slots, failing the edit."""
+    from app.artifacts.storage import ArtifactStore, validate_spec
+
+    source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
+    create_provider = ArtifactStageProvider(outline=outline(), sections={"s1": [section()]})
+    client, store, executor = setup_runtime(db, collection, create_provider, tmp_path)
+    run_id = start_run(client, "document", {"prompt": "Alpha", "sourceIds": [str(source)]},
+                       "code-written-base")
+    assert run_once(store, "code-written-base", executor).status.value == "succeeded"
+    artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
+    built = client.get(f"/api/artifacts/{artifact_id}").json()
+    spec = dict(built["spec"])
+    steps = [{"id": "next:h", "type": "heading", "text": "Next steps", "level": 2},
+             {"id": "next:l", "type": "list", "items": ["Meet your advisor."]}]
+    spec["blocks"] = [*spec["blocks"], *steps]
+    saved = ArtifactStore(db, workspace_key="development", data_dir=tmp_path).revise(
+        UUID(artifact_id), UUID(built["revisionId"]), validate_spec("document", spec))
+    db.commit()
+
+    revise_provider = ArtifactStageProvider(
+        edits=[{"title": "Guide", "operations": [
+            {"action": "replace", "section_id": "s1",
+             "section": {"id": "s1", "heading": "Facts", "purpose": "State the facts.",
+                         "block_types": ["paragraph"], "source_slots": [1]}},
+            {"action": "keep", "section_id": "next"},
+        ]}],
+        sections={"s1": [section(text="Alpha facts revised.")]},
+    )
+    revise_client, revise_store, revise_executor = setup_runtime(
+        db, collection, revise_provider, tmp_path)
+    start_run(revise_client, "document", {
+        "prompt": "Alpha facts revision", "sourceIds": [str(source)],
+        "artifactId": artifact_id, "expectedRevisionId": str(saved["revision_id"]),
+    }, "code-written-revision")
+    finished = run_once(revise_store, "code-written-revision", revise_executor)
+    assert finished.status.value == "succeeded", finished.error
+    revised = revise_client.get(f"/api/artifacts/{artifact_id}").json()["spec"]
+    kept = [b for b in saved["spec"]["blocks"] if b["id"].startswith("next:")]
+    assert [b for b in revised["blocks"] if b["id"].startswith("next:")] == kept == [
+        {**block, **({"ordered": False} if block["type"] == "list" else {})} for block in steps]
+    written = {json.loads(request.messages[-1]["content"])["section"]["id"]
+               for request in revise_provider.requests
+               if {tool.name for tool in request.tools} == {"advisor_stage_section"}}
+    assert written == {"s1"}
 
 
 @pytest.mark.parametrize(("rows", "known", "flagged"), [

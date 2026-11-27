@@ -18,5 +18,20 @@ reviewed = false
 # Explicit risk: replaces the answer. No research runs.
 crisis = """I'm really glad you told me. What you're feeling matters more than any class right now, and you deserve to talk it through with someone who can really help. You can call or text 988 any time, day or night, or reach Emory Counseling and Psychological Services (CAPS) 24/7 at 404-727-7450 (press 1). If you're in danger right now, please call 911 or Emory Police at 404-727-6111. I'm still here for the school side whenever you want it, and none of that has to be decided today."""
 
+# Strong risk on a first message (support_at in question_router.toml): shown first;
+# the answer follows. Riley, 2026-11-27.
+support_once = """I'm really glad you told me. What you're describing sounds heavy, and bigger than school, and you don't have to carry it by yourself. Emory Counseling and Psychological Services (CAPS) is there 24/7 at 404-727-7450 (press 1), and you can call or text 988 any time. I'm still here for the school side whenever you want it."""
+
 # The same worry again after a check-in: shown first; the answer follows.
 support = """I want to come back to something you've said more than once. It sounds like this is weighing on you beyond school, and you don't have to carry it by yourself. If you'd like someone to talk to, Emory Counseling and Psychological Services (CAPS) is there 24/7 at 404-727-7450 (press 1), and you can call or text 988 any time."""
+
+# Visa, CPT/OPT, I-20 and other immigration or work-authorization asks: these rules
+# change fast and depend on the student's own record, so the advisor does not answer
+# them. Alone, this replaces the answer (no research runs); next to a course question
+# it is added after the answer. Riley, 2026-11-27. Contacts quoted from
+# isss.emory.edu's contact page on 2026-11-27 (data/staging/student-testing-2026-11-27).
+immigration = """That one is outside what I can advise on. Visa, CPT, OPT, I-20 and other immigration or work-authorization questions depend on federal rules that change often and on your own record, so the office to ask is Emory's International Student and Scholar Services (ISSS): isss@emory.edu, 404-727-3300, or isss.emory.edu. Please don't accept, start or change anything that could affect your status until ISSS confirms it. I'm glad to help with the course, credit and requirement side of your plans."""
+
+# "Will you remember all this?": what the app does, stated by code. A chat is saved
+# and reopens from the sidebar; a new chat does not see earlier ones.
+about_memory = """Yes, this chat is saved. When you come back, open it from the chat list on the left and we can pick up right where we left off. A brand-new chat starts fresh and can't see this one, so for this topic, reopen this chat."""

@@ -143,9 +143,10 @@ def test_conflicting_editions_and_cohort_scopes_detected():
     assert any("conflicting cohort applicability" in c for c in notice.conflicts)
 
 
-def _edition(category, edition, roles=()):
+def _edition(category, edition, roles=(), publisher=None):
     return {"source_id": uuid4(), "title": edition, "source_category": category,
-            "edition": edition, "document_roles": list(roles), "is_current": True}
+            "edition": edition, "document_roles": list(roles), "is_current": True,
+            "publisher": publisher}
 
 
 _CATALOG = _edition("institutional_catalog", "Catalog 2026-2027")
@@ -158,6 +159,13 @@ _CATALOG = _edition("institutional_catalog", "Catalog 2026-2027")
      False),
     ([_CATALOG, _edition("institutional_catalog", "Catalog 2025-2026")], True),
     ([_CATALOG, _edition("career_reference", "May 2025")], False),
+    # Two publishers' data sets are not two editions of one.
+    ([_edition("career_reference", "May 2025", publisher="U.S. Bureau of Labor Statistics"),
+      _edition("career_reference", "October 2026", publisher="U.S. Department of Education")],
+     False),
+    ([_edition("career_reference", "May 2025", publisher="U.S. Bureau of Labor Statistics"),
+      _edition("career_reference", "May 2024", publisher="U.S. Bureau of Labor Statistics")],
+     True),
 ])
 def test_only_editions_of_one_kind_of_source_conflict(rows, conflict):
     notice = build_applicability_notice(rows, as_of=date(2026, 10, 1))
@@ -214,3 +222,27 @@ def test_evaluate_sources_applicability_db_integration(db):
     assert item.freshness == "current"
     assert item.isCurrent is True
     assert item.isSuperseded is False
+
+
+def test_students_see_a_sources_title_not_its_file_name():
+    from types import SimpleNamespace
+
+    from app.api.query_service import _title_sources
+    from app.api.schemas import Citation, ContextItem
+
+    atlas, program, untitled = "s-atlas", "s-program", "s-untitled"
+    citations = [Citation(sourceId=sid, sourceName=name, locatorLabel="x", chunkId=sid)
+                 for sid, name in ((atlas, "atlas-primary.jsonl"), (program, "mathematics-bs.md"),
+                                   (untitled, ""))]
+    context = [ContextItem(chunkId=atlas, sourceId=atlas, sourceName="atlas-primary.jsonl",
+                           locatorLabel="CHEM 150", text="t")]
+    notice = SimpleNamespace(sources=[
+        SimpleNamespace(sourceId=atlas, sourceName="Emory Course Atlas — Fall 2023 to Spring 2027"),
+        SimpleNamespace(sourceId=program, sourceName="mathematics-bs.md"),  # no title on file
+        SimpleNamespace(sourceId=untitled, sourceName="Untitled Source")])
+    response = SimpleNamespace(applicability=notice, citations=citations,
+                               trace=SimpleNamespace(contextBlock=context))
+    _title_sources(response)
+    assert [c.sourceTitle for c in citations] == [
+        "Emory Course Atlas — Fall 2023 to Spring 2027", None, None]
+    assert context[0].sourceTitle == "Emory Course Atlas — Fall 2023 to Spring 2027"

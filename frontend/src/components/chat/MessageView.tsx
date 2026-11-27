@@ -92,6 +92,19 @@ interface AssistantProps {
   onRetry?: (text: string) => void;
 }
 
+/**
+ * The open questions a student should see: questions put to them ("Which term are
+ * you in?") and the advisor's own notes ("I did not check every requirement for...").
+ * A model's research notes about the student or a source ("Does Maya prefer...",
+ * "Candidate: psych-ba.") read as leaked internals and are left out.
+ */
+function studentFacing(questions: string[]): string[] {
+  return questions.filter(
+    (question) =>
+      /^I\b/.test(question.trim()) || (/\byou(?:r|['’](?:re|ve|d|ll))?\b/i.test(question) && /\?\s*$/.test(question)),
+  );
+}
+
 function AssistantMessage({ entry, onRetry }: AssistantProps) {
   const [openPassage, setOpenPassage] = useState<number | null>(null);
 
@@ -117,6 +130,16 @@ function AssistantMessage({ entry, onRetry }: AssistantProps) {
           )}
         </div>
       )}
+      {entry.kind === 'stopped' && (
+        <div className="callout" role="note">
+          <p>You stopped this answer.</p>
+          {onRetry && entry.question && (
+            <button type="button" className="ghost-button" onClick={() => onRetry(entry.question!)}>
+              Ask again
+            </button>
+          )}
+        </div>
+      )}
       {entry.kind === 'refusal' && (
         <div className="callout callout-refusal">
           <strong>I couldn’t answer that from your sources.</strong>
@@ -128,9 +151,8 @@ function AssistantMessage({ entry, onRetry }: AssistantProps) {
           {entry.applicability && <ApplicabilityBanner notice={entry.applicability} />}
           {entry.research?.completeness === 'partial' && (
             <div className="callout" role="note">
-              <strong>Some questions remain open.</strong>
-              <p>This advice is based on a partial investigation.</p>
-              {entry.research.unresolvedQuestions.map((question, index) => (
+              <strong>Parts of this answer couldn’t be fully checked.</strong>
+              {studentFacing(entry.research.unresolvedQuestions).map((question, index) => (
                 <p key={index}>{question}</p>
               ))}
             </div>

@@ -42,14 +42,23 @@ from app.generation.operation import GenerationOperation
 from app.generation.question_router import (
     TIERS,
     Route,
+    asks_immigration,
     combined,
+    distress_tier,
     load_router_config,
     load_support_replies,
+    only_about_memory,
+    only_immigration,
     only_out_of_scope,
     prefetch_searches,
     route_question,
 )
-from app.generation.research_controller import ResearchController, asks_for_advice, file_turn
+from app.generation.research_controller import (
+    CONTEXT_TOO_LONG,
+    ResearchController,
+    asks_for_advice,
+    file_turn,
+)
 from app.generation.research_final import (
     RESEARCH_PROMPT_VERSION,
     RESEARCH_RENDER_VERSION,
@@ -314,7 +323,8 @@ def _enriched_artifact_references(conn, settings, workspace_key: str, body) -> l
 
 def _apply_route(session, route, router_config, body, scope, file, replies) -> None:
     """Give the session its route: the policy, the prefetched calls, the distress handling."""
-    session.route, session.route_policy = route, combined(route)
+    session.route = route
+    session.route_policy = combined(route, pins_place=bool(places_in(body.query)))
     session.prefetch = [("advisor_search", arguments) for arguments in
                         prefetch_searches(route, session.route_policy, router_config, body.query)]
     if file is not None:
@@ -324,10 +334,28 @@ def _apply_route(session, route, router_config, body, scope, file, replies) -> N
                              {"handle": session.handle("program", pins[title].program_id)})
                             for title in file[1]]
     if route.distress == "support":
-        session.support_first = replies.support
+        # Strong risk on its own reaches support without a check-in before it; the
+        # escalation wording ("you've said more than once") would be untrue there.
+        strong = distress_tier(route.distress_levels, router_config) == "support"
+        session.support_first = replies.support_once if strong else replies.support
+    if asks_immigration(route):
+        session.support_last = replies.immigration
     # Before support, nothing in the reply points to counseling, even if the model
     # writes it: venting is answered, not referred.
     session.strip_contacts = route.distress in {"steady", "check_in", "support"}
+
+
+def _title_sources(response) -> None:
+    """Show students a source's reviewed title ("Emory Course Atlas — Fall 2023 to
+    Spring 2027"), not its file name ("atlas-primary.jsonl"). The applicability notice
+    already read each cited source's provenance; a source with no title keeps none."""
+    if response.applicability is None:
+        return
+    names = {item.sourceId: item.sourceName for item in response.applicability.sources}
+    for item in [*response.citations, *response.trace.contextBlock]:
+        title = names.get(item.sourceId)
+        if title and title not in {item.sourceName, "Untitled Source"}:
+            item.sourceTitle = title
 
 
 def query_response(
@@ -436,12 +464,17 @@ def query_response(
     try:
         guard()
         session.open_workspace(conversation_id)
-        if route.distress == "crisis" or only_out_of_scope(route):
-            # Written by code: clear risk gets the support reply, a request with no
-            # advising in it gets the decline. No research runs for either.
+        if (route.distress == "crisis" or only_out_of_scope(route) or only_immigration(route)
+                or only_about_memory(route) and route.distress in {"calm", "steady"}):
+            # Written by code: clear risk gets the support reply, an immigration ask
+            # goes to ISSS, a request with no advising in it gets the decline. No
+            # research runs for any of them.
+            fixed = (replies.crisis if route.distress == "crisis"
+                     else replies.immigration if only_immigration(route)
+                     else replies.about_memory if only_about_memory(route) else None)
             decision = (FinalDecision(outcome="information", completeness="complete", blocks=(
-                            DecisionBlock(kind="limitation", text=replies.crisis),))
-                        if route.distress == "crisis" else
+                            DecisionBlock(kind="limitation", text=fixed),))
+                        if fixed else
                         declined_decision(FinalDecision(outcome="declined", completeness="complete")))
             session.decision = decision
             usage, system, user, model = Usage(), "", "", None
@@ -516,6 +549,7 @@ def query_response(
                 declared_cohort=getattr(body, "studentCohort", None),
                 query=body.query,
             )
+            _title_sources(response)
         on_progress({"stage": "validated"})
         return response
     except Exception as exc:
@@ -539,7 +573,7 @@ def query_response(
             message = str(exc)
             if isinstance(exc, OperationBudgetError) and exc.code == "deadline_exceeded":
                 detail = "The question took too long to answer. Try a shorter version."
-            elif message in {FAILED_ANSWER,
+            elif message in {FAILED_ANSWER, CONTEXT_TOO_LONG,
                              "The question took too long to answer. Try a shorter version."}:
                 detail = message
             else:

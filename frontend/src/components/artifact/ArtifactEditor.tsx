@@ -134,13 +134,8 @@ export function ArtifactEditor({ record, onOpenVersion, onClose }: Props) {
         <span className="toolbar-spacer" />
         <DownloadMenu record={record} disabled={busy} onDownload={download} />
       </div>
-      {(error || notice || record.status === 'needs_recalculation') && (
+      {(error || notice) && (
         <div className="canvas-messages">
-          {record.status === 'needs_recalculation' && (
-            <p className="callout callout-info" role="status">
-              Formula results need recalculation{record.message ? `: ${record.message}` : '.'}
-            </p>
-          )}
           {notice && <p role="status">{notice}</p>}
           {error && <p role="alert">{error}</p>}
         </div>

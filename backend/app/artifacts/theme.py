@@ -43,7 +43,8 @@ border-radius:8px}
 .artifact-doc ul.checklist li::before{content:"";flex:none;width:16px;height:16px;margin-top:4px;
 border:2px solid var(--navy);border-radius:4px}
 .artifact-doc table{width:100%;border-collapse:separate;border-spacing:0;margin:6px 0 12px;
-font-size:14px;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+font-size:14px;border:1px solid var(--line);border-radius:10px;overflow:hidden;table-layout:fixed}
+.artifact-doc th,.artifact-doc td{overflow-wrap:anywhere}
 .artifact-doc th{background:var(--navy);color:#fff;text-align:left;padding:9px 12px;
 font-weight:600}
 @media (prefers-color-scheme:dark){.artifact-doc th{color:#0E1320}}

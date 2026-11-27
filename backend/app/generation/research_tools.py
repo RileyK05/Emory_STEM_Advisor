@@ -60,6 +60,7 @@ from app.generation.research_final import (
     validate_final,
     with_support_text,
 )
+from app.generation.student_request import completed_codes_written, names_other_school
 from app.programs.rules import RuleValidationError
 from app.retrieval.retrieve import retrieve
 from app.retrieval.seams.keyword import expand_program_names
@@ -1667,10 +1668,28 @@ class ResearchSession:
                     f"needs: {', '.join(sorted(self.must_name - named))}")
             unknown = self.unknown_question_codes()
             unnamed = {code for code, near in unknown.items() if not near} - named
-            if unnamed:
+            # A code the student reports finishing is on their record, maybe from a
+            # retired course the master no longer carries: the reply says the plan cannot
+            # count it, not that the student made it up, and still answers the rest.
+            if unnamed and names_other_school(self.question or ""):
+                # Another school's course: Emory's Atlas cannot list it, which says
+                # nothing about whether it exists.
+                raise DecisionRejected(
+                    "the student named a course from another school; say it is that school's "
+                    "course, that Emory's Course Atlas does not list other schools' courses, do "
+                    "not say it does not exist or describe it, and answer the rest: "
+                    f"{', '.join(sorted(unnamed))}")
+            reported = unnamed & set(completed_codes_written(self.question or ""))
+            if unnamed - reported:
                 raise DecisionRejected(
                     "the student asked about a course that does not exist; say so plainly, "
-                    f"naming it: {', '.join(sorted(unnamed))}")
+                    f"naming it: {', '.join(sorted(unnamed - reported))}")
+            if reported:
+                raise DecisionRejected(
+                    "the student reports finishing a course the Course Atlas does not list; name "
+                    "it once, say it is not in the Course Atlas so this answer cannot count it and "
+                    "their advisor can check it, do not say it does not exist, and answer the "
+                    f"rest: {', '.join(sorted(reported))}")
             # A code with a same-course match on another campus, suffix or subject
             # name is a correction to offer, not a question to refuse.
             unpointed = sorted(code for code, near in unknown.items()
@@ -1815,8 +1834,15 @@ class ResearchSession:
                       f"{' or '.join(nearest[code])}." if nearest[code]
                       else f"There is no {code} in the Course Atlas."))
                   for code in sorted(unknown - named)]
-        # A kept block that already says the course does not exist is the answer.
-        if not absent and not named & unknown and not any(block.kind == "fact" for block in kept):
+        # A kept block that already says the course does not exist is the answer. A
+        # greeting, an out-of-scope note or a check-in needs no record at all: there a
+        # dropped reply leaves the student with an error instead of the words that passed.
+        route = self.route
+        conversational = route is not None and (
+            route.distress in {"check_in", "support"}
+            or route.categories <= {"smalltalk", "out_of_scope"})
+        if (not absent and not named & unknown and not any(block.kind == "fact" for block in kept)
+                and not (conversational and kept)):
             return None
         kept = [*absent, *kept]
         self.supplied = known
