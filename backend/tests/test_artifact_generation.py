@@ -1052,6 +1052,20 @@ def test_the_student_term_limits_are_read(text, credits, courses, terms):
     assert requested_terms(text) == terms
 
 
+@pytest.mark.parametrize(("text", "strict"), [
+    ("finish the CS BS in four semesters", True),
+    ("plan for my last 3 semesters", True),
+    ("my final two terms", True),
+    # A described plan length is not a hard limit.
+    ("make a four-semester plan for the CS BS", False),
+    ("plan my next three semesters", False),
+])
+def test_a_term_count_is_a_hard_limit_only_when_the_student_has_no_more(text, strict):
+    from app.generation.student_request import strict_term_limit
+
+    assert strict_term_limit(text) is strict
+
+
 @pytest.mark.parametrize(("prerequisites", "courses", "chain"), [
     # The Computer Science BS: why a "four-semester plan" came back with a Term 5.
     ((("CS 171", "CS 170"), ("CS 253", "CS 171"), ("CS 326", "CS 253"),

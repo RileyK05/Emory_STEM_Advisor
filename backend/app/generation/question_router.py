@@ -140,6 +140,7 @@ class SupportReplies:
     reviewed: bool
     immigration: str = ""
     support_once: str = ""
+    about_memory: str = ""
 
 
 def load_support_replies(path: Path | None = None) -> SupportReplies:
@@ -151,10 +152,10 @@ def load_support_replies(path: Path | None = None) -> SupportReplies:
 def _load_support(path: Path, _mtime: int) -> SupportReplies:
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     _check_keys(data, {"schema_version", "reviewed", "crisis", "support", "support_once",
-                       "immigration"}, path.name)
+                       "immigration", "about_memory"}, path.name)
     return SupportReplies(data["crisis"].strip(), data["support"].strip(),
                           bool(data.get("reviewed", False)), data["immigration"].strip(),
-                          data["support_once"].strip())
+                          data["support_once"].strip(), data["about_memory"].strip())
 
 
 # --- rules ---------------------------------------------------------------------
@@ -178,6 +179,13 @@ IMMIGRATION = re.compile(
     r"(?:maintain|keep|lose|losing)\w*\s+(?:my\s+)?(?:f-?1\s+|j-?1\s+|visa\s+)?status|"
     r"reduced\s+course\s+load|dso)\b", re.IGNORECASE)
 
+# "Will you remember all this?" asks about the app, not Emory: the router counts it as an
+# Emory follow-up, no record answers it, and a goodbye ended in an error.
+ABOUT_MEMORY = re.compile(
+    r"\b(?:will|would|do|can|are|did)\s+you\s+(?:\w+\s+){0,3}"
+    r"(?:remember|recall|forget|save|keep)\b|\b(?:is|are|will)\s+(?:this|my|our)\s+"
+    r"(?:chats?|conversations?)\s+(?:be\s+)?(?:saved|kept|stored)\b", re.IGNORECASE)
+
 
 def rule_hits(question: str) -> tuple[str, ...]:
     hits = []
@@ -189,6 +197,8 @@ def rule_hits(question: str) -> tuple[str, ...]:
         hits.append("self_harm")
     if IMMIGRATION.search(question):
         hits.append("immigration")
+    if ABOUT_MEMORY.search(question):
+        hits.append("about_memory")
     return tuple(hits)
 
 
@@ -421,6 +431,12 @@ def only_out_of_scope(route: Route) -> bool:
 
 def asks_immigration(route: Route) -> bool:
     return "immigration" in route.rule_hits
+
+
+def only_about_memory(route: Route) -> bool:
+    """A question about whether the advisor remembers, with nothing about Emory in it."""
+    return "about_memory" in route.rule_hits and not {
+        "course_code", "policy_word", "immigration", "self_harm"} & set(route.rule_hits)
 
 
 def only_immigration(route: Route) -> bool:

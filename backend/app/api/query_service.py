@@ -47,6 +47,7 @@ from app.generation.question_router import (
     distress_tier,
     load_router_config,
     load_support_replies,
+    only_about_memory,
     only_immigration,
     only_out_of_scope,
     prefetch_searches,
@@ -450,12 +451,14 @@ def query_response(
     try:
         guard()
         session.open_workspace(conversation_id)
-        if route.distress == "crisis" or only_out_of_scope(route) or only_immigration(route):
+        if (route.distress == "crisis" or only_out_of_scope(route) or only_immigration(route)
+                or only_about_memory(route) and route.distress in {"calm", "steady"}):
             # Written by code: clear risk gets the support reply, an immigration ask
             # goes to ISSS, a request with no advising in it gets the decline. No
             # research runs for any of them.
             fixed = (replies.crisis if route.distress == "crisis"
-                     else replies.immigration if only_immigration(route) else None)
+                     else replies.immigration if only_immigration(route)
+                     else replies.about_memory if only_about_memory(route) else None)
             decision = (FinalDecision(outcome="information", completeness="complete", blocks=(
                             DecisionBlock(kind="limitation", text=fixed),))
                         if fixed else

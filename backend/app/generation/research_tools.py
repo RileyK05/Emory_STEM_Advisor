@@ -60,7 +60,7 @@ from app.generation.research_final import (
     validate_final,
     with_support_text,
 )
-from app.generation.student_request import completed_codes_written
+from app.generation.student_request import completed_codes_written, names_other_school
 from app.programs.rules import RuleValidationError
 from app.retrieval.retrieve import retrieve
 from app.retrieval.seams.keyword import expand_program_names
@@ -1671,6 +1671,14 @@ class ResearchSession:
             # A code the student reports finishing is on their record, maybe from a
             # retired course the master no longer carries: the reply says the plan cannot
             # count it, not that the student made it up, and still answers the rest.
+            if unnamed and names_other_school(self.question or ""):
+                # Another school's course: Emory's Atlas cannot list it, which says
+                # nothing about whether it exists.
+                raise DecisionRejected(
+                    "the student named a course from another school; say it is that school's "
+                    "course, that Emory's Course Atlas does not list other schools' courses, do "
+                    "not say it does not exist or describe it, and answer the rest: "
+                    f"{', '.join(sorted(unnamed))}")
             reported = unnamed & set(completed_codes_written(self.question or ""))
             if unnamed - reported:
                 raise DecisionRejected(

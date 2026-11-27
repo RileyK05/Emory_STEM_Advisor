@@ -7,7 +7,9 @@ import re
 from collections import Counter
 from copy import deepcopy
 from dataclasses import asdict, replace
+from datetime import datetime
 from uuid import uuid5
+from zoneinfo import ZoneInfo
 
 from app.advising.research_repository import verify_sources
 from app.advising.research_types import FinalDecision
@@ -134,6 +136,7 @@ PROGRAMS AND COURSES
 - named_by_programs lists programs naming a course, program_lines each line with evidence_ids. For "which majors need X", answer and cite from those without reading programs.
 - renamed_subjects gives Emory's subject renames: QTM 100 is DATASCI 100. Search both; use the new code.
 - course_facts keeps what you read about each course across rounds, with its evidence_ids. Never reread a course it lists.
+- today is the real date in Atlanta and current_term the term it falls in. Use them to say whether a deadline, a term or an offering is past, current or upcoming, when a source gives its date; never invent a date no source gives.
 - Do not expand an acronym unless the source spells it out.
 - other_degrees lists the same major under another degree. When the student named no degree, read it too, say in the first block that both exist with their hours, then give what they share and what differs.
 - special_course is a caveat the course needs: give it when you recommend or plan it.
@@ -866,6 +869,17 @@ def _run_prefetch(session, executor, registry, ledger, operation, fingerprint, c
             *(message for _, message in prefetched)], tools_used
 
 logger = logging.getLogger(__name__)
+
+
+def _today_context(now: datetime | None = None) -> dict[str, str]:
+    """The date in Atlanta and its term. Students ask whether a deadline has passed;
+    without the date the model could only answer "I don't have today's date"."""
+    day = (now or datetime.now(_ATLANTA)).astimezone(_ATLANTA).date()
+    term = "Spring" if day.month <= 4 else "Summer" if day.month <= 7 else "Fall"
+    return {"today": day.isoformat(), "current_term": f"{term} {day.year}"}
+
+
+_ATLANTA = ZoneInfo("America/New_York")
 CONTEXT_TOO_LONG = "This chat has gotten too long for me to answer in. Start a new chat and ask again."
 
 
@@ -1293,7 +1307,7 @@ class ResearchController:
         handles = [(h, value) for h, value in session.handles.items() if value[0] != "memory"][-40:]
         # Keys run from what stays the same all run to what changes every round,
         # so a provider's prompt cache can reuse the longest possible prefix.
-        base = {"question": question, "history_untrusted": history or "",
+        base = {"question": question, **_today_context(), "history_untrusted": history or "",
                 "available_source_kinds": sorted({p.source_kind for p in session.scope.sources.values()}),
                 "program_count": len(session.scope.programs),
                 "exact_evidence_untrusted": [],
@@ -1433,6 +1447,22 @@ class ResearchController:
             base["history_untrusted"] = json.dumps(selected, ensure_ascii=False, separators=(",", ":")) + separator + artifacts
             omissions = base.setdefault("context_omissions", {})
             omissions["history_turns"] = omissions.get("history_turns", 0) + 1
+        while not fits():
+            # A long chat that kept editing files carries every referenced revision; the
+            # older ones go first and the newest, usually the one being edited, stays.
+            history, separator, artifacts = base["history_untrusted"].partition(
+                "\nExact referenced artifact revisions:\n")
+            try:
+                references = json.loads(artifacts) if separator else None
+            except (TypeError, ValueError):
+                break
+            if not isinstance(references, list) or len(references) <= 1:
+                break
+            references.pop(0)
+            base["history_untrusted"] = history + separator + json.dumps(
+                references, ensure_ascii=False, separators=(",", ":"))
+            omissions = base.setdefault("context_omissions", {})
+            omissions["referenced_artifacts"] = omissions.get("referenced_artifacts", 0) + 1
         if last_round and not fits():
             # Keep the rejected proposal and its matching feedback together when
             # possible. If even that pair plus one passage cannot fit, drop the

@@ -182,10 +182,13 @@ def requested_terms(text: str) -> int | None:
 
 
 def strict_term_limit(text: str) -> bool:
-    """A student who says "finish in four semesters" set a hard limit."""
+    """A student who says "finish in four semesters" set a hard limit; so did one who
+    says these are their "last 3 semesters": there are no more to spill into."""
     return bool(re.search(
         r"\b(?:finish|complete|graduate)\b[^.?!]{0,25}\b(?:in|within)\b"
-        r"[^.?!]{0,25}\b(?:semesters?|terms?|years?)\b", text or "", re.IGNORECASE))
+        r"[^.?!]{0,25}\b(?:semesters?|terms?|years?)\b"
+        r"|\b(?:last|final|remaining|only)\s+(?:\w+\s+)?(?:semesters?|terms?)\b",
+        text or "", re.IGNORECASE))
 
 
 PREMED_RE = re.compile(
@@ -323,6 +326,22 @@ def _completed_spans(text: str) -> list[str]:
                 continue
             spans.append(span)
     return spans
+
+
+# Another school, by a word that says so ("GSU", "community college", "transfer")...
+_OTHER_SCHOOL_WORDS = re.compile(
+    r"\b(?:gsu|georgia\s+state|georgia\s+tech|kennesaw|community\s+college|"
+    r"(?:another|other)\s+(?:school|college|university)|transfer(?:red|ring|s)?|transient|"
+    r"dual\s+enrollment|high\s+school)\b", re.IGNORECASE)
+# ...or by its capitalized name: "at Kennesaw State University", "from Clayton State".
+_NAMED_SCHOOL = re.compile(
+    r"\b(?:at|from)\s+(?:[A-Z][a-z]+\s+)+(?:University|College|State|Tech)\b")
+
+
+def names_other_school(text: str) -> bool:
+    """The student talks about a course from another school, whose codes Emory's Atlas
+    does not carry: "I took CHEM 1212 at Georgia State" is not an Emory code."""
+    return bool(_OTHER_SCHOOL_WORDS.search(text or "") or _NAMED_SCHOOL.search(text or ""))
 
 
 def completed_codes_written(text: str) -> list[str]:

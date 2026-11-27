@@ -949,7 +949,7 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
                               program_handles=("h_a",)),))
     session = SimpleNamespace(
         settings=replace(load_settings(), research_max_prompt_bytes=(
-            22600 if support == "preparation" else 15700 if support == "oversized_preparation" else 18600)),
+            22900 if support == "preparation" else 16000 if support == "oversized_preparation" else 18900)),
         store=SimpleNamespace(evidence=lambda _run: records), run=SimpleNamespace(run_id=uuid4()),
         active=[r.evidence_id for r in records], state=state, entity_evidence={"h_a": {"e20"}},
         scope=SimpleNamespace(sources={}, programs={}),
@@ -988,6 +988,34 @@ def test_finish_request_retains_declared_candidate_program_evidence(support):
     if support == "preparation":
         assert {"e19", "e20"} <= session.supplied
         assert json.loads(user)["executed_preparation_checks"][0]["check_id"] == "p_test"
+
+
+def test_a_long_chat_drops_older_file_revisions_before_it_fails():
+    """Devin's long chat failed outright: its referenced file revisions alone filled the
+    prompt bound. The older revisions go first; the newest one, being edited, stays."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.config import load_settings
+    from app.generation.research_controller import ResearchController
+
+    session = SimpleNamespace(
+        settings=replace(load_settings(), research_max_prompt_bytes=26000),
+        store=SimpleNamespace(evidence=lambda _run: []), run=SimpleNamespace(run_id=uuid4()),
+        active=[], state=None, entity_evidence={}, scope=SimpleNamespace(sources={}, programs={}),
+        handles={}, checks={}, actions=[], program_reads={}, supplied=set(), remaining_limits={})
+    separator = "\nExact referenced artifact revisions:\n"
+    references = [{"artifactId": "old", "spec": "Old plan. " * 900},
+                  {"artifactId": "new", "spec": "New plan. " * 200}]
+    history = json.dumps({"kind": "selected_conversation_history", "total_turns": 0,
+                          "omitted_turns": 0, "turns": []}) + separator + json.dumps(references)
+    _request, user = ResearchController().request(
+        session, SimpleNamespace(definitions=()), "Edit the plan", history, [], "", True)
+    context = json.loads(user)
+    kept = json.loads(context["history_untrusted"].partition(separator)[2])
+    assert [reference["artifactId"] for reference in kept] == ["new"]
+    assert context["context_omissions"]["referenced_artifacts"] == 1
 
 
 def test_an_exhausted_run_publishes_only_the_blocks_that_pass_alone(monkeypatch):

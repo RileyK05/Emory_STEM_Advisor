@@ -1417,6 +1417,8 @@ def test_research_answers_progressively_and_persists_its_decision(
                         "kind": "fact", "text": "Still unsupported.", "evidence_ids": ["e999"]}]}}),
                     finish_reason="stop", usage=provider.result.usage)
             if scenario == "finish_names_unoffered_call":
+                # The model knows the date, so it can say whether a deadline has passed.
+                assert context["today"] and context["current_term"]
                 # A model that invents a tool is told which call was wrong, not only to
                 # "use the advertised tools", which it answered with the same call again.
                 if index == 1:
@@ -2054,6 +2056,11 @@ def test_the_prerequisite_graph_can_hold_the_whole_answer(db, collection, tmp_pa
     with pytest.raises(DecisionRejected, match="reports finishing.*ECON 999") as reported:
         session.finish(FinishInput.model_construct(decision=decision), None)
     assert "asked about a course" not in str(reported.value)
+    # Another school's code is not an Emory course that "does not exist".
+    session.question = "I took CHEM 1212 at Georgia State, does it count here?"
+    with pytest.raises(DecisionRejected, match="another school.*CHEM 1212") as external:
+        session.finish(FinishInput.model_construct(decision=decision), None)
+    assert "does not exist; say so" not in str(external.value)
     # The other degree is a database fact, so the server says it rather than refuse.
     session.question = "what classes do i need for the economics major"
     session.must_name_degrees = {"BA"}
@@ -2131,6 +2138,9 @@ def test_a_program_question_gets_citable_requirement_lines(db, collection, tmp_p
     # (This corpus has no course records, so the answer also says ECON 101 is unknown.)
     ("does ECON 101 count for my OPT?", {"institutional": 0.9}, {"none": 1.0}, True,
      "information", None, "immigration"),
+    # A question about the app gets what the app does, even when the router calls it Emory.
+    ("ok thanks. will you remember all this if i come back tomorrow?", {"institutional": 0.6},
+     {"none": 1.0}, False, "information", "about_memory", None),
 ])
 def test_the_router_decides_what_runs_and_what_code_writes(
         db, collection, monkeypatch, question, scores, levels, researched, outcome, first, last):
