@@ -67,10 +67,14 @@ _MAX_SECTION_TEXT_CHARS = 12_000
 
 
 def _check_binding_slots(slots, allowed):
+    # Name the allowed slots: told only "use this section's own source slots", a model
+    # guessed, dropped its bindings, was told every block needs one, and looped.
     if not slots:
-        raise ValueError("a binding needs at least one source slot")
+        raise ValueError("a binding needs at least one source slot; this section's slots are "
+                         f"{sorted(allowed)}")
     if not set(slots) <= set(allowed):
-        raise ValueError("every binding must use this section's own source slots")
+        raise ValueError(f"every binding must use this section's own source slots, {sorted(allowed)}; "
+                         f"{sorted(set(slots) - set(allowed))} are not among them")
 
 
 def _canonical_block_codes(raw: dict) -> dict:
@@ -276,6 +280,14 @@ class SectionStages:
                 block_type: _block_schema(block_type)
                 for block_type in getattr(section, "block_types", [])
             }
+        current = getattr(self, "replaced_text", {}).get(section.id)
+        if current:
+            payload["current_section_untrusted"] = current[:_MAX_SECTION_TEXT_CHARS]
+            payload["revision_rule"] = (
+                "This section already exists; current_section_untrusted is its text now. "
+                "Write the whole section again with only the change the request asks for: "
+                "keep every other line, item and note as it is, cited from this section's "
+                "slots. Do not describe the change or say what was removed or kept.")
         if repair:
             previous = self.section_payloads.get(section.id)
             payload["repair"] = {

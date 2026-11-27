@@ -325,6 +325,14 @@ class OutlineStages:
                 raise ValueError("section IDs must be unique")
             for section in value.sections:
                 _check_slots(section.source_slots, len(self.grounding.slots))
+                # A grounded section binds every block to its own slots, so one with no
+                # slots can never be written: a checklist's "How to use" intro failed
+                # every section call that way until the whole file gave up.
+                if self.inputs.mode == "grounded" and not section.source_slots:
+                    raise ValueError(
+                        f"section {section.id} has no source slots, so it cannot be written "
+                        "from the sources; give it the numbered slots its content comes from, "
+                        "or fold it into a section that has them")
                 if not section.block_types:
                     raise ValueError(f"section {section.id} needs at least one block type")
             if value.sheets:

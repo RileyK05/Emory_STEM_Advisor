@@ -775,8 +775,8 @@ def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, t
 
     # The revising model sees headings, not the column schema, and calls every
     # column text. The prior sheet's types are the student's data.
-    revise_provider = ArtifactStageProvider(
-        edits=[{
+    def replace_sheet(slots):
+        return {
             "title": "Credits",
             "operations": [{
                 "action": "replace", "section_id": "s1",
@@ -787,10 +787,14 @@ def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, t
                         {"key": "c2", "header": "Credits", "type": "text"},
                         {"key": "c3", "header": "Total", "type": "text"},
                     ],
-                    "source_slots": [1],
+                    "source_slots": slots,
                 },
             }],
-        }],
+        }
+
+    # A rewritten sheet with no slots could never be written: the edit is sent back.
+    revise_provider = ArtifactStageProvider(
+        edits=[replace_sheet([]), replace_sheet([1])],
         sections={"s1": [{"rows": [
             {"values": ["Alpha 101", 4, None], "source_slots": [1]},
             {"values": ["Alpha 102", 3, None], "source_slots": [1]},
@@ -805,6 +809,8 @@ def test_a_workbook_revision_keeps_its_total_formula_and_chart(db, collection, t
     }, "workbook-revision")
     finished = run_once(revise_store, "workbook-revision", revise_executor)
     assert finished.status.value == "succeeded", finished.error
+    assert any("has no source slots" in repr(request.messages)
+               for request in revise_provider.requests)
     revised = revise_client.get(f"/api/artifacts/{artifact_id}").json()
     spec = revised["spec"]
     cells = {(cell["row"], cell["column"]): cell for cell in spec["sheets"][0]["cells"]}
@@ -1390,6 +1396,13 @@ def test_a_revision_replaces_one_section_and_keeps_the_rest_byte_identical(db, c
     assert any(block.get("text") == "Alpha facts revised." for block in changed)
     assert any(block.get("text") == "Changed" for block in changed)
     assert revised["parentRevisionId"] == prior["revisionId"]
+    # The replaced section is rewritten from its current text, not from the new purpose
+    # alone (which once produced a note about the edit in place of the content).
+    section_request = next(json.loads(request.messages[-1]["content"])
+                           for request in revise_provider.requests
+                           if {tool.name for tool in request.tools} == {"advisor_stage_section"})
+    assert "Alpha facts too." in section_request["current_section_untrusted"]
+    assert "Do not describe the change" in section_request["revision_rule"]
 
 
 @pytest.mark.parametrize(("rows", "known", "flagged"), [

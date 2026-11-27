@@ -200,6 +200,7 @@ class RevisionStages:
         }
         self.kept = {section.id: payloads[section.id] for section in sections
                      if section.id in payloads}
+        self.replaced_text = {}
         messages = _stage_messages(
             "You revise an existing artifact by targeted edits only. Do not rewrite kept "
             "sections. Call advisor_stage_edits alone with keep, replace, insert_after or "
@@ -338,7 +339,12 @@ class RevisionStages:
                 if (self.plan is not None and getattr(section, "courses", [])
                         and list(getattr(replacement, "courses", [])) != list(section.courses)):
                     raise ValueError("a plan section's replacement cannot add, drop or move a course")
-                self.kept.pop(section_id, None)
+                # The writer rewrites from the section as it is now; given only the new
+                # purpose ("the BIOL 336 line has been removed; the rest is unchanged") it
+                # wrote a note about the edit in place of the checklist.
+                prior = self.kept.pop(section_id, None)
+                if prior is not None and prior.text:
+                    self.replaced_text[section_id] = prior.text
                 new_sections.append(replacement)
                 write.add(section_id)
             for insert in sorted(inserts.get(section_id, []), key=lambda item: item.section.id):
@@ -353,6 +359,15 @@ class RevisionStages:
                 write.add(inserted.id)
         if not new_sections:
             raise ValueError("edits would remove every section")
+        if self.inputs.mode == "grounded":
+            # A rewritten or new section is written from scratch and binds every block to
+            # its own slots; with none it can never be written (an edit failed that way).
+            for section in new_sections:
+                section_id = self._section_id(section)
+                if section_id in write and not section.source_slots:
+                    raise ValueError(
+                        f"section {section_id} is rewritten but has no source slots; give it "
+                        "the numbered slots its content comes from")
         if self.kind == "workbook":
             self.outline.sheets = [section for section in new_sections
                                    if isinstance(section, OutlineSheet)]

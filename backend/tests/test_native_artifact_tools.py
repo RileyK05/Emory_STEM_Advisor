@@ -70,7 +70,7 @@ def test_stage_tools_are_audited_and_published_once(db, collection, tmp_path):
     assert len(client.get("/api/artifacts").json()) == 1
 
 
-@pytest.mark.parametrize("stage", ["section", "outline", "course", "program"])
+@pytest.mark.parametrize("stage", ["section", "outline", "slotless_outline", "course", "program"])
 def test_a_rejected_stage_goes_back_to_the_model_in_the_same_conversation(
         db, collection, tmp_path, stage):
     title = "Keep this title"
@@ -104,7 +104,13 @@ def test_a_rejected_stage_goes_back_to_the_model_in_the_same_conversation(
     else:
         source = ingest_text(db, collection, tmp_path, "lecture.txt", "Alpha facts.")
         prompt = "Alpha"
-    if stage == "outline":
+    if stage == "slotless_outline":
+        # A grounded section with no slots could never be written; the outline is
+        # sent back instead of every section call failing.
+        bad = outline(slots=(), title=title)
+        provider = ArtifactStageProvider(
+            outline=[bad, {"sections": outline()["sections"]}], sections={"s1": [section()]})
+    elif stage == "outline":
         bad = outline(slots=(99,), title=title)
         # The correction sends just the changed field. The accepted title survives.
         provider = ArtifactStageProvider(
@@ -133,6 +139,9 @@ def test_a_rejected_stage_goes_back_to_the_model_in_the_same_conversation(
                    for request in provider.requests
                    if "not accepted" in message_text(request.messages[-1]))
     assert ("binding" if stage in {"course", "program"} else "slots") in refusal["error"]
+    if stage == "section":
+        # The refusal names the slots the section may use, so the model need not guess.
+        assert "[1]" in refusal["error"] and "[99]" in refusal["error"]
     assert refusal["previous_arguments"] == bad
     artifact_id = client.get("/api/runs/" + run_id).json()["artifactIds"][0]
     spec = client.get("/api/artifacts/" + artifact_id).json()["spec"]
