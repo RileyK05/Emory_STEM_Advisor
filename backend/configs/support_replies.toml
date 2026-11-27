@@ -28,8 +28,9 @@ support = """I want to come back to something you've said more than once. It sou
 # Visa, CPT/OPT, I-20 and other immigration or work-authorization asks: these rules
 # change fast and depend on the student's own record, so the advisor does not answer
 # them. Alone, this replaces the answer (no research runs); next to a course question
-# it is added after the answer. Riley, 2026-11-27.
-immigration = """That one is outside what I can advise on. Visa, CPT, OPT, I-20 and other immigration or work-authorization questions depend on federal rules that change often and on your own record, so the office to ask is Emory's International Student and Scholar Services (ISSS): isss.emory.edu. Please don't accept, start or change anything that could affect your status until ISSS confirms it. I'm glad to help with the course, credit and requirement side of your plans."""
+# it is added after the answer. Riley, 2026-11-27. Contacts quoted from
+# isss.emory.edu's contact page on 2026-11-27 (data/staging/student-testing-2026-11-27).
+immigration = """That one is outside what I can advise on. Visa, CPT, OPT, I-20 and other immigration or work-authorization questions depend on federal rules that change often and on your own record, so the office to ask is Emory's International Student and Scholar Services (ISSS): isss@emory.edu, 404-727-3300, or isss.emory.edu. Please don't accept, start or change anything that could affect your status until ISSS confirms it. I'm glad to help with the course, credit and requirement side of your plans."""
 
 # "Will you remember all this?": what the app does, stated by code. A chat is saved
 # and reopens from the sidebar; a new chat does not see earlier ones.
