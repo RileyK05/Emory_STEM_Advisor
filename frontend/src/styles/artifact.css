@@ -263,6 +263,20 @@ button.artifact-card:not(:disabled):hover {
   font-size: 13.5px;
 }
 
+/* A wide sheet scrolls inside the pane instead of being cut off at its edge. */
+.artifact-preview .sheet-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.artifact-preview .sheet-scroll thead th,
+.artifact-preview .sheet-scroll tbody th {
+  background: var(--surface-muted, rgba(127, 127, 127, 0.08));
+  color: var(--muted);
+  font-weight: 600;
+  text-align: center;
+}
+
 .artifact-preview th,
 .artifact-preview td {
   border: 1px solid var(--border);

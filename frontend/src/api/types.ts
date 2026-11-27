@@ -28,6 +28,8 @@ export interface ContextItem {
   chunkId: string;
   sourceId: string;
   sourceName: string;
+  /** The source's reviewed title, when it has one; sourceName is its file name. */
+  sourceTitle?: string | null;
   locatorLabel: string;
   text: string;
 }
@@ -65,6 +67,7 @@ export interface RetrievalTrace {
 export interface Citation {
   sourceId: string;
   sourceName: string;
+  sourceTitle?: string | null;
   locatorLabel: string;
   chunkId: string;
 }

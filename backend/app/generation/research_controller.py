@@ -118,6 +118,7 @@ EVIDENCE
 - Every fact must occur in its cited chunks. Use evidence_ids, never raw citation markers.
 - Use fact/limitation for facts and scope. Use judgment for your advice or a candidate preference; every judgment needs supporting evidence_ids, and candidate_ids only when it prefers a registered candidate.
 - Factual lookups need no candidates. Clarification or insufficient evidence may have no facts or citations.
+- unresolved_questions are shown to the student: write each as a short question to them ("Which term are you in now?"), never a research note about them or about a source.
 - Match institution, rule target, program/track, edition/cohort, and admissions cycle. Unknown or historical applicability stays scoped; reviewed_default and acquisition time prove neither eligibility nor currency. source_scope_notices are limits, not ineligibility.
 - Catalog precedence requires the same target and edition. Captured Course Atlas registration restrictions override catalog conflicts within that term.
 - Follow each record's authority annotation: catalog fallback means Atlas requirements were not verified; unparsed means parser limits, never no prerequisites, eligibility, or discontinuation.

@@ -600,7 +600,7 @@ def test_entry_point_claims_need_a_read_course_without_prerequisites():
 
 
 # The system prompt counts toward the bound; these fixture budgets track its size.
-@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(17900, False), (18900, False), (51900, True)])
+@pytest.mark.parametrize("prompt_bytes,workspace_loaded", [(18200, False), (19200, False), (52200, True)])
 @pytest.mark.parametrize("scope_status,edition,notice", [
     ("historical", "2025-26", "historical_source"),
     ("unknown", None, "edition_not_recorded"),

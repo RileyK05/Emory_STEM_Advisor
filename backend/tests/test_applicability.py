@@ -222,3 +222,27 @@ def test_evaluate_sources_applicability_db_integration(db):
     assert item.freshness == "current"
     assert item.isCurrent is True
     assert item.isSuperseded is False
+
+
+def test_students_see_a_sources_title_not_its_file_name():
+    from types import SimpleNamespace
+
+    from app.api.query_service import _title_sources
+    from app.api.schemas import Citation, ContextItem
+
+    atlas, program, untitled = "s-atlas", "s-program", "s-untitled"
+    citations = [Citation(sourceId=sid, sourceName=name, locatorLabel="x", chunkId=sid)
+                 for sid, name in ((atlas, "atlas-primary.jsonl"), (program, "mathematics-bs.md"),
+                                   (untitled, ""))]
+    context = [ContextItem(chunkId=atlas, sourceId=atlas, sourceName="atlas-primary.jsonl",
+                           locatorLabel="CHEM 150", text="t")]
+    notice = SimpleNamespace(sources=[
+        SimpleNamespace(sourceId=atlas, sourceName="Emory Course Atlas — Fall 2023 to Spring 2027"),
+        SimpleNamespace(sourceId=program, sourceName="mathematics-bs.md"),  # no title on file
+        SimpleNamespace(sourceId=untitled, sourceName="Untitled Source")])
+    response = SimpleNamespace(applicability=notice, citations=citations,
+                               trace=SimpleNamespace(contextBlock=context))
+    _title_sources(response)
+    assert [c.sourceTitle for c in citations] == [
+        "Emory Course Atlas — Fall 2023 to Spring 2027", None, None]
+    assert context[0].sourceTitle == "Emory Course Atlas — Fall 2023 to Spring 2027"

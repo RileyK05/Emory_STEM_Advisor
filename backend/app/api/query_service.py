@@ -345,6 +345,19 @@ def _apply_route(session, route, router_config, body, scope, file, replies) -> N
     session.strip_contacts = route.distress in {"steady", "check_in", "support"}
 
 
+def _title_sources(response) -> None:
+    """Show students a source's reviewed title ("Emory Course Atlas — Fall 2023 to
+    Spring 2027"), not its file name ("atlas-primary.jsonl"). The applicability notice
+    already read each cited source's provenance; a source with no title keeps none."""
+    if response.applicability is None:
+        return
+    names = {item.sourceId: item.sourceName for item in response.applicability.sources}
+    for item in [*response.citations, *response.trace.contextBlock]:
+        title = names.get(item.sourceId)
+        if title and title not in {item.sourceName, "Untitled Source"}:
+            item.sourceTitle = title
+
+
 def query_response(
     body: QueryRequest, conn, settings: Settings, config: RetrievalConfig,
     embedder: Embedder, provider: Provider, *,
@@ -536,6 +549,7 @@ def query_response(
                 declared_cohort=getattr(body, "studentCohort", None),
                 query=body.query,
             )
+            _title_sources(response)
         on_progress({"stage": "validated"})
         return response
     except Exception as exc:
