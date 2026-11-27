@@ -205,7 +205,10 @@ class RevisionStages:
             "You revise an existing artifact by targeted edits only. Do not rewrite kept "
             "sections. Call advisor_stage_edits alone with keep, replace, insert_after or "
             "delete operations; every current section must have exactly one keep, replace or "
-            "delete. A replacement keeps its section id. Use the numbered source slots.",
+            "delete. A replacement keeps its section id. Use the numbered source slots. "
+            "Replace only the sections the change touches; keep the rest. A replacement's "
+            "purpose says what the section holds after the edit, never what changed: the "
+            "file is for the student, not a record of the edit.",
             payload,
         )
         self._run_stage(
