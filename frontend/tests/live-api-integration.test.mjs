@@ -141,7 +141,8 @@ const cited = (page) => page.getByRole('figure', { name: 'Cited passage' }).loca
 const revisionTitle = (page) => page.locator('.canvas-footer [title*=" · revision "]');
 
 test.before(async () => {
-  await access(python);
+  // A bare command (CI sets PYTHON=python) is found on PATH by spawn; only a path can be checked.
+  if (path.isAbsolute(python) || python.includes('/') || python.includes('\\')) await access(python);
   const executablePath = resolveChromePath();
   await mkdir(testRunsRoot, { recursive: true });
   assert.equal(await realpath(testRunsRoot), testRunsRoot, 'test-runs directory must resolve inside the workspace');
