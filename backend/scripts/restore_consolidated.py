@@ -41,7 +41,8 @@ def restore_consolidated(archive_path: Path, target_data: Path) -> dict:
             target.execute(queries.get("schema_create_baseline_check_database"))
             target.autocommit = False
             reference_dsn = server.get_uri(database="baseline_check")
-            restore_tool = str(_pg_bin("pg_restore"))
+            major = version // 10000
+            restore_tool = str(_pg_bin("pg_restore", server_major=major))
             _run([restore_tool, "--single-transaction", "--exit-on-error", "--no-owner",
                   "--no-acl", "--dbname=baseline_check", str(dump)], _pg_env(reference_dsn))
             reference = connect(reference_dsn)
@@ -65,7 +66,7 @@ def restore_consolidated(archive_path: Path, target_data: Path) -> dict:
             # Copy the upgraded reference, not the original pre-upgrade dump:
             # later migrations can drop tables or transform rows (e.g. v033).
             upgraded_data = Path(temp_name) / "upgraded-data.dump"
-            _run([str(_pg_bin("pg_dump")), "--data-only", "--format=custom",
+            _run([str(_pg_bin("pg_dump", server_major=major)), "--data-only", "--format=custom",
                   "--no-owner", "--no-acl", "--exclude-table=public.schema_migrations",
                   f"--file={upgraded_data}"], _pg_env(reference_dsn))
             # The target is empty and isolated. FK triggers are checked explicitly

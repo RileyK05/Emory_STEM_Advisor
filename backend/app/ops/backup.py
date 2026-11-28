@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -53,19 +54,37 @@ def _pg_candidates(name: str) -> list[Path]:
     return candidates
 
 
-def _tool_major(path: Path) -> int | None:
-    """The major version a PostgreSQL client tool reports, or None if unreadable."""
+def _parse_version(text: str) -> tuple[int, int] | None:
+    """(major, minor) from `pg_dump (PostgreSQL) 16.16 (Debian ...)`, or None."""
+    parts = text.split()
+    match = re.match(r"(\d+)(?:\.(\d+))?", parts[2]) if len(parts) >= 3 else None
+    return (int(match.group(1)), int(match.group(2) or 0)) if match else None
+
+
+def _tool_version(path: Path) -> tuple[int, int] | None:
+    """The (major, minor) version a PostgreSQL client tool reports, or None if unreadable."""
     try:
         result = subprocess.run([str(path), "--version"], capture_output=True, text=True, check=False)
     except OSError:
         return None
-    parts = result.stdout.split()
-    if result.returncode or len(parts) < 3:
-        return None
-    try:
-        return int(parts[2].split(".")[0])
-    except ValueError:
-        return None
+    return None if result.returncode else _parse_version(result.stdout)
+
+
+def check_dump_tool(tool_version: str, server_version_num: int) -> None:
+    """Refuse a pg_dump older than the server it dumps.
+
+    A newer minor release can store catalog state an older pg_dump writes out
+    verbatim: PostgreSQL 16.16 keeps a `pg_attver` option on every column, which
+    16.16's pg_dump omits and 16.2's dumps, and no restore accepts it.
+    """
+    version = _parse_version(tool_version)
+    server = (server_version_num // 10000, server_version_num % 100)
+    if version is None or version[0] != server[0]:
+        raise BackupError("pg_dump major version must match the source database")
+    if version < server:
+        raise BackupError(
+            f"pg_dump {version[0]}.{version[1]} is older than the database server "
+            f"({server[0]}.{server[1]}); install a current PostgreSQL {server[0]} client")
 
 
 def _pg_bin(name: str, *, server_major: int | None = None) -> Path:
@@ -79,10 +98,13 @@ def _pg_bin(name: str, *, server_major: int | None = None) -> Path:
     if not candidates:
         raise BackupError(f"{name} is unavailable; install matching PostgreSQL client tools")
     if server_major is not None:
-        for candidate in candidates:
-            if _tool_major(candidate) == server_major:
-                return candidate
-        available = sorted({major for major in map(_tool_major, candidates) if major is not None})
+        # The newest release of the matching major: a host can carry both pgserver's
+        # bundled tools and a current system client of the same major.
+        versions = {candidate: _tool_version(candidate) for candidate in candidates}
+        matching = [c for c in candidates if versions[c] and versions[c][0] == server_major]
+        if matching:
+            return max(matching, key=lambda c: versions[c])
+        available = sorted({v[0] for v in versions.values() if v is not None})
         raise BackupError(
             f"{name} major version must match the source database "
             f"(have {available or 'unknown'}, need {server_major})"
@@ -214,10 +236,15 @@ def _unshared_tables(conn, shared_tables: frozenset[str]) -> list[str]:
     return sorted(tables - shared_tables)
 
 
-def _tables_in_dump(dump: Path, env: dict[str, str]) -> set[str]:
-    """The tables whose rows are really in a dump, read from its table of contents."""
+def _tables_in_dump(dump: Path, env: dict[str, str], major: int) -> set[str]:
+    """The tables whose rows are really in a dump, read from its table of contents.
+
+    The reader must be the dump's own major: an older pg_restore cannot read a
+    newer dump's header, and a host may carry both bundled and system tools.
+    """
     found = set()
-    for line in _run([str(_pg_bin("pg_restore")), "--list", str(dump)], env).splitlines():
+    reader = _pg_bin("pg_restore", server_major=major)
+    for line in _run([str(reader), "--list", str(dump)], env).splitlines():
         parts = line.split()
         if line.startswith(";") or len(parts) < 7:
             continue
@@ -297,16 +324,16 @@ def create_backup(
         env = _pg_env(dsn)
         dump_tool = _pg_bin("pg_dump", server_major=version // 10000)
         dump_version = _run([str(dump_tool), "--version"], env)
-        dump_major = int(dump_version.split()[2].split(".")[0])
-        if dump_major != version // 10000:
-            raise BackupError("pg_dump major version must match the source database")
+        check_dump_tool(dump_version, version)
+        dump_major = version // 10000
         _run([
             str(dump_tool), "--format=custom", "--no-owner", "--no-acl",
             f"--snapshot={snapshot}",
             f"--file={dump}",
             *(f"--exclude-table-data=public.{table}" for table in unshared),
         ], env)
-        if shared_tables is not None and (extra := _tables_in_dump(dump, env) - shared_tables):
+        if shared_tables is not None and (
+                extra := _tables_in_dump(dump, env, dump_major) - shared_tables):
             raise BackupError(f"unshared tables reached the dump: {', '.join(sorted(extra))}")
         dump_sha, dump_size = _hash_file(dump)
         manifest = {

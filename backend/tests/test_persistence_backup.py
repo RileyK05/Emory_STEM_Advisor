@@ -49,18 +49,46 @@ def _drop_database(dsn: str, name: str) -> None:
     )
 
 
-def test_pg_bin_prefers_the_client_whose_major_matches_the_server(monkeypatch, tmp_path):
-    """EMO-018: pgserver's bundled pg_dump 16 must not beat a matching system 17."""
+@pytest.mark.parametrize(("system_version", "server_major", "chosen"), [
+    # EMO-018: pgserver's bundled pg_dump 16 must not beat a matching system 17.
+    ((17, 1), 17, "system"),
+    ((17, 1), 16, "bundled"),
+    # A current system 16 beats the bundled 16.2 that cannot dump 16.16 cleanly.
+    ((16, 16), 16, "system"),
+    ((16, 1), 16, "bundled"),
+    ((17, 1), 18, None),
+])
+def test_pg_bin_picks_the_newest_client_of_the_servers_major(
+        monkeypatch, tmp_path, system_version, server_major, chosen):
     from app.ops import backup
 
-    bundled, system = tmp_path / "pg_dump-16", tmp_path / "pg_dump-17"
-    majors = {bundled: 16, system: 17}
+    bundled, system = tmp_path / "pg_dump-bundled", tmp_path / "pg_dump-system"
+    versions = {bundled: (16, 2), system: system_version}
     monkeypatch.setattr(backup, "_pg_candidates", lambda _name: [bundled, system])
-    monkeypatch.setattr(backup, "_tool_major", lambda path: majors[path])
-    assert backup._pg_bin("pg_dump", server_major=17) == system
-    assert backup._pg_bin("pg_dump", server_major=16) == bundled
-    with pytest.raises(BackupError, match="major version must match"):
-        backup._pg_bin("pg_dump", server_major=18)
+    monkeypatch.setattr(backup, "_tool_version", lambda path: versions[path])
+    if chosen is None:
+        with pytest.raises(BackupError, match="major version must match"):
+            backup._pg_bin("pg_dump", server_major=server_major)
+    else:
+        assert backup._pg_bin("pg_dump", server_major=server_major) == {
+            "bundled": bundled, "system": system}[chosen]
+
+
+@pytest.mark.parametrize(("tool", "server", "refusal"), [
+    ("pg_dump (PostgreSQL) 16.16 (Debian 16.16-1.pgdg12+1)", 160016, None),
+    ("pg_dump (PostgreSQL) 16.18", 160016, None),
+    # An older minor writes catalog state (16.16's pg_attver) no restore accepts.
+    ("pg_dump (PostgreSQL) 16.2", 160016, "older than the database server"),
+    ("pg_dump (PostgreSQL) 17.1", 160016, "major version must match"),
+])
+def test_a_dump_needs_a_pg_dump_at_least_as_new_as_the_server(tool, server, refusal):
+    from app.ops.backup import check_dump_tool
+
+    if refusal is None:
+        check_dump_tool(tool, server)
+    else:
+        with pytest.raises(BackupError, match=refusal):
+            check_dump_tool(tool, server)
 
 
 @pytest.fixture

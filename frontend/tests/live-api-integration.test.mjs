@@ -200,7 +200,9 @@ test('real browser retrieves a cited passage, then reopens and exports a Postgre
     await send(page, 'What is required before using the robotics equipment?');
     try { await page.getByText('Students must complete the safety requirement the passage states.', { exact: false }).waitFor({ timeout: 10_000 }); }
     catch (error) { throw new Error(`Grounded answer failed. Page: ${await page.locator('body').innerText()} Server: ${serverDiagnostics()}`, { cause: error }); }
-    const citation = page.locator('.source-chip').filter({ hasText: 'robotics-intro.txt' });
+    // An upload has no reviewed title, so its chip is named "Source", never the file name.
+    const citation = page.getByRole('button', { name: 'Source', exact: true });
+    assert.equal(await page.locator('.source-chip').filter({ hasText: 'robotics-intro.txt' }).count(), 0);
     await citation.waitFor(); await citation.click();
     assert.equal(await cited(page).innerText(), exactPassage);
 

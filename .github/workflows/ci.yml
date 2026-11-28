@@ -43,6 +43,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-backend
+      - name: PostgreSQL 16 client
+        # Backups need a pg_dump at least as new as the server (current 16.x);
+        # pgserver's bundled 16.2 writes catalog options a restore rejects.
+        run: |
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-16
+          echo /usr/lib/postgresql/16/bin >> "$GITHUB_PATH"
       - name: Ruff
         run: ruff check .
       - name: Pytest

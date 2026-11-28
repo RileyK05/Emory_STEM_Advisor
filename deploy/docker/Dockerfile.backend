@@ -22,6 +22,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /workspace/backend
 
+# The backup job runs pg_dump against Azure's PostgreSQL 16. Debian's own client
+# is another major, and a pg_dump older than the server is refused, so take the
+# current 16.x client from the PostgreSQL project's repository.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl postgresql-common \
+    && /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y \
+    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && rm -rf /var/lib/apt/lists/*
+ENV PATH=/usr/lib/postgresql/16/bin:$PATH
+
 # CPU-only torch keeps the image portable and avoids pulling CUDA libraries.
 RUN python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch>=2.4"
 

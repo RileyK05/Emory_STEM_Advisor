@@ -72,6 +72,13 @@ jobs:
             --build-arg PRELOAD_EMBEDDING_MODEL= -t advisor-api:ci .
           docker build -f deploy/docker/Dockerfile.backend --target dev -t advisor-dev:ci .
           docker build -f deploy/docker/Dockerfile.web --target prod -t advisor-web:ci .
+      - name: The API image can run backups
+        # The scheduled backup job runs this image; it needs PostgreSQL 16 client tools.
+        run: |
+          for tool in pg_dump pg_restore; do
+            docker run --rm advisor-api:ci "$tool" --version | tee /dev/stderr \
+              | grep -q "(PostgreSQL) 16\." || { echo "::error::$tool 16 missing"; exit 1; }
+          done
       - name: Web caching and security headers
         run: |
           docker run -d --name web -p 8080:8080 -e API_UPSTREAM=http://127.0.0.1:9 advisor-web:ci
